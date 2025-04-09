@@ -429,9 +429,7 @@ def plot_spectra(x, x_units, y, y_units, save_path, x_fit=None, y_fit=None):
     plt.close()
 
 
-def monte_carlo_analysis(sim_cube, wave_axis, psf, qe, e_per_ph, read_noise,
-                         dn_per_e, dark_current, instrument_wave0,
-                         instrument_sigma, nsim=DEFAULT_NSIM):
+def monte_carlo_analysis(sim_cube, wave_axis, nsim=DEFAULT_NSIM):
     """
     Perform Monte Carlo error analysis of the synthetic observation process.
 
@@ -463,66 +461,62 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf, qe, e_per_ph, read_noise,
     Returns:
         dict: Contains maps for mean and uncertainty of both Doppler velocity and excess broadening.
     """
-    n_scan, n_slit, n_wave = sim_cube.shape
-    # Initialize storage arrays for the derived parameters over nsim iterations
-    velocity_maps = np.zeros((nsim, n_scan, n_slit))
-    nonthermal_maps = np.zeros((nsim, n_scan, n_slit))
+
+    # Make a dictionary of dictionaries to store information about the key pixels
+    key_pixels = {
+        'max': {'ipix': np.unravel_index(np.argmax(np.sum(sim_cube, axis=2)), sim_cube.shape[:2])},
+        'p75': {'ipix': np.unravel_index(np.percentile(np.sum(sim_cube, axis=2), 75), sim_cube.shape[:2])},
+        'p50': {'ipix': np.unravel_index(np.percentile(np.sum(sim_cube, axis=2), 50), sim_cube.shape[:2])},
+        'p25': {'ipix': np.unravel_index(np.percentile(np.sum(sim_cube, axis=2), 25), sim_cube.shape[:2])},
+    }
+    for key in key_pixels.keys():key_pixels[key]['spectra_sim'] = sim_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
+
+    velocity_vals = np.zeros((nsim, sim_cube.shape[0], sim_cube.shape[1]))
+    nonthermal_vals = np.zeros((nsim, sim_cube.shape[0], sim_cube.shape[1]))
 
     for it in tqdm(range(nsim), desc="Monte Carlo iterations", unit="iteration"):
-        
-        max_intensity_pix = np.unravel_index(np.argmax(np.sum(sim_cube, axis=2)), sim_cube.shape[:2])
 
-        plot_spectra(wave_axis, "Wavelength (Angstrom)", sim_cube[max_intensity_pix[0], max_intensity_pix[1], :],
-                     "Intensity (photon)", f"sim_spectra_{it}")
+        # Add Poisson noise
+        poisson_cube = add_poisson_noise(sim_cube)
+        for key in key_pixels.keys():key_pixels[key]['spectra_poisson'] = poisson_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        # Step 1: Add Poisson noise to the spectra in each spatial position
-        noisy_cube = add_poisson_noise(sim_cube)
+        # Convolve with the PSF
+        # psf_cube = convolve_cube_with_psf(poisson_cube, psf)
+        psf_cube = poisson_cube.copy()
+        for key in key_pixels.keys():key_pixels[key]['spectra_psf'] = psf_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        plot_spectra(wave_axis, "Wavelength (Angstrom)", noisy_cube[max_intensity_pix[0], max_intensity_pix[1], :],
-                     "Intensity (photon)", f"noisy_spectra_{it}")
+        # Add stray light
+        # sl_cube = add_vis_stray_light(psf_cube)
+        sl_cube = psf_cube.copy()
+        for key in key_pixels.keys():key_pixels[key]['spectra_sl'] = sl_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        # # Step 2: Convolve with the PSF in the (slit, spectral) plane for each scan position
-        # conv_cube = convolve_cube_with_psf(noisy_cube, psf)
-        conv_cube = noisy_cube.copy()
+        # Read out electrons
+        el_cube = read_out_photons(sl_cube)
+        for key in key_pixels.keys():key_pixels[key]['spectra_el'] = dn_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        # Step 3: Convert from counts to DN (including electrons conversion and adding noise)
-        dn_cube = convert_counts_to_dn(conv_cube, qe, e_per_ph, read_noise, dn_per_e, dark_current)
+        # Convert to DN
+        dn_cube = convert_counts_to_dn(el_cube)
+        for key in key_pixels.keys():key_pixels[key]['spectra_dn'] = dn_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        plot_spectra(wave_axis, "Wavelength (Angstrom)", dn_cube[max_intensity_pix[0], max_intensity_pix[1], :],
-                     "Intensity (DN)", f"dn_spectra_{it}")
+        # Fit the spectrum
+        fit_params = fit_spectra(dn_cube, wave_axis)
+        for key in key_pixels.keys():
+            key_pixels[key]['fit_params'] = fit_params[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-        # # Step 4: Loop over each (scan, slit) pixel and fit the spectrum
-        # for i in range(n_scan):
-        #     for j in range(n_slit):
-        #         spectrum = dn_cube[i, j, :]
-        #         fit_info = analyse_spectrum_fit(wave_axis, spectrum, instrument_wave0, instrument_sigma)
-        #         velocity_maps[it, i, j] = fit_info['velocity']
-        #         nonthermal_maps[it, i, j] = fit_info['nonthermal']
-        i = max_intensity_pix[0]
-        j = max_intensity_pix[1]
-        spectrum = dn_cube[i, j, :]
-        fit_info = analyse_spectrum_fit(wave_axis, spectrum, instrument_wave0, instrument_sigma)
-        velocity_maps[it, i, j] = fit_info['velocity']
-        nonthermal_maps[it, i, j] = fit_info['nonthermal']
+        # Calculate the Doppler velocity and excess broadening
+        for key in key_pixels.keys():
+            key_pixels[key]['velocity'] = None
+            key_pixels[key]['nonthermal'] = None
 
-        # calculate y_fit based on the fit parameters
-        x_fit = np.linspace(wave_axis[0], wave_axis[-1], 1000)
-        fit_params = fit_info['fit_details']['params']
-        y_fit = gaussian(x_fit, *fit_params)
+        # Plot the spectras for this iteration
+        if it % 10 == 0:
+            plot_spectra(key_pixels, wave_axis, it)
 
-        plot_spectra(wave_axis, "Wavelength (Angstrom)", dn_cube[max_intensity_pix[0], max_intensity_pix[1], :],
-                     "Intensity (DN)", f"fit_spectra_{it}", x_fit=x_fit, y_fit=y_fit)
-        
-        exit()
-
-    # Compute mean and standard deviation (uncertainty) maps
-    velocity_mean = np.nanmean(velocity_maps, axis=0)
-    velocity_std = np.nanstd(velocity_maps, axis=0)
-    nonthermal_mean = np.nanmean(nonthermal_maps, axis=0)
-    nonthermal_std = np.nanstd(nonthermal_maps, axis=0)
+    # Calculate the standard deviation (uncertainty) maps
+    velocity_std = np.nanstd(velocity_vals, axis=2)
+    nonthermal_std = np.nanstd(nonthermal_vals, axis=2)
     
-    return {'velocity_mean': velocity_mean, 'velocity_std': velocity_std,
-            'nonthermal_mean': nonthermal_mean, 'nonthermal_std': nonthermal_std}
+    return {'velocity_std': velocity_std, 'nonthermal_std': nonthermal_std}
 
 
 # ---------------------------------------------------------------------------
