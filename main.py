@@ -1,3 +1,5 @@
+# TODO: Rebin MuRAM cube spatially and spectrally
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -7,7 +9,6 @@ from scipy.io import readsav
 from tqdm import tqdm
 import astropy.constants as const
 import astropy.units as u
-import os
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -21,7 +22,7 @@ swc_read_noise_e = 10.0           # CCD readout noise (electrons)
 swc_dn_per_e = 19.0               # Conversion factor (DN per electron)
 swc_dark_current = 1.0            # Dark current (electrons)
 swc_pixel_size = 13.5e-6          # Pixel size (m)
-swc_instrument_width = 0.1123e-10 # Instrumental width (m) ### TODO: REVISIT USING REAL PSF ###
+swc_instrument_width = 47.9e-10   # Instrumental width (m) ### from Kawate 2020 TODO: REVISIT USING REAL PSF ###
 
 # Telescope
 tel_psf_filename = "psf.txt"      # PSF filename
@@ -76,7 +77,7 @@ def fit_spectra(data_cube, wave_axis):
     """
     n_scan, n_slit, n_spec = data_cube.shape
     fit_params = np.zeros((n_scan, n_slit, 4))  # [peak, cent, sigma, background]
-    for i in range(n_scan):
+    for i in tqdm(range(n_scan), desc="Fitting spectra", unit="Scan direction spectra"):
         for j in range(n_slit):
             fit_result = fit_gaussian_profile(wave_axis, data_cube[i, j, :])
             fit_params[i, j, :] = fit_result['params']
@@ -162,6 +163,27 @@ def add_poisson_noise(data_cube):
     return np.random.poisson(data_cube)
 
 
+def gaussian_psf(size, sigma):
+    """
+    Generate a 2D Gaussian PSF.
+
+    Parameters:
+        size : int
+            Size of the PSF array (should be odd for a centered PSF).
+        sigma : float
+            Standard deviation of the Gaussian (instrumental width).
+
+    Returns:
+        numpy.ndarray: 2D Gaussian PSF.
+    """
+    x = np.linspace(-size//2, size//2, size)
+    y = np.linspace(-size//2, size//2, size)
+    X, Y = np.meshgrid(x, y)
+    psf = np.exp(-(X**2 + Y**2) / (2 * sigma**2))
+    psf /= np.sum(psf)  # Normalize the PSF so the total sum is 1
+    return psf
+
+
 # def rebin_psf(psf, old_spacing, new_spacing):
 #     """
 #     Rebin (resample) the PSF array from its original pixel spacing to that of the detector.
@@ -187,66 +209,70 @@ def add_poisson_noise(data_cube):
 #     return psf_rebinned
 
 
-# def convolve_cube_with_psf(cube, psf):
-#     """
-#     Convolve each (spatial, spectral) plane in the cube with the instrument PSF.
+def convolve_cube_with_psf(cube, psf):
+    """
+    Convolve each (spatial, spectral) plane in the cube with the instrument PSF.
 
-#     The cube is assumed to have shape (n_scan, n_slit, n_spectral). For each scan position,
-#     the (n_slit, n_spectral) plane is convolved with the PSF.
+    The cube is assumed to have shape (n_scan, n_slit, n_spectral). For each scan position,
+    the (n_slit, n_spectral) plane is convolved with the PSF.
 
-#     Parameters:
-#         cube : numpy.ndarray
-#             Input data cube.
-#         psf : numpy.ndarray
-#             PSF kernel (2D).
+    Parameters:
+        cube : numpy.ndarray
+            Input data cube.
+        psf : numpy.ndarray
+            PSF kernel (2D).
     
-#     Returns:
-#         numpy.ndarray: Convolved data cube.
-#     """
-#     n_scan, n_slit, n_spec = cube.shape
-#     conv_cube = np.zeros_like(cube)
-#     for i in range(n_scan):
-#         plane = cube[i, :, :]
-#         plane_conv = convolve2d(plane, psf, mode='same', boundary='fill')
-#         conv_cube[i, :, :] = plane_conv
-#     return conv_cube
+    Returns:
+        numpy.ndarray: Convolved data cube.
+    """
+    n_scan, n_slit, n_spec = cube.shape
+    conv_cube = np.zeros_like(cube)
+    for i in range(n_scan):
+        plane = cube[i, :, :]
+        plane_conv = convolve2d(plane, psf, mode='same', boundary='fill')
+        conv_cube[i, :, :] = plane_conv
+    return conv_cube
 
 
-# def convert_counts_to_dn(counts_cube, qe=DEFAULT_QE, e_per_euv_ph=DEFAULT_E_PER_EUV_PH,
-#                          read_noise=DEFAULT_READ_NOISE_E, dn_per_e=DEFAULT_DN_PER_E,
-#                          dark_current=DEFAULT_DARK_CURRENT):
-#     """
-#     Convert photon counts into digital numbers (DN) via conversion to electrons.
+def read_out_photons(counts_cube):
+    """
+    Read out the photons from the detector, including CCD readout noise, dark current, and conversion to electrons.
 
-#     This function multiplies the counts by the quantum efficiency and electrons-per-photon,
-#     adds a constant dark current and readout noise (sampled from a Gaussian), and converts
-#     the resulting electrons to DN.
+    Parameters:
+        counts_cube : numpy.ndarray
+            Cube of photon counts.
 
-#     Parameters:
-#         counts_cube : numpy.ndarray
-#             Cube with photon counts.
-#         qe : float
-#             Detector quantum efficiency.
-#         e_per_ph : float
-#             Electrons produced per photon.
-#         read_noise : float
-#             CCD readout noise (in electrons).
-#         dn_per_e : float
-#             Conversion factor (DN per electron).
-#         dark_current : float
-#             Dark current in electrons.
+    Returns:
+        numpy.ndarray: Cube of electrons after readout noise and dark current.
+    """
+    # Convert counts to electrons
+    electrons = counts_cube * swc_qe * swc_e_per_euv_ph
+
+    # Add dark current (in electrons)
+    electrons += swc_dark_current
+
+    # Add readout noise (Gaussian noise with mean 0, std = swc_read_noise_e)
+    noise = np.random.normal(loc=0.0, scale=swc_read_noise_e, size=electrons.shape)
+    electrons_noisy = electrons + noise
+
+    # No negative electrons
+    electrons_noisy[electrons_noisy < 0] = 0.0
+
+    return electrons_noisy
+
+
+def convert_counts_to_dn(electrons_cube):
+    """
+    Convert the cube of electrons to digital numbers (DN).
+
+    Parameters:
+        electrons_cube : numpy.ndarray
+            Cube of electrons (output of read_out_photons).
     
-#     Returns:
-#         numpy.ndarray: Data cube in DN.
-#     """
-#     # Convert counts to electrons and add dark current
-#     electrons = counts_cube * qe * e_per_euv_ph + dark_current
-#     # Add read noise
-#     noise = np.random.normal(loc=0.0, scale=read_noise, size=electrons.shape)
-#     electrons_noisy = electrons + noise
-#     electrons_noisy[electrons_noisy < 0] = 0.0  # no negative electrons
-#     # Convert to DN
-#     return electrons_noisy / dn_per_e
+    Returns:
+        numpy.ndarray: Cube of DN values.
+    """
+    return electrons_cube / swc_dn_per_e
 
 
 def load_muram_atmosphere(filepath):
@@ -291,29 +317,13 @@ def load_muram_atmosphere(filepath):
     atmosphere_cube = np.copy(data[key])  # erg/s/cm^2/sr/cm
     atmosphere_cube = np.transpose(atmosphere_cube, (2, 1, 0))  # Correct dimensions from IDL import artifact (so [n1, n2, n_wave])
 
-    # Determine the number of spectral points from the cube's third dimension.
+    # Calculate the wavelength scale.
     n_wave = atmosphere_cube.shape[2]
-
-    # Construct a velocity grid spanning -300e5 to +300e5 cm/s.
-    # (The readme specifies vr = 600e5 cm/s as the full range.)
-    vr = 600.0e5   # Total velocity range in cm/s
-    # Generate a uniform velocity grid from -vr/2 to +vr/2
-    velocity_grid = np.linspace(-vr/2, vr/2, n_wave)
-    
-    # Calculate the velocity spacing (cm/s)
-    dv = velocity_grid[1] - velocity_grid[0]
-    
-    # Speed of light in cm/s
-    c = 2.99792458e10
-    
-    # Convert the velocity grid to a wavelength shift (in cm)
-    dlar = velocity_grid / c * dat_rest_wave
-    
-    # Create the wavelength axis in cm, centred on the line centre la_0
-    wave_cm = dat_rest_wave + dlar
-    
-    # Convert the wavelength axis to Angstroms (1 cm = 1e8 Angstrom)
-    wave_axis = wave_cm * 1e8
+    velocity_range = 6e5  # m/s (from MuRAM readme)
+    velocity_grid = np.linspace(-velocity_range, velocity_range, n_wave)  # m/s
+    velocity_spacing = velocity_grid[1] - velocity_grid[0]  # m/s
+    wavelength_shift = velocity_grid / const.c.to('m/s').value * dat_rest_wave  # m
+    wave_axis = dat_rest_wave + wavelength_shift  # m
 
     # Convert to J/s/cm^2/sr/cm
     atmosphere_cube *= 1e-7
@@ -328,11 +338,11 @@ def load_muram_atmosphere(filepath):
     atmosphere_cube *= (swc_pixel_size ** 2) * solid_angle
 
     # Convert to photon/s/pixel
-    d_wave = wave_cm[1] - wave_cm[0]  # cm
-    atmosphere_cube *= d_wave
+    d_wave = np.abs(wave_axis[1] - wave_axis[0])  # m
+    atmosphere_cube *= d_wave * 1e2  # cm
 
-    # TEMP!!!!!!!!!!! Normalise so the maximum is 50
-    atmosphere_cube *= 50.0 / np.max(atmosphere_cube)
+    # TEMP!!!!!!!!!!! Normalise so the maximum is x
+    atmosphere_cube *= 300.0 / np.max(atmosphere_cube)
     # TEMP!!!!!!!!!!! round everything to the nearest integer
     atmosphere_cube = np.round(atmosphere_cube).astype(np.int32)
 
@@ -352,20 +362,25 @@ def plot_spectra(key_pixels, wave_axis, it):
             Current iteration number.
     """
 
-    fig, axs = plt.subplots(4, 5, figsize=(20, 16))
+    fig, axs = plt.subplots(4, 6, figsize=(20, 16))
     fig.suptitle(f"Monte Carlo Iteration {it}", fontsize=16)
     for i, key in enumerate(key_pixels.keys()):
-        axs[i, 0].plot(wave_axis, key_pixels[key]['spectra_sim'], label='Simulated', color='blue')
-        axs[i, 1].plot(wave_axis, key_pixels[key]['spectra_poisson'], label='Poisson', color='orange')
-        axs[i, 2].plot(wave_axis, key_pixels[key]['spectra_psf'], label='PSF', color='green')
-        axs[i, 3].plot(wave_axis, key_pixels[key]['spectra_sl'], label='Stray Light', color='red')
-        axs[i, 4].plot(wave_axis, key_pixels[key]['spectra_dn'], label='DN', color='purple')
+        axs[i, 0].step(wave_axis*1e10, key_pixels[key]['spectra_sim'], label='Simulated', color='blue')
+        axs[i, 1].step(wave_axis*1e10, key_pixels[key]['spectra_poisson'], label='Poisson', color='orange')
+        axs[i, 2].step(wave_axis*1e10, key_pixels[key]['spectra_psf'], label='PSF', color='green')
+        axs[i, 3].step(wave_axis*1e10, key_pixels[key]['spectra_sl'], label='Stray Light', color='red')
+        axs[i, 4].step(wave_axis*1e10, key_pixels[key]['spectra_el'], label='Electrons', color='brown')
+        axs[i, 5].step(wave_axis*1e10, key_pixels[key]['spectra_dn'], label='DN', color='purple')
 
-        for j in range(5):
-            axs[i, j].set_title(f"{key} - {j}")
+        fit_x = np.linspace(wave_axis[0], wave_axis[-1], 100)
+        fit_y = gaussian(fit_x, *key_pixels[key]['fit_params'])
+        axs[i, 5].plot(fit_x*1e10, fit_y, label='Fitted Gaussian', color='black', linestyle='--')
+
+        for j in range(6):
+            mapping = {0: 'Simulated', 1: 'With Poisson noise', 2: 'With PSF', 3: 'With stray light', 4: 'In electrons', 5: 'In DN'}
+            axs[i, j].set_title(f"{key} - {mapping[j]}")
             axs[i, j].set_xlabel('Wavelength (Angstrom)')
             axs[i, j].set_ylabel('y')
-            axs[i, j].legend()
             axs[i, j].grid()
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -404,13 +419,11 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
         for key in key_pixels.keys():key_pixels[key]['spectra_sl'] = sl_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Read out electrons
-        # el_cube = read_out_photons(sl_cube)
-        el_cube = sl_cube.copy()
+        el_cube = read_out_photons(sl_cube)
         for key in key_pixels.keys():key_pixels[key]['spectra_el'] = el_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Convert to DN
-        # dn_cube = convert_counts_to_dn(el_cube)
-        dn_cube = el_cube.copy()
+        dn_cube = convert_counts_to_dn(el_cube)
         for key in key_pixels.keys():key_pixels[key]['spectra_dn'] = dn_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Fit the spectrum
@@ -422,6 +435,8 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
         for key in key_pixels.keys():
             key_pixels[key]['velocity'] = None
             key_pixels[key]['nonthermal'] = None
+
+        from IPython import embed;embed();exit()
 
         # Plot the spectras for this iteration
         if it % 1 == 0:
