@@ -39,9 +39,12 @@ tel_collecting_area = .5*np.pi*(0.28/2)**2  # Entrance pupil diameter (aperture 
 tel_pm_efficiency = 0.161         # Primary mirror efficiency
 tel_ega_efficiency = 0.0623       # Grating efficiency
 tel_filter_transmission = 0.507   # Filter transmission efficiency
-tel_focus_psf_filename = "psf.txt"  # PSF filename
-tel_filter_psf_filename = "psf.txt"  # Filter PSF filename
-tel_psf_input_res = None          # Input resolution (m)
+tel_focus_psf_filename = "psf_euvst_v20230909_195119_focus.txt"  # PSF filename
+tel_mesh_psf_filename = "psf_euvst_v20230909_derived_195119_mesh.txt"  # Filter PSF filename
+tel_focus_psf_input_res_um = 0.5  # Input resolution (microns)
+tel_focus_psf_input_res = tel_focus_psf_input_res_um * 1e-6  # Input resolution (m)
+tel_mesh_psf_input_res_mm = 6.1200E-04  # Input resolution (millimeters)
+tel_mesh_psf_input_res = tel_mesh_psf_input_res_mm * 1e-3  # Input resolution (m)
 
 # Synthetic data
 dat_filename = "SI_Fe_XII_1952_d0_xy_0270000.sav"  # MuRAM file
@@ -50,6 +53,8 @@ dat_rest_wave = 195.12e-10        # Rest wavelength (m)
 # Simulation parameters
 sim_n = 1                         # Number of Monte Carlo iterations
 sim_t = 40.0                      # Exposure time (s)
+sim_stray_light_s = 1             # Visible stray light photon/s/pixel
+sim_stray_light = sim_stray_light_s * sim_t  # Visible stray light photon/pixel
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -199,29 +204,113 @@ def add_poisson_noise(data_cube):
     return np.random.poisson(data_cube)
 
 
-# def rebin_psf(psf, old_spacing, new_spacing):
-#     """
-#     Rebin (resample) the PSF array from its original pixel spacing to that of the detector.
+def load_psf(filename, skiprows=0):
+    """
+    Load the PSF from a file.
 
-#     Parameters:
-#         psf : numpy.ndarray
-#             Input PSF (2D array).
-#         old_spacing : float
-#             Original PSF pixel spacing (microns).
-#         new_spacing : float
-#             Detector pixel size (microns).
+    Parameters:
+        filename : str
+            Path to the PSF file.
     
-#     Returns:
-#         numpy.ndarray: Rebinned PSF.
-#     """
-#     scale_factor = old_spacing / new_spacing
-#     psf_rebinned = zoom(psf, scale_factor, order=1)
-#     # Normalise to conserve total energy
-#     total_before = psf.sum()
-#     total_after = psf_rebinned.sum()
-#     if total_after > 0:
-#         psf_rebinned *= (total_before / total_after)
-#     return psf_rebinned
+    Returns:
+        numpy.ndarray: PSF kernel (2D).
+    """
+    psf = np.loadtxt(filename, skiprows=skiprows, encoding='UTF-16 LE')
+    return psf
+
+
+def resample_psf(psf, old_spacing, new_spacing):
+    """
+    Resample the PSF array from its original pixel spacing to that of the detector.
+
+    Parameters:
+        psf : numpy.ndarray
+            Input PSF (2D array).
+        old_spacing : float
+            Original PSF pixel spacing (microns).
+        new_spacing : float
+            Detector pixel size (microns).
+    
+    Returns:
+        numpy.ndarray: Resampled PSF.
+    """
+    scale_factor = old_spacing / new_spacing
+    psf_resampled = zoom(psf, scale_factor, order=1)
+    return psf_resampled
+
+
+def combine_normalise_psf(psf1, psf2, crop_frac=0.99, max_size=None):
+  """
+  Combine two PSF arrays by convolving them, then crop and normalize.
+
+  You can either:
+    - Crop by including a fraction of total intensity (crop_frac, default 0.99)
+    - Or specify max_size (odd integer) for a centered square crop on the peak.
+
+  Parameters:
+    psf1, psf2 : numpy.ndarray
+    Input PSFs.
+    crop_frac : float, optional
+    Fraction of total intensity to include when intensity‑based cropping.
+    max_size : int, optional
+    Maximum output size (odd). If set, overrides crop_frac.
+
+  Returns:
+    numpy.ndarray: Cropped & normalized combined PSF.
+  """
+  # Convolve
+  psf = convolve2d(psf1, psf2, mode='same', boundary='fill')
+  nr, nc = psf.shape
+
+  if max_size is not None:
+    if max_size % 2 == 0 or max_size < 1:
+      raise ValueError("max_size must be a positive odd integer")
+    # Find peak pixel
+    idx = np.argmax(psf)
+    r0c, c0c = np.unravel_index(idx, psf.shape)
+    half = max_size // 2
+    # Compute bounds
+    r0 = max(0, r0c - half)
+    c0 = max(0, c0c - half)
+    r1 = min(nr, r0 + max_size)
+    c1 = min(nc, c0 + max_size)
+    # Adjust if at edge
+    if (r1 - r0) < max_size:
+      r0 = max(0, r1 - max_size)
+    if (c1 - c0) < max_size:
+      c0 = max(0, c1 - max_size)
+    cropped = psf[r0:r0 + max_size, c0:c0 + max_size]
+  else:
+    # Intensity‑based cropping
+    total = psf.sum()
+    flat = psf.ravel()
+    idx_desc = np.argsort(flat)[::-1]
+    cumsum = np.cumsum(flat[idx_desc])
+    th_idx = np.searchsorted(cumsum, total * crop_frac)
+    th_val = flat[idx_desc[th_idx]]
+    mask = psf >= th_val
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+      cropped = psf.copy()
+    else:
+      r0, r1 = rows.min(), rows.max()
+      c0, c1 = cols.min(), cols.max()
+      h, w = r1 - r0 + 1, c1 - c0 + 1
+      side = max(h, w)
+      center_r, center_c = (r0 + r1) // 2, (c0 + c1) // 2
+      half = side // 2
+      r0s = max(0, center_r - half)
+      c0s = max(0, center_c - half)
+      r1s, c1s = r0s + side, c0s + side
+      if r1s > nr:
+        r1s, r0s = nr, nr - side
+      if c1s > nc:
+        c1s, c0s = nc, nc - side
+      cropped = psf[r0s:r1s, c0s:c1s]
+
+  # Normalize to unit sum
+  cropped /= cropped.sum()
+  return cropped
 
 
 def convolve_cube_with_psf(cube, psf):
@@ -513,18 +602,24 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
 # Main function
 # ---------------------------------------------------------------------------
 
-def main():
+def main(): 
+
+    # Load the PSFs
+    psf_mesh = load_psf(tel_mesh_psf_filename, skiprows=16)
+    psf_focus = load_psf(tel_focus_psf_filename, skiprows=21)
+
+    # Resample the PSFs to the detector pixel size
+    psf_mesh_resampled = resample_psf(psf_mesh, tel_mesh_psf_input_res, swc_pixel_size)
+    psf_focus_resampled = resample_psf(psf_focus, tel_focus_psf_input_res, swc_pixel_size)
+
+    # Combine the PSFs
+    psf_combined = combine_normalise_psf(psf_mesh_resampled, psf_focus_resampled, max_size=5)
 
     # Load the synthetic atmosphere cube.
     sim_cube, wave_axis = load_muram_atmosphere(dat_filename)
 
-    # Load the PSF
-    # psf = load_psf(tel_psf_filename)
-    # psf_rebinned = rebin_psf(psf, tel_psf_input_res, tel_psf_output_res)
-    psf_rebinned = None
-
     # Perform Monte Carlo analysis over nsim iterations
-    results = monte_carlo_analysis(sim_cube, wave_axis, psf_rebinned)
+    results = monte_carlo_analysis(sim_cube, wave_axis, psf_combined)
 
 
 if __name__ == "__main__":
