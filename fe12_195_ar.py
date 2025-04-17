@@ -1,4 +1,5 @@
-# TODO: Rebin MuRAM cube spatially and spectrally
+## TODO: add exposure time as a variable, 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss).
+## TODO: change spectra plotting so that we see photons at aperture, photons after fitler, and so on...
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,28 +7,41 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import zoom
 from scipy.signal import convolve2d
 from scipy.io import readsav
+from scipy.interpolate import interp1d
 from tqdm import tqdm
 import astropy.constants as const
 import astropy.units as u
+from joblib import Parallel, delayed
+import warnings
+from scipy.optimize import OptimizeWarning
 
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
 
 # Detector
-swc_qe = 0.7                      # Quantum efficiency
+swc_qe = 0.76                     # Quantum efficiency at target wavelength (function of wavelength)
 swc_e_per_euv_ph = 18.0           # Electrons produced per EUV photon
 swc_e_per_vis_ph = 2.0            # Electrons produced per VIS photon
 swc_read_noise_e = 10.0           # CCD readout noise (electrons)
 swc_dn_per_e = 19.0               # Conversion factor (DN per electron)
 swc_dark_current = 1.0            # Dark current (electrons)
-swc_pixel_size = 13.5e-6          # Pixel size (m)
-swc_instrument_width = 47.9e-10   # Instrumental width (m) ### from Kawate 2020 TODO: REVISIT USING REAL PSF ###
+swc_pixel_size_um = 13.5          # Pixel size (microns)
+swc_pixel_size = swc_pixel_size_um * 1e-6  # Pixel size (m)
+# swc_instrument_width = 47.9e-10   # Instrumental width (m) ;
+swc_spatial_sampling_a = 0.159    # Spatial sampling (arcsec/pixel)
+swc_spatial_sampling = swc_spatial_sampling_a * np.pi / (180 * 3600)  # Spatial sampling in radians/pixel
+swc_spectral_sampling_ma = 16.9   # Spectral sampling (mA/pixel)
+swc_spectral_sampling = swc_spectral_sampling_ma * 1e-13  # Spectral sampling in m/pixel
 
 # Telescope
-tel_psf_filename = "psf.txt"      # PSF filename
+tel_collecting_area = .5*np.pi*(0.28/2)**2  # Entrance pupil diameter (aperture stop) ; *half* pi r^2 as only half of beam for SW
+tel_pm_efficiency = 0.161         # Primary mirror efficiency
+tel_ega_efficiency = 0.0623       # Grating efficiency
+tel_filter_transmission = 0.507   # Filter transmission efficiency
+tel_focus_psf_filename = "psf.txt"  # PSF filename
+tel_filter_psf_filename = "psf.txt"  # Filter PSF filename
 tel_psf_input_res = None          # Input resolution (m)
-tel_psf_output_res = None         # Output resolution (m)
 
 # Synthetic data
 dat_filename = "SI_Fe_XII_1952_d0_xy_0270000.sav"  # MuRAM file
@@ -35,6 +49,7 @@ dat_rest_wave = 195.12e-10        # Rest wavelength (m)
 
 # Simulation parameters
 sim_n = 1                         # Number of Monte Carlo iterations
+sim_t = 40.0                      # Exposure time (s)
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -75,12 +90,31 @@ def fit_spectra(data_cube, wave_axis):
     Returns:
         numpy.ndarray: Fitted parameters for each spectrum.
     """
+    # Get the dimensions of the data cube: n_scan (number of scans),
+    # n_slit (number of spectra per scan) and n_spec (spectral points per spectrum)
     n_scan, n_slit, n_spec = data_cube.shape
-    fit_params = np.zeros((n_scan, n_slit, 4))  # [peak, cent, sigma, background]
-    for i in tqdm(range(n_scan), desc="Fitting spectra", unit="Scan direction spectra"):
+    
+    # Define an inner function to process a single scan direction.
+    def process_scan(i):
+        # Create an array to store the fit parameters for all spectra in this scan
+        row_fit_params = np.zeros((n_slit, 4))
+        # Loop over each spectrum (slit) in the current scan
         for j in range(n_slit):
+            # Fit a Gaussian to the spectrum at data_cube[i, j, :]
             fit_result = fit_gaussian_profile(wave_axis, data_cube[i, j, :])
-            fit_params[i, j, :] = fit_result['params']
+            row_fit_params[j, :] = fit_result['params']
+        return row_fit_params
+    
+    # Use joblib.Parallel to execute the outer loop concurrently.
+    # n_jobs=-1 utilises all available cores.
+    results = Parallel(n_jobs=-1)(
+        delayed(process_scan)(i) for i in tqdm(range(n_scan),
+                                                 desc="Fitting spectra",
+                                                 unit="scan")
+    )
+    
+    # Combine the results for each scan back into a single numpy array.
+    fit_params = np.array(results)
     return fit_params
 
 
@@ -130,7 +164,9 @@ def fit_gaussian_profile(wave, profile):
     try:
         # Estimate uncertainties using the square root of the profile values
         noise = np.sqrt(np.maximum(profile[valid], 1))
-        popt, pcov = curve_fit(gaussian, wave[valid], profile[valid], p0=p0, sigma=noise)
+        with warnings.catch_warnings():
+          warnings.simplefilter("ignore", OptimizeWarning)
+          popt, pcov = curve_fit(gaussian, wave[valid], profile[valid], p0=p0, sigma=noise)
         perr = np.sqrt(np.diag(pcov))
         model = gaussian(wave, *popt)
         converged = True
@@ -161,27 +197,6 @@ def add_poisson_noise(data_cube):
         numpy.ndarray: Noisy data cube.
     """
     return np.random.poisson(data_cube)
-
-
-def gaussian_psf(size, sigma):
-    """
-    Generate a 2D Gaussian PSF.
-
-    Parameters:
-        size : int
-            Size of the PSF array (should be odd for a centered PSF).
-        sigma : float
-            Standard deviation of the Gaussian (instrumental width).
-
-    Returns:
-        numpy.ndarray: 2D Gaussian PSF.
-    """
-    x = np.linspace(-size//2, size//2, size)
-    y = np.linspace(-size//2, size//2, size)
-    X, Y = np.meshgrid(x, y)
-    psf = np.exp(-(X**2 + Y**2) / (2 * sigma**2))
-    psf /= np.sum(psf)  # Normalize the PSF so the total sum is 1
-    return psf
 
 
 # def rebin_psf(psf, old_spacing, new_spacing):
@@ -313,38 +328,58 @@ def load_muram_atmosphere(filepath):
     assert len(data_keys) == 1
     key = data_keys[0]
 
-    # Extract the synthesised intensity cube.
+    # Extract the synthesised intensity cube
     atmosphere_cube = np.copy(data[key])  # erg/s/cm^2/sr/cm
     atmosphere_cube = np.transpose(atmosphere_cube, (2, 1, 0))  # Correct dimensions from IDL import artifact (so [n1, n2, n_wave])
 
-    # Calculate the wavelength scale.
+    # Calculate the spectral scale
     n_wave = atmosphere_cube.shape[2]
     velocity_range = 6e5  # m/s (from MuRAM readme)
-    velocity_grid = np.linspace(-velocity_range, velocity_range, n_wave)  # m/s
-    velocity_spacing = velocity_grid[1] - velocity_grid[0]  # m/s
+    velocity_grid = np.linspace(-velocity_range*.5, velocity_range*.5, n_wave)  # m/s
     wavelength_shift = velocity_grid / const.c.to('m/s').value * dat_rest_wave  # m
     wave_axis = dat_rest_wave + wavelength_shift  # m
+
+    # Rebin the spectral axis to swc_spectral_resolution
+    d_wave = np.abs(wave_axis[1] - wave_axis[0])  # m
+    new_wave_axis = np.arange(wave_axis[0], wave_axis[-1], swc_spectral_resolution)  # m
+    interp_func = interp1d(wave_axis, atmosphere_cube, axis=2, bounds_error=False, fill_value=0)
+    old_atmosphere_cube = atmosphere_cube.copy()
+    atmosphere_cube = interp_func(new_wave_axis)
+    wave_axis = new_wave_axis  # m
+
+    # Calculate the spatial scale
+    cube_pixel_size = 0.192 * 1e6  # m (from readme)
+
+    # Rebin the spatial axes of the cube to the spatial dimensions of the SWC
+    cube_swc_pixel_size = const.au.to('m').value * np.tan(swc_spatial_resolution)  # m
+    scale_factor = cube_pixel_size / cube_swc_pixel_size
+    atmosphere_cube = zoom(atmosphere_cube, (scale_factor, scale_factor, 1))  # Rebin spatially
+    atmosphere_cube = np.clip(atmosphere_cube, 0, None)  # No negative values
 
     # Convert to J/s/cm^2/sr/cm
     atmosphere_cube *= 1e-7
 
     # Convert to photon/s/cm^2/sr/cm
-    photon_energy = const.h.to('J.s').value * const.c.to('m/s').value / (dat_rest_wave * 1e-10)  # in J
+    photon_energy = const.h.to('J.s').value * const.c.to('m/s').value / (dat_rest_wave)  # in J
     atmosphere_cube /= photon_energy
 
-    # Convert to photon/s/pixel/cm
-    cube_pixel_size = 0.192 * 1e6  # m (from readme)
-    solid_angle = (cube_pixel_size / const.au.to('m').value) ** 2  # steradians
-    atmosphere_cube *= (swc_pixel_size ** 2) * solid_angle
+    # Convert to photon/s/cm^2/cm /spatial row on detector
+    solid_angle = cube_swc_pixel_size ** 2 / const.au.to('m').value ** 2  # steradians
+    atmosphere_cube *= solid_angle
 
-    # Convert to photon/s/pixel
-    d_wave = np.abs(wave_axis[1] - wave_axis[0])  # m
-    atmosphere_cube *= d_wave * 1e2  # cm
+    # Convert to photon/s/cm (account for collecting area) /spatial row on detector
+    tel_partial_ea = tel_collecting_area * tel_pm_efficiency * tel_ega_efficiency * tel_filter_transmission  # Telescope partial effective area (excluding CCD QE) in m^2
+    tel_partial_ea_cm2 = tel_partial_ea * 1e4  # Convert to cm^2
+    atmosphere_cube *= tel_partial_ea_cm2
+    # atmosphere_cube *= 0.2
 
-    # TEMP!!!!!!!!!!! Normalise so the maximum is x
-    atmosphere_cube *= 300.0 / np.max(atmosphere_cube)
-    # TEMP!!!!!!!!!!! round everything to the nearest integer
+    # Convert to photon/s/CCD pixel
+    atmosphere_cube *= swc_spectral_resolution * 1e2  # cm
+
+    # Round to nearest integer as can only measure whole photons
     atmosphere_cube = np.round(atmosphere_cube).astype(np.int32)
+
+    atmosphere_cube *= 40 # 40 s exposure time
 
     return atmosphere_cube, wave_axis
 
@@ -365,12 +400,12 @@ def plot_spectra(key_pixels, wave_axis, it):
     fig, axs = plt.subplots(4, 6, figsize=(20, 16))
     fig.suptitle(f"Monte Carlo Iteration {it}", fontsize=16)
     for i, key in enumerate(key_pixels.keys()):
-        axs[i, 0].step(wave_axis*1e10, key_pixels[key]['spectra_sim'], label='Simulated', color='blue')
-        axs[i, 1].step(wave_axis*1e10, key_pixels[key]['spectra_poisson'], label='Poisson', color='orange')
-        axs[i, 2].step(wave_axis*1e10, key_pixels[key]['spectra_psf'], label='PSF', color='green')
-        axs[i, 3].step(wave_axis*1e10, key_pixels[key]['spectra_sl'], label='Stray Light', color='red')
-        axs[i, 4].step(wave_axis*1e10, key_pixels[key]['spectra_el'], label='Electrons', color='brown')
-        axs[i, 5].step(wave_axis*1e10, key_pixels[key]['spectra_dn'], label='DN', color='purple')
+        axs[i, 0].step(wave_axis*1e10, key_pixels[key]['spectra_sim'], where='mid', label='Simulated', color='blue')
+        axs[i, 1].step(wave_axis*1e10, key_pixels[key]['spectra_poisson'], where='mid', label='Poisson', color='orange')
+        axs[i, 2].step(wave_axis*1e10, key_pixels[key]['spectra_psf'], where='mid', label='PSF', color='green')
+        axs[i, 3].step(wave_axis*1e10, key_pixels[key]['spectra_sl'], where='mid', label='Stray Light', color='red')
+        axs[i, 4].step(wave_axis*1e10, key_pixels[key]['spectra_el'], where='mid', label='Electrons', color='brown')
+        axs[i, 5].step(wave_axis*1e10, key_pixels[key]['spectra_dn'], where='mid', label='DN', color='purple')
 
         fit_x = np.linspace(wave_axis[0], wave_axis[-1], 100)
         fit_y = gaussian(fit_x, *key_pixels[key]['fit_params'])
@@ -386,6 +421,27 @@ def plot_spectra(key_pixels, wave_axis, it):
     plt.subplots_adjust(top=0.9)
     plt.savefig(f"monte_carlo_iteration_{it}.png")
     plt.close()
+
+
+def calculate_velocity(fit_params):
+    """
+    Calculate the Doppler velocity from the fitted Gaussian parameters.
+
+    Parameters:
+        fit_params : numpy.ndarray
+            Fitted parameters for each spectrum.
+    
+    Returns:
+        numpy.ndarray: Velocity values.
+    """
+    # Extract the fitted parameters
+    cent = fit_params[:, :, 1]  # Centre of the Gaussian
+    sigma = fit_params[:, :, 2]  # Width of the Gaussian
+
+    # Calculate the Doppler velocity
+    velocity = (cent - dat_rest_wave) / dat_rest_wave * const.c.to('m/s').value  # m/s
+    return velocity
+
 
 def monte_carlo_analysis(sim_cube, wave_axis, psf):
     # Make a dictionary of dictionaries to store information about the key pixels
@@ -432,11 +488,15 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
             key_pixels[key]['fit_params'] = fit_params[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Calculate the Doppler velocity and excess broadening
-        for key in key_pixels.keys():
-            key_pixels[key]['velocity'] = None
-            key_pixels[key]['nonthermal'] = None
+        velocity_vals[it, :, :] = calculate_velocity(fit_params)
+        nonthermal_vals[it, :, :] = None
 
-        from IPython import embed;embed();exit()
+        # imshow the velocity_vals
+        plt.imshow(velocity_vals[it, :, :]/1000, cmap='seismic', interpolation='nearest', vmin=-30, vmax=30)
+        plt.colorbar(label='Velocity (km/s)')
+        plt.title(f"Velocity at iteration {it}")
+        plt.savefig(f"velocity_{it}.png")
+        plt.close()
 
         # Plot the spectras for this iteration
         if it % 1 == 0:
