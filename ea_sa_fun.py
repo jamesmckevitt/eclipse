@@ -1,4 +1,5 @@
 ## TODO: add a point of real EIS data (e.g. from Brooks paper) to show our calculation for EIS is correct
+## TODO: make these plots for different cases (AR, quiet Sun, flare)
 
 import numpy as np
 import matplotlib.pyplot as plt
