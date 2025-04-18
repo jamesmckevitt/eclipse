@@ -34,7 +34,7 @@ swc_spectral_sampling_ma = 16.9   # Spectral sampling (mA/pixel)
 swc_spectral_sampling = swc_spectral_sampling_ma * 1e-13  # Spectral sampling in m/pixel
 
 # Telescope
-tel_collecting_area = .5*np.pi*(0.28/2)**2  # Entrance pupil diameter (aperture stop) ; *half* pi r^2 as only half of beam for SW
+tel_collecting_area = .5*np.pi*(0.28/2)**2  # Entrance pupil diameter (aperture stop) is .28 m; *half* pi r^2 as only half of beam for SW
 tel_pm_efficiency = 0.161         # Primary mirror efficiency
 tel_ega_efficiency = 0.0623       # Grating efficiency
 tel_filter_transmission = 0.507   # Filter transmission efficiency
