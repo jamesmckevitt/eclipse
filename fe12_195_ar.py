@@ -1,6 +1,8 @@
-## TODO: add background spectras from CHIANTI
+## TODO: add background spectras
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.ndimage import zoom
@@ -28,7 +30,6 @@ swc_dn_per_e = 19.0               # Conversion factor (DN per electron)
 swc_dark_current = 1.0            # Dark current (electrons)
 swc_pixel_size_um = 13.5          # Pixel size (microns)
 swc_pixel_size = swc_pixel_size_um * 1e-6  # Pixel size (m)
-# swc_instrument_width = 47.9e-10   # Instrumental width (m) ;
 swc_spatial_sampling_a = 0.159    # Spatial sampling (arcsec/pixel)
 swc_spatial_sampling = swc_spatial_sampling_a * np.pi / (180 * 3600)  # Spatial sampling in radians/pixel
 swc_spatial_sampling_at_sun = const.au.to('m').value * np.tan(swc_spatial_sampling/2) * 2  # Spatial sampling at the Sun per spatial pixel (m)
@@ -56,10 +57,9 @@ dat_pixel_scale_cm = 0.192e8      # Pixel scale (cm) (from MuRAM readme)
 dat_pixel_scale = dat_pixel_scale_cm * 1e-2  # Pixel scale (m) (from MuRAM readme)
 
 # Simulation parameters
-sim_n = 1                         # Number of Monte Carlo iterations
-sim_t = 40.0                      # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
+sim_n = 100                       # Number of Monte Carlo iterations per exposure time
+sim_t = [20, 40, 80, 160, 320]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
 sim_stray_light_s = 1             # Visible stray light photon/s/pixel
-sim_stray_light = sim_stray_light_s * sim_t  # Visible stray light photon/pixel
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -117,10 +117,8 @@ def fit_spectra(data_cube, wave_axis):
     
     # Use joblib.Parallel to execute the outer loop concurrently.
     # n_jobs=-1 utilises all available cores.
-    results = Parallel(n_jobs=-1)(
-        delayed(process_scan)(i) for i in tqdm(range(n_scan),
-                                                 desc="Fitting spectra",
-                                                 unit="scan")
+    results = Parallel(n_jobs=8)(
+        delayed(process_scan)(i) for i in tqdm(range(n_scan), desc="Fitting spectra", unit="scan", leave=False)
     )
     
     # Combine the results for each scan back into a single numpy array.
@@ -370,7 +368,7 @@ def read_out_photons(counts_cube):
     return electrons_noisy
 
 
-def add_vis_stray_light(electrons_cube):
+def add_vis_stray_light(electrons_cube, sim_t_i):
     """
     Add visible stray light, in electrons, to the cube.
 
@@ -385,6 +383,8 @@ def add_vis_stray_light(electrons_cube):
     out_cube = electrons_cube.copy()
 
     # Add stray light signal
+    sim_stray_light = sim_stray_light_s * sim_t_i
+    
     stray_light_vis_photons = np.random.poisson(sim_stray_light, size=electrons_cube.shape)
 
     stray_light_electrons = stray_light_vis_photons * swc_e_per_vis_ph * swc_vis_qe
@@ -411,7 +411,7 @@ def convert_counts_to_dn(electrons_cube):
     return electrons_cube / swc_dn_per_e
 
 
-def load_muram_atmosphere(filepath):
+def load_muram_atmosphere(filepath, sim_t_i):
     """
     Load a synthesised MuRAM atmosphere from an IDL .sav file for the Fe XII 195.12 emission line and include the exposure time.
     
@@ -473,7 +473,7 @@ def load_muram_atmosphere(filepath):
     atmosphere_cube = np.clip(atmosphere_cube, 0, None)  # No negative values
 
     # Multiply by the exposure time
-    atmosphere_cube *= sim_t  # Convert to erg/cm^2/sr/cm
+    atmosphere_cube *= sim_t_i  # Convert to erg/cm^2/sr/cm
 
     return atmosphere_cube, wave_axis
 
@@ -549,7 +549,7 @@ def get_per_pixel(data_cube):
     return out
 
 
-def plot_spectra(key_pixels, wave_axis, it):
+def plot_spectra(key_pixels, wave_axis, savename):
     """
     Plot the spectra for the key pixels.
 
@@ -563,7 +563,6 @@ def plot_spectra(key_pixels, wave_axis, it):
     """
 
     fig, axs = plt.subplots(4, 9, figsize=(30, 15))
-    fig.suptitle(f"Monte Carlo Iteration {it}", fontsize=16)
     for i, key in enumerate(key_pixels.keys()):
 
         axs[i, 0].step(wave_axis*1e10, key_pixels[key]['spectra_sim'], where='mid', color='black')
@@ -609,7 +608,7 @@ def plot_spectra(key_pixels, wave_axis, it):
             axs[i, j].grid()
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
-    plt.savefig(f"monte_carlo_iteration_{it}.png")
+    plt.savefig(savename)
     plt.close()
 
 
@@ -633,22 +632,21 @@ def calculate_velocity(fit_params):
     return velocity
 
 
-def monte_carlo_analysis(sim_cube, wave_axis, psf):
+def monte_carlo_analysis(sim_cube, wave_axis, psf, sim_t_i):
     # Make a dictionary of dictionaries to store information about the key pixels
     total = np.sum(sim_cube, axis=2)
     key_pixels = {
         'max': {'ipix': np.unravel_index(np.argmax(total), total.shape)},
         'p75': {'ipix': np.unravel_index(np.abs(total - np.percentile(total, 75)).argmin(), total.shape)},
         'p50': {'ipix': np.unravel_index(np.abs(total - np.percentile(total, 50)).argmin(), total.shape)},
-        'p25': {'ipix': np.unravel_index(np.abs(total - np.percentile(total, 25)).argmin(), total.shape)},
+        'p25': {'ipix': np.unravel_index(np.abs(total - np.percentile(total, 25)).argmin(), total.shape)}
     }
     for key in key_pixels.keys():key_pixels[key]['spectra_sim'] = sim_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
-    # Preallocate arrays for storing velocity and nonthermal values
+    # Preallocate arrays for storing velocity values
     velocity_vals = np.zeros((sim_n, sim_cube.shape[0], sim_cube.shape[1]))
-    nonthermal_vals = np.zeros((sim_n, sim_cube.shape[0], sim_cube.shape[1]))
 
-    for it in tqdm(range(sim_n), desc="Monte Carlo iterations", unit="iteration"):
+    for it in tqdm(range(sim_n), desc="Monte Carlo iterations", unit="iteration", leave=False):
 
         # Add Poisson noise
         poisson_cube = add_poisson_noise(sim_cube)
@@ -675,7 +673,7 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
         for key in key_pixels.keys():key_pixels[key]['spectra_el'] = el_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Add stray light signal
-        sl_cube = add_vis_stray_light(el_cube)
+        sl_cube = add_vis_stray_light(el_cube, sim_t_i)
         for key in key_pixels.keys():key_pixels[key]['spectra_sl'] = sl_cube[key_pixels[key]['ipix'][0], key_pixels[key]['ipix'][1], :]
 
         # Convert to DN
@@ -689,25 +687,30 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf):
 
         # Calculate the Doppler velocity and excess broadening
         velocity_vals[it, :, :] = calculate_velocity(fit_params)
-        # nonthermal_vals[it, :, :] = None
 
+        # Plot the velocity map and spectra for the first iteration
         if it == 0:
-            # imshow the velocity_vals
+            plt.figure()
             plt.imshow(velocity_vals[it, :, :]/1000, cmap='seismic', interpolation='nearest', vmin=-30, vmax=30)
             plt.colorbar(label='Velocity (km/s)')
             plt.title(f"Velocity at iteration {it}")
-            plt.savefig(f"velocity_{it}.png")
-            plt.show()
+            plt.savefig(f"velocity_{sim_t_i}_{it}.png")
+            plt.close()
 
-        # Plot the spectras for this iteration
-        if it % 1 == 0:
-            plot_spectra(key_pixels, wave_axis, it)
+            plot_spectra(key_pixels, wave_axis, f'spectra_{sim_t_i}_{it}.png')
 
     # Calculate the standard deviation (uncertainty) maps
     velocity_std = np.nanstd(velocity_vals, axis=0)
-    # nonthermal_std = np.nanstd(nonthermal_vals, axis=0)
-    
-    return {'velocity_std': velocity_std}
+
+    # Plot the Doppler velocity standard deviation map in km/s
+    plt.figure()
+    plt.imshow(velocity_std/1000, cmap='seismic', interpolation='nearest', vmin=-5, vmax=5)
+    plt.colorbar(label='Standard Deviation of Doppler Velocity (km/s)')
+    plt.title('Doppler Velocity Standard Deviation Map (km/s)')
+    plt.savefig(f'velocity_std_map_{sim_t_i}.png')
+    plt.close()
+
+    return {'velocity_vals': velocity_vals, 'velocity_std': velocity_std, 'key_pixels': key_pixels}
 
 
 # ---------------------------------------------------------------------------
@@ -727,12 +730,42 @@ def main():
     # Combine the PSFs
     psf_combined = combine_normalise_psf(psf_mesh_resampled, psf_focus_resampled, max_size=5)
 
-    # Load the synthetic atmosphere cube.
-    sim_cube, wave_axis = load_muram_atmosphere(dat_filename)
+    # Loop over the exposure times and store results
+    all_results = []
+    for sim_t_i in tqdm(sim_t, desc="Exposure times", unit="exposure time"):
+      # Load the synthetic atmosphere cube.
+      sim_cube, wave_axis = load_muram_atmosphere(dat_filename, sim_t_i)
 
-    # Perform Monte Carlo analysis over nsim iterations
-    results = monte_carlo_analysis(sim_cube, wave_axis, psf_combined)
+      # Perform Monte Carlo analysis over sim_n iterations
+      results = monte_carlo_analysis(sim_cube, wave_axis, psf_combined, sim_t_i)
+      all_results.append(results)
 
+    # After the loop: plot exposure time vs. Doppler velocity uncertainty for each key pixel
+    exposure_times = sim_t
+    keys = list(all_results[0]['key_pixels'].keys())
+    markers = ['o', 's', '^', 'v']  # one per key
+
+    plt.figure(figsize=(8, 6))
+    for key, m in zip(keys, markers):
+      # get the pixel indices for this key
+      ipix = all_results[0]['key_pixels'][key]['ipix']
+      # extract the std dev at that pixel for each exposure time
+      std_vals = [
+        res['velocity_std'][ipix[0], ipix[1]] / 1000.0  # convert to km/s
+        for res in all_results
+      ]
+      plt.plot(exposure_times, std_vals,
+           marker=m, linestyle='-',
+           label=key)
+
+    plt.xlabel("Exposure Time (s)")
+    plt.ylabel("Doppler Velocity Uncertainty (km/s)")
+    plt.title("Velocity Uncertainty vs Exposure Time")
+    plt.legend(title="Key Pixels")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("velocity_uncertainty_vs_exposure_time.png")
+    plt.close()
 
 if __name__ == "__main__":
     main()
