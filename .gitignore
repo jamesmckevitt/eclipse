@@ -3,6 +3,9 @@
 *.txt
 *.pdf
 *.sav
-tei_synthesis_ver2.2_20250422/*
-!tei_synthesis_ver2.2_20250422/program/
+
+# Ignore everything inside tei_synthesis_ver2.2_20250422 …
+tei_synthesis_ver2.2_20250422/**
+
+# … except the program directory and everything below it
 !tei_synthesis_ver2.2_20250422/program/**
