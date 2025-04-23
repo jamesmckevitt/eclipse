@@ -15,6 +15,7 @@ import astropy.units as u
 from joblib import Parallel, delayed
 import warnings
 from scipy.optimize import OptimizeWarning
+import h5py
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -57,8 +58,8 @@ dat_pixel_scale_cm = 0.192e8      # Pixel scale (cm) (from MuRAM readme)
 dat_pixel_scale = dat_pixel_scale_cm * 1e-2  # Pixel scale (m) (from MuRAM readme)
 
 # Simulation parameters
-sim_n = 100                       # Number of Monte Carlo iterations per exposure time
-sim_t = [20, 40, 80, 160, 320]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
+sim_n = 50                       # Number of Monte Carlo iterations per exposure time
+sim_t = [1,2,5,10,20]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
 sim_stray_light_s = 1             # Visible stray light photon/s/pixel
 
 # ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ def fit_spectra(data_cube, wave_axis):
     
     # Use joblib.Parallel to execute the outer loop concurrently.
     # n_jobs=-1 utilises all available cores.
-    results = Parallel(n_jobs=8)(
+    results = Parallel(n_jobs=-1)(
         delayed(process_scan)(i) for i in tqdm(range(n_scan), desc="Fitting spectra", unit="scan", leave=False)
     )
     
@@ -750,22 +751,43 @@ def main():
       # get the pixel indices for this key
       ipix = all_results[0]['key_pixels'][key]['ipix']
       # extract the std dev at that pixel for each exposure time
-      std_vals = [
-        res['velocity_std'][ipix[0], ipix[1]] / 1000.0  # convert to km/s
-        for res in all_results
-      ]
+      std_vals = []
+      for res in all_results:
+        std_vals.append(res['velocity_std'][ipix[0], ipix[1]] / 1000.0) # convert to km/s
+
       plt.plot(exposure_times, std_vals,
            marker=m, linestyle='-',
            label=key)
 
+    plt.xscale("log")
+    plt.yscale("log")
     plt.xlabel("Exposure Time (s)")
     plt.ylabel("Doppler Velocity Uncertainty (km/s)")
     plt.title("Velocity Uncertainty vs Exposure Time")
     plt.legend(title="Key Pixels")
-    plt.grid(True)
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.tight_layout()
     plt.savefig("velocity_uncertainty_vs_exposure_time.png")
     plt.close()
+
+    # After plotting, save all_results in a structured HDF5 file
+    with h5py.File('solar_mc_results.h5', 'w') as hf:
+      # Global attributes
+      hf.attrs['sim_n'] = sim_n
+      hf.attrs['exposure_times'] = sim_t
+
+      # Per‐exposure groups
+      for t_val, res in zip(sim_t, all_results):
+        grp = hf.create_group(f"exposure_{t_val}s")
+        grp.create_dataset('velocity_vals', data=res['velocity_vals'])
+        grp.create_dataset('velocity_std', data=res['velocity_std'])
+        # Key pixels metadata
+        kp_grp = grp.create_group('key_pixels')
+        for key, info in res['key_pixels'].items():
+          sub = kp_grp.create_group(key)
+          sub.attrs['ipix'] = info['ipix']
+    # Also save a backup using the simple numpy save function
+    np.savez('solar_mc_results.npz', all_results=all_results)
 
 if __name__ == "__main__":
     main()
