@@ -3,6 +3,8 @@
 *.txt
 *.pdf
 *.sav
+*.h5
+*.npz
 
 # Ignore everything inside tei_synthesis_ver2.2_20250422 …
 tei_synthesis_ver2.2_20250422/**
