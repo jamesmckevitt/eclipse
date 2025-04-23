@@ -1,4 +1,7 @@
 ## TODO: add background spectras
+## TODO: compare calculated velocities to real velocities (to show systematic errors): 
+#   either 1) load in pure MURaM cube and weight LOS velocities 
+#          2) fit high-res emission line (remake synthetic cubes at full wavelength res or use tei's (2x worse res))
 
 import numpy as np
 import matplotlib
@@ -413,7 +416,21 @@ def convert_counts_to_dn(electrons_cube):
     return electrons_cube / swc_dn_per_e
 
 
-def load_muram_atmosphere(filepath, sim_t_i):
+def load_muram_simulated_atmosphere(filepath):
+
+    cube = np.fromfile(filepath, dtype=np.float32).reshape((256, 768, 512))
+
+    # imshow the cube (sum through the last axis)
+    plt.imshow(np.sum(cube, axis=2), cmap='gray')
+    
+    # Transpose the cube
+    cube = np.transpose(cube, (0, 2, 1))  # Transpose axes 1 and 2
+    
+    return cube
+
+
+
+def load_muram_synthetic_atmosphere(filepath, sim_t_i):
     """
     Load a synthesised MuRAM atmosphere from an IDL .sav file for the Fe XII 195.12 emission line and include the exposure time.
     
@@ -736,7 +753,7 @@ def main():
     all_results = []
     for sim_t_i in tqdm(sim_t, desc="Exposure times", unit="exposure time"):
       # Load the synthetic atmosphere cube.
-      sim_cube, wave_axis = load_muram_atmosphere(dat_filename, sim_t_i)
+      sim_cube, wave_axis = load_muram_synthetic_atmosphere(dat_filename, sim_t_i)
 
       # Perform Monte Carlo analysis over sim_n iterations
       results = monte_carlo_analysis(sim_cube, wave_axis, psf_combined, sim_t_i)
