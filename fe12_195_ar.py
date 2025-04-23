@@ -61,6 +61,7 @@ dat_pixel_scale = dat_pixel_scale_cm * 1e-2  # Pixel scale (m) (from MuRAM readm
 sim_n = 50                       # Number of Monte Carlo iterations per exposure time
 sim_t = [1,2,5,10,20]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
 sim_stray_light_s = 1             # Visible stray light photon/s/pixel
+sim_ncpu = 1                  # Number of CPU cores to use for parallel processing (-1 for all available cores)
 
 # ---------------------------------------------------------------------------
 # Functions
