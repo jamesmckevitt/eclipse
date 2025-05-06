@@ -8,8 +8,7 @@ from tqdm import tqdm
 import psutil
 import matplotlib.pyplot as plt
 
-
-g_mu  = 1.29
+g_mu  = 1.29  # DOI: 10.1051/0004-6361:20041507, appendix A
 Fe_amu = 55.845 * u.g / u.mol  # atomic weight of iron
 
 vel_res = 10 * u.km/u.s
@@ -17,7 +16,6 @@ vel_lim = 100 * u.km/u.s
 spt_res = 0.192 * u.Mm
 wvl0 = 195.119 * u.angstrom
 wvl_res = (vel_res.cgs * wvl0.cgs / const.c.cgs)
-
 
 def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
     """
@@ -98,7 +96,7 @@ idx_T = np.searchsorted(goft_logT, logT_flat)
 idx_N = np.searchsorted(goft_logN, logN_flat)
 idx_T = np.clip(idx_T, 0, len(goft_logT) - 1)
 idx_N = np.clip(idx_N, 0, len(goft_logN) - 1)
-Garray = goft[idx_T, idx_N].reshape((nx, ny, nz))
+Garray = goft[idx_N, idx_T].reshape((nx, ny, nz))
 
 Carray = Garray / (4*np.pi) * (10**logN_cube)**2
 
@@ -113,8 +111,9 @@ gauss_x = gauss_x.to(u.cm/u.s)
 gx = gauss_x[None, None, None, :]                # shape (1,1,1,nvel)
 gc = gauss_cent[..., None]                       # shape (nx,ny,nz,1)
 gw = gauss_wdth[..., None]                       # shape (nx,ny,nz,1)
-thermal_widths = gauss_peak[..., None] * np.exp(-0.5 * ((gx - gc) / gw)**2)
-spectral_grid = thermal_widths * Carray[..., None] * spt_res
+thermal_gauss = gauss_peak[..., None] * np.exp(-0.5 * ((gx - gc) / gw)**2)
+
+spectral_grid = thermal_gauss * Carray[..., None] * los_length
 
 print(f"Integrating along the z axis...")
 output = spectral_grid.sum(axis=2)  # shape: (nx, ny, nvel)
