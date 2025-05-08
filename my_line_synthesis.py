@@ -157,10 +157,24 @@ def main():
         I_cubes[line] = calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs, vz_cube)
     del C_cubes, gauss_wdth, gauss_peak, gauss_x_cgs
 
+    print(f"Saving cubes to disk ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
+    filename = 'I_cubes.npz'
+    np.savez_compressed('I_cubes.npz', **{line: I_cubes[line] for line in I_cubes.keys()})
+    print(f"File {filename} saved with total size {os.path.getsize(filename)/1e9:.2f} GB")
+    print(f"Reload this using:")
+    print(f"  tmp = np.load('{filename}')")
+    print("  I_cubes = {line: tmp[line] for line in tmp.files}")
+
+    # reload the .npz file
+    tmp = np.load('I_cubes.npz')
+    # remake the dictionary
+    # I_cubes = {line: I_cubes[line] for line in I_cubes.files}
+    I_cubes = {line: tmp[line] for line in tmp.files}
+
     I_cube = I_cubes['Fe12_195.1190']
 
     fig, ax = plt.subplots()
-    img = ax.imshow(np.log10(I_cube.sum(axis=2).T), aspect='equal', cmap='inferno', origin='upper')
+    img = ax.imshow(np.log10(I_cube.sum(axis=2).T), aspect='equal', cmap='inferno', origin='lower')
     plt.colorbar(img, ax=ax, label='Log(Intensity)')
     ax.set_xlabel('X pixel')
     ax.set_ylabel('Y pixel')
