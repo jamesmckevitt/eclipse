@@ -9,10 +9,6 @@ import psutil
 import matplotlib.pyplot as plt
 from scipy.interpolate import RectBivariateSpline
 
-#### DEBUGGING
-const_c_cgs = 29979245800.000000
-const_u = 1.66e-24
-
 downsample = False
 
 g_mu  = 1.29  # DOI: 10.1051/0004-6361:20041507, appendix A
@@ -20,10 +16,9 @@ Fe_amu = 55.845 * u.g / u.mol  # atomic weight of iron
 
 vel_res = 6 * u.km/u.s
 vel_lim = 300 * u.km/u.s
-# spt_res = 0.192 * u.Mm
-spt_res = 0.064 * u.Mm
+spt_res = 0.064 * u.Mm  # in z direction (note different in x/y)
 wvl0 = 195.119 * u.angstrom
-wvl_res = (vel_res.cgs * wvl0.cgs / const_c_cgs)
+wvl_res = (vel_res.cgs * wvl0.cgs / const.c.cgs)
 
 if downsample:
     spt_res = spt_res * downsample
@@ -117,7 +112,7 @@ del tmp
 
 print(f"Precomputing lookup indices...")
 logT_cube = np.log10(temp.value)
-ne        = (rho/(g_mu*const_u)).cgs
+ne        = (rho/(g_mu*const.u)).cgs
 logN_cube = np.log10(ne.value)
 del ne
 
@@ -133,91 +128,80 @@ del Garray, ne2
 
 li = Carray.sum(axis=2)*spt_res.cgs
 
-# # imshow the Carray summed along the z axis
-# plt.imshow(np.log10(li.T.value), aspect='equal', cmap='inferno')
-# plt.colorbar(label='Intensity')
-# plt.xlabel('X pixel')
-# plt.ylabel('Y pixel')
-# plt.title('Log Integrated Intensity')
-# plt.show()
-
-print(f"Calculating thermal width per voxel...")
+print(f"Calculating the specific intensity for each voxel [erg/s/cm2/sr/cm]...")
 probable_speed = np.sqrt(2 * const.k_B * temp / (Fe_amu / const.N_A)).cgs  # v_p = sqrt(2kT/m), m=M/N_A : cm/s
-# broadening along LOS: g(v) = 1/sqrt(pi*sigma) * exp(-v^2/(wdth^2)), sigma = sqrt(kT/m), therefore sigma = v_p/sqrt(2)
-gauss_wdth = probable_speed / np.sqrt(2)
+gauss_wdth = probable_speed / np.sqrt(2)  # broadening along LOS: g(v) = 1/sqrt(pi*sigma) * exp(-v^2/(wdth^2)), sigma = sqrt(kT/m), therefore sigma = v_p/sqrt(2)
 del probable_speed
 
-print(f"Calculating the specific intensity for each voxel [erg/s/cm2/sr/cm]...")
-gauss_peak = 1/(np.sqrt(2*np.pi*gauss_wdth**2))  # s/cm
-gauss_cent = vz  # cm/s
+gauss_peak = 1.0 / (np.sqrt(2 * np.pi * gauss_wdth**2))
 
-gauss_x = np.arange(-vel_lim.to(u.km/u.s).value, vel_lim.to(u.km/u.s).value + vel_res.to(u.km/u.s).value, vel_res.to(u.km/u.s).value) * u.km/u.s
-gauss_x = gauss_x.to(u.cm/u.s)
+gauss_x = np.arange(-vel_lim.to(u.km/u.s).value,vel_lim.to(u.km/u.s).value + vel_res.to(u.km/u.s).value,vel_res.to(u.km/u.s).value) * u.km/u.s
+gauss_x_cgs = gauss_x.cgs.value
 
-nl = gauss_x.shape[0]
+spt_res_cgs = spt_res.cgs.value
+vel_res_cgs = vel_res.cgs.value
+wvl_res_cgs = wvl_res.cgs.value
 
-# gx = gauss_x[None, None, None, :]                # shape (1,1,1,nvel)
-# gc = gauss_cent[..., None]                       # shape (nx,ny,nz,1)
-# gw = gauss_wdth[..., None]                       # shape (nx,ny,nz,1)
-# del gauss_cent, gauss_wdth
+nl = gauss_x_cgs.size
+spectral_grid = np.zeros((nx, ny, nl))
 
-# thermal_gauss = gauss_peak[..., None] * np.exp(-0.5 * ((gx - gc) / gw)**2)
-# normalised_gauss = thermal_gauss.value / (thermal_gauss.value.sum(axis=3, keepdims=True) + 1e-10)  # shape (nx,ny,nz,nvel)
-
-from IPython import embed;embed()
-
-spectral_grid = np.zeros((nx, ny, nl))  #  * (u.erg / u.s / u.cm**2 / u.sr / u.cm)  # shape (nx, ny, nvel)
 for i in tqdm(range(nx), desc="Calculating gaussians", unit="x"):
-    for j in range(ny):
+    peak_i = gauss_peak[i, :, :]
+    vz_i   = vz[i, :, :].cgs.value
+    gw_i   = gauss_wdth[i, :, :].value
+    C_i    = Carray[i, :, :]
 
-        tmp = np.zeros((nz, nl))
+    diff = (gauss_x_cgs[None, None, :] - vz_i[:, :, None]) / gw_i[:, :, None]
 
-        for k in range(nz):
-            gx = gauss_x.value
-            gc = gauss_cent[i, j, k].value
-            gw = gauss_wdth[i, j, k].value
-            thermal_gauss = gauss_peak[i, j, k] * np.exp(-0.5 * ((gx - gc) / gw)**2)
-            tmp[k, :] = thermal_gauss * Carray[i, j, k] * spt_res.cgs.value
-            # del gx, gc, gw, thermal_gauss, normalised_gauss
+    thermal_gauss = peak_i[:, :, None] * np.exp(-0.5 * diff**2)
 
-        spectral_grid[i, j, :] = tmp.sum(axis=0)  # shape (nvel)
+    tmp = thermal_gauss * C_i[:, :, None] * spt_res_cgs
 
-# # Calculate the Gaussian for each voxel
-# for i in tqdm(range(nx), desc="Calculating gaussians", unit="x"):
-#     for j in range(ny):
-#         for k in range(nz):
-#             gx = gauss_x.value
-#             gc = gauss_cent[i, j, k].value
-#             gw = gauss_wdth[i, j, k].value
-#             thermal_gauss = gauss_peak[i, j, k] * np.exp(-0.5 * ((gx - gc) / gw)**2)
-#             normalised_gauss = thermal_gauss / thermal_gauss.sum()
+    spectral_grid[i, :, :] = tmp.sum(axis=1)
 
-# spectral_grid = normalised_gauss * Carray[..., None] * spt_res.cgs
+spectral_grid_2 = spectral_grid * vel_res_cgs / wvl_res_cgs
+spectral_grid_2 = spectral_grid_2 * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
 
 print(f"Integrating along the z axis...")
-output = spectral_grid.sum(axis=2)  # shape: (nx, ny, nvel)
+output = spectral_grid_2.sum(axis=2)  # shape: (nx, ny, nvel)
 
 fig, ax = plt.subplots()
 img = ax.imshow(
-  np.log10(output.sum(axis=2).T.value),
-  aspect='equal',
-  cmap='inferno',
-  origin='upper'
+    np.log10(output.T.value),
+    aspect='equal',
+    cmap='inferno',
+    origin='upper'
 )
 plt.colorbar(img, ax=ax, label='Log(Intensity)')
 ax.set_xlabel('X pixel')
 ax.set_ylabel('Y pixel')
 ax.set_title('Log Integrated Intensity')
 
-def onclick(event):
-  if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-    # round to nearest pixel
+def onclick(event, ax=ax, cube=spectral_grid_2, vel_axis=gauss_x):
+    """
+    On mouse‐click inside our image axes, round to the nearest pixel,
+    pull the full spectrum from `cube` and plot it against `vel_axis`.
+    """
+    if event.inaxes is not ax:
+        return
+
+    if event.xdata is None or event.ydata is None:
+        return
+
+    # round to the nearest pixel indices
     x_pix = int(round(event.xdata))
     y_pix = int(round(event.ydata))
-    # extract spectrum at that pixel
-    spectrum = output[x_pix, y_pix, :].value
-    # velocity axis in km/s
-    vel = gauss_x.to(u.km/u.s).value
+
+    # guard against clicking outside the valid range
+    nx, ny, _ = cube.shape
+    if not (0 <= x_pix < nx and 0 <= y_pix < ny):
+        return
+
+    # extract spectrum (plain ndarray) at that (x,y)
+    spectrum = cube[x_pix, y_pix, :].value
+
+    # velocity axis in km/s as plain ndarray
+    vel = vel_axis.to(u.km/u.s).value
 
     # plot the clicked spectrum
     fig2, ax2 = plt.subplots()
@@ -227,40 +211,6 @@ def onclick(event):
     ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix})')
     plt.show()
 
-cid = fig.canvas.mpl_connect('button_press_event', onclick)
-plt.show(block=False)
-
-print("Loading up Tei'sans atmosphere for comparison...")
-tmp = readsav("/home/jm/solar/solc/solc_euvst_sw_response/SI_Fe_XII_1952_d0_xy_0270000.sav")
-atmosphere = tmp['si_xy_dl']
-atmosphere = atmosphere.transpose((2, 1, 0))  # shape (nx, ny, nwvl)
-
-# imshow the atmosphere integrated intensity (integrated over the spectral dimension)
-fig_atm, ax_atm = plt.subplots()
-atm_intensity = atmosphere.sum(axis=2)
-img_atm = ax_atm.imshow(np.log10(atm_intensity.T), aspect='equal', cmap='inferno', origin='upper')
-plt.colorbar(img_atm, ax=ax_atm, label='Log(Intensity)')
-ax_atm.set_xlabel('X pixel')
-ax_atm.set_ylabel('Y pixel')
-ax_atm.set_title('Log Integrated Atmosphere Intensity')
-
-# define click event to display the atmospheric spectrum at the clicked pixel
-def onclick_atm(event):
-  if event.inaxes is ax_atm and event.xdata is not None and event.ydata is not None:
-    # round to nearest pixel
-    x_pix = int(round(event.xdata))
-    y_pix = int(round(event.ydata))
-    # extract the spectrum at that pixel (wavelength dimension)
-    spectrum = atmosphere[x_pix, y_pix, :]
-    # define a wavelength axis as pixel index (modify if you have a real wavelength calibration)
-    wvl = np.arange(atmosphere.shape[2])
-    
-    fig2, ax2 = plt.subplots()
-    ax2.plot(wvl, spectrum)
-    ax2.set_xlabel('Wavelength Pixel')
-    ax2.set_ylabel('Intensity')
-    ax2.set_title(f'Atmospheric Spectrum at Pixel ({x_pix}, {y_pix})')
-    plt.show()
-
-cid_atm = fig_atm.canvas.mpl_connect('button_press_event', onclick_atm)
+# connect the click handler and show
+fig.canvas.mpl_connect('button_press_event', onclick)
 plt.show()
