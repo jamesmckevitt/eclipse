@@ -165,12 +165,6 @@ def main():
     print(f"  tmp = np.load('{filename}')")
     print("  I_cubes = {line: tmp[line] for line in tmp.files}")
 
-    # reload the .npz file
-    tmp = np.load('I_cubes.npz')
-    # remake the dictionary
-    # I_cubes = {line: I_cubes[line] for line in I_cubes.files}
-    I_cubes = {line: tmp[line] for line in tmp.files}
-
     I_cube = I_cubes['Fe12_195.1190']
 
     fig, ax = plt.subplots()
