@@ -62,21 +62,45 @@ def interp2d_spline(goft, goft_logT, goft_logN, logT_cube, logN_cube):
     G_flat = spline.ev(pts_N, pts_T)
     return G_flat.reshape(logT_cube.shape)
 
-def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs, vz_cube):
+def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, full_vectorization=False):
 
     nx, ny, nz = C_cube.shape
     nl = gauss_x_cgs.size
 
-    I_cube = np.zeros((nx, ny, nl))
-    for i in tqdm(range(nx), desc='Looping through x axis', unit='x'):
-        peak_i = gauss_peak[i, :, :]
-        vz_i = vz_cube[i, :, :].cgs.value
-        gw_i = gauss_wdth[i, :, :].cgs.value
-        C_i = C_cube[i, :, :].cgs.value
+    if full_vectorization:
+        
+        C_val    = C_cube.cgs.value      if hasattr(C_cube, 'cgs')    else np.asarray(C_cube)
+        peak_val = np.asarray(gauss_peak)
+        gw_val   = gauss_wdth.cgs.value
+        vz_val   = vz_cube.cgs.value
 
-        thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2 * gw_i[:, :, None]**2))
-        I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_cgs * (vel_res_cgs / wvl_res_cgs), axis=1 ) * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-    return I_cube
+        C_b    = C_val[..., None]
+        peak_b = peak_val[..., None]
+        gw_b   = gw_val[..., None]
+        vz_b   = vz_val[..., None]
+
+        x_b = gauss_x_cgs[None, None, None, :]
+        exponent = -((x_b - vz_b)**2) / (2.0 * gw_b**2)
+
+        thermal_gauss = peak_b * np.exp(exponent)
+        prefactor = spt_res_cgs * (vel_res_cgs / wvl_res_cgs)
+        emissivity = thermal_gauss * C_b * prefactor
+        I_val = np.sum(emissivity, axis=2)
+        I_cube = I_val
+
+    else:
+
+        I_cube = np.zeros((nx, ny, nl))
+        for i in tqdm(range(nx), desc='Looping through x axis', unit='x'):
+            peak_i = gauss_peak[i, :, :]
+            vz_i = vz_cube[i, :, :].cgs.value
+            gw_i = gauss_wdth[i, :, :].cgs.value
+            C_i = C_cube[i, :, :].cgs.value
+
+            thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2 * gw_i[:, :, None]**2))
+            I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_cgs * (vel_res_cgs / wvl_res_cgs), axis=1 )
+
+        return I_cube * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
 
 
 def main():
@@ -97,11 +121,11 @@ def main():
 
     base = '/home/jm/solar/solc/solc_euvst_sw_response/tei_synthesis_ver2.2_20250422/input/AR_64x192x192'
     files = dict(
-        T   = 'temp/eosT.0270000',
-        rho = 'rho/result_prim_0.0270000',
-        vx  = 'vx/result_prim_1.0270000',
-        vy  = 'vy/result_prim_3.0270000',
-        vz  = 'vz/result_prim_2.0270000'
+        T   = 'temp/eosT.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/eosT.0270000
+        rho = 'rho/result_prim_0.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_0.0270000
+        vx  = 'vx/result_prim_1.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_1.0270000
+        vy  = 'vy/result_prim_3.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_3.0270000
+        vz  = 'vz/result_prim_2.0270000'  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_2.0270000
     )
     paths = {k:os.path.join(base,fn) for k,fn in files.items()}
 
@@ -121,9 +145,9 @@ def main():
     print(f"Loading G(T,N) tables ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
     gofnt_dict = read_contribution_funcs('G_of_T.sav')
 
-    ###### TEMP FOR DEBUG ######
-    gofnt_dict = {k:v for k,v in gofnt_dict.items() if k == 'Fe12_195.1190'}
-    ###### TEMP FOR DEBUG ######
+    # ###### TEMP FOR DEBUG ######
+    # gofnt_dict = {k:v for k,v in gofnt_dict.items() if k == 'Fe12_195.1190'}
+    # ###### TEMP FOR DEBUG ######
 
     print(f"Calculating the contribution function [erg cm3/s] per voxel ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
     G_cubes = {}
@@ -165,33 +189,33 @@ def main():
     print(f"  tmp = np.load('{filename}')")
     print("  I_cubes = {line: tmp[line] for line in tmp.files}")
 
-    I_cube = I_cubes['Fe12_195.1190']
+    # I_cube = I_cubes['Fe12_195.1190']
 
-    fig, ax = plt.subplots()
-    img = ax.imshow(np.log10(I_cube.sum(axis=2).T), aspect='equal', cmap='inferno', origin='lower')
-    plt.colorbar(img, ax=ax, label='Log(Intensity)')
-    ax.set_xlabel('X pixel')
-    ax.set_ylabel('Y pixel')
-    def onclick(event, ax=ax, cube=I_cube, vel_axis=vel_grid.to(u.km/u.s).value):
-        if event.inaxes is not ax:
-            return
-        if event.xdata is None or event.ydata is None:
-            return
-        x_pix = int(round(event.xdata))
-        y_pix = int(round(event.ydata))
-        nx, ny, _ = cube.shape
-        if not (0 <= x_pix < nx and 0 <= y_pix < ny):
-            return
-        spectrum = cube[x_pix, y_pix, :]
-        vel = vel_axis
-        fig2, ax2 = plt.subplots()
-        ax2.plot(vel, spectrum)
-        ax2.set_xlabel('Velocity (km/s)')
-        ax2.set_ylabel('Intensity')
-        ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix})')
-        plt.show()
-    fig.canvas.mpl_connect('button_press_event', onclick)
-    plt.show()
+    # fig, ax = plt.subplots()
+    # img = ax.imshow(np.log10(I_cube.sum(axis=2).T), aspect='equal', cmap='inferno', origin='lower')
+    # plt.colorbar(img, ax=ax, label='Log(Intensity)')
+    # ax.set_xlabel('X pixel')
+    # ax.set_ylabel('Y pixel')
+    # def onclick(event, ax=ax, cube=I_cube, vel_axis=vel_grid.to(u.km/u.s).value):
+    #     if event.inaxes is not ax:
+    #         return
+    #     if event.xdata is None or event.ydata is None:
+    #         return
+    #     x_pix = int(round(event.xdata))
+    #     y_pix = int(round(event.ydata))
+    #     nx, ny, _ = cube.shape
+    #     if not (0 <= x_pix < nx and 0 <= y_pix < ny):
+    #         return
+    #     spectrum = cube[x_pix, y_pix, :]
+    #     vel = vel_axis
+    #     fig2, ax2 = plt.subplots()
+    #     ax2.plot(vel, spectrum)
+    #     ax2.set_xlabel('Velocity (km/s)')
+    #     ax2.set_ylabel('Intensity')
+    #     ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix})')
+    #     plt.show()
+    # fig.canvas.mpl_connect('button_press_event', onclick)
+    # plt.show()
 
     globals().update(locals())
 if __name__ == '__main__':
