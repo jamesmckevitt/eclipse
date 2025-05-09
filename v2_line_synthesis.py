@@ -8,14 +8,19 @@ from tqdm import tqdm
 import psutil
 import matplotlib.pyplot as plt
 
+downsample = 2
+
 g_mu  = 1.29  # DOI: 10.1051/0004-6361:20041507, appendix A
 Fe_amu = 55.845 * u.g / u.mol  # atomic weight of iron
 
-vel_res = 10 * u.km/u.s
-vel_lim = 100 * u.km/u.s
+vel_res = 5 * u.km/u.s
+vel_lim = 50 * u.km/u.s
 spt_res = 0.192 * u.Mm
 wvl0 = 195.119 * u.angstrom
 wvl_res = (vel_res.cgs * wvl0.cgs / const.c.cgs)
+
+if downsample:
+    spt_res = spt_res * downsample
 
 def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
     """
@@ -65,15 +70,14 @@ files = dict(
 paths = {k:os.path.join(base,fn) for k,fn in files.items()}
 
 print(f"Loading static cubes ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-temp = load_cube(paths['T']  , downsample=2, unit=u.K)
-rho  = load_cube(paths['rho'], downsample=2, unit=u.g/u.cm**3)
-vx   = load_cube(paths['vx'] , downsample=2, unit=u.cm/u.s)
-vy   = load_cube(paths['vy'] , downsample=2, unit=u.cm/u.s)
-vz   = load_cube(paths['vz'] , downsample=2, unit=u.cm/u.s)
+temp = load_cube(paths['T']  , downsample=downsample, unit=u.K)
+rho  = load_cube(paths['rho'], downsample=downsample, unit=u.g/u.cm**3)
+vx   = load_cube(paths['vx'] , downsample=downsample, unit=u.cm/u.s)
+vy   = load_cube(paths['vy'] , downsample=downsample, unit=u.cm/u.s)
+vz   = load_cube(paths['vz'] , downsample=downsample, unit=u.cm/u.s)
 
+assert temp.shape == rho.shape == vx.shape == vy.shape == vz.shape, "Cubes must have the same shape"
 nx, ny, nz = temp.shape
-
-los_length = spt_res.cgs * nz
 
 print("Load the goft function")
 tmp = read_contribution_funcs('G_of_T.sav')
@@ -83,11 +87,8 @@ goft_logT = tmp['Fe12_195.1190']['logT']
 
 print(f"Precomputing lookup indices...")
 logT_cube = np.log10(temp.value)
-ne        = (rho/(g_mu*const.u.cgs)).to(1/u.cm**3)
+ne        = (rho/(g_mu*const.u)).cgs
 logN_cube = np.log10(ne.value)
-
-print(f"Calculating thermal width per voxel...")
-thermal_widths = np.sqrt(2 * const.k_B.cgs * temp.cgs / (Fe_amu / const.N_A.cgs))
 
 print(f"Calculating the contribution function per voxel...")
 logT_flat = logT_cube.ravel()
@@ -98,30 +99,120 @@ idx_T = np.clip(idx_T, 0, len(goft_logT) - 1)
 idx_N = np.clip(idx_N, 0, len(goft_logN) - 1)
 Garray = goft[idx_N, idx_T].reshape((nx, ny, nz))
 
-Carray = Garray / (4*np.pi) * (10**logN_cube)**2
+# get the indices of the voxel with the maximum G
+max_idx = np.unravel_index(np.argmax(Garray), Garray.shape)
+i, j, k = max_idx
+print(f"  logT = {logT_cube[i, j, k]:.2f}, logN = {logN_cube[i, j, k]:.2f}, Ne = {ne[i, j, k]:.2e}, rho = {rho[i, j, k]:.2e}")
+print(f"  G = {Garray[i, j, k]:.2e}")
 
-print(f"Calculating the spectral grid...")
-gauss_wdth = thermal_widths / np.sqrt(2)
-gauss_peak = 1/np.sqrt(2*np.pi*gauss_wdth)
-gauss_cent = vz
+print(f"Calculating the integrated intensity per voxel [erg/s/cm3/sr]...")
+Carray = Garray * (1/(4*np.pi*u.sr)) * ne**2
 
-gauss_x = np.arange(-vel_lim.value, vel_lim.value + vel_res.value, vel_res.value) * u.km/u.s
+# imshow the Carray summed along the z axis
+plt.imshow(np.log10((Carray.sum(axis=2).T*spt_res.cgs).value), aspect='equal', cmap='inferno')
+plt.colorbar(label='Log(Intensity)')
+plt.xlabel('X pixel')
+plt.ylabel('Y pixel')
+plt.title('Log Integrated Intensity')
+plt.show()
+
+print(f"Calculating thermal width per voxel...")
+probable_speed = np.sqrt(2 * const.k_B * temp / (Fe_amu / const.N_A)).cgs  # v_p = sqrt(2kT/m), m=M/N_A : cm/s
+# broadening along LOS: g(v) = 1/sqrt(pi*sigma) * exp(-v^2/(wdth^2)), sigma = sqrt(kT/m), therefore sigma = v_p/sqrt(2)
+gauss_wdth = probable_speed / np.sqrt(2)
+
+print(f"Calculating the specific intensity for each voxel [erg/s/cm2/sr/cm]...")
+gauss_peak = 1/(np.sqrt(2*np.pi*gauss_wdth**2))  # s/cm
+gauss_cent = vz  # cm/s
+
+gauss_x = np.arange(-vel_lim.to(u.km/u.s).value, vel_lim.to(u.km/u.s).value + vel_res.to(u.km/u.s).value, vel_res.to(u.km/u.s).value) * u.km/u.s
 gauss_x = gauss_x.to(u.cm/u.s)
 
 gx = gauss_x[None, None, None, :]                # shape (1,1,1,nvel)
 gc = gauss_cent[..., None]                       # shape (nx,ny,nz,1)
 gw = gauss_wdth[..., None]                       # shape (nx,ny,nz,1)
 thermal_gauss = gauss_peak[..., None] * np.exp(-0.5 * ((gx - gc) / gw)**2)
+normalised_gauss = thermal_gauss.value / (thermal_gauss.value.sum(axis=3, keepdims=True) + 1e-10)  # shape (nx,ny,nz,nvel)
 
-spectral_grid = thermal_gauss * Carray[..., None] * los_length
+# # Calculate the Gaussian for each voxel
+# for i in tqdm(range(nx), desc="Calculating gaussians", unit="x"):
+#     for j in range(ny):
+#         for k in range(nz):
+#             gx = gauss_x.value
+#             gc = gauss_cent[i, j, k].value
+#             gw = gauss_wdth[i, j, k].value
+#             thermal_gauss = gauss_peak[i, j, k] * np.exp(-0.5 * ((gx - gc) / gw)**2)
+#             normalised_gauss = thermal_gauss / thermal_gauss.sum()
+
+spectral_grid = normalised_gauss * Carray[..., None] * spt_res.cgs
 
 print(f"Integrating along the z axis...")
 output = spectral_grid.sum(axis=2)  # shape: (nx, ny, nvel)
 
-# imshow the output summed along the wavelength axis
-plt.imshow(np.log10(output.sum(axis=2).T.value), aspect='equal', cmap='inferno')
-plt.colorbar(label='Log(Intensity)')
-plt.xlabel('X pixel')
-plt.ylabel('Y pixel')
-plt.title('Log Integrated Intensity')
+fig, ax = plt.subplots()
+img = ax.imshow(
+  np.log10(output.sum(axis=2).T.value),
+  aspect='equal',
+  cmap='inferno',
+  origin='upper'
+)
+plt.colorbar(img, ax=ax, label='Log(Intensity)')
+ax.set_xlabel('X pixel')
+ax.set_ylabel('Y pixel')
+ax.set_title('Log Integrated Intensity')
+
+def onclick(event):
+  if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+    # round to nearest pixel
+    x_pix = int(round(event.xdata))
+    y_pix = int(round(event.ydata))
+    # extract spectrum at that pixel
+    spectrum = output[x_pix, y_pix, :].value
+    # velocity axis in km/s
+    vel = gauss_x.to(u.km/u.s).value
+
+    # plot the clicked spectrum
+    fig2, ax2 = plt.subplots()
+    ax2.plot(vel, spectrum)
+    ax2.set_xlabel('Velocity (km/s)')
+    ax2.set_ylabel('Intensity')
+    ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix})')
+    plt.show()
+
+cid = fig.canvas.mpl_connect('button_press_event', onclick)
+plt.show(block=False)
+
+print("Loading up Tei'sans atmosphere for comparison...")
+tmp = readsav("/home/jm/solar/solc/solc_euvst_sw_response/SI_Fe_XII_1952_d0_xy_0270000.sav")
+atmosphere = tmp['si_xy_dl']
+atmosphere = atmosphere.transpose((2, 1, 0))  # shape (nx, ny, nwvl)
+
+# imshow the atmosphere integrated intensity (integrated over the spectral dimension)
+fig_atm, ax_atm = plt.subplots()
+atm_intensity = atmosphere.sum(axis=2)
+img_atm = ax_atm.imshow(np.log10(atm_intensity.T), aspect='equal', cmap='inferno', origin='upper')
+plt.colorbar(img_atm, ax=ax_atm, label='Log(Intensity)')
+ax_atm.set_xlabel('X pixel')
+ax_atm.set_ylabel('Y pixel')
+ax_atm.set_title('Log Integrated Atmosphere Intensity')
+
+# define click event to display the atmospheric spectrum at the clicked pixel
+def onclick_atm(event):
+  if event.inaxes is ax_atm and event.xdata is not None and event.ydata is not None:
+    # round to nearest pixel
+    x_pix = int(round(event.xdata))
+    y_pix = int(round(event.ydata))
+    # extract the spectrum at that pixel (wavelength dimension)
+    spectrum = atmosphere[x_pix, y_pix, :]
+    # define a wavelength axis as pixel index (modify if you have a real wavelength calibration)
+    wvl = np.arange(atmosphere.shape[2])
+    
+    fig2, ax2 = plt.subplots()
+    ax2.plot(wvl, spectrum)
+    ax2.set_xlabel('Wavelength Pixel')
+    ax2.set_ylabel('Intensity')
+    ax2.set_title(f'Atmospheric Spectrum at Pixel ({x_pix}, {y_pix})')
+    plt.show()
+
+cid_atm = fig_atm.canvas.mpl_connect('button_press_event', onclick_atm)
 plt.show()
