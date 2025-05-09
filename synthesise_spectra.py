@@ -355,7 +355,8 @@ def main():
         print(f"Combining into one spectra per LOS pixel [erg/s/cm2/sr/cm] (primary + background) ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
         I_cube, background_spectrum, background_spectrum_line = combine_spectra(I_cubes, gofnt_dict, prime_line)
         I_cube *= (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        background_spectrum, background_spectrum_line *= (u.AA)
+        background_spectrum *= (u.AA)
+        background_spectrum_line *= (u.AA)
         np.savez(filename, I_cube=I_cube.value, background_spectrum=background_spectrum.value, background_spectrum_line=background_spectrum_line.value)
 
     fig, ax = plt.subplots()
