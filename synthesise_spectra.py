@@ -127,7 +127,7 @@ def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, sp
 
 def combine_spectra(I_cubes, gofnt_dict, prime_line):
     """
-    Combine all line spectra into one spectrum per voxel. Method:
+    Combine all line spectra into one spectrum per pixel. Method:
     - Background lines: Connect the two highest peaks with a straight line.
       If the line goes below 0 anywhere in the wavelength range, connect the highest peak with y=0 at xmin or xmax.
     - Primary lines: sum their full profiles.
@@ -135,81 +135,54 @@ def combine_spectra(I_cubes, gofnt_dict, prime_line):
     """
     nx, ny, nl = I_cubes[prime_line].shape
 
-    # Initialize combined and background spectra arrays
     combined = np.zeros_like(I_cubes[prime_line].value)
     background_spectrum = np.zeros_like(I_cubes[prime_line].value)
+    background_spectrum_line = np.zeros_like(I_cubes[prime_line].value)
 
-    # Wavelength grid of the prime line
     wl_grid_prime = gofnt_dict[prime_line]['wl_grid'].to(u.AA).value
 
-    # List of background lines
     background_lines = [line for line in I_cubes.keys() if gofnt_dict[line]['background']]
 
-    # Step 3: Accumulate background spectra for each voxel
     for line, I_cube in tqdm(I_cubes.items(), desc='Making background', unit='line', leave=False):
         if line in background_lines:
+            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
             for i in range(nx):
                 for j in range(ny):
-                    wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-                    # Interpolate to the prime line's wavelength grid
-                    background_spectrum[i, j, :] += np.interp(wl_grid_prime, wl_grid, I_cube[i, j, :].value)
+                    spectrum = I_cube[i, j, :].value
+                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
+                    background_spectrum[i, j, :] += interpolated
 
-    # Step 4: Find the highest and second highest peaks in the background spectrum
     peak1_idx = np.argmax(background_spectrum, axis=2)
-    
-    # Initialize point2_idx based on peak positions
-    point2_idx = np.zeros_like(peak1_idx)
-    
-    for i in range(nx):
-        for j in range(ny):
-            if peak1_idx[i,j] < nl // 2:
-                point2_idx[i,j] = nl - 1  # Peak is to the left, second point is the furthest right
-            else:
-                point2_idx[i,j] = 0      # Peak is to the right, second point is the furthest left
+    point2_idx = np.where(peak1_idx < nl // 2, nl - 1, 0)
 
-    # Step 5: Define the straight line connecting the two highest peaks
-    background_spectrum_line = np.zeros_like(background_spectrum)
     for i in range(nx):
         for j in range(ny):
-            # globals().update(locals());raise ValueError("Kicking back to ipython")
-            # Get the two points: peak1 and point2
-            # x1, y1 = peak1_idx[i,j], background_spectrum[i,j,peak1_idx[i,j]]
             x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
             x2, y2 = wl_grid_prime[point2_idx[i,j]], 0
-
-            # Define the line connecting the two points
             slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
             intercept = y1 - slope * x1
             background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
 
-            # Step 6: Check if any points go above the line
             if np.any(background_spectrum[i,j,:] > background_spectrum_line[i,j,:]):
-                # Get the index of the highest point above the line
                 peak3_idx = np.argmax(background_spectrum[i,j,:] - background_spectrum_line[i,j,:])
-
-                # Step 7: Redefine the line to connect the highest peak and the new point
-                # x1, y1 = peak1_idx[i,j], background_spectrum[i,j,peak1_idx[i,j]]
-                # x2, y2 = peak3_idx, background_spectrum[i,j,peak3_idx]
                 x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
                 x2, y2 = wl_grid_prime[peak3_idx], background_spectrum[i,j,peak3_idx]
-                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0  # Handle division by zero
+                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
                 intercept = y1 - slope * x1
                 background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
 
-    # Step 8: Add the primary lines to the final combined spectrum
     for line, I_cube in I_cubes.items():
         if line not in background_lines:
+            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
             for i in range(nx):
                 for j in range(ny):
-                    wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-                    # Interpolate non-background lines to the prime line's wavelength grid
-                    combined[i, j, :] += np.interp(wl_grid_prime, wl_grid, I_cube[i, j, :].value)
+                    spectrum = I_cube[i, j, :].value
+                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
+                    combined[i, j, :] += interpolated
 
-    # Add the background spectrum to the final combined spectrum
     combined += background_spectrum_line
 
     return combined, background_spectrum, background_spectrum_line
-
 
 def main():
 
@@ -360,71 +333,81 @@ def main():
         np.savez(filename, I_cube=I_cube.value, background_spectrum=background_spectrum.value, background_spectrum_line=background_spectrum_line.value)
 
     fig, ax = plt.subplots()
-    img = ax.imshow(
-      np.log10(I_cube.sum(axis=2).T.value),
-      aspect='equal', cmap='inferno', origin='lower'
-    )
+    img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value), aspect='equal', cmap='inferno', origin='lower')
     plt.colorbar(img, ax=ax, label='Log(Intensity)')
-    ax.set_xlabel('X pixel')
-    ax.set_ylabel('Y pixel')
 
     def onclick(event,
-        ax=ax,
-        total_cube=I_cube,
-        back_cube=background_spectrum,
-        back_line_cube=background_spectrum_line,
-        cubes=I_cubes,
-        gofnt=gofnt_dict):
-      # only respond to clicks in this axes
-      if event.inaxes is not ax:
+          ax=ax,
+          total_cube=I_cube,
+          back_cube=background_spectrum,
+          back_line_cube=background_spectrum_line,
+          cubes=I_cubes,
+          gofnt=gofnt_dict):
+        if event.inaxes is not ax:
           return
-      if event.xdata is None or event.ydata is None:
+        if event.xdata is None or event.ydata is None:
           return
-
-      x_pix = int(round(event.xdata))
-      y_pix = int(round(event.ydata))
-      nx, ny, _ = total_cube.shape
-      if not (0 <= x_pix < nx and 0 <= y_pix < ny):
+        x_pix = int(round(event.xdata))
+        y_pix = int(round(event.ydata))
+        nx, ny, _ = total_cube.shape
+        if not (0 <= x_pix < nx and 0 <= y_pix < ny):
           return
 
-      # make two subplots: top=linear, bottom=log
-      fig2, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(6, 8))
-      # plot each line vs its own wavelength grid
-      for name, cube_line in cubes.items():
+        # Prepare the two-panel figure
+        fig2, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(6, 8))
+
+        # Plot each line's spectrum
+        for name, cube_line in cubes.items():
           wl_grid = gofnt[name]['wl_grid'].to(u.AA).value
           spec = cube_line[x_pix, y_pix, :]
           y_line = spec.value if hasattr(spec, 'value') else spec
           ax1.plot(wl_grid, y_line, label=name, alpha=0.7)
           ax2.plot(wl_grid, y_line, label=name, alpha=0.7)
 
-      # plot the combined spectrum versus the first line's wavelength grid
-      wl_tot = gofnt[prime_line]['wl_grid'].to(u.AA).value
-      spec_tot = total_cube[x_pix, y_pix, :]
-      spec_back = back_cube[x_pix, y_pix, :]
-      spec_back_line = back_line_cube[x_pix, y_pix, :]
-      y_tot = spec_tot.value if hasattr(spec_tot, 'value') else spec_tot
-      ax1.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
-      ax2.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
+        # Plot total and background
+        wl_tot = gofnt[prime_line]['wl_grid'].to(u.AA).value
+        spec_tot = total_cube[x_pix, y_pix, :]
+        spec_back = back_cube[x_pix, y_pix, :]
+        spec_back_line = back_line_cube[x_pix, y_pix, :]
 
-      ax1.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
-      ax2.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
-      ax1.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
-      ax2.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
+        y_tot = spec_tot.value if hasattr(spec_tot, 'value') else spec_tot
 
-      # formatting
-      ax1.set_ylabel('Intensity')
-      ax1.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — linear scale')
-      ax1.legend(loc='best', fontsize='small')
+        ax1.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
+        ax2.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
 
-      ax2.set_yscale('log')
-      ax2.set_ylim(bottom=1e-1)
-      ax2.set_xlabel('Wavelength (Å)')
-      ax2.set_ylabel('Intensity')
-      ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — log scale')
-      ax2.legend(loc='best', fontsize='small')
+        ax1.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
+        ax2.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
 
-      plt.tight_layout()
-      plt.show()
+        ax1.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
+        ax2.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
+
+        ax1.set_ylabel('Intensity')
+        ax1.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — linear scale')
+        ax1.legend(loc='best', fontsize='small')
+
+        ax2.set_yscale('log')
+        ax2.set_ylim(bottom=1e-1)
+        ax2.set_xlabel('Wavelength (Å)')
+        ax2.set_ylabel('Intensity')
+        ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — log scale')
+        ax2.legend(loc='best', fontsize='small')
+
+        # Add a top x-axis showing velocity (km/s) for the primary line
+        # Convert wavelength (Å) ↔ velocity (km/s) via v = c * (λ - λ0) / λ0
+        wl0_A = gofnt[prime_line]['wl0'].to(u.AA).value
+        c_km_s = const.c.to(u.km / u.s).value
+
+        def wl_to_vel(wl):
+            return (wl - wl0_A) / wl0_A * c_km_s
+
+        def vel_to_wl(v):
+            return (v / c_km_s) * wl0_A + wl0_A
+
+        secax = ax1.secondary_xaxis('top', functions=(wl_to_vel, vel_to_wl))
+        secax.set_xlabel('Velocity (km/s)')
+
+        plt.tight_layout()
+        plt.show()
 
     fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
