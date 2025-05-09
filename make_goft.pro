@@ -1,8 +1,9 @@
 ; TODO: Improve this by using emiss_calc and calculate goft ourselves, to as not to need a catalogue of transition indexes
 
-PRO make_goft
+; run ch_ss to get the emission lines in the range fo interest
+; run get_index to get the transition indexes needed for this code, for those lines
 
-compile_opt idl2
+PRO make_goft
 
   ; Density & temperature grids
   nN = 51                           ; number of density points
@@ -21,21 +22,34 @@ compile_opt idl2
   ioneq_file = '/home/jm/solar/ssw/packages/chianti/dbase/ioneq/chianti.ioneq'
   abund_file = '/home/jm/solar/ssw/packages/chianti/dbase/abundance/archive/sun_coronal_2012_schmelz_ext.abund'
 
-  ; Lines (and their transition index) from CHIANIT surrounding Fe XII 195.119
+  ; Index    Wavelength (A) Intensity  Ion        Tmax  Transition
+  ; 24741    194.9800     2.89e-01 Fe XIII *     6.25   3s 3p3 3D1 - 3s 3p2 3d 3P0
+  ; 17507    194.9910     1.94e+00 Fe XIV *      6.30   3s2.4f 2F5/2 - 3s2.5g 2G7/2
+  ; 24745    194.9970     6.46e-01 Fe XIII *     6.25   3s 3p3 1P1 - 3s2 3d2 3F2
+  ; 30003    195.0040     5.08e+00 Fe XII *      6.20   3s 3p4 4P5/2 - 3s 3p3 3d 2F7/2
   ; 24318    195.0250     9.76e+00 Fe XI *       6.15   3s2 3p3 3d 1F3 - 3s2 3p2 3d2 1G4
   ; 15963    195.0290     7.56e+00 Fe IX *       6.00   3s2 3p5 3d 1F3 - 3s2 3p4 3d2 1D2
+  ; 15       195.0360     3.86e+00 Mn X          6.10   3s2.3p4 3P0 - 3s2.3p3(4S).3d 3D1
+  ; 24327    195.0540     1.60e+00 Fe XI *       6.15   3s2 3p3 3d 3P1 - 3s2 3p2 3d2 3D2
   ; 30038    195.0860     3.97e+00 Fe XII *      6.20   3s2 3p2 3d 4D7/2 - 3s2 3p 3d2 4F9/2
   ; 30051    195.1190     2.24e+03 Fe XII        6.20   3s2 3p3 4S3/2 - 3s2 3p2 3d 4P5/2
+  ; 24345    195.1470     6.29e-01 Fe XI *       6.15   3s2 3p3 3d 1P1 - 3s2 3p2 3d2 3P1
+  ; 6977     195.1510     2.84e-01 Fe X *        6.05   3s2 3p4 3d 4D1/2 - 3s2 3p3 3d2 4D3/2
+  ; 24766    195.1600     3.57e-01 Fe XIII *     6.25   3s 3p3 3P1 - 3s 3p2 3d 1D2
+  ; 13088    195.1600     9.41e-01 Ni XI *       6.15   3s2 3p5 3d 1D2 - 3s2 3p4 3d2 5D3
   ; 30073    195.1790     2.93e+02 Fe XII        6.20   3s2 3p3 2D3/2 - 3s2 3p2 3d 2D3/2
+  ; 16010    195.2300     3.29e-01 Fe IX *       6.00   3s2 3p4 3d2 3G5 - 3s2 3p3 3d3 1I6
+  ; 17522    195.2450     8.46e-01 Fe XIV        6.30   3s.3p2 4P3/2 - 3s.3p(3P).3d 2F5/2
+  ; 24371    195.2450     3.19e-01 Fe XI *       6.15   3s2 3p3 3d 3G4 - 3s2 3p2 3d2 3G4
   ; 6988     195.2600     8.06e+00 Fe X *        6.05   3s2 3p4 3d 2F7/2 - 3s2 3p3 3d2 2G9/2
   ; 6989     195.2610     2.66e+01 Fe X *        6.05   3s2 3p4 3d 2F7/2 - 3s2 3p3 3d2 2G9/2
-  ; 81       195.2710     2.31e+01 Ni XVI        6.45   3s2.3p 2P3/2 - 3s2.3d 2D3/2
+  ; 30103    195.2660     2.91e-01 Fe XII *      6.20   3s2 3p2 3d 2D5/2 - 3s2 3p 3d2 2D3/2
 
   ; Emission lines
-  emission_lines = ['Fe11_195.0250', 'Fe09_195.0290', 'Fe12_195.0860', 'Fe12_195.1190', 'Fe12_195.1790', 'Fe10_195.2600', 'Fe10_195.2610', 'Ni16_195.2710']
-  atoms          = [             26,              26,              26,              26,              26,              26,              26,              28]
-  ions           = [             11,               9,              12,              12,              12,              10,              10,              16]
-  indices        = [          24318,           15963,           30038,           30051,           30073,             6988,           6989,              81]
+  emission_lines = ['Fe13_194.9800', 'Fe14_194.9910', 'Fe13_194.9970', 'Fe12_195.0040', 'Fe11_195.0250', 'Fe09_195.0290', 'Mn10_195.0360', 'Fe11_195.0540', 'Fe12_195.0860', 'Fe12_195.1190', 'Fe11_195.1470', 'Fe10_195.1510', 'Fe13_195.1600', 'Ni11_195.1600', 'Fe12_195.1790', 'Fe09_195.2300', 'Fe14_195.2450', 'Fe11_195.2450', 'Fe10_195.2600', 'Fe10_195.2610', 'Fe12_195.2660']
+  atoms          = [             26,              26,              26,              26,              26,              26,              25,              26,              26,              26,              26,              26,              26,              28,              26,              26,              26,              26,              26,              26,              26]
+  ions           = [             13,              14,              13,              12,              11,               9,              10,              11,              12,              12,              11,              10,              13,              11,              12,               9,              14,              11,              10,              10,              12]
+  indices        = [          24741,           17507,           24745,           30003,           24318,           15963,              15,           24327,           30038,            30051,          24345,            6977,           24766,           13088,           30073,           16010,           17522,           24371,            6988,            6989,           30103]
   nLines = n_elements(emission_lines)
 
   print,"Setting up data structure..."

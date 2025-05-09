@@ -5,9 +5,9 @@ pro get_index
 
     ioneq_file = '/home/jm/solar/ssw/packages/chianti/dbase/ioneq/chianti.ioneq'
     abund_file = '/home/jm/solar/ssw/packages/chianti/dbase/abundance/archive/sun_coronal_2012_schmelz_ext.abund'
-    iz=26
-    ion=12
-    wrange=[195.0,195.3]
+    iz=25
+    ion=10
+    wrange=[194.95,195.3]
 
     read_ioneq,ioneq_file,temp_all,ioneq,ref
 
