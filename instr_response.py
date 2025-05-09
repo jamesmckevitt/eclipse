@@ -432,53 +432,18 @@ def load_muram_simulated_atmosphere(filepath):
 
 def load_muram_synthetic_atmosphere(filepath, sim_t_i):
     """
-    Load a synthesised MuRAM atmosphere from an IDL .sav file for the Fe XII 195.12 emission line and include the exposure time.
-    
-    Parameters
-    ----------
-    filepath : str
-        Path to the IDL .sav file (e.g. 'SI_Fe_XII_1952_d0_xy_0270000.sav').
-        Units are erg/s/cm^2/sr/cm.
-    
-    Returns
-    -------
-    atmosphere_cube : numpy.ndarray
-        The 3D synthesised atmosphere cube with dimensions [n1, n2, n_wave],
-        where n_wave is the number of wavelength bins.
-        erg/cm^2/sr/cm.
-    wave_axis : numpy.ndarray
-        Wavelength axis corresponding to the spectral dimension, in Angstrom.
-    
-    Notes
-    -----
-    The IDL save file is assumed to have a variable with a name formatted as:
-        "si_<plane>_dl"   (e.g. si_xy_dl for the XY plane).
-    The units of the synthesised intensity are erg/s/cm^2/sr/cm.
-    
-    The wavelength axis is constructed as follows:
-      - The number of spectral points (nw) is taken from the third dimension of the cube.
-      - A velocity grid is made spanning -300x1e5 to +300x1e5 [cm/s].
-      - This is then converted to a wavelength shift using the relation: 
-            dλ (cm) = (velocity / c) * la_0.
-      - Finally, the wavelength axis is centred on la_0 and converted to Angstrom 
-        (1 cm = 1e8 Angstrom).
+    Load a synthesised MuRAM atmosphere from an IDL .sav file for the Fe XII 195.12 emission line.
     """
 
-    # Load the IDL .sav file using SciPy
-    data = readsav(filepath)
-    data_keys = list(data.keys())
-    assert len(data_keys) == 1
-    key = data_keys[0]
+    tmp = np.load(filepath)  # all in cgs units
+    tmp = {item: tmp[item] for item in tmp.files}
+    assert tmp['spt_res_x'] == tmp['spt_res_y'], "Spatial resolution in x and y are not equal"
+    dat_pixel_scale = tmp['spt_res_x'] * u.cm
+    wave_axis = tmp['wl_grid'] * u.cm
+    velocity_grid = tmp['vel_grid'] * (u.cm / u.s)
+    atmosphere_cube = tmp['I_cube'] * (u.erg / (u.s * u.cm**2 * u.sr * u.cm))
 
-    # Extract the synthesised intensity cube
-    atmosphere_cube = np.copy(data[key])  # erg/s/cm^2/sr/cm
-    atmosphere_cube = np.transpose(atmosphere_cube, (2, 1, 0))  # Correct dimensions from IDL import artifact (so [n1, n2, n_wave])
-
-    # Calculate the spectral scale
-    n_wave = atmosphere_cube.shape[2]
-    velocity_grid = np.linspace(-dat_velocity_range*.5, dat_velocity_range*.5, n_wave)  # m/s
-    wavelength_shift = velocity_grid / const.c.to('m/s').value * dat_rest_wave  # m
-    wave_axis = dat_rest_wave + wavelength_shift  # m
+    #### JAMES YOU NEED TO LOOK AT THE UNITS HERE AND PUT u UNITS EVERYWHERE IN THIS CODE ####
 
     # Rebin the spectral axis to swc_spectral_resolution
     new_wave_axis = np.arange(wave_axis[0], wave_axis[-1], swc_spectral_sampling)  # m
@@ -864,5 +829,6 @@ def main():
     # Also save a backup using the simple numpy save function
     np.savez('solar_mc_results.npz', all_results=all_results)
 
+    globals().update(locals())
 if __name__ == "__main__":
     main()
