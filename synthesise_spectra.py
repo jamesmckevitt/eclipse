@@ -66,7 +66,7 @@ def interp2d_spline(goft, goft_logT, goft_logN, logT_cube, logN_cube, cube_preci
     G_flat = spline.ev(pts_N, pts_T)
     return G_flat.reshape(logT_cube.shape).astype(cube_precision)
 
-def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=np.float64, full_vectorization=False, ncpu=False):
+def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=np.float64, full_vectorization=False, ncpu=False):
     """
     Calculate the specific intensity for a given contribution function cube.
     The function uses a Gaussian velocity profile which is then converted to wavelength to calculate the intensity.
@@ -92,7 +92,7 @@ def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, sp
         exponent = -((x_b - vz_b)**2) / (2.0 * gw_b**2)
 
         thermal_gauss = peak_b * np.exp(exponent)
-        prefactor = spt_res_cgs * (vel_res_cgs / wvl_res_cgs)
+        prefactor = spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs)
         emissivity = thermal_gauss * C_b * prefactor
         I_val = np.sum(emissivity, axis=2)
         I_cube = I_val
@@ -107,7 +107,7 @@ def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, sp
                 gw_i   = gauss_wdth[i, :, :].cgs.value
                 C_i    = C_cube[i, :, :].cgs.value
                 thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2.0 * gw_i[:, :, None]**2))
-                emissivity = thermal_gauss * C_i[:, :, None] * spt_res_cgs * (vel_res_cgs / wvl_res_cgs)
+                emissivity = thermal_gauss * C_i[:, :, None] * spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs)
                 return np.sum(emissivity, axis=1)
             I_slices = Parallel(n_jobs=ncpu)(delayed(_compute_intensity_slice)(i) for i in range(nx))
             I_cube = np.stack(I_slices, axis=0)
@@ -121,7 +121,7 @@ def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, sp
                 gw_i = gauss_wdth[i, :, :].cgs.value
                 C_i = C_cube[i, :, :].cgs.value
                 thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2 * gw_i[:, :, None]**2))
-                I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_cgs * (vel_res_cgs / wvl_res_cgs), axis=1)
+                I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs), axis=1)
 
         return I_cube.astype(cube_precision)
 
@@ -201,7 +201,8 @@ def main():
 
     vel_res     = 6 * u.km/u.s  # velocity bin width
     vel_lim     = 300 * u.km/u.s  # +-velocity range
-    spt_res     = 0.064 * u.Mm  # spatial resolution
+    spt_res_z     = 0.064 * u.Mm  # spatial resolution in z
+    spt_res_x, spt_res_y = 0.192 * u.Mm, 0.192 * u.Mm  # spatial resolution in x and y
     vel_grid = np.arange(-vel_lim.to(u.cm/u.s).value,
                        vel_lim.to(u.cm/u.s).value + vel_res.to(u.cm/u.s).value,
                        vel_res.to(u.cm/u.s).value) * (u.cm/u.s)  # velocity grid
@@ -304,16 +305,16 @@ def main():
         gauss_wdth = probable_speed / np.sqrt(2)  # broadening along LOS: g(v) = 1/sqrt(pi*sigma) * exp(-v^2/(wdth^2)), sigma = sqrt(kT/m), therefore sigma = v_p/sqrt(2) : cm/s
         gauss_peak = 1.0 / (np.sqrt(2 * np.pi * gauss_wdth**2))  # s / cm
         gauss_x_cgs = vel_grid.cgs.value  # velocity grid in cm/s
-        spt_res_cgs = spt_res.to(u.cm).value  # save these to avoid repeated unit calculation
+        spt_res_z_cgs = spt_res_z.to(u.cm).value  # save these to avoid repeated unit calculation
         vel_res_cgs = vel_res.to(u.cm/u.s).value
         I_cubes = {line: np.empty((C_cubes[line].shape[0], C_cubes[line].shape[1], gauss_x_cgs.size), dtype=cube_precision) for line in C_cubes.keys()}
         pbar = tqdm(C_cubes.items(), desc='Lines', unit='line', leave=False)
         for line, C_cube in pbar:
             pbar.set_postfix(mem=f"{psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB")
             wvl_res_cgs = gofnt_dict[line]['wl_grid'][1].cgs.value - gofnt_dict[line]['wl_grid'][0].cgs.value  # wavelength resolution in cm
-            I_cubes[line] = calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=cube_precision, ncpu=ncpu) * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
+            I_cubes[line] = calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=cube_precision, ncpu=ncpu) * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
         np.savez(filename, **{line: I_cubes[line].value for line in I_cubes.keys()})
-        del probable_speed, gauss_wdth, gauss_peak, gauss_x_cgs, spt_res_cgs, vel_res_cgs, wvl_res_cgs
+        del probable_speed, gauss_wdth, gauss_peak, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs
     del C_cubes, logT_cube, vz_cube
 
     filename = '_I_cube.npz'
@@ -330,7 +331,7 @@ def main():
         I_cube *= (u.erg / u.s / u.cm**2 / u.sr / u.cm)
         background_spectrum *= (u.AA)
         background_spectrum_line *= (u.AA)
-        np.savez(filename, I_cube=I_cube.value, background_spectrum=background_spectrum.value, background_spectrum_line=background_spectrum_line.value)
+        np.savez(filename, I_cube=I_cube.cgs.value, background_spectrum=background_spectrum.cgs.value, background_spectrum_line=background_spectrum_line.cgs.value, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value)
 
     fig, ax = plt.subplots()
     img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value), aspect='equal', cmap='inferno', origin='lower')
