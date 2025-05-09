@@ -1,7 +1,6 @@
-## TODO: add background spectras
+## TODO: add background spectra
 ## TODO: compare calculated velocities to real velocities (to show systematic errors): 
-#   either 1) load in pure MURaM cube and weight LOS velocities 
-#          2) fit high-res emission line (remake synthetic cubes at full wavelength res or use tei's (2x worse res))
+#      - fit high-res emission line (remake synthetic cubes at v high wavelength res)
 
 import numpy as np
 import matplotlib
@@ -35,6 +34,7 @@ swc_dark_current = 1.0            # Dark current (electrons)
 swc_pixel_size_um = 13.5          # Pixel size (microns)
 swc_pixel_size = swc_pixel_size_um * 1e-6  # Pixel size (m)
 swc_spatial_sampling_a = 0.159    # Spatial sampling (arcsec/pixel)
+# swc_spatial_sampling_a = 4    # Spatial sampling (arcsec/pixel)
 swc_spatial_sampling = swc_spatial_sampling_a * np.pi / (180 * 3600)  # Spatial sampling in radians/pixel
 swc_spatial_sampling_at_sun = const.au.to('m').value * np.tan(swc_spatial_sampling/2) * 2  # Spatial sampling at the Sun per spatial pixel (m)
 swc_spectral_sampling_ma = 16.9   # Spectral sampling (mA/pixel)
@@ -61,10 +61,10 @@ dat_pixel_scale_cm = 0.192e8      # Pixel scale (cm) (from MuRAM readme)
 dat_pixel_scale = dat_pixel_scale_cm * 1e-2  # Pixel scale (m) (from MuRAM readme)
 
 # Simulation parameters
-sim_n = 50                       # Number of Monte Carlo iterations per exposure time
-sim_t = [1,2,5,10,20]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
+sim_n = 10                       # Number of Monte Carlo iterations per exposure time
+sim_t = [1,20]    # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
 sim_stray_light_s = 1             # Visible stray light photon/s/pixel
-sim_ncpu = 1                  # Number of CPU cores to use for parallel processing (-1 for all available cores)
+sim_ncpu = 8                  # Number of CPU cores to use for parallel processing (-1 for all available cores)
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -611,12 +611,12 @@ def plot_spectra(key_pixels, wave_axis, savename):
                 8: 'DN'
             }
             yaxes = {
-                0: 'erg/cm^2/sr/cm)',
-                1: 'erg/cm^2/sr/cm)',
-                2: 'photon/cm^2/sr/cm)',
-                3: 'photon/sr/cm)',
-                4: 'photon/pixel)',
-                5: 'photon/pixel)',
+                0: 'erg/cm^2/sr/cm',
+                1: 'erg/cm^2/sr/cm',
+                2: 'photon/cm^2/sr/cm',
+                3: 'photon/sr/cm',
+                4: 'photon/pixel',
+                5: 'photon/pixel',
                 6: 'electrons/pixel',
                 7: 'electrons/pixel',
                 8: 'DN/pixel'
@@ -721,6 +721,9 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf, sim_t_i):
     # Calculate the standard deviation (uncertainty) maps
     velocity_std = np.nanstd(velocity_vals, axis=0)
 
+    # Also compute the total intensity map (sum over wavelength) for the scatter plot
+    intensity_map = np.sum(sim_cube, axis=2)
+
     # Plot the Doppler velocity standard deviation map in km/s
     plt.figure()
     plt.imshow(velocity_std/1000, cmap='seismic', interpolation='nearest', vmin=-5, vmax=5)
@@ -729,7 +732,8 @@ def monte_carlo_analysis(sim_cube, wave_axis, psf, sim_t_i):
     plt.savefig(f'velocity_std_map_{sim_t_i}.png')
     plt.close()
 
-    return {'velocity_vals': velocity_vals, 'velocity_std': velocity_std, 'key_pixels': key_pixels}
+    # return {'velocity_vals': velocity_vals, 'velocity_std': velocity_std, 'key_pixels': key_pixels}
+    return {'velocity_vals': velocity_vals, 'velocity_std': velocity_std, 'intensity_map': intensity_map, 'key_pixels': key_pixels}
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +762,59 @@ def main():
       # Perform Monte Carlo analysis over sim_n iterations
       results = monte_carlo_analysis(sim_cube, wave_axis, psf_combined, sim_t_i)
       all_results.append(results)
+
+    # Plot intensity vs. uncertainty for each exposure time
+    for sim_t_i, res in zip(sim_t, all_results):
+        intensity = res['intensity_map']
+        sigma = res['velocity_std']
+        key_pixels = res['key_pixels']
+
+        # --- 1) Plot σ‐map with markers ---
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = ax.imshow(sigma/1000, cmap='seismic', interpolation='nearest', vmin=-5, vmax=5)
+        fig.colorbar(im, ax=ax, label='σ of Doppler Velocity (km/s)')
+        ax.set_title(f'σ‐Map with Key Pixels (t={sim_t_i}s)')
+        ax.set_xlabel('X pixel')
+        ax.set_ylabel('Y pixel')
+
+        # overlay each key pixel
+        markers = {'max':'o', 'p75':'s', 'p50':'^', 'p25':'v'}
+        for key, mk in markers.items():
+            y, x = key_pixels[key]['ipix']
+            # white‐edge marker for visibility
+            ax.plot(x, y, marker=mk, markersize=10,
+                    markerfacecolor='none', markeredgecolor='white',
+                    label=key)
+        ax.legend(loc='upper right')
+        plt.tight_layout()
+        plt.savefig(f'velocity_std_map_marked_{sim_t_i}s.png')
+        plt.close()
+
+        # --- 2) Scatter: intensity vs. σ uncertainty ---
+        fig, ax = plt.subplots(figsize=(8, 6))
+        x_all = intensity.flatten()
+        y_all = (sigma/1000).flatten()
+
+        # background cloud of all pixels
+        ax.scatter(x_all, y_all, s=1, alpha=0.3)
+
+        # highlight key pixels
+        for key, mk in markers.items():
+            yk, xk = key_pixels[key]['ipix']
+            ax.scatter(intensity[yk, xk], sigma[yk, xk]/1000,
+                       s=100, marker=mk, edgecolor='black', linewidth=1.5,
+                       label=key)
+
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel('Total Intensity (arb. units)')
+        ax.set_ylabel('Doppler Velocity Uncertainty (km/s)')
+        ax.set_title(f'Intensity vs. Velocity Uncertainty (t={sim_t_i}s)')
+        ax.legend(loc='lower left')
+        ax.grid(which='both', linestyle='--', linewidth=0.5)
+        plt.tight_layout()
+        plt.savefig(f'intensity_vs_uncertainty_{sim_t_i}s.png')
+        plt.close()
 
     # After the loop: plot exposure time vs. Doppler velocity uncertainty for each key pixel
     exposure_times = sim_t
