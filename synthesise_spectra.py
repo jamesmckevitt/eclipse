@@ -16,6 +16,7 @@ import psutil
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 from scipy.interpolate import RectBivariateSpline
+import pickle
 
 def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
     """
@@ -322,16 +323,20 @@ def main():
         print(f"Loading saved combined spectra [erg/s/cm2/sr/cm] per LOS pixel from {filename} ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
         tmp = np.load(filename)
         I_cube = tmp['I_cube'] * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        background_spectrum = tmp['background_spectrum'] * (u.AA)
-        background_spectrum_line = tmp['background_spectrum_line'] * (u.AA)
         del tmp
     else:
         print(f"Combining into one spectra per LOS pixel [erg/s/cm2/sr/cm] (primary + background) ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
         I_cube, background_spectrum, background_spectrum_line = combine_spectra(I_cubes, gofnt_dict, prime_line)
         I_cube *= (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        background_spectrum *= (u.AA)
-        background_spectrum_line *= (u.AA)
-        np.savez(filename, I_cube=I_cube.cgs.value, background_spectrum=background_spectrum.cgs.value, background_spectrum_line=background_spectrum_line.cgs.value, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value)
+        np.savez(filename, I_cube=I_cube.cgs.value, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value, prime_line=prime_line, wl0=gofnt_dict[prime_line]['wl0'].cgs.value)
+
+    variables = {key: value for key, value in globals().items() if not key.startswith("__") and not callable(value)}
+    with open("_synthesise_spectra_final_state.pkl", "wb") as f:
+        pickle.dump(variables, f)
+    print("Saved final state to _synthesise_spectra_final_state.pkl.")
+    print("Reload using:")
+    print('    with open("variables.pkl", "rb") as f:variables = pickle.load(f)')
+    print("    globals().update(variables)")
 
     fig, ax = plt.subplots()
     img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value), aspect='equal', cmap='inferno', origin='lower')
@@ -341,7 +346,7 @@ def main():
           ax=ax,
           total_cube=I_cube,
           back_cube=background_spectrum,
-          back_line_cube=background_spectrum_line,
+          # back_line_cube=background_spectrum_line,
           cubes=I_cubes,
           gofnt=gofnt_dict):
         if event.inaxes is not ax:
@@ -369,7 +374,7 @@ def main():
         wl_tot = gofnt[prime_line]['wl_grid'].to(u.AA).value
         spec_tot = total_cube[x_pix, y_pix, :]
         spec_back = back_cube[x_pix, y_pix, :]
-        spec_back_line = back_line_cube[x_pix, y_pix, :]
+        # spec_back_line = back_line_cube[x_pix, y_pix, :]
 
         y_tot = spec_tot.value if hasattr(spec_tot, 'value') else spec_tot
 
@@ -379,8 +384,8 @@ def main():
         ax1.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
         ax2.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
 
-        ax1.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
-        ax2.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
+        # ax1.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
+        # ax2.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
 
         ax1.set_ylabel('Intensity')
         ax1.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — linear scale')
