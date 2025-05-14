@@ -6,13 +6,10 @@
 ## TODO: make it possible to plot all summary plots after all monte carlo iterations have been done
 
 import numpy as np
-import matplotlib
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.ndimage import zoom
 from scipy.signal import convolve2d
-from scipy.io import readsav
-from scipy.interpolate import interp1d
 from tqdm import tqdm
 import astropy.constants as const
 import astropy.units as u
@@ -21,6 +18,7 @@ import warnings
 from scipy.optimize import OptimizeWarning
 from specutils import Spectrum1D
 from specutils.manipulation import FluxConservingResampler
+import pickle
 
 # Detector
 swc_vis_qe = 1                                # Quantum efficiency at visible wavelengths
@@ -641,7 +639,13 @@ def main():
         monte_carlo_results = monte_carlo(swc_atm_cube_i, swc_wvl_grid, swc_vel_grid, psf_combined, sim_t_i, sim_wvl0)
         analysis_results = analysis(monte_carlo_results['fit_cubes'], tgt_fit_cube, sim_wvl0, u.km/u.s)
 
-    globals().update(locals());raise ValueError("Kicking back to ipython")
+    variables = {key: value for key, value in globals().items() if not key.startswith("__") and not callable(value)}
+    with open("_synthesise_spectra_final_state.pkl", "wb") as f:
+        pickle.dump(variables, f)
+    print("Saved final state to _synthesise_spectra_final_state.pkl.")
+    print("Reload using:")
+    print('    with open("variables.pkl", "rb") as f:variables = pickle.load(f)')
+    print("    globals().update(variables)")
 
     mc_res = monte_carlo_results
     plot_summaries(
@@ -652,6 +656,5 @@ def main():
       mc_res['electron_cube_0'], mc_res['sl_cube_0'], mc_res['dn_cube_0']
     )
 
-    globals().update(locals())
 if __name__ == "__main__":
     main()
