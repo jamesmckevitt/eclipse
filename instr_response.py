@@ -640,9 +640,9 @@ def main():
         analysis_results = analysis(monte_carlo_results['fit_cubes'], tgt_fit_cube, sim_wvl0, u.km/u.s)
 
     variables = {key: value for key, value in globals().items() if not key.startswith("__") and not callable(value)}
-    with open("_synthesise_spectra_final_state.pkl", "wb") as f:
+    with open("_instr_response.pkl", "wb") as f:
         pickle.dump(variables, f)
-    print("Saved final state to _synthesise_spectra_final_state.pkl.")
+    print("Saved final state to _instr_response.pkl.")
     print("Reload using:")
     print('    with open("variables.pkl", "rb") as f:variables = pickle.load(f)')
     print("    globals().update(variables)")
