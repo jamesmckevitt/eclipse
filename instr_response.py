@@ -1,6 +1,9 @@
 ## TODO: compare calculated velocities to real velocities (to show systematic errors): 
 #      - fit high-res emission line (remake synthetic cubes at v high wavelength res)
 ## TODO: include the QE as a function of wavelength, rather than a constant factor when doing multiple wavelengths
+## TODO: show the tgt fit of the cube before the instrument response in the summary plots
+## TODO: Tidy up summary plots code and make individual plots bigger
+## TODO: make it possible to plot all summary plots after all monte carlo iterations have been done
 
 import numpy as np
 import matplotlib
@@ -29,7 +32,8 @@ swc_dn_per_e = 19.0 * (u.DN/u.electron)       # Conversion factor
 swc_dark_current = 1.0 *(u.electron/u.pix)    # Dark current
 swc_pix_size = (13.5*u.um).cgs/u.pix          # Pixel size
 swc_wvl_res = (16.9*u.mAA).cgs/u.pix          # Spectral resolution per pixel
-swc_spt_res = (0.159 * (u.arcsec)).to(u.rad)  # Spatial resolution
+# swc_spt_res = (0.159 * (u.arcsec)).to(u.rad)  # Spatial resolution
+swc_spt_res = (4. * (u.arcsec)).to(u.rad)  # Spatial resolution
 swc_spt_res = const.au.cgs * np.tan(swc_spt_res/2) * 2  # Spatial resolution at the Sun
 
 # Telescope
@@ -46,8 +50,8 @@ tel_mesh_psf_input_res = 6.12e-4 * u.mm / u.pix
 dat_filename = "_I_cube.npz"
 
 # Simulation parameters
-sim_n = 2                                # Number of Monte Carlo iterations per exposure time
-sim_t = [10,20] * u.s               # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
+sim_n = 5                                # Number of Monte Carlo iterations per exposure time
+sim_t = [2] * u.s               # Exposure time (s) 90s for quiet Sun, 40s for active region, 5s for flare (1s before x-band loss on EIS).
 sim_stray_light_s = 1 * (u.ph/u.s/u.pix)  # Visible stray light photon/s/pixel
 sim_ncpu = -1                              # Number of CPU cores to use for parallel processing (-1 for all available cores)
 
@@ -79,7 +83,7 @@ def fit_spectra(data_cube, wave_axis):
     # Use joblib.Parallel to execute the outer loop concurrently.
     # n_jobs=-1 utilises all available cores.
     results = Parallel(n_jobs=sim_ncpu)(
-        delayed(process_scan)(i) for i in tqdm(range(n_scan), desc="Fitting spectra", unit="scan", leave=False)
+        delayed(process_scan)(i) for i in tqdm(range(n_scan), desc=f"Fitting spectra using {sim_ncpu} parallel cores", unit="scan", leave=False)
     )
     
     # Combine the results for each scan back into a single numpy array.
@@ -272,7 +276,7 @@ def rebin_atmosphere(atm_cube, sim_wvl_grid, sim_wvl_res, sim_vel_grid, sim_spt_
         return row
     results = Parallel(n_jobs=sim_ncpu)(
         delayed(_resample_scan)(i)
-        for i in tqdm(range(atm_cube.shape[0]), desc="Resampling spectra", unit="scan", leave=False))
+        for i in tqdm(range(atm_cube.shape[0]), desc=f"Resampling spectra using {sim_ncpu} parallel cores", unit="scan", leave=False))
     resampled_atm_cube = np.stack(results, axis=0)
     nans = np.isnan(resampled_atm_cube[0,0,:])
     assert np.all(nans == np.isnan(resampled_atm_cube)), "Not all pixels have the same number of nans in the last axis. Something weird happened with detecting overlapping bins."
@@ -323,7 +327,7 @@ def calculate_velocity(fit_params, dat_rest_wave):
     velocity = (cent - dat_rest_wave.cgs.value) / dat_rest_wave.cgs.value * const.c.cgs.value
     return velocity
 
-def monte_carlo(atm_cube_i, wvl_grid, psf_combined, sim_t_i, sim_wvl0):
+def monte_carlo(atm_cube_i, wvl_grid, swc_vel_grid, psf_combined, sim_t_i, sim_wvl0):
     """
     Perform a Monte Carlo simulation of the instrument response.
     """
@@ -338,6 +342,7 @@ def monte_carlo(atm_cube_i, wvl_grid, psf_combined, sim_t_i, sim_wvl0):
         electron_cube = read_out_photons(psf_cube)                  ; assert electron_cube.unit == (u.electron/u.pix)
         sl_cube = add_vis_stray_light(electron_cube, sim_t_i)       ; assert sl_cube.unit == (u.electron/u.pix)
         dn_cube = convert_counts_to_dn(sl_cube)                     ; assert dn_cube.unit == (u.DN/u.pix)
+
         fit_cube = fit_spectra(dn_cube.value, wvl_grid.value)
         fit_cubes.append(fit_cube)
 
@@ -365,7 +370,7 @@ def monte_carlo(atm_cube_i, wvl_grid, psf_combined, sim_t_i, sim_wvl0):
         'fit_cube_0': fit_cube_0
     }
 
-def analysis(fit_cubes, tgt_fit_cube, sim_wvl0):
+def analysis(fit_cubes, tgt_fit_cube, sim_wvl0, units):
     """
     Analyse the velocities.
     """
@@ -376,10 +381,10 @@ def analysis(fit_cubes, tgt_fit_cube, sim_wvl0):
     vel_err = vel_tgt - vel_mean
 
     return {
-        'velocity_vals': vel_vals,
-        'velocity_mean': vel_mean,
-        'velocity_std': vel_std,
-        'velocity_err': vel_err
+        'velocity_vals': vel_vals*(u.cm/u.s).to(units),
+        'velocity_mean': vel_mean*(u.cm/u.s).to(units),
+        'velocity_std': vel_std*(u.cm/u.s).to(units),
+        'velocity_err': vel_err*(u.cm/u.s).to(units),
     }
 
 def plot_atmosphere(swc_atm_cube, swc_wvl_grid, swc_vel_grid, sim_atm_cube, sim_wvl_grid, sim_wvl_res, sim_vel_grid, sim_wvl0, block=True):
@@ -441,6 +446,171 @@ def plot_atmosphere(swc_atm_cube, swc_wvl_grid, swc_vel_grid, sim_atm_cube, sim_
     fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show(block=block)
 
+
+
+
+
+
+
+
+
+
+
+
+
+def plot_summaries(mc_res, analysis_res,
+                   swc_atm_cube, swc_wvl_res, swc_wvl_grid, swc_vel_grid,
+                   sim_t_i, sim_label,
+                   photon0, pixel0, psf0, electron0, sl0, dn0):
+
+    tot_int = (swc_atm_cube.sum(axis=2).value * swc_wvl_res.to(u.cm/u.pix).value)
+    flat = tot_int.ravel()
+    mean_I = flat.mean()
+    std_I  = flat.std()
+    targets = [mean_I-std_I, mean_I, mean_I+std_I]
+    coords = []
+    for tgt in targets:
+        idx = np.argmin(np.abs(flat - tgt))
+        coords.append(np.unravel_index(idx, tot_int.shape))
+
+    fig1, axs1 = plt.subplots(4, 1, figsize=(6, 10), sharex=True)
+    maps = [tot_int, (analysis_res['velocity_mean']), (analysis_res['velocity_std']), (analysis_res['velocity_err'])]
+    titles = [f'Total intensity (t={sim_t_i.value:.0f}s)', 'Mean Doppler velocity', 'Std of Doppler velocity', 'Error (tgt-mean)']
+    cmaps = ['inferno','RdYlBu_r','RdYlBu_r','RdYlBu_r']
+    # limits = [None, (-100, 100), (0, 100), (-100, 100)]
+    limits = [None, (-50, 50), (0, 2), (-2, 2)]
+    markers = ['x','o','+']
+
+    for ax, data, title, cmap, lims in zip(axs1, maps, titles, cmaps, limits):
+        if "intensity" in title:
+            data = np.log10(data)
+        im = ax.imshow(data.T, origin='lower', cmap=cmap, aspect='equal')
+        ax.set_title(title)
+        ax.set_xlabel('Pixel X')
+        ax.set_ylabel('Pixel Y')
+        plt.colorbar(im, ax=ax)
+        for m, (ix,iy) in zip(markers, coords):
+            # ax.plot(ix, iy, m, ms=10, mfc='none', mew=2, color='white')
+            ax.plot(ix, iy, m, color='white')
+        if lims is not None:
+            im.set_clim(lims)
+
+    plot_target_spectra(swc_wvl_grid, sim_t_i, mc_res, photon0, pixel0, psf0, electron0, sl0, dn0, coords)
+
+    plot_int_vs_doppler_errs(tot_int, analysis_res)
+
+    markers_click = [ax.plot([],[], 'r+', ms=12)[0] for ax in axs1]
+
+    def onclick(event):
+        if event.inaxes not in axs1:
+            return
+        ax_idx = axs1.tolist().index(event.inaxes)
+        xpix = int(round(event.xdata))
+        ypix = int(round(event.ydata))
+
+        # update all red markers
+        for mk in markers_click:
+            mk.set_data([],[])
+        # # place on whichever map was clicked
+        # markers_click[ax_idx].set_data([xpix],[ypix])
+        # fig1.canvas.draw()
+        # place on all maps
+        for mk in markers_click:
+            mk.set_data([xpix],[ypix])
+        fig1.canvas.draw()
+
+        # now plot the overlaid spectra for that pixel
+        plot_click_spectra(xpix, ypix,
+                           swc_wvl_grid, sim_t_i,
+                           mc_res, photon0, pixel0, psf0, electron0, sl0, dn0)
+
+    fig1.canvas.mpl_connect('button_press_event', onclick)
+    plt.tight_layout()
+    plt.show(block=False)
+
+
+def plot_target_spectra(swc_wvl_grid, sim_t_i, mc_res, photon0, pixel0, psf0, electron0, sl0, dn0, coords):
+    stages = [photon0, pixel0, psf0, electron0, sl0, dn0]
+    names  = ['photon_cube','pixel_cube','psf_cube',
+              'electron_cube','sl_cube','dn_cube']
+
+    fig2, axs2 = plt.subplots(3, 6, figsize=(9,5), sharex=True)
+    for col, (cube, nm) in enumerate(zip(stages, names)):
+        for row, (ix, iy) in enumerate(coords):
+            spec = cube[ix, iy, :].value
+            ax = axs2[row, col]
+            ax.step(swc_wvl_grid.to(u.AA).value, spec, where='mid')
+            if row == 2:
+                ax.set_xlabel('Wavelength (Å)')
+                ax2 = ax.twiny()
+                v = (swc_wvl_grid - swc_wvl_grid.mean())/swc_wvl_grid.mean()*const.c.to('km/s').value
+                ax2.set_xlim(v.min(), v.max())
+                ax2.set_xlabel('Velocity (km/s)')
+            if col == 0:
+                ax.set_ylabel(f'Row {row}')
+            if col == len(stages)-1:
+                # plot the fit from mc_res
+                fit = mc_res['fit_cube_0'][ix, iy, :]
+                yvals = gaussian(swc_wvl_grid.value, *fit)
+                ax.plot(swc_wvl_grid.to(u.AA).value, yvals, 'r--', lw=1)
+            ax.set_title(nm)
+
+    fig2.suptitle(f'Spectra at pixel ({ix},{iy}), t={sim_t_i.value}s', y=0.92)
+    plt.tight_layout()
+    plt.show(block=False)
+
+def plot_click_spectra(ix, iy,
+                       swc_wvl_grid, sim_t_i,
+                       mc_res, photon0, pixel0, psf0, electron0, sl0, dn0):
+    stages = [photon0, pixel0, psf0, electron0, sl0, dn0]
+    names  = ['photon_cube','pixel_cube','psf_cube',
+              'electron_cube','sl_cube','dn_cube']
+
+    fig2, axs2 = plt.subplots(1, 6, figsize=(9,2), sharex=True)
+    for col, (cube, nm) in enumerate(zip(stages, names)):
+        spec = cube[ix, iy, :].value
+        ax = axs2[col]
+        ax.step(swc_wvl_grid.to(u.AA).value, spec, where='mid')
+        if col == 0:
+            ax.set_ylabel('Intensity')
+        if col == len(stages)-1:
+            fit = mc_res['fit_cube_0'][ix, iy, :]
+            yvals = gaussian(swc_wvl_grid.value, *fit)
+            ax.plot(swc_wvl_grid.to(u.AA).value, yvals, 'r--', lw=1)
+        ax.set_title(nm)
+
+    fig2.suptitle(f'Spectra at pixel ({ix},{iy}), t={sim_t_i.value}s', y=0.92)
+    plt.tight_layout()
+    plt.show(block=False)
+
+def plot_int_vs_doppler_errs(tot_int, analysis_res):
+    "Make a scatter plot of total intensity vs. the different Doppler errors all on one plot"
+    fig3, ax = plt.subplots(figsize=(6, 4))
+    ax.scatter(tot_int.ravel(), analysis_res['velocity_err'].ravel(), s=1, alpha=0.5, color='k')
+    ax.scatter(tot_int.ravel(), analysis_res['velocity_std'].ravel(), s=1, alpha=0.5, color='r')
+    ax.scatter(tot_int.ravel(), analysis_res['velocity_mean'].ravel(), s=1, alpha=0.5, color='b')
+    ax.set_xlabel('Total intensity (erg/s/cm2/sr)')
+    ax.set_ylabel('Doppler error (km/s)')
+    ax.set_title('Total intensity vs. Doppler error')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    plt.tight_layout()
+    plt.show(block=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def main(): 
 
     print("Loading PSFs...")
@@ -460,17 +630,27 @@ def main():
     print("Rebinning the atmosphere to the instrument spatial/spectral resolution...")
     swc_atm_cube, swc_wvl_grid, swc_vel_grid = rebin_atmosphere(sim_atm_cube, sim_wvl_grid, sim_wvl_res, sim_vel_grid, sim_spt_res, swc_wvl_res, swc_spt_res, sim_wvl0)
 
-    plot_atmosphere(swc_atm_cube, swc_wvl_grid, swc_vel_grid, sim_atm_cube, sim_wvl_grid, sim_wvl_res, sim_vel_grid, sim_wvl0, block=False)
+    # plot_atmosphere(swc_atm_cube, swc_wvl_grid, swc_vel_grid, sim_atm_cube, sim_wvl_grid, sim_wvl_res, sim_vel_grid, sim_wvl0, block=False)
 
+    print("Fitting spectra before instrument effects...")
     tgt_fit_cube = fit_spectra(sim_atm_cube.value, sim_wvl_grid.value)
 
     all_results = []
     for sim_t_i in tqdm(sim_t, desc="Exposure times", unit="exposure time"):
         swc_atm_cube_i = swc_atm_cube*sim_t_i
-        monte_carlo_results = monte_carlo(swc_atm_cube_i, swc_wvl_grid, psf_combined, sim_t_i, sim_wvl0)
-        analysis_results = analysis(monte_carlo_results['fit_cubes'], tgt_fit_cube, sim_wvl0)
+        monte_carlo_results = monte_carlo(swc_atm_cube_i, swc_wvl_grid, swc_vel_grid, psf_combined, sim_t_i, sim_wvl0)
+        analysis_results = analysis(monte_carlo_results['fit_cubes'], tgt_fit_cube, sim_wvl0, u.km/u.s)
 
     globals().update(locals());raise ValueError("Kicking back to ipython")
+
+    mc_res = monte_carlo_results
+    plot_summaries(
+      mc_res, analysis_results,
+      swc_atm_cube_i, swc_wvl_res, swc_wvl_grid, swc_vel_grid,
+      sim_t_i, f'{sim_t_i.value}s',
+      mc_res['photon_cube_0'], mc_res['pixel_cube_0'], mc_res['psf_cube_0'],
+      mc_res['electron_cube_0'], mc_res['sl_cube_0'], mc_res['dn_cube_0']
+    )
 
     globals().update(locals())
 if __name__ == "__main__":
