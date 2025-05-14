@@ -346,7 +346,6 @@ def main():
           ax=ax,
           total_cube=I_cube,
           back_cube=background_spectrum,
-          # back_line_cube=background_spectrum_line,
           cubes=I_cubes,
           gofnt=gofnt_dict):
         if event.inaxes is not ax:
@@ -384,9 +383,6 @@ def main():
         ax1.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
         ax2.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
 
-        # ax1.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
-        # ax2.plot(wl_tot, spec_back_line, 'b--', lw=2, label='Background line')
-
         ax1.set_ylabel('Intensity')
         ax1.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — linear scale')
         ax1.legend(loc='best', fontsize='small')
@@ -398,8 +394,6 @@ def main():
         ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — log scale')
         ax2.legend(loc='best', fontsize='small')
 
-        # Add a top x-axis showing velocity (km/s) for the primary line
-        # Convert wavelength (Å) ↔ velocity (km/s) via v = c * (λ - λ0) / λ0
         wl0_A = gofnt[prime_line]['wl0'].to(u.AA).value
         c_km_s = const.c.to(u.km / u.s).value
 
