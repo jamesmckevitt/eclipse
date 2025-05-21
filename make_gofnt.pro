@@ -1,7 +1,6 @@
 ; TODO: Improve this by using emiss_calc and calculate goft ourselves, to as not to need a catalogue of transition indexes
 
-; run ch_ss to get the emission lines in the range fo interest
-; run get_index to get the transition indexes needed for this code, for those lines
+; run ch_ss to get the emission lines in the range of interest
 
 PRO make_goft
 
