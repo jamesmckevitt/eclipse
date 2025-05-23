@@ -15,7 +15,7 @@ from tqdm import tqdm
 import psutil
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 import pickle
 
 def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
@@ -211,8 +211,8 @@ def main():
     prime_line = 'Fe12_195.1190'  # primary line to use for the velocity grid
 
     ## Debugging options
-    downsample = 4  # number or False, used to speed up and reduce memory usage during testing by reducing the size of the cubes by sparse sampling.
-    limit_to_lines = False  # e.g. ['Fe12_195.1190'] or False used to limit the lines to only those specified in the list to speed up and reduce memory usage.
+    downsample = False  # number or False, used to speed up and reduce memory usage during testing by reducing the size of the cubes by sparse sampling.
+    limit_to_lines = ['Fe12_195.1190']  # e.g. ['Fe12_195.1190'] or False used to limit the lines to only those specified in the list to speed up and reduce memory usage.
     ## End of debugging options
 
     g_mu  = 1.29  # mean molecular weight solar (unitless as multiplied by u in kg) [doi:10.1051/0004-6361:20041507]
@@ -234,8 +234,9 @@ def main():
     vx_cube   = load_cube(paths['vx'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
     vy_cube   = load_cube(paths['vy'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
     vz_cube   = load_cube(paths['vz'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
+    nx, ny, nz = temp_cube.shape
     assert temp_cube.shape == rho_cube.shape == vx_cube.shape == vy_cube.shape == vz_cube.shape, "Cubes must have the same shape"
-    del vx_cube, vy_cube  # not used as LOS is through z
+    del vx_cube, vy_cube
 
     logT_cube = np.log10(temp_cube.value).astype(cube_precision)
     ne        = (rho_cube/(g_mu*const.u.cgs)).to(1/u.cm**3)
@@ -261,6 +262,76 @@ def main():
             info['background'] = False
         else:
             info['background'] = True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    print("Calculating the DEM")
+    nbins = 25
+    bin_edges = np.linspace(4, 9, nbins+1)
+    bin_centres = 0.5*(bin_edges[:-1] + bin_edges[1:])
+    dh = spt_res_z.to(u.cm).value
+    dlogT = bin_edges[1] - bin_edges[0]
+    n_e = 10.0**(logN_cube.astype(np.float64))
+    w2 = n_e**2
+    w3 = n_e**3
+    dem = np.zeros((nx, ny, nbins), dtype=np.float64)
+    avg_ne = np.zeros((nx, ny, nbins), dtype=np.float64)
+    for b in tqdm(range(nbins), unit='T bin', leave=False):
+        lo, hi = bin_edges[b], bin_edges[b+1]
+        m = (logT_cube >= lo) & (logT_cube < hi)
+        s2 = np.sum(w2*m, axis=2)*dh
+        s3 = np.sum(w3*m, axis=2)*dh
+        dem[:, :, b]    = s2/dlogT
+        with np.errstate(divide='ignore', invalid='ignore'):
+            avg_ne[:, :, b] = np.where(s2>0, s3/s2, 0.0)
+
+    # where avg_ne is zero, set it to 10
+    avg_ne[avg_ne == 0] = 10.0  # used to avoid errors when doing log below. So long as setting to something below the min if the gofnt density (1e4), this is fine.
+
+    print("Calculating contribution function per PIXEL")
+    logTg = np.broadcast_to(bin_centres[:, None, None], (nbins, nx, ny))
+    logNg = np.log10(avg_ne)               # shape (nx,ny,nbins)
+    pts   = np.stack((logNg.transpose(2,0,1).ravel(), logTg.ravel()), axis=-1)
+    for line, info in gofnt_dict.items(): info['g'] = np.zeros((nx, ny, nbins), dtype=cube_precision)
+    for line, info in tqdm(gofnt_dict.items(), desc='Lines', unit='line', leave=False):
+        interp    = RegularGridInterpolator((info['logN'], info['logT']), info['g_tn'], method='linear', bounds_error=False, fill_value=0.0)
+        G_flat    = interp(pts)
+        info['g'] = G_flat.reshape(nbins, nx, ny).transpose(1, 2, 0)
+
+    print("Calculating integrated intensity per PIXEL")
+    for line, info in tqdm(gofnt_dict.items(), desc='Lines', unit='line', leave=False):
+        info['int'] = (1/(4*np.pi))*np.sum(info['g']*dem, axis=2)*dlogT
+
+    plt.imshow(np.log10(info['int']), aspect='equal', cmap='inferno', origin='lower')
+    plt.colorbar()
+    plt.show()
+
+    globals().update(locals());raise ValueError("Kicking back to ipython")
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     filename = '_G_cubes.npz'
     if os.path.exists(filename):
