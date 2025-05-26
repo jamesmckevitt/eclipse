@@ -1,488 +1,507 @@
-## TODO: Improve method. Currently assumes atmosphere is isotopic (temperature and density) at each grid point.
-##    Fix by summing temperature and density through LOS first to get temperature, density profile.
-##    Plot as discrete points connected (linear interpolation between points) to get a smooth profile.
-##    Then convolve with the G(n,T) function to get the contribution function for each LOS pixel.
-
-## NOTE: This needs the G(n,T) function .sav file generated in IDL using my make_goft.pro script.
-##     ChiantiPy and fiasco do not work properly and so this can't be done in Python yet. 
-
 import os
+import pickle
+from pathlib import Path
+from typing import Dict, Tuple
 import numpy as np
 from scipy.io import readsav
+from scipy.interpolate import RegularGridInterpolator
 import astropy.units as u
 import astropy.constants as const
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 import psutil
-from joblib import Parallel, delayed
-import matplotlib.pyplot as plt
-from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
-import pickle
 
-def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
+
+##############################################################################
+# ---------------------------------------------------------------------------
+#  I/O helpers
+# ---------------------------------------------------------------------------
+##############################################################################
+
+def load_cube(
+    file_path: str | Path,
+    shape: Tuple[int, int, int] = (512, 768, 256),
+    unit: u.Unit | None = None,
+    downsample: int | bool = False,
+    precision: type = np.float32,
+) -> np.ndarray | u.Quantity:
     """
-    Load a binary cube and optionally attach an astropy unit.
-    Returns an ndarray or Quantity of shape (nx, ny, nz).
+    Read a Fortran-ordered binary cube (single precision) and return as a
+    NumPy array (or Quantity if *unit* is given).
+
+    The cube is stored (x, z, y) in the file and transposed to (x, y, z)
+    upon loading.
+
+    Parameters
+    ----------
+    file_path
+        Path to the binary file.
+    shape
+        Tuple (nx, ny, nz) describing the *full* cube dimensions.
+    unit
+        Astropy unit to attach (e.g. u.K or u.g/u.cm**3).  If None, returns
+        a plain ndarray.
+    downsample
+        Integer factor; if non-False, keep every *downsample*-th cell along
+        each axis (simple stride).
+    precision
+        np.float32 or np.float64 for returned dtype.
+
+    Returns
+    -------
+    ndarray or Quantity with shape (nx', ny', nz').
     """
-    data = np.fromfile(path, dtype=np.float32).reshape(shape, order='F')
-    data = np.transpose(data, (0, 2, 1))
+    data = np.fromfile(file_path, dtype=np.float32).reshape(shape, order="F")
+    data = data.transpose(0, 2, 1)                        # (x,y,z)
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
 
+    data = data.astype(precision, copy=False)
     return data * unit if unit is not None else data
 
-def read_contribution_funcs(savfile):
+
+def read_goft(
+    sav_file: str | Path,
+    limit_lines: list[str] | bool = False,
+    precision: type = np.float64,
+) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
-    Read CHIANTI G(T,N) structure from a .sav file.
-    Returns a dict: { line_name: { 'wl0': Quantity(cm),
-                                   'atom': int,
-                                   'g_tn': ndarray [erg cm3 / s],
-                                   'logT': array, 'logN': array } }
+    Read a CHIANTI G(T,N) .sav file produced by IDL.
+
+    Returns
+    -------
+    goft_dict
+        Dictionary keyed by line name, each entry holding:
+            'wl0'      - rest wavelength (Quantity, cm)
+            'g_tn'     - 2-D array G(logT, logN)  [erg cm^3 s^-1]
+            'wl_grid'  - placeholder for later wavelength grid
+            'background' - filled later (True for background lines)
+    logT_grid
+        1-D array of log10(T/K) values.
+    logN_grid
+        1-D array of log10(N_e/cm^3) values.
     """
-    raw = readsav(savfile)
-    goft = {}
-    for entry in raw['goftarr']:
-        line = entry[0].decode()
-        goft[line] = {
-            'wl0' : (float(line.split('_')[1]) * u.AA).to(u.cm),  # line format: "Fe11_195.119"
-            'atom': int(entry[1]),
-            'g_tn': entry[4] * (u.erg * u.cm**3 / u.s),
-            'logT': raw['logTarr'],
-            'logN': raw['logNarr']
+    raw = readsav(sav_file)
+    goft_dict: Dict[str, dict] = {}
+
+    logT_grid = raw["logTarr"].astype(precision)
+    logN_grid = raw["logNarr"].astype(precision)
+
+    for entry in raw["goftarr"]:
+        line_name = entry[0].decode()          # e.g. "Fe12_195.1190"
+        if limit_lines and line_name not in limit_lines:
+            continue
+
+        rest_wl = float(line_name.split("_")[1]) * u.AA      # Å -> Quantity
+        goft_dict[line_name] = {
+            "wl0": rest_wl.to(u.cm),
+            "g_tn": entry[4].astype(precision),              # erg cm^3 / s
         }
-    return goft
 
-def interp2d_spline(goft, goft_logT, goft_logN, logT_cube, logN_cube, cube_precision=np.float64):
+    return goft_dict, logT_grid, logN_grid
+
+
+##############################################################################
+# ---------------------------------------------------------------------------
+#  DEM and G(T) helpers
+# ---------------------------------------------------------------------------
+##############################################################################
+
+def compute_dem(
+    logT_cube: np.ndarray,
+    logN_cube: np.ndarray,
+    voxel_dz_cm: float,
+    logT_edges: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Bilinear interpolation via a B-spline of degree 1 in each direction.
+    Build the differential emission measure DEM(T) and the emission-measure
+    weighted mean electron density <n_e>(T).
+
+    Returns
+    -------
+    dem_map  : (nx, ny, nT) - DEM  [cm^-5 per dex]
+    avg_ne   : (nx, ny, nT) - mean n_e  [cm^-3]
     """
-    spline = RectBivariateSpline(
-        goft_logN,        # sorted 1D array of logN
-        goft_logT,        # sorted 1D array of logT
-        goft,             # 2D array shape (nN, nT)
-        kx=1, ky=1        # degree of spline = 1 => bilinear
-    )
-    pts_N = logN_cube.ravel()
-    pts_T = logT_cube.ravel()
-    G_flat = spline.ev(pts_N, pts_T)
-    return G_flat.reshape(logT_cube.shape).astype(cube_precision)
+    nx, ny, _ = logT_cube.shape
+    nT = len(logT_edges) - 1
+    dlogT = logT_edges[1] - logT_edges[0]
 
-def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=np.float64, full_vectorization=False, ncpu=False):
+    ne = 10.0 ** logN_cube.astype(np.float64)
+    w2 = ne**2                       # weights for EM
+    w3 = ne**3                       # weights for EM*n_e
+
+    dem = np.zeros((nx, ny, nT))
+    avg_ne = np.zeros_like(dem)
+
+    for idx in tqdm(range(nT), desc="DEM bins", unit="bin", leave=False):
+        lo, hi = logT_edges[idx], logT_edges[idx + 1]
+        mask = (logT_cube >= lo) & (logT_cube < hi)          # (nx,ny,nz)
+
+        em   = np.sum(w2 * mask, axis=2) * voxel_dz_cm       # cm^-5
+        em_n = np.sum(w3 * mask, axis=2) * voxel_dz_cm       # cm^-5 * n_e
+
+        dem[..., idx] = em / dlogT
+        with np.errstate(divide="ignore", invalid="ignore"):
+            avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
+
+    return dem, avg_ne
+
+
+def interpolate_g_on_dem(
+    goft: Dict[str, dict],
+    avg_ne: np.ndarray,
+    logT_centres: np.ndarray,
+    logN_grid: np.ndarray,
+    logT_grid: np.ndarray,
+    precision: type = np.float32,
+) -> None:
     """
-    Calculate the specific intensity for a given contribution function cube.
-    The function uses a Gaussian velocity profile which is then converted to wavelength to calculate the intensity.
-    WARNING: Full vecotirisation is likely to crash the code unless running on a large cluster (RAM>500 GB).
+    For every spectral line insert a cube g(x,y,T) evaluated at DEM
+    bin centres and at the emission-measure weighted density <n_e>(T).
     """
+    nT, nx, ny = len(logT_centres), *avg_ne.shape[:2]
 
-    nx, ny, nz = C_cube.shape
-    nl = gauss_x_cgs.size
+    # build list of query points (logN, logT) for every (T-bin, pixel)
+    logNe_flat = np.log10(avg_ne).transpose(2, 0, 1).ravel()
+    logT_flat = np.broadcast_to(logT_centres[:, None, None],
+                                (nT, nx, ny)).ravel()
+    query_pts = np.column_stack((logNe_flat, logT_flat))
 
-    if full_vectorization:
-        
-        C_val    = C_cube.cgs.value      if hasattr(C_cube, 'cgs')    else np.asarray(C_cube)
-        peak_val = np.asarray(gauss_peak)
-        gw_val   = gauss_wdth.cgs.value
-        vz_val   = vz_cube.cgs.value
+    for name, info in tqdm(goft.items(), desc="interpolating G", unit="line", leave=False):
+        rgi = RegularGridInterpolator(
+            (logN_grid, logT_grid), info["g_tn"],
+            method="linear", bounds_error=False, fill_value=0.0
+        )
+        g_flat = rgi(query_pts)
+        info["g"] = g_flat.reshape(nT, nx, ny).transpose(1, 2, 0).astype(precision)
 
-        C_b    = C_val[..., None]
-        peak_b = peak_val[..., None]
-        gw_b   = gw_val[..., None]
-        vz_b   = vz_val[..., None]
 
-        x_b = gauss_x_cgs[None, None, None, :]
-        exponent = -((x_b - vz_b)**2) / (2.0 * gw_b**2)
+##############################################################################
+# ---------------------------------------------------------------------------
+#  Build EM(T,v) and synthesize spectra
+# ---------------------------------------------------------------------------
+##############################################################################
 
-        thermal_gauss = peak_b * np.exp(exponent)
-        prefactor = spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs)
-        emissivity = thermal_gauss * C_b * prefactor
-        I_val = np.sum(emissivity, axis=2)
-        I_cube = I_val
-
-    else:
-
-        if ncpu:
-            # PARALLEL
-            def _compute_intensity_slice(i):
-                peak_i = gauss_peak[i, :, :]
-                vz_i   = vz_cube[i, :, :].cgs.value
-                gw_i   = gauss_wdth[i, :, :].cgs.value
-                C_i    = C_cube[i, :, :].cgs.value
-                thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2.0 * gw_i[:, :, None]**2))
-                emissivity = thermal_gauss * C_i[:, :, None] * spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs)
-                return np.sum(emissivity, axis=1)
-            I_slices = Parallel(n_jobs=ncpu)(delayed(_compute_intensity_slice)(i) for i in range(nx))
-            I_cube = np.stack(I_slices, axis=0)
-
-        else:
-            # SERIAL
-            I_cube = np.zeros((nx, ny, nl), dtype=cube_precision)
-            for i in tqdm(range(nx), desc='Looping through x axis', unit='x', leave=False):
-                peak_i = gauss_peak[i, :, :]
-                vz_i = vz_cube[i, :, :].cgs.value
-                gw_i = gauss_wdth[i, :, :].cgs.value
-                C_i = C_cube[i, :, :].cgs.value
-                thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2 * gw_i[:, :, None]**2))
-                I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs), axis=1)
-
-        return I_cube.astype(cube_precision)
-
-def combine_spectra(I_cubes, gofnt_dict, prime_line):
+def build_em_tv(
+    logT_cube: np.ndarray,
+    vz_cube: np.ndarray,
+    logT_edges: np.ndarray,
+    v_edges: np.ndarray,
+    ne_sq_dh: np.ndarray,
+) -> np.ndarray:
     """
-    Combine all line spectra into one spectrum per pixel. Method:
-    - Background lines: Connect the two highest peaks with a straight line.
-      If the line goes below 0 anywhere in the wavelength range, connect the highest peak with y=0 at xmin or xmax.
-    - Primary lines: sum their full profiles.
-    - Final spectrum = baseline + sum(primary profiles).
+    Construct 4-D emission-measure cube EM(x,y,T,v) [cm^-5].
     """
-    nx, ny, nl = I_cubes[prime_line].shape
+    mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
+             (logT_cube[..., None] <  logT_edges[1:])
+    mask_V = (vz_cube.value[..., None] >= v_edges[:-1]) & \
+             (vz_cube.value[..., None] <  v_edges[1:])
 
-    combined = np.zeros_like(I_cubes[prime_line].value)
-    background_spectrum = np.zeros_like(I_cubes[prime_line].value)
-    background_spectrum_line = np.zeros_like(I_cubes[prime_line].value)
+    em_tv = np.einsum("ijk,ijkl,ijkm->ijlm",
+                      ne_sq_dh, mask_T, mask_V, optimize=True)
+    return em_tv
 
-    wl_grid_prime = gofnt_dict[prime_line]['wl_grid'].to(u.AA).value
 
-    background_lines = [line for line in I_cubes.keys() if gofnt_dict[line]['background']]
+def synthesize_spectra(
+    goft: Dict[str, dict],
+    em_tv: np.ndarray,
+    v_edges: np.ndarray,
+    logT_centres: np.ndarray,
+    dv_cm_s: float,
+    ion_mass_g: float,
+) -> None:
+    """
+    Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
+    specific intensity cube I(x,y,lambda) for every line.  The result is
+    stored in `goft[line]["si"]`.
+    """
+    kb = const.k_B.cgs.value
+    c_cm_s = const.c.cgs.value
+    v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])      # (nv,)
 
-    for line, I_cube in tqdm(I_cubes.items(), desc='Making background', unit='line', leave=False):
-        if line in background_lines:
-            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-            for i in range(nx):
-                for j in range(ny):
-                    spectrum = I_cube[i, j, :].value
-                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
-                    background_spectrum[i, j, :] += interpolated
+    for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
+        wl0 = data["wl0"].cgs.value                     # cm
+        wl_grid = data["wl_grid"].cgs.value                 # (n_lambda,)
 
-    peak1_idx = np.argmax(background_spectrum, axis=2)
-    point2_idx = np.where(peak1_idx < nl // 2, nl - 1, 0)
+        # thermal width per T-bin: sigma_T (nT,)
+        sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_centres) / ion_mass_g) / c_cm_s
 
-    for i in range(nx):
-        for j in range(ny):
-            x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
-            x2, y2 = wl_grid_prime[point2_idx[i,j]], 0
-            slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
-            intercept = y1 - slope * x1
-            background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
+        # Doppler-shifted center for each v-bin: (nv,)
+        lam_cent = wl0 * (1 + v_centres / c_cm_s)
 
-            if np.any(background_spectrum[i,j,:] > background_spectrum_line[i,j,:]):
-                peak3_idx = np.argmax(background_spectrum[i,j,:] - background_spectrum_line[i,j,:])
-                x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
-                x2, y2 = wl_grid_prime[peak3_idx], background_spectrum[i,j,peak3_idx]
-                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
-                intercept = y1 - slope * x1
-                background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
+        # build phi(T,v,lambda) as (nT,nv,n_lambda)
+        delta = wl_grid[None, None, :] - lam_cent[None, :, None]
+        phi = np.exp(-0.5 * (delta / sigma_T[:, None, None]) ** 2)
+        phi /= sigma_T[:, None, None] * np.sqrt(2 * np.pi)
 
-    for line, I_cube in I_cubes.items():
-        if line not in background_lines:
-            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-            for i in range(nx):
-                for j in range(ny):
-                    spectrum = I_cube[i, j, :].value
-                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
-                    combined[i, j, :] += interpolated
+        # EM(x,y,T,v) * G(T)  ->  (nx,ny,nT,nv)
+        weighted = em_tv * data["g"][..., None]
 
-    combined += background_spectrum_line
+        # collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
+        spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
+        data["si"] = spec_map * (dv_cm_s / (4 * np.pi))   # erg s^-1 cm^-2 sr^-1
 
-    return combined, background_spectrum, background_spectrum_line
 
-def main():
+##############################################################################
+# ---------------------------------------------------------------------------
+#  Simple spectrum combiner and viewer (optional)
+# ---------------------------------------------------------------------------
+##############################################################################
 
-    print("Warning: This will take lots of memory and so can crash if not enough is available.")
-    print("   Regular outputs of memory used and total available will be printed.")
+def combine_lines(goft: dict, main_line: str):
+    """
+    Sum primary + background spectra on the wavelength grid of *main_line*.
 
-    ncpu = False  # number of CPUs to use for parallel processing (-1 = all available)
-    cube_precision = np.float32  # set to np.float64 for double precision, np.float32 for single precision
-    if cube_precision == np.float32:
-        print("WARNING: Using SINGLE PRECISION for all cubes to save memory. This may cause accuracy issues.")
+    Returns
+    -------
+    total_si      : (nx,ny,nλ)  -> primary + background
+    background_si : (nx,ny,nλ)  -> background only
+    """
+    wl_ref = goft[main_line]["wl_grid"].value
+    nx, ny, nλ = goft[main_line]["si"].shape
 
-    if os.path.exists('_C_cubes.npz') or os.path.exists('_I_cubes.npz') or os.path.exists('_G_cubes.npz'):
-        print("WARNING: One or more of the files _C_cubes.npz, _I_cubes.npz, or _G_cubes.npz exist.")
-        print("   This means that you are going to be loading at least one file, and that you should be sure you are using the same settings (resolution, lines, etc.) as when they were created.")
-        print("   If you are not sure, delete the files and rerun the code.")
+    total_si      = np.zeros((nx, ny, nλ))
+    background_si = np.zeros_like(total_si)
 
-    vel_res     = 6 * u.km/u.s  # velocity bin width
-    vel_lim     = 300 * u.km/u.s  # +-velocity range
-    spt_res_z     = 0.064 * u.Mm  # spatial resolution in z
-    spt_res_x, spt_res_y = 0.192 * u.Mm, 0.192 * u.Mm  # spatial resolution in x and y
-    vel_grid = np.arange(-vel_lim.to(u.cm/u.s).value,
-                       vel_lim.to(u.cm/u.s).value + vel_res.to(u.cm/u.s).value,
-                       vel_res.to(u.cm/u.s).value) * (u.cm/u.s)  # velocity grid
-    primary_lines = ['Fe12_195.1190', 'Fe12_195.1790']  # used for if there is a strong line (blend) which shouldn't be used as any old background line (e.g. 195.179 is a blend of 195.119)
-    prime_line = 'Fe12_195.1190'  # primary line to use for the velocity grid
+    for name, entry in goft.items():
+        wl_src = entry["wl_grid"].value              # 1-D, length nλ_src
+        cube   = entry["si"]                         # (nx,ny,nλ_src)
 
-    ## Debugging options
-    downsample = False  # number or False, used to speed up and reduce memory usage during testing by reducing the size of the cubes by sparse sampling.
-    limit_to_lines = ['Fe12_195.1190']  # e.g. ['Fe12_195.1190'] or False used to limit the lines to only those specified in the list to speed up and reduce memory usage.
-    ## End of debugging options
+        # loop over all LOS pixels and interpolate their 1-D spectrum
+        for i in range(nx):
+            for j in range(ny):
+                spec_1d = cube[i, j, :]              # 1-D array
+                interp  = np.interp(wl_ref, wl_src, spec_1d,
+                                    left=0.0, right=0.0)
+                if entry["background"]:
+                    background_si[i, j, :] += interp
+                else:
+                    total_si[i, j, :]      += interp
 
-    g_mu  = 1.29  # mean molecular weight solar (unitless as multiplied by u in kg) [doi:10.1051/0004-6361:20041507]
-    Fe_amu = 55.845 * u.g / u.mol  # atomic weight of iron
+    total_si += background_si
+    return total_si, background_si
 
-    base = './data/atmosphere'
+
+##############################################################################
+# ---------------------------------------------------------------------------
+#                 M A I N   W O R K F L O W
+# ---------------------------------------------------------------------------
+##############################################################################
+
+def main() -> None:
+    # ---------------- user-tunable parameters -----------------
+    precision      = np.float64       # global float dtype
+    downsample     = 8                # factor or False
+    primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
+    main_line      = "Fe12_195.1190"
+    limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
+    vel_res        = 1 * u.km / u.s
+    vel_lim        = 300 * u.km / u.s
+    voxel_dz       = 0.064 * u.Mm
+    ion_mass       = 55.845 * u.g / u.mol    # Fe atomic weight
+    mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
+    # ----------------------------------------------------------
+
+    # build velocity grid (symmetric about zero, inclusive)
+    vel_grid = np.arange(-vel_lim.to(u.cm / u.s).value,
+                          vel_lim.to(u.cm / u.s).value + vel_res.to(u.cm / u.s).value,
+                          vel_res.to(u.cm / u.s).value) * (u.cm / u.s)
+    dv_cm_s = vel_grid[1].cgs.value - vel_grid[0].cgs.value
+    v_edges = np.concatenate([vel_grid.value - 0.5 * dv_cm_s,
+                              [vel_grid.value[-1] + 0.5 * dv_cm_s]])
+
+    # # ---------------- coarse v-bins for the DEM -----------------
+    # dv_dem = 25 * u.km/u.s                     # coarse LOS bin
+    # v_edges_dem = np.arange(-vel_lim, vel_lim + dv_dem, dv_dem).to(u.cm/u.s).value
+    # v_centres_dem = 0.5*(v_edges_dem[:-1] + v_edges_dem[1:])
+    # nv_dem = len(v_centres_dem)
+
+    # file paths
+    base_dir = Path("data/atmosphere")
     files = dict(
-        T   = 'temp/eosT.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/eosT.0270000
-        rho = 'rho/result_prim_0.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_0.0270000
-        vx  = 'vx/result_prim_1.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_1.0270000
-        vy  = 'vy/result_prim_3.0270000',  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_3.0270000
-        vz  = 'vz/result_prim_2.0270000'  # https://stacks.stanford.edu/file/dv883vb9686/result_prim_2.0270000
+        T   = "temp/eosT.0270000",
+        rho = "rho/result_prim_0.0270000",
+        vz  = "vz/result_prim_2.0270000",
     )
-    paths = {k:os.path.join(base,fn) for k,fn in files.items()}
+    paths = {k: base_dir / fname for k, fname in files.items()}
 
-    print(f"Loading static cubes ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-    temp_cube = load_cube(paths['T']  , downsample=downsample, unit=u.K).astype(cube_precision)
-    rho_cube  = load_cube(paths['rho'], downsample=downsample, unit=u.g/u.cm**3).astype(cube_precision)
-    vx_cube   = load_cube(paths['vx'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
-    vy_cube   = load_cube(paths['vy'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
-    vz_cube   = load_cube(paths['vz'] , downsample=downsample, unit=u.cm/u.s).astype(cube_precision)
+    # ----------------------------------------------------------
+    # load simulation cubes
+    # ----------------------------------------------------------
+    print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
+                        f"{psutil.virtual_memory().total/1e9:.2f} GB"
+
+    print(f"Loading cubes       ({print_mem()})")
+    temp_cube = load_cube(paths["T"],   unit=u.K,         downsample=downsample, precision=precision)
+    rho_cube  = load_cube(paths["rho"], unit=u.g/u.cm**3, downsample=downsample, precision=precision)
+    vz_cube   = load_cube(paths["vz"],  unit=u.cm/u.s,    downsample=downsample, precision=precision)
+
     nx, ny, nz = temp_cube.shape
-    assert temp_cube.shape == rho_cube.shape == vx_cube.shape == vy_cube.shape == vz_cube.shape, "Cubes must have the same shape"
-    del vx_cube, vy_cube
 
-    logT_cube = np.log10(temp_cube.value).astype(cube_precision)
-    ne        = (rho_cube/(g_mu*const.u.cgs)).to(1/u.cm**3)
-    logN_cube = np.log10(ne.value).astype(cube_precision)
-    del ne, rho_cube, temp_cube
+    # convert to log10 temperature and density
+    logT_cube = np.log10(temp_cube.value).astype(precision)
+    ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
+    logN_cube = np.log10(ne_arr.value).astype(precision)
+    del rho_cube, temp_cube, ne_arr
 
-    print(f"Loading G(T,N) tables ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-    gofnt_dict = read_contribution_funcs('gofnt.sav')
-    for line, info in gofnt_dict.items():
-        info['g_tn'] = info['g_tn'].astype(cube_precision)
-        info['logT'] = info['logT'].astype(cube_precision)
-        info['logN'] = info['logN'].astype(cube_precision)
-    if limit_to_lines:
-        gofnt_dict = {k:v for k,v in gofnt_dict.items() if k in limit_to_lines}
+    # ----------------------------------------------------------
+    # read contribution functions
+    # ----------------------------------------------------------
+    print(f"Loading G(T,N)      ({print_mem()})")
+    goft, logT_grid, logN_grid = read_goft("gofnt.sav", limit_lines, precision)
 
-    print(f"Calculating the wavelength grid from the velocity grid for each line ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-    for line, info in gofnt_dict.items():
-        info['wl_grid'] = (vel_grid * info['wl0'] / const.c + info['wl0']).cgs
+    # attach wavelength grid and mark background lines
+    for name, info in goft.items():
+        info["wl_grid"] = (vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+        info["background"] = name not in primary_lines
 
-    print(f"Assigning background status to the lines as appropriate.")
-    for line, info in gofnt_dict.items():
-        if line in primary_lines:
-            info['background'] = False
-        else:
-            info['background'] = True
+    # ----------------------------------------------------------
+    # DEM and G interpolation
+    # ----------------------------------------------------------
+    nT_bins = 50
+    logT_edges = np.linspace(logT_grid.min(), logT_grid.max(), nT_bins + 1)
+    logT_centres = 0.5 * (logT_edges[:-1] + logT_edges[1:])
+    dh_cm = voxel_dz.to(u.cm).value
 
+    print(f"DEM / <n_e>          ({print_mem()})")
+    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_edges)
 
+    # globals().update(locals());raise ValueError("Kicking back to ipython")
 
+    print(f"Interpolate G(T)    ({print_mem()})")
+    interpolate_g_on_dem(goft, avg_ne_map, logT_centres,
+                         logN_grid, logT_grid, precision)
 
+    # ----------------------------------------------------------
+    # EM(T,v) cube
+    # ----------------------------------------------------------
+    ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
+    print(f"EM(T,v) cube        ({print_mem()})")
+    em_tv = build_em_tv(logT_cube, vz_cube, logT_edges, v_edges, ne_sq_dh)
 
+    # ----------------------------------------------------------
+    # synthesis of spectra
+    # ----------------------------------------------------------
+    print(f"Synthesise spectra  ({print_mem()})")
+    synthesize_spectra(goft, em_tv, v_edges, logT_centres,
+                       dv_cm_s, ion_mass.cgs.value * const.u.cgs.value)
 
+    # ----------------------------------------------------------
+    # combine lines and quicklook image
+    # ----------------------------------------------------------
+    total_si, back_si = combine_lines(goft, main_line)
+    wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
+    wl_res = wl_grid_main[1] - wl_grid_main[0]
 
+    # ----------------------------------------------------------------------
+    # interactive quick-look: click any pixel -> spectra + DEM windows
+    # ----------------------------------------------------------------------
+    def launch_viewer(
+            total_si: np.ndarray,
+            goft: dict,
+            dem_map: np.ndarray,
+            em_tv: np.ndarray,
+            wl_ref: np.ndarray,
+            v_edges: np.ndarray,
+            logT_centres: np.ndarray,
+            main_line: str,
+    ):
+        """
+        Left-click on the intensity map to pop up
+            1) the full spectrum for that LOS pixel,
+            2) its 1-D DEM(T),
+            3) its 2-D DEM(T,v).
+        """
 
+        # helper: wavelength ↔ velocity converters (km/s) for the main line
+        wl0_A   = goft[main_line]["wl0"].to(u.AA).value
+        c_km_s  = const.c.to(u.km / u.s).value
+        wl_to_vel = lambda wl:  (wl - wl0_A) / wl0_A * c_km_s
+        vel_to_wl = lambda vel: (vel / c_km_s) * wl0_A + wl0_A
 
+        nx, ny, _ = total_si.shape
+        v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])
+        nT, nv    = len(logT_centres), len(v_centres)
 
+        # show the log-integrated intensity
+        wl_res = wl_ref[1] - wl_ref[0]
+        fig_map, ax_map = plt.subplots()
+        im = ax_map.imshow(
+            np.log10(total_si.sum(axis=2).T) / wl_res,
+            origin="lower", cmap="inferno", aspect="equal"
+        )
+        ax_map.set_title("log10 ∫I(λ) dλ  (click a pixel)")
+        plt.colorbar(im, ax=ax_map, label="log10(I)")
 
+        # on-click callback --------------------------------------------------
+        def on_click(event):
+            if event.inaxes is not ax_map or event.xdata is None or event.ydata is None:
+                return
+            x_pix, y_pix = int(round(event.xdata)), int(round(event.ydata))
+            if not (0 <= x_pix < nx and 0 <= y_pix < ny):
+                return
 
+            # 1. spectrum window --------------------------------------------
+            fig_spec, ax_spec = plt.subplots(figsize=(6, 4))
+            ax_spec.plot(wl_ref, total_si[x_pix, y_pix, :], color="k", lw=1)
+            ax_spec.set_xlabel("Wavelength (Å)")
+            ax_spec.set_ylabel("Specific intensity")
+            ax_spec.set_title(f"Spectrum at pixel ({x_pix}, {y_pix})")
+            ax_spec.grid(ls=":")
 
+            # secondary x-axis in velocity
+            ax_top = ax_spec.secondary_xaxis("top", functions=(wl_to_vel, vel_to_wl))
+            ax_top.set_xlabel("Velocity (km/s)")
 
+            # 2. 1-D DEM window ---------------------------------------------
+            fig_dem, ax_dem = plt.subplots(figsize=(4, 4))
+            ax_dem.step(logT_centres, dem_map[x_pix, y_pix, :],
+                        where="mid", lw=1.5)
+            ax_dem.set_xlabel("log10 T (K)")
+            ax_dem.set_ylabel("DEM  [cm^-5 per dex]")
+            ax_dem.set_title(f"DEM(T) at ({x_pix},{y_pix})")
+            ax_dem.grid(ls=":")
 
-    print("Calculating the DEM")
-    nbins = 25
-    bin_edges = np.linspace(4, 9, nbins+1)
-    bin_centres = 0.5*(bin_edges[:-1] + bin_edges[1:])
-    dh = spt_res_z.to(u.cm).value
-    dlogT = bin_edges[1] - bin_edges[0]
-    n_e = 10.0**(logN_cube.astype(np.float64))
-    w2 = n_e**2
-    w3 = n_e**3
-    dem = np.zeros((nx, ny, nbins), dtype=np.float64)
-    avg_ne = np.zeros((nx, ny, nbins), dtype=np.float64)
-    for b in tqdm(range(nbins), unit='T bin', leave=False):
-        lo, hi = bin_edges[b], bin_edges[b+1]
-        m = (logT_cube >= lo) & (logT_cube < hi)
-        s2 = np.sum(w2*m, axis=2)*dh
-        s3 = np.sum(w3*m, axis=2)*dh
-        dem[:, :, b]    = s2/dlogT
-        with np.errstate(divide='ignore', invalid='ignore'):
-            avg_ne[:, :, b] = np.where(s2>0, s3/s2, 0.0)
+            # 3. 2-D DEM(T,v) window ----------------------------------------
+            fig_dem2d, ax_dem2d = plt.subplots(figsize=(5, 4))
+            dem2d = em_tv[x_pix, y_pix, :, :]   # (nT,nv)
+            im2 = ax_dem2d.imshow(
+                np.log10(np.clip(dem2d, 1e15, None)),   # avoid log(0)
+                origin="lower", aspect="auto",
+                extent=[v_centres[0], v_centres[-1],
+                        logT_centres[0], logT_centres[-1]],
+                cmap="viridis"
+            )
+            ax_dem2d.set_xlabel("Velocity (cm/s)")
+            ax_dem2d.set_ylabel("log10 T (K)")
+            ax_dem2d.set_title(f"2-D DEM(T,v) at ({x_pix},{y_pix})")
+            plt.colorbar(im2, ax=ax_dem2d, label="log10 EM  [cm^-5]")
 
-    # where avg_ne is zero, set it to 10
-    avg_ne[avg_ne == 0] = 10.0  # used to avoid errors when doing log below. So long as setting to something below the min if the gofnt density (1e4), this is fine.
+            plt.tight_layout()
+            plt.show()
 
-    print("Calculating contribution function per PIXEL")
-    logTg = np.broadcast_to(bin_centres[:, None, None], (nbins, nx, ny))
-    logNg = np.log10(avg_ne)               # shape (nx,ny,nbins)
-    pts   = np.stack((logNg.transpose(2,0,1).ravel(), logTg.ravel()), axis=-1)
-    for line, info in gofnt_dict.items(): info['g'] = np.zeros((nx, ny, nbins), dtype=cube_precision)
-    for line, info in tqdm(gofnt_dict.items(), desc='Lines', unit='line', leave=False):
-        interp    = RegularGridInterpolator((info['logN'], info['logT']), info['g_tn'], method='linear', bounds_error=False, fill_value=0.0)
-        G_flat    = interp(pts)
-        info['g'] = G_flat.reshape(nbins, nx, ny).transpose(1, 2, 0)
-
-    print("Calculating integrated intensity per PIXEL")
-    for line, info in tqdm(gofnt_dict.items(), desc='Lines', unit='line', leave=False):
-        info['int'] = (1/(4*np.pi))*np.sum(info['g']*dem, axis=2)*dlogT
-
-    plt.imshow(np.log10(info['int']), aspect='equal', cmap='inferno', origin='lower')
-    plt.colorbar()
-    plt.show()
-
-    globals().update(locals());raise ValueError("Kicking back to ipython")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    filename = '_G_cubes.npz'
-    if os.path.exists(filename):
-        print(f"Loading saved contribution function [erg cm3/s] per voxel from {filename} ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        tmp = np.load(filename)
-        G_cubes = {line: tmp[line] * (u.erg * u.cm**3 / u.s) for line in tmp.files}
-        del tmp
-    else: 
-        print(f"Calculating the contribution function [erg cm3/s] per voxel ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        G_cubes = {line: np.empty_like(logT_cube, dtype=cube_precision) for line in gofnt_dict.keys()}
-        for line, info in tqdm(gofnt_dict.items(), desc='Lines', unit='line', leave=False):
-            G_cubes[line] = interp2d_spline(info['g_tn'], info['logT'], info['logN'], logT_cube, logN_cube, cube_precision=cube_precision) * (u.erg * u.cm**3 / u.s)
-        np.savez(filename, **{line: G_cubes[line].value for line in G_cubes.keys()})
-    for line, info in gofnt_dict.items():
-        del info['g_tn'], info['logT'], info['logN']
-
-    filename = '_C_cubes.npz'
-    if os.path.exists(filename):
-        print(f"Loading saved integrated intensity [erg/s/cm3/sr] per voxel from {filename} ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        tmp = np.load(filename)
-        C_cubes = {line: tmp[line] * (u.erg / u.s / u.cm**3 / u.sr) for line in tmp.files}
-        del tmp
-    else:
-        print(f"Calculating the integrated intensity [erg/s/cm3/sr] per voxel ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        with np.errstate(over='ignore', invalid='ignore'):
-            ne2 = (10**logN_cube * (1/u.cm**3))**2
-            ne2[~np.isfinite(ne2)] = 0.0
-            C_cubes = {line: np.zeros_like(G_cubes[line], dtype=cube_precision) for line in G_cubes.keys()}
-            C_cubes = {line: (G_cubes[line] * (1/(4*np.pi*u.sr)) * ne2).astype(cube_precision) for line in tqdm(G_cubes.keys(), desc='Lines', unit='line', leave=False)}  # note, can't turn ne2 to float32 directly as values outside of single precision range (larger than 1e38)
-        np.savez(filename, **{line: C_cubes[line].value for line in C_cubes.keys()})
-        del ne2
-    del G_cubes, logN_cube
-
-    filename = '_I_cubes.npz'
-    if os.path.exists(filename):
-        print(f"Loading saved specific intensity [erg/s/cm2/sr/cm] for each voxel from {filename} ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        tmp = np.load(filename)
-        I_cubes = {line: tmp[line] * (u.erg / u.s / u.cm**2 / u.sr / u.cm) for line in tmp.files}
-        del tmp
-    else:
-        print(f"Calculating the specific intensity [erg/s/cm2/sr/cm] for each LOS pixel ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        probable_speed = np.sqrt(2 * const.k_B.cgs * (10**logT_cube * (u.K)) / (Fe_amu / const.N_A)).cgs  # v_p = sqrt(2kT/m), m=M/N_A : cm/s
-        gauss_wdth = probable_speed / np.sqrt(2)  # broadening along LOS: g(v) = 1/sqrt(pi*sigma) * exp(-v^2/(wdth^2)), sigma = sqrt(kT/m), therefore sigma = v_p/sqrt(2) : cm/s
-        gauss_peak = 1.0 / (np.sqrt(2 * np.pi * gauss_wdth**2))  # s / cm
-        gauss_x_cgs = vel_grid.cgs.value  # velocity grid in cm/s
-        spt_res_z_cgs = spt_res_z.to(u.cm).value  # save these to avoid repeated unit calculation
-        vel_res_cgs = vel_res.to(u.cm/u.s).value
-        I_cubes = {line: np.empty((C_cubes[line].shape[0], C_cubes[line].shape[1], gauss_x_cgs.size), dtype=cube_precision) for line in C_cubes.keys()}
-        pbar = tqdm(C_cubes.items(), desc='Lines', unit='line', leave=False)
-        for line, C_cube in pbar:
-            pbar.set_postfix(mem=f"{psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB")
-            wvl_res_cgs = gofnt_dict[line]['wl_grid'][1].cgs.value - gofnt_dict[line]['wl_grid'][0].cgs.value  # wavelength resolution in cm
-            I_cubes[line] = calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs, vz_cube, cube_precision=cube_precision, ncpu=ncpu) * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        np.savez(filename, **{line: I_cubes[line].value for line in I_cubes.keys()})
-        del probable_speed, gauss_wdth, gauss_peak, gauss_x_cgs, spt_res_z_cgs, vel_res_cgs, wvl_res_cgs
-    del C_cubes, logT_cube, vz_cube
-
-    filename = '_I_cube.npz'
-    if os.path.exists(filename):
-        print(f"Loading saved combined spectra [erg/s/cm2/sr/cm] per LOS pixel from {filename} ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        tmp = np.load(filename)
-        I_cube = tmp['I_cube'] * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        del tmp
-    else:
-        print(f"Combining into one spectra per LOS pixel [erg/s/cm2/sr/cm] (primary + background) ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        I_cube, background_spectrum, background_spectrum_line = combine_spectra(I_cubes, gofnt_dict, prime_line)
-        I_cube *= (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-        np.savez(filename, I_cube=I_cube.cgs.value, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value, prime_line=prime_line, wl0=gofnt_dict[prime_line]['wl0'].cgs.value)
-
-    variables = {key: value for key, value in globals().items() if not key.startswith("__") and not callable(value)}
-    with open("_synthesise_spectra_final_state.pkl", "wb") as f:
-        pickle.dump(variables, f)
-    print("Saved final state to _synthesise_spectra_final_state.pkl.")
-    print("Reload using:")
-    print('    with open("variables.pkl", "rb") as f:variables = pickle.load(f)')
-    print("    globals().update(variables)")
-
-    fig, ax = plt.subplots()
-    img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value), aspect='equal', cmap='inferno', origin='lower')
-    plt.colorbar(img, ax=ax, label='Log(Intensity)')
-
-    def onclick(event,
-          ax=ax,
-          total_cube=I_cube,
-          back_cube=background_spectrum,
-          cubes=I_cubes,
-          gofnt=gofnt_dict):
-        if event.inaxes is not ax:
-          return
-        if event.xdata is None or event.ydata is None:
-          return
-        x_pix = int(round(event.xdata))
-        y_pix = int(round(event.ydata))
-        nx, ny, _ = total_cube.shape
-        if not (0 <= x_pix < nx and 0 <= y_pix < ny):
-          return
-
-        # Prepare the two-panel figure
-        fig2, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(6, 8))
-
-        # Plot each line's spectrum
-        for name, cube_line in cubes.items():
-          wl_grid = gofnt[name]['wl_grid'].to(u.AA).value
-          spec = cube_line[x_pix, y_pix, :]
-          y_line = spec.value if hasattr(spec, 'value') else spec
-          ax1.plot(wl_grid, y_line, label=name, alpha=0.7)
-          ax2.plot(wl_grid, y_line, label=name, alpha=0.7)
-
-        # Plot total and background
-        wl_tot = gofnt[prime_line]['wl_grid'].to(u.AA).value
-        spec_tot = total_cube[x_pix, y_pix, :]
-        spec_back = back_cube[x_pix, y_pix, :]
-        # spec_back_line = back_line_cube[x_pix, y_pix, :]
-
-        y_tot = spec_tot.value if hasattr(spec_tot, 'value') else spec_tot
-
-        ax1.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
-        ax2.plot(wl_tot, y_tot, 'k-', lw=2, label='Total')
-
-        ax1.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
-        ax2.plot(wl_tot, spec_back, 'r--', lw=2, label='Background')
-
-        ax1.set_ylabel('Intensity')
-        ax1.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — linear scale')
-        ax1.legend(loc='best', fontsize='small')
-
-        ax2.set_yscale('log')
-        ax2.set_ylim(bottom=1e-1)
-        ax2.set_xlabel('Wavelength (Å)')
-        ax2.set_ylabel('Intensity')
-        ax2.set_title(f'Spectrum at pixel ({x_pix}, {y_pix}) — log scale')
-        ax2.legend(loc='best', fontsize='small')
-
-        wl0_A = gofnt[prime_line]['wl0'].to(u.AA).value
-        c_km_s = const.c.to(u.km / u.s).value
-
-        def wl_to_vel(wl):
-            return (wl - wl0_A) / wl0_A * c_km_s
-
-        def vel_to_wl(v):
-            return (v / c_km_s) * wl0_A + wl0_A
-
-        secax = ax1.secondary_xaxis('top', functions=(wl_to_vel, vel_to_wl))
-        secax.set_xlabel('Velocity (km/s)')
-
+        # connect the callback
+        fig_map.canvas.mpl_connect("button_press_event", on_click)
         plt.tight_layout()
         plt.show()
 
-    fig.canvas.mpl_connect('button_press_event', onclick)
-    plt.show()
 
-    globals().update(locals())
-if __name__ == '__main__':
+    # ----------------------------------------------------------------------
+    # call viewer after all processing is complete
+    # ----------------------------------------------------------------------
+    launch_viewer(
+        total_si     = total_si,
+        goft         = goft,
+        dem_map      = dem_map,
+        em_tv        = em_tv,
+        wl_ref       = wl_grid_main,
+        v_edges      = v_edges,
+        logT_centres = logT_centres,
+        main_line    = main_line,
+    )
+
+
+
+if __name__ == "__main__":
     main()
