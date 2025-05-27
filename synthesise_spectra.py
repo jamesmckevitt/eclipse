@@ -10,6 +10,9 @@ import astropy.constants as const
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import psutil
+import dask.array as da
+from dask.diagnostics import ProgressBar
+from matplotlib.cm import get_cmap
 
 
 ##############################################################################
@@ -39,7 +42,7 @@ def load_cube(
     shape
         Tuple (nx, ny, nz) describing the *full* cube dimensions.
     unit
-        Astropy unit to attach (e.g. u.K or u.g/u.cm**3).  If None, returns
+        Astropy unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns
         a plain ndarray.
     downsample
         Integer factor; if non-False, keep every *downsample*-th cell along
@@ -93,7 +96,7 @@ def read_goft(
         if limit_lines and line_name not in limit_lines:
             continue
 
-        rest_wl = float(line_name.split("_")[1]) * u.AA      # Å -> Quantity
+        rest_wl = float(line_name.split("_")[1]) * u.AA      # A -> Quantity
         goft_dict[line_name] = {
             "wl0": rest_wl.to(u.cm),
             "g_tn": entry[4].astype(precision),              # erg cm^3 / s
@@ -142,8 +145,7 @@ def compute_dem(
         em_n = np.sum(w3 * mask, axis=2) * voxel_dz_cm       # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
-        with np.errstate(divide="ignore", invalid="ignore"):
-            avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
+        avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
 
     return dem, avg_ne
 
@@ -163,7 +165,7 @@ def interpolate_g_on_dem(
     nT, nx, ny = len(logT_centres), *avg_ne.shape[:2]
 
     # build list of query points (logN, logT) for every (T-bin, pixel)
-    logNe_flat = np.log10(avg_ne).transpose(2, 0, 1).ravel()
+    logNe_flat = np.log10(avg_ne, where=avg_ne > 0.0).transpose(2, 0, 1).ravel()
     logT_flat = np.broadcast_to(logT_centres[:, None, None],
                                 (nT, nx, ny)).ravel()
     query_pts = np.column_stack((logNe_flat, logT_flat))
@@ -198,8 +200,22 @@ def build_em_tv(
     mask_V = (vz_cube.value[..., None] >= v_edges[:-1]) & \
              (vz_cube.value[..., None] <  v_edges[1:])
 
-    em_tv = np.einsum("ijk,ijkl,ijkm->ijlm",
-                      ne_sq_dh, mask_T, mask_V, optimize=True)
+    # Build the 4-D emission-measure cube EM(x,y,T,v) by summing over the z-axis:
+    #   ne_sq_dh has shape (nx,ny,nz)  ->  n_e^2 * dh for each voxel
+    #   mask_T   has shape (nx,ny,nz,nT) -> True where logT falls in each T-bin
+    #   mask_V   has shape (nx,ny,nz,nv) -> True where vz falls in each v-bin
+    # einsum string "ijk,ijkl,ijkm->ijlm" multiplies these three arrays
+    # element-wise along z and sums over that axis, producing em_tv of shape (nx,ny,nT,nv).
+    # This is further parallelised by Dask.
+
+    ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
+    mask_T_d   = da.from_array(mask_T,   chunks='auto')
+    mask_V_d   = da.from_array(mask_V,   chunks='auto')
+    em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm",
+                        ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+    with ProgressBar():
+        em_tv = em_tv_d.compute()
+
     return em_tv
 
 
@@ -213,8 +229,8 @@ def synthesize_spectra(
 ) -> None:
     """
     Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
-    specific intensity cube I(x,y,lambda) for every line.  The result is
-    stored in `goft[line]["si"]`.
+    specific intensity cube I(x,y,lambda) for every line. The result is
+    stored in goft[line]["si"].
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
@@ -240,12 +256,12 @@ def synthesize_spectra(
 
         # collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
         spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
-        data["si"] = spec_map * (dv_cm_s / (4 * np.pi))   # erg s^-1 cm^-2 sr^-1
+        data["si"] = spec_map * (dv_cm_s / (4 * np.pi))   # erg s^-1 cm^-2 sr^-1 cm^-1
 
 
 ##############################################################################
 # ---------------------------------------------------------------------------
-#  Simple spectrum combiner and viewer (optional)
+#  Spectrum combiner
 # ---------------------------------------------------------------------------
 ##############################################################################
 
@@ -255,18 +271,18 @@ def combine_lines(goft: dict, main_line: str):
 
     Returns
     -------
-    total_si      : (nx,ny,nλ)  -> primary + background
-    background_si : (nx,ny,nλ)  -> background only
+    total_si      : (nx,ny,nl)  -> primary + background
+    background_si : (nx,ny,nl)  -> background only
     """
     wl_ref = goft[main_line]["wl_grid"].value
-    nx, ny, nλ = goft[main_line]["si"].shape
+    nx, ny, nl = goft[main_line]["si"].shape
 
-    total_si      = np.zeros((nx, ny, nλ))
+    total_si      = np.zeros((nx, ny, nl))
     background_si = np.zeros_like(total_si)
 
     for name, entry in goft.items():
-        wl_src = entry["wl_grid"].value              # 1-D, length nλ_src
-        cube   = entry["si"]                         # (nx,ny,nλ_src)
+        wl_src = entry["wl_grid"].value              # 1-D, length nl_src
+        cube   = entry["si"]                         # (nx,ny,nl_src)
 
         # loop over all LOS pixels and interpolate their 1-D spectrum
         for i in range(nx):
@@ -282,6 +298,142 @@ def combine_lines(goft: dict, main_line: str):
     total_si += background_si
     return total_si, background_si
 
+##############################################################################
+# ---------------------------------------------------------------------------
+#  Interactive quick-look viewer
+# ---------------------------------------------------------------------------
+##############################################################################
+
+def launch_viewer(
+    *,                                 # force keyword use
+    total_si     : np.ndarray,
+    goft         : dict,
+    dem_map      : np.ndarray,
+    wl_ref       : np.ndarray,
+    v_edges      : np.ndarray,
+    logT_centres : np.ndarray,
+    main_line    : str,
+) -> None:
+    """
+    Opens one overview window (intensity + Doppler map).  Clicking on a pixel
+    launches two further windows:
+
+        - DEM(T)    - y-axis in log-scale
+        - Spectra   - upper panel linear-y, lower panel log-y
+                      - one curve per emission line
+                      - thick black curve = summed spectrum
+    """
+
+    # ----------------- helper lambdas -----------------
+    wl0_A   = goft[main_line]["wl0"].to(u.AA).value
+    c_km_s  = const.c.to(u.km/u.s).value
+    wl2v    = lambda wl:  (wl - wl0_A) / wl0_A * c_km_s         # A -> km s-1
+    v2wl    = lambda vel: (vel / c_km_s)    * wl0_A + wl0_A     # km s-1 -> A
+
+    # velocity grid centres that correspond to wl_ref
+    v_centres_km = (0.5 * (v_edges[:-1] + v_edges[1:]) * u.cm/u.s)\
+                    .to(u.km/u.s).value
+
+    nx, ny, _ = total_si.shape
+    wl_res     = wl_ref[1] - wl_ref[0]
+
+    # ----------------- overview figure -----------------
+    fig_ov, (ax_I, ax_V) = plt.subplots(2, 1, figsize=(7, 10))
+
+    imI = ax_I.imshow(
+        np.log10(total_si.sum(axis=2).T / wl_res),
+        origin="lower", aspect="equal", cmap="inferno"
+    )
+    ax_I.set_title(r"$\log_{10}\!\int I(\lambda)\,\mathrm{d}\lambda$")
+    fig_ov.colorbar(imI, ax=ax_I, label=r"$\log_{10} I$  [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$ dex$^{-1}$]")
+
+    peak_idx = total_si.argmax(axis=2)             # index of lambda of max signal
+    v_map    = v_centres_km[peak_idx]              # Doppler map
+    imV = ax_V.imshow(
+        v_map.T, origin="lower", aspect="equal",
+        cmap="RdBu_r"
+    )
+    ax_V.set_title("Doppler velocity of peak intensity  [km s-1]")
+    imV.set_clim(-30, 30)  # set color limits for velocity map
+    fig_ov.colorbar(imV, ax=ax_V, label="v  (km s-1)")
+
+    plt.tight_layout()
+    plt.show(block=False)          # keep UI responsive
+
+    # ----------------- click callback -----------------
+    def _on_click(event):
+      if event.inaxes not in (ax_I, ax_V):        # click somewhere else
+        return
+      if event.xdata is None or event.ydata is None:
+        return
+
+      # pixel indices (round - the images are pixel-aligned)
+      x, y = map(int, map(round, (event.xdata, event.ydata)))
+      if not (0 <= x < nx and 0 <= y < ny):
+        return
+
+      # -------- DEM window --------
+      fig_dem, ax_dem = plt.subplots(figsize=(5, 4))
+      dem_1d = dem_map[x, y, :]
+      ax_dem.step(logT_centres, np.log10(dem_1d, where=dem_1d > 0.0), where='mid', lw=1.8)
+      ax_dem.set_xlabel(r"\log_{10} T  [K]")
+      ax_dem.set_ylabel(r"\log_{10} DEM  [cm$^{-5}$ dex$^{-1}$]")
+      ax_dem.set_title(f"DEM(T)  -  pixel ({x},{y})")
+      ax_dem.grid(ls=":")
+      fig_dem.tight_layout()
+      plt.show(block=False)
+
+      # -------- spectra window --------
+      fig_sp, (ax_lin, ax_log) = plt.subplots(2, 1, sharex=True,
+                          figsize=(7, 8))
+      line_names   = list(goft.keys())
+      n_lines      = len(line_names)
+      cmap         = get_cmap("tab10", n_lines)
+
+      # summed spectrum (already on wl_ref grid)
+      summed = total_si[x, y, :]
+
+      # plot each emission line - thin coloured curves
+      for i, name in enumerate(line_names):
+        spec_px   = goft[name]["si"][x, y, :]
+        wl_src    = goft[name]["wl_grid"].to(u.AA).value
+        spec_int  = np.interp(wl_ref, wl_src, spec_px, left=0.0, right=0.0)
+        lbl       = f"{name}" + ("  (bg)" if goft[name]["background"] else "")
+        ax_lin.plot(wl_ref, spec_int, color=cmap(i), lw=1.0, label=lbl)
+        ax_log.plot(wl_ref, spec_int, color=cmap(i), lw=1.0)
+
+      # summed spectrum - thick black curve on top
+      ax_lin.plot(wl_ref, summed, color="k", lw=2.0, label="total")
+      ax_log.plot(wl_ref, summed, color="k", lw=2.0)
+
+      # axis cosmetics for linear panel
+      ax_lin.set_ylabel("I  (linear)")
+      ax_lin.set_title(f"Spectrum - pixel ({x},{y})")
+      ax_lin.grid(ls=":")
+
+      # axis cosmetics for log panel
+      ax_log.set_yscale("log")
+      ax_log.set_xlabel("Wavelength  (A)")
+      ax_log.set_ylabel("I  (log)")
+      ax_log.grid(ls=":")
+
+      # add secondary x-axis (velocity) to both panels
+      for ax in (ax_lin, ax_log):
+        sec = ax.secondary_xaxis("top", functions=(wl2v, v2wl))
+        sec.set_xlabel("Velocity  (km s-1)")
+
+      # adjust log y-axis limits: bottom 10 orders below top
+      y_top = ax_log.get_ylim()[1]
+      ax_log.set_ylim(y_top / 1e10, y_top)
+
+      ax_lin.legend(fontsize="small", ncol=2)
+
+      fig_sp.tight_layout()
+      plt.show(block=False)
+
+    # connect callback
+    fig_ov.canvas.mpl_connect("button_press_event", _on_click)
+
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -292,7 +444,7 @@ def combine_lines(goft: dict, main_line: str):
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = 8                # factor or False
+    downsample     = 4                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
     limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
@@ -311,12 +463,6 @@ def main() -> None:
     v_edges = np.concatenate([vel_grid.value - 0.5 * dv_cm_s,
                               [vel_grid.value[-1] + 0.5 * dv_cm_s]])
 
-    # # ---------------- coarse v-bins for the DEM -----------------
-    # dv_dem = 25 * u.km/u.s                     # coarse LOS bin
-    # v_edges_dem = np.arange(-vel_lim, vel_lim + dv_dem, dv_dem).to(u.cm/u.s).value
-    # v_centres_dem = 0.5*(v_edges_dem[:-1] + v_edges_dem[1:])
-    # nv_dem = len(v_centres_dem)
-
     # file paths
     base_dir = Path("data/atmosphere")
     files = dict(
@@ -332,7 +478,7 @@ def main() -> None:
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    print(f"Loading cubes       ({print_mem()})")
+    print(f"Loading cubes ({print_mem()})")
     temp_cube = load_cube(paths["T"],   unit=u.K,         downsample=downsample, precision=precision)
     rho_cube  = load_cube(paths["rho"], unit=u.g/u.cm**3, downsample=downsample, precision=precision)
     vz_cube   = load_cube(paths["vz"],  unit=u.cm/u.s,    downsample=downsample, precision=precision)
@@ -340,15 +486,15 @@ def main() -> None:
     nx, ny, nz = temp_cube.shape
 
     # convert to log10 temperature and density
-    logT_cube = np.log10(temp_cube.value).astype(precision)
     ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
     logN_cube = np.log10(ne_arr.value).astype(precision)
+    logT_cube = np.log10(temp_cube.value).astype(precision)
     del rho_cube, temp_cube, ne_arr
 
     # ----------------------------------------------------------
     # read contribution functions
     # ----------------------------------------------------------
-    print(f"Loading G(T,N)      ({print_mem()})")
+    print(f"Loading contribution functions ({print_mem()})")
     goft, logT_grid, logN_grid = read_goft("gofnt.sav", limit_lines, precision)
 
     # attach wavelength grid and mark background lines
@@ -364,12 +510,10 @@ def main() -> None:
     logT_centres = 0.5 * (logT_edges[:-1] + logT_edges[1:])
     dh_cm = voxel_dz.to(u.cm).value
 
-    print(f"DEM / <n_e>          ({print_mem()})")
+    print(f"Calculating DEM and average density per bin ({print_mem()})")
     dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_edges)
 
-    # globals().update(locals());raise ValueError("Kicking back to ipython")
-
-    print(f"Interpolate G(T)    ({print_mem()})")
+    print(f"Interpolating contribution function on the DEM ({print_mem()})")
     interpolate_g_on_dem(goft, avg_ne_map, logT_centres,
                          logN_grid, logT_grid, precision)
 
@@ -377,131 +521,53 @@ def main() -> None:
     # EM(T,v) cube
     # ----------------------------------------------------------
     ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
-    print(f"EM(T,v) cube        ({print_mem()})")
+    print(f"Calculating an emissivity cube in temperature and velocity space ({print_mem()})")
     em_tv = build_em_tv(logT_cube, vz_cube, logT_edges, v_edges, ne_sq_dh)
 
     # ----------------------------------------------------------
     # synthesis of spectra
     # ----------------------------------------------------------
-    print(f"Synthesise spectra  ({print_mem()})")
+    print(f"Synthesising spectra ({print_mem()})")
     synthesize_spectra(goft, em_tv, v_edges, logT_centres,
                        dv_cm_s, ion_mass.cgs.value * const.u.cgs.value)
 
     # ----------------------------------------------------------
-    # combine lines and quicklook image
+    # combine lines
     # ----------------------------------------------------------
+    print(f"Combining lines into a single spectrum cube ({print_mem()})")
     total_si, back_si = combine_lines(goft, main_line)
-    wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
-    wl_res = wl_grid_main[1] - wl_grid_main[0]
+
+    # # ----------------------------------------------------------------------
+    # # call viewer after all processing is complete
+    # # ----------------------------------------------------------------------
+    # wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
+    # launch_viewer(
+    #     total_si     = total_si,
+    #     goft         = goft,
+    #     dem_map      = dem_map,
+    #     wl_ref       = wl_grid_main,
+    #     v_edges      = v_edges,
+    #     logT_centres = logT_centres,
+    #     main_line    = main_line,
+    # )
 
     # ----------------------------------------------------------------------
-    # interactive quick-look: click any pixel -> spectra + DEM windows
+    # save the results
     # ----------------------------------------------------------------------
-    def launch_viewer(
-            total_si: np.ndarray,
-            goft: dict,
-            dem_map: np.ndarray,
-            em_tv: np.ndarray,
-            wl_ref: np.ndarray,
-            v_edges: np.ndarray,
-            logT_centres: np.ndarray,
-            main_line: str,
-    ):
-        """
-        Left-click on the intensity map to pop up
-            1) the full spectrum for that LOS pixel,
-            2) its 1-D DEM(T),
-            3) its 2-D DEM(T,v).
-        """
+    output_file = "synthesised_spectra.pkl"
+    print(f"Saving results to {output_file} ({print_mem()})")
+    with open(output_file, "wb") as f:
+        pickle.dump({
+            "goft": goft,
+            "dem_map": dem_map,
+            "total_si": total_si,
+            "background_si": back_si,
+            "v_edges": v_edges,
+            "logT_centres": logT_centres,
+        }, f)
+    filesize = os.path.getsize(output_file) / 1e9
+    print(f"Saved {output_file} ({filesize:.2f} GB)")
 
-        # helper: wavelength ↔ velocity converters (km/s) for the main line
-        wl0_A   = goft[main_line]["wl0"].to(u.AA).value
-        c_km_s  = const.c.to(u.km / u.s).value
-        wl_to_vel = lambda wl:  (wl - wl0_A) / wl0_A * c_km_s
-        vel_to_wl = lambda vel: (vel / c_km_s) * wl0_A + wl0_A
-
-        nx, ny, _ = total_si.shape
-        v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])
-        nT, nv    = len(logT_centres), len(v_centres)
-
-        # show the log-integrated intensity
-        wl_res = wl_ref[1] - wl_ref[0]
-        fig_map, ax_map = plt.subplots()
-        im = ax_map.imshow(
-            np.log10(total_si.sum(axis=2).T) / wl_res,
-            origin="lower", cmap="inferno", aspect="equal"
-        )
-        ax_map.set_title("log10 ∫I(λ) dλ  (click a pixel)")
-        plt.colorbar(im, ax=ax_map, label="log10(I)")
-
-        # on-click callback --------------------------------------------------
-        def on_click(event):
-            if event.inaxes is not ax_map or event.xdata is None or event.ydata is None:
-                return
-            x_pix, y_pix = int(round(event.xdata)), int(round(event.ydata))
-            if not (0 <= x_pix < nx and 0 <= y_pix < ny):
-                return
-
-            # 1. spectrum window --------------------------------------------
-            fig_spec, ax_spec = plt.subplots(figsize=(6, 4))
-            ax_spec.plot(wl_ref, total_si[x_pix, y_pix, :], color="k", lw=1)
-            ax_spec.set_xlabel("Wavelength (Å)")
-            ax_spec.set_ylabel("Specific intensity")
-            ax_spec.set_title(f"Spectrum at pixel ({x_pix}, {y_pix})")
-            ax_spec.grid(ls=":")
-
-            # secondary x-axis in velocity
-            ax_top = ax_spec.secondary_xaxis("top", functions=(wl_to_vel, vel_to_wl))
-            ax_top.set_xlabel("Velocity (km/s)")
-
-            # 2. 1-D DEM window ---------------------------------------------
-            fig_dem, ax_dem = plt.subplots(figsize=(4, 4))
-            ax_dem.step(logT_centres, dem_map[x_pix, y_pix, :],
-                        where="mid", lw=1.5)
-            ax_dem.set_xlabel("log10 T (K)")
-            ax_dem.set_ylabel("DEM  [cm^-5 per dex]")
-            ax_dem.set_title(f"DEM(T) at ({x_pix},{y_pix})")
-            ax_dem.grid(ls=":")
-
-            # 3. 2-D DEM(T,v) window ----------------------------------------
-            fig_dem2d, ax_dem2d = plt.subplots(figsize=(5, 4))
-            dem2d = em_tv[x_pix, y_pix, :, :]   # (nT,nv)
-            im2 = ax_dem2d.imshow(
-                np.log10(np.clip(dem2d, 1e15, None)),   # avoid log(0)
-                origin="lower", aspect="auto",
-                extent=[v_centres[0], v_centres[-1],
-                        logT_centres[0], logT_centres[-1]],
-                cmap="viridis"
-            )
-            ax_dem2d.set_xlabel("Velocity (cm/s)")
-            ax_dem2d.set_ylabel("log10 T (K)")
-            ax_dem2d.set_title(f"2-D DEM(T,v) at ({x_pix},{y_pix})")
-            plt.colorbar(im2, ax=ax_dem2d, label="log10 EM  [cm^-5]")
-
-            plt.tight_layout()
-            plt.show()
-
-        # connect the callback
-        fig_map.canvas.mpl_connect("button_press_event", on_click)
-        plt.tight_layout()
-        plt.show()
-
-
-    # ----------------------------------------------------------------------
-    # call viewer after all processing is complete
-    # ----------------------------------------------------------------------
-    launch_viewer(
-        total_si     = total_si,
-        goft         = goft,
-        dem_map      = dem_map,
-        em_tv        = em_tv,
-        wl_ref       = wl_grid_main,
-        v_edges      = v_edges,
-        logT_centres = logT_centres,
-        main_line    = main_line,
-    )
-
-
-
+    globals().update(locals());raise ValueError("Kicking back to ipython")
 if __name__ == "__main__":
     main()
