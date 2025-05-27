@@ -13,6 +13,7 @@ import psutil
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from matplotlib.cm import get_cmap
+from matplotlib.patches import Rectangle
 
 
 ##############################################################################
@@ -181,7 +182,7 @@ def interpolate_g_on_dem(
 
 ##############################################################################
 # ---------------------------------------------------------------------------
-#  Build EM(T,v) and synthesize spectra
+#  Build EM(T,v) and synthesise spectra
 # ---------------------------------------------------------------------------
 ##############################################################################
 
@@ -219,7 +220,7 @@ def build_em_tv(
     return em_tv
 
 
-def synthesize_spectra(
+def synthesise_spectra(
     goft: Dict[str, dict],
     em_tv: np.ndarray,
     v_edges: np.ndarray,
@@ -256,7 +257,7 @@ def synthesize_spectra(
 
         # collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
         spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
-        data["si"] = spec_map * (dv_cm_s / (4 * np.pi))   # erg s^-1 cm^-2 sr^-1 cm^-1
+        data["si"] = spec_map / (4 * np.pi)
 
 
 ##############################################################################
@@ -434,6 +435,137 @@ def launch_viewer(
     # connect callback
     fig_ov.canvas.mpl_connect("button_press_event", _on_click)
 
+##############################################################################
+# ---------------------------------------------------------------------------
+#  Plotting
+# ---------------------------------------------------------------------------
+##############################################################################
+
+def _find_median_pixel(total_si, margin_frac=0.20):
+    """Return (i,j) indices of the median-intensity pixel inside the
+    central (1-2*margin_frac)² region of total_si."""
+    nx, ny = total_si.shape[:2]
+    margin = int(margin_frac * min(nx, ny))
+    inner  = total_si[margin:nx - margin, margin:ny - margin]
+    med    = np.argsort(inner.sum(axis=2).ravel())[len(inner.ravel()) // 2]
+    i_in, j_in = np.unravel_index(med, inner.sum(axis=2).shape)
+    return (i_in + margin, j_in + margin), margin
+
+
+def plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
+              median_idx, margin, save="maps.png"):
+    """Intensity + Doppler maps (side-by-side)."""
+    ds       = downsample if isinstance(downsample, int) and downsample > 1 else 1
+    dx_pix   = voxel_dx.to(u.Mm).value * ds
+    dy_pix   = voxel_dy.to(u.Mm).value * ds
+    nx, ny   = total_si.shape[:2]
+    extent   = (0, nx*dx_pix, 0, ny*dy_pix)
+
+    # Doppler map
+    v_cent_km = 0.5*(v_edges[:-1] + v_edges[1:]) * u.cm/u.s
+    v_cent_km = v_cent_km.to(u.km/u.s).value
+    v_map     = v_cent_km[total_si.argmax(axis=2)]
+
+    # wavelength resolution for intensity normalisation
+    wl_res = wl_grid_main[1] - wl_grid_main[0]
+
+    fig   = plt.figure(figsize=(11, 5))
+    gs    = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
+    axI   = fig.add_subplot(gs[0, 0])
+    axV   = fig.add_subplot(gs[0, 1], sharey=axI)
+
+    # intensity panel
+    imI = axI.imshow(np.log10(total_si.sum(axis=2).T / wl_res),
+                     origin="lower", aspect="equal", cmap="afmhot", extent=extent)
+    x_med = median_idx[0]*dx_pix + dx_pix/2
+    y_med = median_idx[1]*dy_pix + dy_pix/2
+    axI.scatter(x_med, y_med, color="cyan", s=100, edgecolor="k")
+    rect = Rectangle((margin*dx_pix, margin*dy_pix),
+                     (nx-2*margin)*dx_pix, (ny-2*margin)*dy_pix,
+                     fill=False, edgecolor="cyan", linewidth=1, linestyle="--")
+    axI.add_patch(rect)
+    axI.set_xlabel("X (Mm)")
+    axI.set_ylabel("Y (Mm)")
+    axI.set_title("Intensity")
+    fig.colorbar(imI, ax=axI, orientation="horizontal", extend="both", shrink=0.9,
+                 label=r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\right)$ "
+                       r"[erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]")
+
+    # velocity panel
+    imV = axV.imshow(v_map.T, origin="lower", aspect="equal", cmap="RdBu_r",
+                     extent=extent, vmin=-15, vmax=15)
+    axV.set_xlabel("X (Mm)")
+    axV.set_title("Doppler velocity")
+    fig.colorbar(imV, ax=axV, orientation="horizontal", extend="both", shrink=0.9,
+                 label=r"$v$  [km s$^{-1}$]")
+
+    for ax in (axI, axV):
+        ax.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_spectrum(goft, total_si, wl_grid_main, median_idx,
+                  main_line, save="spectrum.png"):
+    """Linear+log spectrum for a single pixel."""
+    wl0_A  = goft[main_line]["wl0"].to(u.AA).value
+    c_kms  = const.c.to(u.km/u.s).value
+    wl2v   = lambda wl: (wl - wl0_A)/wl0_A * c_kms
+    v2wl   = lambda v: (v / c_kms) * wl0_A + wl0_A
+
+    fig    = plt.figure(figsize=(4, 5))
+    gs     = fig.add_gridspec(nrows=2, ncols=1, hspace=0.0)
+    ax_lin = fig.add_subplot(gs[0, 0])
+    ax_log = fig.add_subplot(gs[1, 0], sharex=ax_lin)
+
+    cmap = get_cmap("tab10", len(goft))
+    for i, (name, info) in enumerate(goft.items()):
+        spec_px  = info["si"][median_idx]
+        wl_src   = info["wl_grid"].to(u.AA).value
+        spec_int = np.interp(wl_grid_main, wl_src, spec_px, left=0.0, right=0.0)
+        ax_lin.plot(wl_grid_main, spec_int, color=cmap(i), lw=1.0)
+        ax_log.plot(wl_grid_main, spec_int, color=cmap(i), lw=1.0)
+
+    summed = total_si[median_idx]
+    ax_lin.plot(wl_grid_main, summed, color="k", lw=2.0)
+    ax_log.plot(wl_grid_main, summed, color="k", lw=2.0)
+
+    for ax in (ax_lin, ax_log):
+        ax.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
+
+    ax_lin.set_ylabel(r"$I$ (linear)")
+    ax_lin.tick_params(axis="x", labelbottom=False)
+    ax_log.set_yscale("log")
+    ax_log.set_xlabel(r"Wavelength  [$\mathrm{\AA}$]")
+    ax_log.set_ylabel(r"$I$ (log)")
+    ax_log.set_ylim(ax_log.get_ylim()[1]/1e7, ax_log.get_ylim()[1])
+
+    sec = ax_lin.secondary_xaxis("top", functions=(wl2v, v2wl))
+    sec.set_xlabel(r"Velocity  [km s$^{-1}$]")
+    sec.tick_params(direction="in")
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_dem(dem_map, logT_centres, median_idx, ylim=(25, 29),
+             xlim=(5.5, 7.0), save="dem.png"):
+    """DEM(T) for a single pixel."""
+    dem_1d = dem_map[median_idx]
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.step(logT_centres, np.log10(dem_1d, where=dem_1d>0), where="mid", lw=1.8)
+    ax.set_xlabel(r"$\log_{10} T$  [K]")
+    ax.set_ylabel(r"$\log_{10} \xi$  [cm$^{-5}$ dex$^{-1}$]")
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.grid(ls=":")
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -444,13 +576,14 @@ def launch_viewer(
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = 4                # factor or False
+    downsample     = False                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
     limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
     vel_res        = 1 * u.km / u.s
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
+    voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
     ion_mass       = 55.845 * u.g / u.mol    # Fe atomic weight
     mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
     # ----------------------------------------------------------
@@ -528,7 +661,7 @@ def main() -> None:
     # synthesis of spectra
     # ----------------------------------------------------------
     print(f"Synthesising spectra ({print_mem()})")
-    synthesize_spectra(goft, em_tv, v_edges, logT_centres,
+    synthesise_spectra(goft, em_tv, v_edges, logT_centres,
                        dv_cm_s, ion_mass.cgs.value * const.u.cgs.value)
 
     # ----------------------------------------------------------
@@ -540,12 +673,11 @@ def main() -> None:
     # # ----------------------------------------------------------------------
     # # call viewer after all processing is complete
     # # ----------------------------------------------------------------------
-    # wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
     # launch_viewer(
     #     total_si     = total_si,
     #     goft         = goft,
     #     dem_map      = dem_map,
-    #     wl_ref       = wl_grid_main,
+    #     wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
     #     v_edges      = v_edges,
     #     logT_centres = logT_centres,
     #     main_line    = main_line,
@@ -567,6 +699,20 @@ def main() -> None:
         }, f)
     filesize = os.path.getsize(output_file) / 1e9
     print(f"Saved {output_file} ({filesize:.2f} GB)")
+
+    globals().update(locals());raise ValueError("Kicking back to ipython")
+
+    # ----------------------------------------------------------------------
+    # paper output with physical axes in Mm
+    # ----------------------------------------------------------------------
+    median_idx, margin = _find_median_pixel(total_si)
+    plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
+              median_idx, margin, save="maps.png")
+    plot_spectrum(goft, total_si, wl_grid_main, median_idx,
+                  main_line, save="spectrum_median_pixel.png")
+    plot_dem(dem_map, logT_centres, median_idx,
+            save="dem_median_pixel.png")
+
 
     globals().update(locals());raise ValueError("Kicking back to ipython")
 if __name__ == "__main__":
