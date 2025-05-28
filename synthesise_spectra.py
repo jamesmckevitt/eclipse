@@ -14,6 +14,7 @@ import dask.array as da
 from dask.diagnostics import ProgressBar
 from matplotlib.cm import get_cmap
 from matplotlib.patches import Rectangle
+from mendeleev import element
 
 
 ##############################################################################
@@ -101,6 +102,8 @@ def read_goft(
         goft_dict[line_name] = {
             "wl0": rest_wl.to(u.cm),
             "g_tn": entry[4].astype(precision),              # erg cm^3 / s
+            "atom": entry[1],                                 # e.g. 26 (for Fe)
+            "ion": entry[2],                                 # e.g. 12 (for Fe XII)
         }
 
     return goft_dict, logT_grid, logN_grid
@@ -226,7 +229,6 @@ def synthesise_spectra(
     v_edges: np.ndarray,
     logT_centres: np.ndarray,
     dv_cm_s: float,
-    ion_mass_g: float,
 ) -> None:
     """
     Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
@@ -241,8 +243,11 @@ def synthesise_spectra(
         wl0 = data["wl0"].cgs.value                     # cm
         wl_grid = data["wl_grid"].cgs.value                 # (n_lambda,)
 
+        atom = element(data["atom"])
+        atom_weight_g = (atom.atomic_weight * u.u).cgs.value
+
         # thermal width per T-bin: sigma_T (nT,)
-        sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_centres) / ion_mass_g) / c_cm_s
+        sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_centres) / atom_weight_g) / c_cm_s
 
         # Doppler-shifted center for each v-bin: (nv,)
         lam_cent = wl0 * (1 + v_centres / c_cm_s)
@@ -584,7 +589,6 @@ def main() -> None:
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
     voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
-    ion_mass       = 55.845 * u.g / u.mol    # Fe atomic weight
     mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
     # ----------------------------------------------------------
 
@@ -662,7 +666,7 @@ def main() -> None:
     # ----------------------------------------------------------
     print(f"Synthesising spectra ({print_mem()})")
     synthesise_spectra(goft, em_tv, v_edges, logT_centres,
-                       dv_cm_s, ion_mass.cgs.value * const.u.cgs.value)
+                       dv_cm_s)
 
     # ----------------------------------------------------------
     # combine lines
