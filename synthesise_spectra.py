@@ -15,6 +15,7 @@ from dask.diagnostics import ProgressBar
 from matplotlib.cm import get_cmap
 from matplotlib.patches import Rectangle
 from mendeleev import element
+import dill
 
 
 ##############################################################################
@@ -262,7 +263,11 @@ def synthesise_spectra(
 
         # collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
         spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
-        data["si"] = spec_map / (4 * np.pi)
+
+        # data["si"] = spec_map / (4 * np.pi)
+
+        dlam_cm = wl_grid[1] - wl_grid[0]
+        data["si"] = spec_map * (dv_cm_s / dlam_cm) / (4 * np.pi)
 
 
 ##############################################################################
@@ -458,7 +463,7 @@ def _find_median_pixel(total_si, margin_frac=0.20):
 
 
 def plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
-              median_idx, margin, save="maps.png"):
+              median_idx, margin, wl_grid_main, save="maps.png"):
     """Intensity + Doppler maps (side-by-side)."""
     ds       = downsample if isinstance(downsample, int) and downsample > 1 else 1
     dx_pix   = voxel_dx.to(u.Mm).value * ds
@@ -691,27 +696,18 @@ def main() -> None:
     # save the results
     # ----------------------------------------------------------------------
     output_file = "synthesised_spectra.pkl"
-    print(f"Saving results to {output_file} ({print_mem()})")
-    with open(output_file, "wb") as f:
-        pickle.dump({
-            "goft": goft,
-            "dem_map": dem_map,
-            "total_si": total_si,
-            "background_si": back_si,
-            "v_edges": v_edges,
-            "logT_centres": logT_centres,
-        }, f)
-    filesize = os.path.getsize(output_file) / 1e9
-    print(f"Saved {output_file} ({filesize:.2f} GB)")
+    dill.dump_session(output_file)
+    print(f"Saved {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
     globals().update(locals());raise ValueError("Kicking back to ipython")
 
     # ----------------------------------------------------------------------
     # paper output with physical axes in Mm
     # ----------------------------------------------------------------------
+    wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
     median_idx, margin = _find_median_pixel(total_si)
     plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
-              median_idx, margin, save="maps.png")
+              median_idx, margin, wl_grid_main, save="maps_median_pixel.png")
     plot_spectrum(goft, total_si, wl_grid_main, median_idx,
                   main_line, save="spectrum_median_pixel.png")
     plot_dem(dem_map, logT_centres, median_idx,
