@@ -16,7 +16,7 @@ import psutil
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 from scipy.interpolate import RectBivariateSpline
-import pickle
+import dill
 
 def load_cube(path, shape=(512,768,256), unit=None, downsample=False):
     """
@@ -124,74 +124,95 @@ def calculate_specific_intensity(C_cube, gauss_peak, gauss_wdth, gauss_x_cgs, sp
                 thermal_gauss = peak_i[:, :, None] * np.exp(-((gauss_x_cgs[None, None, :] - vz_i[:, :, None])**2) / (2 * gw_i[:, :, None]**2))
                 I_cube[i, :, :] = np.sum( thermal_gauss * C_i[:, :, None] * spt_res_z_cgs * (vel_res_cgs / wvl_res_cgs), axis=1)
 
-        return I_cube.astype(cube_precision)
+    return I_cube.astype(cube_precision)
 
-def combine_spectra(I_cubes, gofnt_dict, prime_line):
-    """
-    Combine all line spectra into one spectrum per pixel. Method:
+def combine_spectra(I_cubes, gofnt_dict, prime_line, simple_sum=False):
+  """
+  Combine all line spectra into one spectrum per pixel.
+
+  If simple_sum is True:
+    - Simply sum all lines (background and primary) together, interpolating to the prime_line wavelength grid.
+    - background_spectrum and background_spectrum_line are both the sum of all background lines.
+
+  If simple_sum is False:
     - Background lines: Connect the two highest peaks with a straight line.
       If the line goes below 0 anywhere in the wavelength range, connect the highest peak with y=0 at xmin or xmax.
     - Primary lines: sum their full profiles.
     - Final spectrum = baseline + sum(primary profiles).
-    """
-    nx, ny, nl = I_cubes[prime_line].shape
+  """
+  nx, ny, nl = I_cubes[prime_line].shape
 
-    combined = np.zeros_like(I_cubes[prime_line].value)
-    background_spectrum = np.zeros_like(I_cubes[prime_line].value)
-    background_spectrum_line = np.zeros_like(I_cubes[prime_line].value)
+  combined = np.zeros_like(I_cubes[prime_line].value)
+  background_spectrum = np.zeros_like(I_cubes[prime_line].value)
+  background_spectrum_line = np.zeros_like(I_cubes[prime_line].value)
 
-    wl_grid_prime = gofnt_dict[prime_line]['wl_grid'].to(u.AA).value
+  wl_grid_prime = gofnt_dict[prime_line]['wl_grid'].to(u.AA).value
 
-    background_lines = [line for line in I_cubes.keys() if gofnt_dict[line]['background']]
+  background_lines = [line for line in I_cubes.keys() if gofnt_dict[line]['background']]
 
-    for line, I_cube in tqdm(I_cubes.items(), desc='Making background', unit='line', leave=False):
-        if line in background_lines:
-            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-            for i in range(nx):
-                for j in range(ny):
-                    spectrum = I_cube[i, j, :].value
-                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
-                    background_spectrum[i, j, :] += interpolated
-
-    peak1_idx = np.argmax(background_spectrum, axis=2)
-    point2_idx = np.where(peak1_idx < nl // 2, nl - 1, 0)
-
-    for i in range(nx):
-        for j in range(ny):
-            x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
-            x2, y2 = wl_grid_prime[point2_idx[i,j]], 0
-            slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
-            intercept = y1 - slope * x1
-            background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
-
-            if np.any(background_spectrum[i,j,:] > background_spectrum_line[i,j,:]):
-                peak3_idx = np.argmax(background_spectrum[i,j,:] - background_spectrum_line[i,j,:])
-                x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
-                x2, y2 = wl_grid_prime[peak3_idx], background_spectrum[i,j,peak3_idx]
-                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
-                intercept = y1 - slope * x1
-                background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
-
+  if simple_sum:
+    # Sum all lines (background and primary) together
     for line, I_cube in I_cubes.items():
-        if line not in background_lines:
-            wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
-            for i in range(nx):
-                for j in range(ny):
-                    spectrum = I_cube[i, j, :].value
-                    interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
-                    combined[i, j, :] += interpolated
-
-    combined += background_spectrum_line
-
+      wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
+      for i in range(nx):
+        for j in range(ny):
+          spectrum = I_cube[i, j, :].value
+          interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
+          combined[i, j, :] += interpolated
+          if line in background_lines:
+            background_spectrum[i, j, :] += interpolated
+            background_spectrum_line[i, j, :] += interpolated
     return combined, background_spectrum, background_spectrum_line
+
+  # Original method: fit a line to the background
+  for line, I_cube in tqdm(I_cubes.items(), desc='Making background', unit='line', leave=False):
+    if line in background_lines:
+      wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
+      for i in range(nx):
+        for j in range(ny):
+          spectrum = I_cube[i, j, :].value
+          interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
+          background_spectrum[i, j, :] += interpolated
+
+  peak1_idx = np.argmax(background_spectrum, axis=2)
+  point2_idx = np.where(peak1_idx < nl // 2, nl - 1, 0)
+
+  for i in range(nx):
+    for j in range(ny):
+      x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
+      x2, y2 = wl_grid_prime[point2_idx[i,j]], 0
+      slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
+      intercept = y1 - slope * x1
+      background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
+
+      if np.any(background_spectrum[i,j,:] > background_spectrum_line[i,j,:]):
+        peak3_idx = np.argmax(background_spectrum[i,j,:] - background_spectrum_line[i,j,:])
+        x1, y1 = wl_grid_prime[peak1_idx[i,j]], background_spectrum[i,j,peak1_idx[i,j]]
+        x2, y2 = wl_grid_prime[peak3_idx], background_spectrum[i,j,peak3_idx]
+        slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
+        intercept = y1 - slope * x1
+        background_spectrum_line[i,j,:] = slope * wl_grid_prime + intercept
+
+  for line, I_cube in I_cubes.items():
+    if line not in background_lines:
+      wl_grid = gofnt_dict[line]['wl_grid'].to(u.AA).value
+      for i in range(nx):
+        for j in range(ny):
+          spectrum = I_cube[i, j, :].value
+          interpolated = np.interp(wl_grid_prime, wl_grid, spectrum)
+          combined[i, j, :] += interpolated
+
+  combined += background_spectrum_line
+
+  return combined, background_spectrum, background_spectrum_line
 
 def main():
 
     print("Warning: This will take lots of memory and so can crash if not enough is available.")
     print("   Regular outputs of memory used and total available will be printed.")
 
-    ncpu = False  # number of CPUs to use for parallel processing (-1 = all available)
-    cube_precision = np.float32  # set to np.float64 for double precision, np.float32 for single precision
+    ncpu = -1  # number of CPUs to use for parallel processing (-1 = all available)
+    cube_precision = np.float64  # set to np.float64 for double precision, np.float32 for single precision
     if cube_precision == np.float32:
         print("WARNING: Using SINGLE PRECISION for all cubes to save memory. This may cause accuracy issues.")
 
@@ -211,7 +232,7 @@ def main():
     prime_line = 'Fe12_195.1190'  # primary line to use for the velocity grid
 
     ## Debugging options
-    downsample = 4  # number or False, used to speed up and reduce memory usage during testing by reducing the size of the cubes by sparse sampling.
+    downsample = False  # number or False, used to speed up and reduce memory usage during testing by reducing the size of the cubes by sparse sampling.
     limit_to_lines = False  # e.g. ['Fe12_195.1190'] or False used to limit the lines to only those specified in the list to speed up and reduce memory usage.
     ## End of debugging options
 
@@ -326,17 +347,45 @@ def main():
         del tmp
     else:
         print(f"Combining into one spectra per LOS pixel [erg/s/cm2/sr/cm] (primary + background) ({psutil.virtual_memory().used/1e9:.2f}/{psutil.virtual_memory().total/1e9:.2f} GB)...")
-        I_cube, background_spectrum, background_spectrum_line = combine_spectra(I_cubes, gofnt_dict, prime_line)
+        I_cube, background_spectrum, background_spectrum_line = combine_spectra(I_cubes, gofnt_dict, prime_line, simple_sum=True)
         I_cube *= (u.erg / u.s / u.cm**2 / u.sr / u.cm)
         np.savez(filename, I_cube=I_cube.cgs.value, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value, prime_line=prime_line, wl0=gofnt_dict[prime_line]['wl0'].cgs.value)
 
-    variables = {key: value for key, value in globals().items() if not key.startswith("__") and not callable(value)}
-    with open("_synthesise_spectra_final_state.pkl", "wb") as f:
-        pickle.dump(variables, f)
-    print("Saved final state to _synthesise_spectra_final_state.pkl.")
-    print("Reload using:")
-    print('    with open("variables.pkl", "rb") as f:variables = pickle.load(f)')
-    print("    globals().update(variables)")
+    I_cube_total = I_cube.sum(axis=2).value * (gofnt_dict[prime_line]['wl_grid'][1].cgs.value - gofnt_dict[prime_line]['wl_grid'][0].cgs.value)
+    np.savez('_I_cube_total.npz', I_cube_total=I_cube_total, wl_grid=gofnt_dict[prime_line]['wl_grid'].cgs.value, vel_grid=vel_grid.cgs.value, spt_res_x=spt_res_x.cgs.value, spt_res_y=spt_res_y.cgs.value, spt_res_z=spt_res_z.cgs.value, prime_line=prime_line, wl0=gofnt_dict[prime_line]['wl0'].cgs.value)
+
+    filepath = 'session.pkl'
+    dill.dump_session(filepath)
+
+    globals().update(locals());raise ValueError("Kicking back to ipython")
+
+    wl_resolution = gofnt_dict[prime_line]['wl_grid'][1].cgs.value - gofnt_dict[prime_line]['wl_grid'][0].cgs.value
+    fig, ax = plt.subplots()
+    img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value * wl_resolution), aspect='equal', cmap='inferno', origin='lower')
+    plt.colorbar(img, ax=ax, label='Log(Intensity)')
+    plt.savefig('synthesised_spectra.png', dpi=300)
+    plt.close(fig)
+
+
+    # plot the total summed spectra from I_cube for the median intensity pixel
+    median_x, median_y = np.unravel_index(np.argmax(I_cube.sum(axis=2).value), I_cube.shape[:2])
+    print(f"Median pixel at ({median_x}, {median_y}) with intensity {I_cube[median_x, median_y, :].sum().value:.2e} erg/s/cm2/sr/cm")
+    fig, ax = plt.subplots()
+    wl_grid = gofnt_dict[prime_line]['wl_grid'].to(u.AA).value
+    spec_tot = I_cube[median_x, median_y, :].value
+    ax.plot(wl_grid, spec_tot, label='Total Spectrum', color='black', lw=2)
+    ax.set_xlabel('Wavelength (Å)')
+    ax.set_ylabel('Intensity (erg/s/cm2/sr/cm)')
+    ax.set_title(f'Spectrum at pixel ({median_x}, {median_y})')
+    ax.legend(loc='best', fontsize='small')
+    plt.tight_layout()
+    plt.savefig('synthesised_spectrum_median_pixel.png', dpi=300)
+    plt.close()
+
+
+
+
+
 
     fig, ax = plt.subplots()
     img = ax.imshow(np.log10(I_cube.sum(axis=2).T.value), aspect='equal', cmap='inferno', origin='lower')
