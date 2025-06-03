@@ -241,10 +241,11 @@ def synthesise_spectra(
     v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])      # (nv,)
 
     for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
+
         wl0 = data["wl0"].cgs.value                     # cm
         wl_grid = data["wl_grid"].cgs.value                 # (n_lambda,)
 
-        atom = element(data["atom"])
+        atom = element(int(data["atom"]))
         atom_weight_g = (atom.atomic_weight * u.u).cgs.value
 
         # thermal width per T-bin: sigma_T (nT,)
@@ -676,11 +677,11 @@ def plot_dem(
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = False                # factor or False
+    downsample     = 8                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
     limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
-    vel_res        = 1 * u.km / u.s
+    vel_res        = 5 * u.km / u.s
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
     voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
