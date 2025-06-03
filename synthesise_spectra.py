@@ -264,10 +264,7 @@ def synthesise_spectra(
         # collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
         spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
 
-        # data["si"] = spec_map / (4 * np.pi)
-
-        dlam_cm = wl_grid[1] - wl_grid[0]
-        data["si"] = spec_map * (dv_cm_s / dlam_cm) / (4 * np.pi)
+        data["si"] = spec_map / (4 * np.pi)
 
 
 ##############################################################################
@@ -426,7 +423,7 @@ def launch_viewer(
       ax_log.set_yscale("log")
       ax_log.set_xlabel("Wavelength  (A)")
       ax_log.set_ylabel("I  (log)")
-      ax_log.grid(ls=":")
+      # ax_log.grid(ls:")
 
       # add secondary x-axis (velocity) to both panels
       for ax in (ax_lin, ax_log):
@@ -451,69 +448,132 @@ def launch_viewer(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-def _find_median_pixel(total_si, margin_frac=0.20):
-    """Return (i,j) indices of the median-intensity pixel inside the
-    central (1-2*margin_frac)² region of total_si."""
-    nx, ny = total_si.shape[:2]
+def _find_mean_sigma_pixel(total_si, margin_frac=0.20, sigma_factor=1.0):
+    """
+    Return (mean_idx_global, plus_sigma_idx_global, minus_sigma_idx_global, margin)
+    corresponding to the pixel intensities nearest to the mean and
+    mean +- (sigma_factor)*std.
+    """
+    nx, ny, _ = total_si.shape
     margin = int(margin_frac * min(nx, ny))
-    inner  = total_si[margin:nx - margin, margin:ny - margin]
-    med    = np.argsort(inner.sum(axis=2).ravel())[len(inner.ravel()) // 2]
-    i_in, j_in = np.unravel_index(med, inner.sum(axis=2).shape)
-    return (i_in + margin, j_in + margin), margin
+    inner = total_si[margin:nx - margin, margin:ny - margin]
+    summed = inner.sum(axis=2)
+    flat = summed.ravel()
+
+    mean_val = np.mean(flat)
+    std_val = np.std(flat)
+    plus_sigma_val = mean_val + sigma_factor * std_val
+    minus_sigma_val = mean_val - sigma_factor * std_val
+
+    mean_idx_flat = np.argmin(np.abs(flat - mean_val))
+    plus_sigma_idx_flat = np.argmin(np.abs(flat - plus_sigma_val))
+    minus_sigma_idx_flat = np.argmin(np.abs(flat - minus_sigma_val))
+
+    mean_idx = np.unravel_index(mean_idx_flat, summed.shape)
+    plus_sigma_idx = np.unravel_index(plus_sigma_idx_flat, summed.shape)
+    minus_sigma_idx = np.unravel_index(minus_sigma_idx_flat, summed.shape)
+
+    mean_idx_global = (mean_idx[0] + margin, mean_idx[1] + margin)
+    plus_sigma_idx_global = (plus_sigma_idx[0] + margin, plus_sigma_idx[1] + margin)
+    minus_sigma_idx_global = (minus_sigma_idx[0] + margin, minus_sigma_idx[1] + margin)
+
+    return mean_idx_global, plus_sigma_idx_global, minus_sigma_idx_global, margin
 
 
-def plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
-              median_idx, margin, wl_grid_main, save="maps.png"):
-    """Intensity + Doppler maps (side-by-side)."""
-    ds       = downsample if isinstance(downsample, int) and downsample > 1 else 1
-    dx_pix   = voxel_dx.to(u.Mm).value * ds
-    dy_pix   = voxel_dy.to(u.Mm).value * ds
-    nx, ny   = total_si.shape[:2]
-    extent   = (0, nx*dx_pix, 0, ny*dy_pix)
+def plot_maps(
+  total_si, v_edges, voxel_dx, voxel_dy, downsample, margin, wl_grid_main, save,
+  mean_idx=None, plus_sigma_idx=None, minus_sigma_idx=None, sigma_factor=1.0
+):
+    """
+    Intensity + Doppler maps (side-by-side), with mean and +-(sigma_factor) pixels marked
+    on both panels. One shared legend on the velocity panel.
+    """
+    ds = downsample if isinstance(downsample, int) and downsample > 1 else 1
+    dx_pix = voxel_dx.to(u.Mm).value * ds
+    dy_pix = voxel_dy.to(u.Mm).value * ds
+    nx, ny = total_si.shape[:2]
+    extent = (0, nx * dx_pix, 0, ny * dy_pix)
 
-    # Doppler map
-    v_cent_km = 0.5*(v_edges[:-1] + v_edges[1:]) * u.cm/u.s
-    v_cent_km = v_cent_km.to(u.km/u.s).value
-    v_map     = v_cent_km[total_si.argmax(axis=2)]
+    v_cent_km = 0.5 * (v_edges[:-1] + v_edges[1:]) * (u.cm / u.s)
+    v_cent_km = v_cent_km.to(u.km / u.s).value
+    peak_idx = total_si.argmax(axis=2)
+    v_map = v_cent_km[peak_idx]
 
-    # wavelength resolution for intensity normalisation
     wl_res = wl_grid_main[1] - wl_grid_main[0]
 
-    fig   = plt.figure(figsize=(11, 5))
-    gs    = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
-    axI   = fig.add_subplot(gs[0, 0])
-    axV   = fig.add_subplot(gs[0, 1], sharey=axI)
+    fig = plt.figure(figsize=(11, 5))
+    gs = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
+    axI = fig.add_subplot(gs[0, 0])
+    axV = fig.add_subplot(gs[0, 1], sharey=axI)
 
-    # intensity panel
-    imI = axI.imshow(np.log10(total_si.sum(axis=2).T / wl_res),
-                     origin="lower", aspect="equal", cmap="afmhot", extent=extent)
-    x_med = median_idx[0]*dx_pix + dx_pix/2
-    y_med = median_idx[1]*dy_pix + dy_pix/2
-    axI.scatter(x_med, y_med, color="cyan", s=100, edgecolor="k")
-    rect = Rectangle((margin*dx_pix, margin*dy_pix),
-                     (nx-2*margin)*dx_pix, (ny-2*margin)*dy_pix,
-                     fill=False, edgecolor="cyan", linewidth=1, linestyle="--")
+    # Intensity panel
+    imI = axI.imshow(
+      np.log10(total_si.sum(axis=2).T * wl_res),
+      origin="lower", aspect="equal", cmap="afmhot", extent=extent
+    )
+    rect = Rectangle(
+      (margin * dx_pix, margin * dy_pix),
+      (nx - 2 * margin) * dx_pix, (ny - 2 * margin) * dy_pix,
+      fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+    )
     axI.add_patch(rect)
     axI.set_xlabel("X (Mm)")
     axI.set_ylabel("Y (Mm)")
-    axI.set_title("Intensity")
-    fig.colorbar(imI, ax=axI, orientation="horizontal", extend="both", shrink=0.9,
-                 label=r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\right)$ "
-                       r"[erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]")
+    cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal",
+                extend="both", shrink=0.9)
+    cbarI.set_label(
+      r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\mathrm{ }\left[\mathrm{erg/s/cm}^2\mathrm{/sr}\right]\right)$"
+    )
+    axI.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
 
-    # velocity panel
-    imV = axV.imshow(v_map.T, origin="lower", aspect="equal", cmap="RdBu_r",
-                     extent=extent, vmin=-15, vmax=15)
+    # Doppler panel
+    imV = axV.imshow(
+      v_map.T, origin="lower", aspect="equal", cmap="RdBu_r",
+      extent=extent, vmin=-15, vmax=15
+    )
+    rect = Rectangle(
+      (margin * dx_pix, margin * dy_pix),
+      (nx - 2 * margin) * dx_pix, (ny - 2 * margin) * dy_pix,
+      fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+    )
+    axV.add_patch(rect)
+    axV.tick_params(labelleft=False, direction="in", top=True, bottom=True, right=True, left=True)
     axV.set_xlabel("X (Mm)")
-    axV.set_title("Doppler velocity")
-    fig.colorbar(imV, ax=axV, orientation="horizontal", extend="both", shrink=0.9,
-                 label=r"$v$  [km s$^{-1}$]")
+    cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal",
+                extend="both", shrink=0.9)
+    cbarV.set_label(r"$v$ [km/s]")
 
-    for ax in (axI, axV):
-        ax.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
+    # Markers on both panels
+    if mean_idx and plus_sigma_idx and minus_sigma_idx:
+        # For each pixel, compute logI and velocity for the legend label
+        for base_label, idx, marker in zip(
+            [rf"$\mu + {sigma_factor:.0f}\sigma$", r"$\mu$", rf"$\mu - {sigma_factor:.0f}\sigma$"],
+            [plus_sigma_idx, mean_idx, minus_sigma_idx],
+            ["2", "3", "1"]
+        ):
+            I_1d = total_si[idx[0], idx[1], :]
+            I_val = I_1d.sum() * wl_res
+            logI_val = np.log10(I_val) if I_val > 0 else -np.inf
+            v_val = v_map[idx[0], idx[1]]
+            label = f"{base_label} (logI={logI_val:.2f}, v={v_val:.0f} km/s)"
+
+            # Mark intensity panel
+            axI.scatter(
+                idx[0] * dx_pix + dx_pix / 2,
+                idx[1] * dy_pix + dy_pix / 2,
+                color="blue", s=200, marker=marker
+            )
+            # Mark velocity panel + legend
+            axV.scatter(
+                idx[0] * dx_pix + dx_pix / 2,
+                idx[1] * dy_pix + dy_pix / 2,
+                color="blue", s=200, marker=marker,
+                label=label
+            )
+        axV.legend(loc="upper right", fontsize="small")
 
     plt.tight_layout()
-    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.savefig(save, dpi=600, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -561,17 +621,47 @@ def plot_spectrum(goft, total_si, wl_grid_main, median_idx,
     plt.close(fig)
 
 
-def plot_dem(dem_map, logT_centres, median_idx, ylim=(25, 29),
-             xlim=(5.5, 7.0), save="dem.png"):
-    """DEM(T) for a single pixel."""
-    dem_1d = dem_map[median_idx]
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.step(logT_centres, np.log10(dem_1d, where=dem_1d>0), where="mid", lw=1.8)
-    ax.set_xlabel(r"$\log_{10} T$  [K]")
-    ax.set_ylabel(r"$\log_{10} \xi$  [cm$^{-5}$ dex$^{-1}$]")
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
-    ax.grid(ls=":")
+def plot_dem(
+    dem_map, logT_centres,
+    mean_idx, plus_idx, minus_idx,
+    goft, main_line, logT_grid, logN_grid,
+    ylim=(25, 29), xlim=(5.5, 7.0), save="dem.png"
+):
+    """
+    Plot DEM(T) for selected pixels, with G(T) on right y-axis.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
+    idxs   = [plus_idx, mean_idx, minus_idx]
+    titles = [r"$\mu+\sigma$", r"$\mu$", r"$\mu-\sigma$"]
+    colors = ["tab:blue", "tab:green", "tab:orange"]
+
+    # extract G(T) for main_line
+    g_tn = goft[main_line]["g_tn"]                   # shape (nT_grid, nN_grid)
+
+    # if grids differ, print a warning and don't plot the G(T) curve
+    if not np.allclose(logT_grid, logT_centres):
+        print("Warning: logT_grid does not match logT_centres. G(T) will not be plotted.")
+
+    for ax, idx, title, c in zip(axes, idxs, titles, colors):
+        dem_1d = dem_map[idx]
+        ax.step(logT_centres, np.log10(dem_1d, where=dem_1d>0),
+                where="mid", lw=1.8, color=c)
+        ax.set_title(title)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_xlabel(r"$\log_{10} T$  [K]")
+        ax.grid(ls=":")
+
+        if np.allclose(logT_grid, logT_centres):
+
+            # twin axis for G(T)
+            ax2 = ax.twinx()
+            ax2.plot(logT_grid, g_tn[:, len(logN_grid)//2], 'k--', lw=1.2)
+            ax2.set_yscale("log")
+            ax2.set_ylabel(r"$G(T)$ [erg cm$^3$ s$^{-1}$]")
+            ax2.tick_params(axis='y', colors='black')
+
+    axes[0].set_ylabel(r"$\log_{10}\,\mathrm{DEM}$  [cm$^{-5}$ dex$^{-1}$]")
     plt.tight_layout()
     plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -595,6 +685,7 @@ def main() -> None:
     voxel_dz       = 0.064 * u.Mm
     voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
     mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
+    nT_bins        = None                    # number of T-bins for DEM, or None to use G(T) bins, which enables G function plotting with DEM
     # ----------------------------------------------------------
 
     # build velocity grid (symmetric about zero, inclusive)
@@ -647,7 +738,8 @@ def main() -> None:
     # ----------------------------------------------------------
     # DEM and G interpolation
     # ----------------------------------------------------------
-    nT_bins = 50
+    if nT_bins is None:
+        nT_bins = len(logT_grid) - 1
     logT_edges = np.linspace(logT_grid.min(), logT_grid.max(), nT_bins + 1)
     logT_centres = 0.5 * (logT_edges[:-1] + logT_edges[1:])
     dh_cm = voxel_dz.to(u.cm).value
@@ -699,21 +791,36 @@ def main() -> None:
     dill.dump_session(output_file)
     print(f"Saved {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
-    globals().update(locals());raise ValueError("Kicking back to ipython")
+    # ----------------------------------------------------------------------
+    # plot output
+    # ----------------------------------------------------------------------
+    wl_grid_main = goft[main_line]["wl_grid"]
 
-    # ----------------------------------------------------------------------
-    # paper output with physical axes in Mm
-    # ----------------------------------------------------------------------
-    wl_grid_main = goft[main_line]["wl_grid"].to(u.AA).value
-    median_idx, margin = _find_median_pixel(total_si)
-    plot_maps(total_si, v_edges, voxel_dx, voxel_dy, downsample,
-              median_idx, margin, wl_grid_main, save="maps_median_pixel.png")
-    plot_spectrum(goft, total_si, wl_grid_main, median_idx,
+    sigma_factor = 1.0
+    mean_idx, plus_idx, minus_idx, margin = _find_mean_sigma_pixel(
+        total_si, 0.20, sigma_factor=sigma_factor
+    )
+
+    print(f"Mean pixel: {mean_idx}")
+    print(f"{sigma_factor}+sigma pixel: {plus_idx}")
+    print(f"{sigma_factor}-sigma pixel: {minus_idx}")
+
+    plot_maps(
+        total_si, v_edges, voxel_dx, voxel_dy, downsample, margin,
+        wl_grid_main.cgs.value, "fig_synthetic_maps.png",
+        mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
+        sigma_factor=sigma_factor
+    )
+    plot_spectrum(goft, total_si, wl_grid_main.to('AA').value, mean_idx,
                   main_line, save="spectrum_median_pixel.png")
-    plot_dem(dem_map, logT_centres, median_idx,
-            save="dem_median_pixel.png")
+    plot_dem(
+        dem_map, logT_centres,
+        mean_idx, plus_idx, minus_idx,
+        goft, main_line, logT_grid, logN_grid,
+        ylim=(25, 29), xlim=(5.5, 7.0),
+        save="dem_median_pixel.png"
+    )
 
-
-    globals().update(locals());raise ValueError("Kicking back to ipython")
+    globals().update(locals()); raise ValueError("Kicking back to ipython")
 if __name__ == "__main__":
     main()
