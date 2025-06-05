@@ -701,7 +701,6 @@ def plot_dems(
     ax.set_xlim(*xlim)
     if ylim_2d_dem:
       ax.set_ylim(*ylim_2d_dem)
-    # ax.set_xlabel(r"$\log_{10} T$  [K]")
     ax.set_xlabel(r"$\log_{10}\left(T\:\mathrm{[K]}\right)$")
     ax.grid(ls=":")
     # inset profile
@@ -782,8 +781,6 @@ def plot_dems(
     ims[0], cax=cax, orientation="vertical", extend="min"
   )
   cbar.set_label(
-    # r"$\log_{10}\,\mathrm{DEM}$  [cm$^{-5}$ dex$^{-1}$ per v-bin$^{-1}$]"
-    # r"$\log_{10}\,\Xi$ [cm$^{-5}$ dex$^{-1}$ per v-bin$^{-1}$]"
     r"$\log_{10}\,\left(\Xi\:\mathrm{[1/cm}^{5}/\mathrm{dex}/\Delta v] \right)$"
   )
 
@@ -978,7 +975,6 @@ def plot_spectrum(
     plt.close(fig)
 
 
-
 ##############################################################################
 # ---------------------------------------------------------------------------
 #                 M A I N   W O R K F L O W
@@ -1116,12 +1112,14 @@ def main() -> None:
         total_si, margin, sigma_factor=sigma_factor
     )
     key_pixel_colors = ["deeppink", "black", "mediumseagreen"]  # in order of minus, mean, plus
+
     plot_maps(
         total_si, v_edges, voxel_dx, voxel_dy, downsample, margin,
         goft[main_line]["wl_grid"].cgs.value, "fig_synthetic_maps.png",
         mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
         sigma_factor=sigma_factor, key_pixel_colors=key_pixel_colors
     )
+
     plot_dems(
         dem_map, em_tv, logT_centres, v_edges,
         plus_idx, mean_idx, minus_idx, sigma_factor,
@@ -1132,6 +1130,7 @@ def main() -> None:
         goft=goft, main_line=main_line,
         key_pixel_colors=key_pixel_colors,
     )
+
     plot_spectrum(
         goft, total_si, goft[main_line]["wl_grid"].to('AA').value,
         minus_idx, mean_idx, plus_idx,
