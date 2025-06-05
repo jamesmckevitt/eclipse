@@ -993,7 +993,6 @@ def main() -> None:
     voxel_dz       = 0.064 * u.Mm
     voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
     mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
-    nT_bins        = None                    # number of T-bins for DEM, or None to use G(T) bins, which enables G function plotting with DEM
     # ----------------------------------------------------------
 
     # build velocity grid (symmetric about zero, inclusive)
@@ -1046,9 +1045,7 @@ def main() -> None:
     # ----------------------------------------------------------
     # DEM and G interpolation
     # ----------------------------------------------------------
-    if nT_bins is None:
-        nT_bins = len(logT_grid) - 1
-    logT_edges = np.linspace(logT_grid.min(), logT_grid.max(), nT_bins + 1)
+    logT_edges = np.linspace(logT_grid.min(), logT_grid.max(), len(logT_grid) + 1)
     logT_centres = 0.5 * (logT_edges[:-1] + logT_edges[1:])
     dh_cm = voxel_dz.to(u.cm).value
 
