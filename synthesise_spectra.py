@@ -16,7 +16,8 @@ from matplotlib.cm import get_cmap
 from matplotlib.patches import Rectangle
 from mendeleev import element
 import dill
-
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from matplotlib.ticker import MaxNLocator, FixedLocator, FixedFormatter
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -487,158 +488,124 @@ def _find_mean_sigma_pixel(total_si, margin_frac=0.20, sigma_factor=1.0):
 
 def plot_maps(
   total_si, v_edges, voxel_dx, voxel_dy, downsample, margin, wl_grid_main, save,
-  mean_idx=None, plus_sigma_idx=None, minus_sigma_idx=None, sigma_factor=1.0
+  mean_idx=None, plus_sigma_idx=None, minus_sigma_idx=None, sigma_factor=1.0,
+  key_pixel_colors=None
 ):
-    """
-    Intensity + Doppler maps (side-by-side), with mean and +-(sigma_factor) pixels marked
-    on both panels. One shared legend on the velocity panel.
-    """
-    ds = downsample if isinstance(downsample, int) and downsample > 1 else 1
-    dx_pix = voxel_dx.to(u.Mm).value * ds
-    dy_pix = voxel_dy.to(u.Mm).value * ds
-    nx, ny = total_si.shape[:2]
-    extent = (0, nx * dx_pix, 0, ny * dy_pix)
+  """
+  Intensity + Doppler maps (side-by-side), with mean and +-(sigma_factor) pixels marked
+  on both panels. One shared legend on the velocity panel.
+  key_pixel_colors: list of 3 colors for plus_sigma, mean, minus_sigma pixels.
+  """
+  ds = downsample if isinstance(downsample, int) and downsample > 1 else 1
+  dx_pix = voxel_dx.to(u.Mm).value * ds
+  dy_pix = voxel_dy.to(u.Mm).value * ds
+  nx, ny = total_si.shape[:2]
+  extent = (0, nx * dx_pix, 0, ny * dy_pix)
 
-    v_cent_km = 0.5 * (v_edges[:-1] + v_edges[1:]) * (u.cm / u.s)
-    v_cent_km = v_cent_km.to(u.km / u.s).value
-    peak_idx = total_si.argmax(axis=2)
-    v_map = v_cent_km[peak_idx]
+  v_cent_km = 0.5 * (v_edges[:-1] + v_edges[1:]) * (u.cm / u.s)
+  v_cent_km = v_cent_km.to(u.km / u.s).value
+  peak_idx = total_si.argmax(axis=2)
+  v_map = v_cent_km[peak_idx]
 
-    wl_res = wl_grid_main[1] - wl_grid_main[0]
+  wl_res = wl_grid_main[1] - wl_grid_main[0]
 
-    fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
-    axI = fig.add_subplot(gs[0, 0])
-    axV = fig.add_subplot(gs[0, 1], sharey=axI)
+  fig = plt.figure(figsize=(11, 5))
+  gs = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
+  axI = fig.add_subplot(gs[0, 0])
+  axV = fig.add_subplot(gs[0, 1], sharey=axI)
 
-    si = total_si.sum(axis=2) * wl_res  # integrate over wavelength
-    log_si = np.log10(si, where=si > 0.0, out=np.zeros_like(si))
+  si = total_si.sum(axis=2) * wl_res  # integrate over wavelength
+  log_si = np.log10(si, where=si > 0.0, out=np.zeros_like(si))
 
-    # Intensity panel
-    imI = axI.imshow(
-      log_si.T,  # log10 of integrated intensity
-      origin="lower", aspect="equal", cmap="afmhot", extent=extent
-    )
-    rect = Rectangle(
-      (margin * dx_pix, margin * dy_pix),
-      (nx - 2 * margin) * dx_pix, (ny - 2 * margin) * dy_pix,
-      fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
-    )
-    axI.add_patch(rect)
-    axI.set_xlabel("X (Mm)")
-    axI.set_ylabel("Y (Mm)")
-    cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal",
-                extend="both", shrink=0.9)
-    cbarI.set_label(
-      r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\mathrm{ }\left[\mathrm{erg/s/cm}^2\mathrm{/sr}\right]\right)$"
-    )
-    axI.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
+  # Intensity panel with lower colorbar limit set to 0
+  imI = axI.imshow(
+    log_si.T,  # log10 of integrated intensity
+    origin="lower", aspect="equal", cmap="afmhot",
+    extent=extent, vmin=0.0
+  )
+  # margin of shortest side
+  this_margin = int(margin * min(nx, ny))
+  rect = Rectangle(
+    (this_margin * dx_pix, this_margin * dy_pix),
+    (nx - 2 * this_margin) * dx_pix, (ny - 2 * this_margin) * dy_pix,
+    fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+  )
+  axI.add_patch(rect)
+  axI.set_xlabel("X (Mm)")
+  axI.set_ylabel("Y (Mm)")
+  cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal",
+        extend="neither", shrink=0.9)
+  cbarI.set_label(
+    r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\mathrm{ }\left[\mathrm{erg/s/cm}^2\mathrm{/sr}\right]\right)$"
+  )
+  axI.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
 
-    # Doppler panel
-    imV = axV.imshow(
-      v_map.T, origin="lower", aspect="equal", cmap="RdBu_r",
-      extent=extent, vmin=-15, vmax=15
-    )
-    rect = Rectangle(
-      (margin * dx_pix, margin * dy_pix),
-      (nx - 2 * margin) * dx_pix, (ny - 2 * margin) * dy_pix,
-      fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
-    )
-    axV.add_patch(rect)
-    axV.tick_params(labelleft=False, direction="in", top=True, bottom=True, right=True, left=True)
-    axV.set_xlabel("X (Mm)")
-    cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal",
-                extend="both", shrink=0.9)
-    cbarV.set_label(r"$v$ [km/s]")
+  # Doppler panel
+  imV = axV.imshow(
+    v_map.T, origin="lower", aspect="equal", cmap="RdBu_r",
+    extent=extent, vmin=-15, vmax=15
+  )
+  rect = Rectangle(
+    (this_margin * dx_pix, this_margin * dy_pix),
+    (nx - 2 * this_margin) * dx_pix, (ny - 2 * this_margin) * dy_pix,
+    fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+  )
+  axV.add_patch(rect)
+  axV.tick_params(labelleft=False, direction="in", top=True, bottom=True, right=True, left=True)
+  axV.set_xlabel("X (Mm)")
+  cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal",
+        extend="both", shrink=0.9)
+  cbarV.set_label(r"$v$ [km/s]")
 
-    # Markers on both panels
-    if mean_idx and plus_sigma_idx and minus_sigma_idx:
-        # For each pixel, compute logI and velocity for the legend label
-        for base_label, idx, marker in zip(
-            [rf"$\mu + {sigma_factor:.0f}\sigma$", r"$\mu$", rf"$\mu - {sigma_factor:.0f}\sigma$"],
-            [plus_sigma_idx, mean_idx, minus_sigma_idx],
-            ["2", "3", "1"]
-        ):
-            I_1d = total_si[idx[0], idx[1], :]
-            I_val = I_1d.sum() * wl_res
-            logI_val = np.log10(I_val) if I_val > 0 else -np.inf
-            v_val = v_map[idx[0], idx[1]]
-            label = f"{base_label} (logI={logI_val:.2f}, v={v_val:.0f} km/s)"
+  # Markers on both panels
+  if mean_idx and plus_sigma_idx and minus_sigma_idx:
+    # idxs = [minus_sigma_idx, mean_idx, plus_sigma_idx]
+    # base_labels = [
+    #   rf"$\mu - {sigma_factor:.0f}\sigma$",
+    #   r"$\mu$",
+    #   rf"$\mu + {sigma_factor:.0f}\sigma$"
+    # ]
+    # markers = ["1", "3", "2"]
+    idxs = [plus_sigma_idx, mean_idx, minus_sigma_idx]
+    base_labels = [
+      rf"$\mu + {sigma_factor:.0f}\sigma$",
+      r"$\mu$",
+      rf"$\mu - {sigma_factor:.0f}\sigma$"
+    ]
+    markers = ["2", "3", "1"]
+    if key_pixel_colors is None:
+      colors = ["tab:blue", "tab:green", "tab:orange"]
+    else:
+      # reverse the order to match idxs
+      colors = key_pixel_colors[::-1]
+    for base_label, idx, marker, color in zip(base_labels, idxs, markers, colors):
+      I_1d = total_si[idx[0], idx[1], :]
+      I_val = I_1d.sum() * wl_res
+      logI_val = np.log10(I_val) if I_val > 0 else -np.inf
+      v_val = v_map[idx[0], idx[1]]
+      label = f"{base_label} (logI={logI_val:.2f}, v={v_val:.0f} km/s)"
 
-            # Mark intensity panel
-            axI.scatter(
-                idx[0] * dx_pix + dx_pix / 2,
-                idx[1] * dy_pix + dy_pix / 2,
-                color="blue", s=200, marker=marker
-            )
-            # Mark velocity panel + legend
-            axV.scatter(
-                idx[0] * dx_pix + dx_pix / 2,
-                idx[1] * dy_pix + dy_pix / 2,
-                color="blue", s=200, marker=marker,
-                label=label
-            )
-        axV.legend(loc="upper right", fontsize="small")
+      # Mark intensity panel
+      axI.scatter(
+        idx[0] * dx_pix + dx_pix / 2,
+        idx[1] * dy_pix + dy_pix / 2,
+        color=color, s=250, marker=marker, linewidth=2,
+      )
+      # Mark velocity panel + legend
+      axV.scatter(
+        idx[0] * dx_pix + dx_pix / 2,
+        idx[1] * dy_pix + dy_pix / 2,
+        color=color, s=250, marker=marker, linewidth=2,
+        label=label
+      )
+    axV.legend(loc="upper right", fontsize="small")
 
-    plt.tight_layout()
-    plt.savefig(save, dpi=600, bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_spectrum(goft, total_si, wl_grid_main, median_idx,
-                  main_line, save="spectrum.png"):
-    """Linear+log spectrum for a single pixel."""
-    wl0_A  = goft[main_line]["wl0"].to(u.AA).value
-    c_kms  = const.c.to(u.km/u.s).value
-    wl2v   = lambda wl: (wl - wl0_A)/wl0_A * c_kms
-    v2wl   = lambda v: (v / c_kms) * wl0_A + wl0_A
-
-    fig    = plt.figure(figsize=(4, 5))
-    gs     = fig.add_gridspec(nrows=2, ncols=1, hspace=0.0)
-    ax_lin = fig.add_subplot(gs[0, 0])
-    ax_log = fig.add_subplot(gs[1, 0], sharex=ax_lin)
-
-    cmap = get_cmap("tab10", len(goft))
-    for i, (name, info) in enumerate(goft.items()):
-        spec_px  = info["si"][median_idx]
-        wl_src   = info["wl_grid"].to(u.AA).value
-        spec_int = np.interp(wl_grid_main, wl_src, spec_px, left=0.0, right=0.0)
-        ax_lin.plot(wl_grid_main, spec_int, color=cmap(i), lw=1.0)
-        ax_log.plot(wl_grid_main, spec_int, color=cmap(i), lw=1.0)
-
-    summed = total_si[median_idx]
-    ax_lin.plot(wl_grid_main, summed, color="k", lw=2.0)
-    ax_log.plot(wl_grid_main, summed, color="k", lw=2.0)
-
-    for ax in (ax_lin, ax_log):
-        ax.tick_params(direction="in", top=True, bottom=True, left=True, right=True)
-
-    ax_lin.set_ylabel(r"$I$ (linear)")
-    ax_lin.tick_params(axis="x", labelbottom=False)
-    ax_log.set_yscale("log")
-    ax_log.set_xlabel(r"Wavelength  [$\mathrm{\AA}$]")
-    ax_log.set_ylabel(r"$I$ (log)")
-    ax_log.set_ylim(ax_log.get_ylim()[1]/1e7, ax_log.get_ylim()[1])
-
-    sec = ax_lin.secondary_xaxis("top", functions=(wl2v, v2wl))
-    sec.set_xlabel(r"Velocity  [km s$^{-1}$]")
-    sec.tick_params(direction="in")
-
-    plt.tight_layout()
-    plt.savefig(save, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+  plt.tight_layout()
+  plt.savefig(save, dpi=600, bbox_inches="tight")
+  plt.close(fig)
 
 
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import astropy.units as u
-from astropy import constants as const
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes as ia_inset_axes
-
-def plot_dem_and_2d_dem(
+def plot_dems(
   dem_map,
   em_tv,
   logT_centres,
@@ -646,29 +613,37 @@ def plot_dem_and_2d_dem(
   plus_idx,
   mean_idx,
   minus_idx,
+  sigma_factor,
   xlim=(5.5, 7.0),
   ylim_dem=(25, 29),
   ylim_2d_dem=None,
   save="dem_and_2d_dem.png",
   goft=None,
   main_line="Fe12_195.1190",
+  key_pixel_colors=None
 ):
   """
   Plot DEM(T) (top row) and DEM(T,v) maps (bottom row) for three pixels.
   A slim, transparent inset axis overlays each map on the left, showing
   the line profile (intensity vs. velocity) without resizing the map.
   The right y-axis (wavelength) is now exactly aligned with the left y-axis (velocity).
+  key_pixel_colors: list of 3 colors for plus_sigma, mean, minus_sigma pixels.
   """
-  # ------------------------------------------------------------- set-up
-  idxs   = [plus_idx, mean_idx, minus_idx]
-  titles = [r"$\mu+\sigma$", r"$\mu$", r"$\mu-\sigma$"]
+
+  idxs   = [minus_idx, mean_idx, plus_idx]
+  # titles = [r"$\mu-\sigma$", r"$\mu$", r"$\mu+\sigma$"]
+  titles = [
+    rf"$\mu - {sigma_factor:.0f}\sigma$",
+    r"$\mu$",
+    rf"$\mu + {sigma_factor:.0f}\sigma$"
+  ]
 
   v_centres = 0.5 * (v_edges[:-1] + v_edges[1:]) * u.cm/u.s
   v_centres_kms = v_centres.to(u.km/u.s).value
   extent = (logT_centres[0], logT_centres[-1],
         v_centres_kms[0],    v_centres_kms[-1])
 
-  # define primary→secondary and secondary→primary for wavelength axis
+  # define primary->secondary and secondary->primary for wavelength axis
   if goft and main_line in goft:
     wl0   = goft[main_line]["wl0"].to(u.angstrom).value
     c_kms = const.c.to(u.km/u.s).value
@@ -681,7 +656,10 @@ def plot_dem_and_2d_dem(
   )
 
   # -------------------------------------------------------- top row DEM(T)
-  colours = ["tab:blue", "tab:green", "tab:orange"]
+  if key_pixel_colors is None:
+      colours = ["tab:blue", "tab:green", "tab:orange"]
+  else:
+      colours = key_pixel_colors
   for ax, idx, title, c in zip(axes[0], idxs, titles, colours):
     log_dem = np.log10(dem_map[idx], where=dem_map[idx] > 0,
                 out=np.zeros_like(dem_map[idx]))
@@ -692,7 +670,7 @@ def plot_dem_and_2d_dem(
     ax.set_xlabel(r"$\log_{10} T$  [K]")
     ax.grid(ls=":")
   axes[0, 0].set_ylabel(
-    r"$\log_{10}\,\mathrm{DEM}$  [cm$^{-5}$ dex$^{-1}$]"
+    r"$\log_{10}\left(\xi\:\mathrm{[1/cm}^{5}/\mathrm{dex}\mathrm{]}\right)$"
   )
 
   # ------------------------------------------- build 2-D DEM arrays + limits
@@ -723,7 +701,8 @@ def plot_dem_and_2d_dem(
     ax.set_xlim(*xlim)
     if ylim_2d_dem:
       ax.set_ylim(*ylim_2d_dem)
-    ax.set_xlabel(r"$\log_{10} T$  [K]")
+    # ax.set_xlabel(r"$\log_{10} T$  [K]")
+    ax.set_xlabel(r"$\log_{10}\left(T\:\mathrm{[K]}\right)$")
     ax.grid(ls=":")
     # inset profile
     if goft and main_line in goft:
@@ -737,77 +716,62 @@ def plot_dem_and_2d_dem(
       )
       stick.set_facecolor("none")
 
-      # ensure ticks, labels, and spines are drawn above the data
       stick.set_axisbelow(False)
       for spine in stick.spines.values():
         spine.set_zorder(3)
 
-      # plot the line at a lower z-order
       stick.plot(spec, v_centres_kms, color="red", lw=1.3, zorder=1)
 
-      # Use scientific notation on tick labels
       stick.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
       stick.xaxis.set_ticks_position("top")
       stick.xaxis.set_label_position("top")
       stick.tick_params(axis="x", labelsize=7, direction="in")
 
-      # Read the offset text, hide it, and put it in the axis label
       fig.canvas.draw()
       offset_text = stick.xaxis.get_offset_text().get_text().replace("1e", "")
       stick.xaxis.get_offset_text().set_visible(False)
 
-      # Update the label to include the extracted factor
       stick.set_xlabel(
-        f"195.119 $\\AA$ intensity \n [$10^{{{offset_text}}}$ erg/s/cm$^{{2}}$/sr/cm]",
+        f"Fe XII 195.119 $\\AA$ intensity \n [$10^{{{offset_text}}}$ erg/s/cm$^{{2}}$/sr/cm]",
         fontsize=8, zorder=3
       )
 
-      # Remove 0 from the x-ticks
       ticks = stick.get_xticks()
       ticks = ticks[ticks != 0]
       stick.set_xticks(ticks)
 
       stick.yaxis.set_ticks([])
 
-      # Hide the right and bottom spines, and move the top spine
       stick.spines[['right', 'bottom', 'left']].set_visible(False)
       stick.spines['top'].set_position(('axes', 0.8))
 
-      # set limits for the inset stick plot
       stick.set_xlim(0, spec.max())
       stick.set_ylim(ax.get_ylim())
 
   # ------------------------------------------------ right‐hand wavelength axis on bottom panels
   if goft and main_line in goft:
     for ax in axes[1]:
-      # Get the current velocity ticks and their positions
       v_ticks = ax.get_yticks()
-      # Only keep those within the current axis limits
       vmin_ax, vmax_ax = ax.get_ylim()
       v_ticks = v_ticks[(v_ticks >= vmin_ax) & (v_ticks <= vmax_ax)]
-      # Calculate corresponding wavelength values
       wl_ticks = v2wl(v_ticks)
-      # Format wavelength ticks to 3 decimals
       wl_ticklabels = [f"{wl:.3f}" for wl in wl_ticks]
-      # Create secondary y-axis and set ticks/labels to match left axis
       ax_r = ax.secondary_yaxis("right")
       ax_r.set_yticks(v_ticks)
       ax_r.set_yticklabels(wl_ticklabels)
-      ax_r.set_ylabel(r"Wavelength  [$\AA$]")
-      # Turn both primary and secondary y‐axis ticks inward
+      ax_r.set_ylabel(r"Wavelength (Fe XII 195.119 $\AA$) [$\AA$]")
       ax.tick_params(axis='y', direction='in', which='both')
       ax_r.tick_params(axis='y', direction='in', which='both')
 
   # ------------------------------------------------ Tick parameters for all main panels
   for row in axes:
     for ax in row:
-      ax.tick_params(direction="in", top=True, bottom=True,
-                left=True, right=True)
+      ax.tick_params(direction="in", top=True, bottom=True)
 
   axes[1, 0].set_ylabel("Velocity [km/s]")
 
   # ------------------------------------------------ shared colourbar (move to right of all panels)
-  cax = ia_inset_axes(
+  cax = inset_axes(
       axes[1, -1], width="3%", height="90%",
       loc="center left",
       bbox_to_anchor=(1.25, 0., 1, 1),
@@ -815,10 +779,12 @@ def plot_dem_and_2d_dem(
       borderpad=0,
   )
   cbar = fig.colorbar(
-    ims[0], cax=cax, orientation="vertical"
+    ims[0], cax=cax, orientation="vertical", extend="min"
   )
   cbar.set_label(
-    r"$\log_{10}\,\mathrm{DEM}$  [cm$^{-5}$ dex$^{-1}$ per v-bin$^{-1}$]"
+    # r"$\log_{10}\,\mathrm{DEM}$  [cm$^{-5}$ dex$^{-1}$ per v-bin$^{-1}$]"
+    # r"$\log_{10}\,\Xi$ [cm$^{-5}$ dex$^{-1}$ per v-bin$^{-1}$]"
+    r"$\log_{10}\,\left(\Xi\:\mathrm{[1/cm}^{5}/\mathrm{dex}/\Delta v] \right)$"
   )
 
   plt.tight_layout()
@@ -826,49 +792,192 @@ def plot_dem_and_2d_dem(
   plt.close(fig)
 
 
-
-
-
-
-
-def plot_fe12_velocity_panels(
-    goft,
-    main_line,
-    idxs,
-    v_edges,
-    xlim=None,
-    ylim=None,
-    save="fe12_velocity_panels.png"
-):
+def plot_spectrum(
+    goft: dict,
+    total_si: np.ndarray,
+    wl_grid_main: np.ndarray,
+    minus_idx: int,
+    mean_idx: int,
+    plus_idx: int,
+    main_line: str = "Fe12_195.1190",
+    secondary_line: str = "Fe12_195.1790",
+    main_label: str | None = None,
+    secondary_label: str | None = None,
+    key_pixel_colors: tuple[str, str, str] | None = None,
+    sigma_factor: float = 1.0,
+    xlim_vel: tuple[float, float] | None = None,   # (v_min, v_max) km s-1
+    yorders: float | None = None,                  # log-y span below ymax
+    ylimits: tuple[float, float] | None = None,     # optional (ymin, ymax) for bottom row
+    save: str = "spectrum.png",
+) -> None:
     """
-    Plot three panels (side-by-side), each showing the Fe XII 195.1190 emission line
-    as a function of velocity for the given pixels.
-    Velocity is on the Y axis, intensity on the X axis (linear scale).
+    Plot three spectra (μ - sigma, μ, μ + sigma) in two rows (linear + log y).
+
+    New parameters:
+    main_label, secondary_label:
+        If provided, these override the legend labels for main_line
+        and secondary_line respectively.
     """
-    titles = [r"$\mu+\sigma$", r"$\mu$", r"$\mu-\sigma$"]
 
-    wl_grid = goft[main_line]["wl_grid"].to(u.AA).value
-    wl0 = goft[main_line]["wl0"].to(u.AA).value
-    c_kms = const.c.to(u.km/u.s).value
-    v_axis = (wl_grid - wl0) / wl0 * c_kms
+    # ---------------------------------------------------------------------
+    # constants and helpers
+    # ---------------------------------------------------------------------
+    wl0_A = goft[main_line]["wl0"].to(u.AA).value
+    c_kms = const.c.to(u.km / u.s).value
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 7), sharey=True, gridspec_kw={"wspace": 0.0})
+    wl2v = lambda wl: (wl - wl0_A) / wl0_A * c_kms          # A -> km s-1
+    v2wl = lambda v: wl0_A * (1 + v / c_kms)                # km s-1 -> A
 
-    for ax, idx, title in zip(axes, idxs, titles):
-        spec = goft[main_line]["si"][idx]
-        ax.plot(spec, v_axis, color="k", lw=1.8)
-        ax.set_title(title)
-        if xlim is not None:
-            ax.set_xlim(*xlim)
-        if ylim is not None:
-            ax.set_ylim(*ylim)
-        ax.set_xlabel(r"$I$ [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$ $\AA^{-1}$]")
-        ax.grid(ls=":")
-    axes[0].set_ylabel(r"Velocity  [km/s]")
+    # velocity limits -> wavelength limits
+    wl_min, wl_max = (None, None)
+    if xlim_vel is not None:
+        wl_min, wl_max = v2wl(xlim_vel[0]), v2wl(xlim_vel[1])
 
-    plt.tight_layout()
+    # default total-spectrum colours
+    if key_pixel_colors is None:
+        key_pixel_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"][:3]
+
+    # determine legend labels
+    label_main = main_label if main_label is not None else main_line
+    label_sec  = secondary_label if secondary_label is not None else secondary_line
+
+    # ---------------------------------------------------------------------
+    # figure & axes grid
+    # ---------------------------------------------------------------------
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(15, 8),
+        sharex="col", sharey="row",
+        gridspec_kw=dict(wspace=0.0, hspace=0.0),
+    )
+
+    pixel_indices = (minus_idx, mean_idx, plus_idx)
+    col_titles = (
+        rf"$\mu - {sigma_factor:.0f}\sigma$",
+        r"$\mu$",
+        rf"$\mu + {sigma_factor:.0f}\sigma$",
+    )
+
+    # ---------------------------------------------------------------------
+    # main plotting loop
+    # ---------------------------------------------------------------------
+    for col, (pix, title, tot_colour) in enumerate(
+        zip(pixel_indices, col_titles, key_pixel_colors)
+    ):
+        ax_lin = axes[0, col]   # linear y-axis (upper row)
+        ax_log = axes[1, col]   # log    y-axis (lower row)
+
+        # plot every individual line
+        for line_name, info in goft.items():
+            wl_src = info["wl_grid"].to(u.AA).value
+            spec_int = np.interp(wl_grid_main, wl_src, info["si"][pix],
+                                 left=0.0, right=0.0)
+
+            if line_name == main_line:
+                colr, z, lw = "red", 3, 1.2
+            elif line_name == secondary_line:
+                colr, z, lw = "blue", 3, 1.2
+            else:
+                colr, z, lw = "darkgrey", 1, 0.8
+
+            ax_lin.plot(wl_grid_main, spec_int, c=colr, lw=lw, zorder=z)
+            ax_log.plot(wl_grid_main, spec_int, c=colr, lw=lw, zorder=z)
+
+        # summed spectrum
+        ax_lin.plot(wl_grid_main, total_si[pix], c=tot_colour, lw=2.0, zorder=4)
+        ax_log.plot(wl_grid_main, total_si[pix], c=tot_colour, lw=2.0, zorder=4)
+
+        # basic cosmetics
+        ax_lin.set_title(title)
+        ax_lin.grid(ls=":", alpha=0.5)
+        ax_log.grid(ls=":", alpha=0.5)
+        ax_lin.tick_params(direction="in", which="both", top=True, right=True)
+        ax_log.tick_params(direction="in", which="both", top=True, right=True)
+
+        ax_log.set_xlabel(r"Wavelength [$\mathrm{\AA}$]")
+        ax_log.set_yscale("log")
+
+        # enforce wavelength limits (velocity follows automatically)
+        if wl_min is not None:
+            ax_lin.set_xlim(wl_min, wl_max)
+
+        # ================================================================
+        # velocity & wavelength ticks
+        # ================================================================
+        if xlim_vel is not None:
+            v_min, v_max = xlim_vel
+        else:
+            v_min, v_max = wl2v(ax_lin.get_xlim())
+
+        v_locator = MaxNLocator(nbins=5, symmetric=True)
+        v_ticks   = v_locator.tick_values(v_min, v_max)
+
+        sec = ax_lin.secondary_xaxis("top", functions=(wl2v, v2wl))
+        sec.set_xlabel(f"Velocity ({main_label}) [km/s]")
+        sec.set_xticks(v_ticks)
+        sec.set_xticklabels([f"{v:.0f}" for v in v_ticks])
+        sec.tick_params(direction="in", which="both", top=True, right=True)
+
+        wl_ticks = v2wl(v_ticks)
+        wl_labels = [f"{wl:.3f}" for wl in wl_ticks]
+
+        fixed_loc = FixedLocator(wl_ticks)
+        fixed_fmt = FixedFormatter(wl_labels)
+        ax_lin.xaxis.set_major_locator(fixed_loc)
+        ax_lin.xaxis.set_major_formatter(fixed_fmt)
+        ax_log.xaxis.set_major_locator(fixed_loc)
+        ax_log.xaxis.set_major_formatter(fixed_fmt)
+
+    # ---------------------------------------------------------------------
+    # optional tweaks: log-y lower limit & y-axis sci-format
+    # ---------------------------------------------------------------------
+    for ax in axes[0]:
+        ax.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
+        ax.set_ylim(bottom=0)
+
+    if yorders is not None:
+        for ax in axes[1]:
+            _, ymax = ax.get_ylim()
+            ax.set_ylim(ymax / 10 ** yorders, ymax)
+
+    # override bottom-row y-limits if provided
+    if ylimits is not None:
+        ymin, ymax = ylimits
+        for ax in axes[1]:
+            ax.set_ylim(ymin, ymax)
+
+    # ---------------------------------------------------------------------
+    # set top and bottom y-axis labels
+    # ---------------------------------------------------------------------
+    fig.canvas.draw()
+    offset_text = axes[0, 0].yaxis.get_offset_text().get_text().replace("1e", "")
+    axes[0, 0].yaxis.get_offset_text().set_visible(False)
+    axes[0, 0].set_ylabel(
+        fr"$\mathrm{{Intensity\:[10^{{{offset_text}}}\:erg/s/cm^2/sr/cm]}}$"
+    )
+    axes[1, 0].set_ylabel(
+        r"Intensity [erg/s/cm$^2$/sr/cm]"
+    )
+
+    # ---------------------------------------------------------------------
+    # legend (upper-left panel)
+    # ---------------------------------------------------------------------
+    handles = [
+        plt.Line2D([0], [0], c="red",      lw=1.2, label=label_main),
+        plt.Line2D([0], [0], c="blue",     lw=1.2, label=label_sec),
+        plt.Line2D([0], [0], c="darkgrey", lw=0.8, label="Background"),
+        plt.Line2D([0], [0], c=key_pixel_colors[0], lw=2.0, label="Total"),
+    ]
+    axes[0, 0].legend(handles=handles, loc="upper left", fontsize="small")
+
+    # ---------------------------------------------------------------------
+    # finish up
+    # ---------------------------------------------------------------------
+    plt.tight_layout(pad=0.1)
     plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -974,64 +1083,67 @@ def main() -> None:
     print(f"Combining lines into a single spectrum cube ({print_mem()})")
     total_si, back_si = combine_lines(goft, main_line)
 
-    # # ----------------------------------------------------------------------
-    # # call viewer after all processing is complete
-    # # ----------------------------------------------------------------------
-    # launch_viewer(
-    #     total_si     = total_si,
-    #     goft         = goft,
-    #     dem_map      = dem_map,
-    #     wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
-    #     v_edges      = v_edges,
-    #     logT_centres = logT_centres,
-    #     main_line    = main_line,
-    # )
-
     # ----------------------------------------------------------------------
     # save the results
     # ----------------------------------------------------------------------
     output_file = "synthesised_spectra.pkl"
+    globals().update(locals())
     dill.dump_session(output_file)
     print(f"Saved {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
+
+    globals().update(locals());raise ValueError("Kicking back to ipython")
+
+    # ----------------------------------------------------------------------
+    # call viewer after all processing is complete
+    # ----------------------------------------------------------------------
+    launch_viewer(
+        total_si     = total_si,
+        goft         = goft,
+        dem_map      = dem_map,
+        wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
+        v_edges      = v_edges,
+        logT_centres = logT_centres,
+        main_line    = main_line,
+    )
 
     # ----------------------------------------------------------------------
     # plot output
     # ----------------------------------------------------------------------
-
-    globals().update(locals());raise ValueError("Kicking back to ipython")
 
     sigma_factor = 1.0
     margin = 0.2
     mean_idx, plus_idx, minus_idx = _find_mean_sigma_pixel(
         total_si, margin, sigma_factor=sigma_factor
     )
-
+    key_pixel_colors = ["deeppink", "black", "mediumseagreen"]  # in order of minus, mean, plus
     plot_maps(
         total_si, v_edges, voxel_dx, voxel_dy, downsample, margin,
         goft[main_line]["wl_grid"].cgs.value, "fig_synthetic_maps.png",
         mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
-        sigma_factor=sigma_factor
+        sigma_factor=sigma_factor, key_pixel_colors=key_pixel_colors
     )
-    plot_spectrum(goft, total_si, goft[main_line]["wl_grid"].to('AA').value, mean_idx,
-                  main_line, save="spectrum_median_pixel.png")
-
-    plot_dem_and_2d_dem(
+    plot_dems(
         dem_map, em_tv, logT_centres, v_edges,
-        plus_idx, mean_idx, minus_idx,
+        plus_idx, mean_idx, minus_idx, sigma_factor,
         xlim=(5.5, 6.9),
         ylim_dem=(25, 29),
         ylim_2d_dem=(-50, 50),
-        save="dem_and_2d_dem.png",
-        goft=goft, main_line=main_line
+        save="fig_synthetic_dems.png",
+        goft=goft, main_line=main_line,
+        key_pixel_colors=key_pixel_colors,
     )
-
-    plot_fe12_velocity_panels(
-        goft, main_line,
-        [plus_idx, mean_idx, minus_idx],
-        v_edges,
-        xlim=(-50, 50),
-        ylim=None,
-        save="fe12_velocity_panels.png"
+    plot_spectrum(
+        goft, total_si, goft[main_line]["wl_grid"].to('AA').value,
+        minus_idx, mean_idx, plus_idx,
+        main_line=main_line, secondary_line="Fe12_195.1790",
+        key_pixel_colors=key_pixel_colors,
+        sigma_factor=sigma_factor,
+        save="fig_synthetic_spectra.png",
+        xlim_vel=(-250, 250),
+        yorders=9,
+        ylimits=(None, 8e11),
+        main_label="Fe XII 195.119",
+        secondary_label="Fe XII 195.179",
     )
 
     globals().update(locals()); raise ValueError("Kicking back to ipython")
