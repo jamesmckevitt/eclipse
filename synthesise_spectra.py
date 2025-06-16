@@ -873,7 +873,7 @@ def plot_dems(
           custom_line = Line2D([0], [0], color='grey', linestyle=(0,(5,5)), linewidth=1, alpha=1.0)
           handles, labels = axes[0, -1].get_legend_handles_labels()
           handles.append(custom_line)
-          labels.append(fr"$G(T,{{N_{{e}}={optimal_density:.1f}}})\pm 2\sigma_{{G}}$")
+          labels.append(fr"$G_{{\mathrm{{Fe\,XII\,195.119}}}}(T,\,N_{{e}}={optimal_density:.1f})\pm2\sigma_{{G}}$")
           axes[0, -1].legend(handles=handles, labels=labels, loc="upper right", fontsize="small")
 
   plt.tight_layout()
@@ -1221,7 +1221,7 @@ def plot_g_function(
     fig.canvas.draw()
     offset_text = cbar.ax.yaxis.get_offset_text().get_text().replace("1e", "")
     cbar.ax.yaxis.get_offset_text().set_visible(False)
-    cbar.set_label(rf"$G(T,N)$ [$10^{{{offset_text}}}$ erg cm$^3$/s]")
+    cbar.set_label(rf"$G_{{\mathrm{{Fe\,XII\,195.119\,\AA}}}}(T,N)$ [$10^{{{offset_text}}}$ erg cm$^3$/s]")
     ax.set_xlabel(r"$\log_{10}(T\:\mathrm{[K]})$")
     ax.set_ylabel(r"$\log_{10}(N_e\:\mathrm{[1/cm^{3}]})$")
 
@@ -1256,7 +1256,8 @@ def plot_g_function(
         # Add annotation for the vlines
         ax.legend(
             [plt.Line2D([0], [0], color='grey', linestyle=(0, (5, 5)), linewidth=1)],
-            [fr"$G(T,{{N_{{e}}={optimal_density:.1f}}})\pm 2\sigma_{{G}}$"],
+            # [fr"$G(T,{{N_{{e}}={optimal_density:.1f}}})\pm 2\sigma_{{G}}$"],
+            [fr"$G_{{\mathrm{{Fe\,XII\,195.119\,\AA}}}}(T,\,N_{{e}}={optimal_density:.1f})\pm2\sigma_{{G}}$"],
             loc="upper right",
             fontsize="small",
         )
@@ -1266,7 +1267,7 @@ def plot_g_function(
     if ylim is not None:
         ax.set_ylim(*ylim)
 
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
