@@ -18,6 +18,11 @@ from mendeleev import element
 import dill
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.ticker import MaxNLocator, FixedLocator, FixedFormatter
+from matplotlib.lines import Line2D
+from scipy.optimize import curve_fit
+from joblib import Parallel, delayed
+from matplotlib.legend_handler import HandlerTuple
+from matplotlib.legend_handler import HandlerBase
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -201,6 +206,7 @@ def build_em_tv(
     """
     Construct 4-D emission-measure cube EM(x,y,T,v) [cm^-5].
     """
+    print("  Building 4-D emission-measure cube...")
     mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
              (logT_cube[..., None] <  logT_edges[1:])
     mask_V = (vz_cube.value[..., None] >= v_edges[:-1]) & \
@@ -486,8 +492,46 @@ def _find_mean_sigma_pixel(total_si, margin_frac=0.20, sigma_factor=1.0):
     return mean_idx_global, plus_sigma_idx_global, minus_sigma_idx_global
 
 
+def calculate_doppler_map(total_si, v_edges):
+    # Helper: Gaussian function
+    def gaussian(x, amp, mu, sigma, offset):
+        return amp * np.exp(-0.5 * ((x - mu) / sigma) ** 2) + offset
+
+    v_cent_km = 0.5 * (v_edges[:-1] + v_edges[1:]) * (u.cm / u.s)
+    v_cent_km = v_cent_km.to(u.km / u.s).value
+    nx, ny, nl = total_si.shape
+    v_map = np.full((nx, ny), np.nan)
+
+    def fit_pixel(i, j):
+        spectrum = total_si[i, j, :]
+        try:
+            amp0 = spectrum.max()
+            mu0 = v_cent_km[np.argmax(spectrum)]
+            sigma0 = 10  # km/s, rough guess
+            offset0 = 0
+            popt, _ = curve_fit(
+                gaussian, v_cent_km, spectrum,
+                p0=[amp0, mu0, sigma0, offset0],
+                maxfev=5000
+            )
+            return (i, j, popt[1])  # centroid (mu)
+        except Exception:
+            return (i, j, np.nan)
+
+    pixel_indices = [(i, j) for i in range(nx) for j in range(ny)]
+
+    results = Parallel(n_jobs=-1, prefer="threads")(
+        delayed(fit_pixel)(i, j) for i, j in tqdm(pixel_indices, desc="Doppler map", unit="pixel", leave=False)
+    )
+
+    for i, j, mu in results:
+        v_map[i, j] = mu
+
+    return v_map
+
+
 def plot_maps(
-  total_si, v_edges, voxel_dx, voxel_dy, downsample, margin, wl_grid_main, save,
+  total_si, v_map, voxel_dx, voxel_dy, downsample, margin, wl_grid_main, save,
   mean_idx=None, plus_sigma_idx=None, minus_sigma_idx=None, sigma_factor=1.0,
   key_pixel_colors=None
 ):
@@ -502,13 +546,9 @@ def plot_maps(
   nx, ny = total_si.shape[:2]
   extent = (0, nx * dx_pix, 0, ny * dy_pix)
 
-  v_cent_km = 0.5 * (v_edges[:-1] + v_edges[1:]) * (u.cm / u.s)
-  v_cent_km = v_cent_km.to(u.km / u.s).value
-  peak_idx = total_si.argmax(axis=2)
-  v_map = v_cent_km[peak_idx]
-
   wl_res = wl_grid_main[1] - wl_grid_main[0]
 
+  # Remove the Gaussian fitting logic from here, as it's now precomputed
   fig = plt.figure(figsize=(11, 5))
   gs = fig.add_gridspec(nrows=1, ncols=2, wspace=0.0)
   axI = fig.add_subplot(gs[0, 0])
@@ -528,13 +568,12 @@ def plot_maps(
   rect = Rectangle(
     (this_margin * dx_pix, this_margin * dy_pix),
     (nx - 2 * this_margin) * dx_pix, (ny - 2 * this_margin) * dy_pix,
-    fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+    fill=False, edgecolor="black", linewidth=1, linestyle="--"
   )
   axI.add_patch(rect)
   axI.set_xlabel("X (Mm)")
   axI.set_ylabel("Y (Mm)")
-  cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal",
-        extend="neither", shrink=0.9)
+  cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal", extend="neither", aspect=35, shrink=0.95, pad=0.115)
   cbarI.set_label(
     r"$\log_{10}\!\left(\int I(\lambda)\,\mathrm{d}\lambda\mathrm{ }\left[\mathrm{erg/s/cm}^2\mathrm{/sr}\right]\right)$"
   )
@@ -548,13 +587,14 @@ def plot_maps(
   rect = Rectangle(
     (this_margin * dx_pix, this_margin * dy_pix),
     (nx - 2 * this_margin) * dx_pix, (ny - 2 * this_margin) * dy_pix,
-    fill=False, edgecolor="cyan", linewidth=1, linestyle="--"
+    fill=False, edgecolor="black", linewidth=1, linestyle="--"
   )
   axV.add_patch(rect)
   axV.tick_params(labelleft=False, direction="in", top=True, bottom=True, right=True, left=True)
   axV.set_xlabel("X (Mm)")
-  cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal",
-        extend="both", shrink=0.9)
+
+  # Doppler panel colorbar (thin, below the axis)
+  cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal", extend="both", aspect=35, shrink=0.95, pad=0.115)
   cbarV.set_label(r"$v$ [km/s]")
 
   # Markers on both panels
@@ -572,6 +612,13 @@ def plot_maps(
       r"$\mu$",
       rf"$\mu - {sigma_factor:.0f}\sigma$"
     ]
+    # # Add intensity and velocity to each label
+    # for i, idx in enumerate(idxs):
+    #   I_1d = total_si[idx[0], idx[1], :]
+    #   I_val = I_1d.sum() * wl_res
+    #   logI_val = np.log10(I_val) if I_val > 0 else -np.inf
+    #   v_val = v_map[idx[0], idx[1]]
+    #   base_labels[i] += f"I={I_val:.2e}, v={v_val:.1f} km/s"
     markers = ["2", "3", "1"]
     if key_pixel_colors is None:
       colors = ["tab:blue", "tab:green", "tab:orange"]
@@ -583,7 +630,7 @@ def plot_maps(
       I_val = I_1d.sum() * wl_res
       logI_val = np.log10(I_val) if I_val > 0 else -np.inf
       v_val = v_map[idx[0], idx[1]]
-      label = f"{base_label} (logI={logI_val:.2f}, v={v_val:.0f} km/s)"
+      label = f"{base_label}"
 
       # Mark intensity panel
       axI.scatter(
@@ -620,7 +667,12 @@ def plot_dems(
   save="dem_and_2d_dem.png",
   goft=None,
   main_line="Fe12_195.1190",
-  key_pixel_colors=None
+  key_pixel_colors=None,
+  logT_grid=None,
+  logN_grid=None,
+  figsize=(15, 7),
+  cbar_offset=1.25,
+  inset_axis_offset=0.8,
 ):
   """
   Plot DEM(T) (top row) and DEM(T,v) maps (bottom row) for three pixels.
@@ -651,7 +703,7 @@ def plot_dems(
     wl2v  = lambda wl: (wl - wl0) / wl0 * c_kms
 
   fig, axes = plt.subplots(
-    2, 3, figsize=(15, 7),
+    2, 3, figsize=figsize,
     sharey="row", gridspec_kw=dict(wspace=0.0, hspace=0.0)
   )
 
@@ -742,9 +794,9 @@ def plot_dems(
       stick.yaxis.set_ticks([])
 
       stick.spines[['right', 'bottom', 'left']].set_visible(False)
-      stick.spines['top'].set_position(('axes', 0.8))
+      stick.spines['top'].set_position(('axes', inset_axis_offset))
 
-      stick.set_xlim(0, spec.max())
+      stick.set_xlim(0, spec.max()*1.05)
       stick.set_ylim(ax.get_ylim())
 
   # ------------------------------------------------ right‐hand wavelength axis on bottom panels
@@ -767,13 +819,17 @@ def plot_dems(
     for ax in row:
       ax.tick_params(direction="in", top=True, bottom=True)
 
+      # add ticks on the right y axis
+      ax.yaxis.set_ticks_position("both")
+      ax.yaxis.set_tick_params(which="both", direction="in", right=True)
+
   axes[1, 0].set_ylabel("Velocity [km/s]")
 
   # ------------------------------------------------ shared colourbar (move to right of all panels)
   cax = inset_axes(
       axes[1, -1], width="3%", height="90%",
       loc="center left",
-      bbox_to_anchor=(1.25, 0., 1, 1),
+      bbox_to_anchor=(cbar_offset, 0., 1, 1),
       bbox_transform=axes[1, -1].transAxes,
       borderpad=0,
   )
@@ -784,10 +840,45 @@ def plot_dems(
     r"$\log_{10}\,\left(\Xi\:\mathrm{[1/cm}^{5}/\mathrm{dex}/\Delta v] \right)$"
   )
 
+  # --------------------------------------------------------
+  # Overplot the contribution function
+  # --------------------------------------------------------
+  if goft and main_line in goft and logT_grid is not None and logN_grid is not None:
+          g_tn = goft[main_line]["g_tn"]
+          integrated_g_over_T = np.trapz(g_tn, logT_grid, axis=1)
+          optimal_density_idx = np.argmax(integrated_g_over_T)
+          optimal_density = logN_grid[optimal_density_idx]
+          g_at_optimal_density = g_tn[optimal_density_idx, :]
+
+          # Compute mean and standard deviation of logT weighted by G
+          mean_logT = np.average(logT_grid, weights=g_at_optimal_density)
+          std_logT = np.sqrt(np.average((logT_grid - mean_logT)**2, weights=g_at_optimal_density))
+
+          # Positions of vertical lines at mean +- xsigma
+          vlines = [mean_logT - 2*std_logT, mean_logT + 2*std_logT]
+
+          # --------------------------------------------------------
+          # Add vertical lines to all panels
+          # --------------------------------------------------------
+          for ax_row in axes:
+                  for ax in ax_row:
+                          for vline in vlines:
+                                #   ax.axvline(vline, color='grey', linestyle='--', linewidth=1, alpha=1.0, zorder=0)
+                                  ax.axvline(vline, color='grey', linestyle=(0,(5,10)), linewidth=1, alpha=1.0, zorder=0)
+
+          # --------------------------------------------------------
+          # Add annotation for vertical lines at top right
+          # --------------------------------------------------------
+          # Add a custom legend entry for the vertical lines at mean +- xsigma
+          custom_line = Line2D([0], [0], color='grey', linestyle=(0,(5,5)), linewidth=1, alpha=1.0)
+          handles, labels = axes[0, -1].get_legend_handles_labels()
+          handles.append(custom_line)
+          labels.append(fr"$G(T,{{N_{{e}}={optimal_density:.1f}}})\pm 2\sigma_{{G}}$")
+          axes[0, -1].legend(handles=handles, labels=labels, loc="upper right", fontsize="small")
+
   plt.tight_layout()
   plt.savefig(save, dpi=300, bbox_inches="tight")
   plt.close(fig)
-
 
 def plot_spectrum(
     goft: dict,
@@ -806,6 +897,7 @@ def plot_spectrum(
     yorders: float | None = None,                  # log-y span below ymax
     ylimits: tuple[float, float] | None = None,     # optional (ymin, ymax) for bottom row
     save: str = "spectrum.png",
+    figsize: tuple[float, float] = (15, 8),
 ) -> None:
     """
     Plot three spectra (μ - sigma, μ, μ + sigma) in two rows (linear + log y).
@@ -843,7 +935,7 @@ def plot_spectrum(
     # ---------------------------------------------------------------------
     fig, axes = plt.subplots(
         2, 3,
-        figsize=(15, 8),
+        figsize=figsize,
         sharex="col", sharey="row",
         gridspec_kw=dict(wspace=0.0, hspace=0.0),
     )
@@ -956,16 +1048,112 @@ def plot_spectrum(
         r"Intensity [erg/s/cm$^2$/sr/cm]"
     )
 
-    # ---------------------------------------------------------------------
-    # legend (upper-left panel)
-    # ---------------------------------------------------------------------
+    # # ---------------------------------------------------------------------
+    # # legend (upper-left panel)
+    # # ---------------------------------------------------------------------
+    # lines_for_total = [
+    #   plt.Line2D([0], [0], c=key_pixel_colors[0], lw=2.0),
+    #   plt.Line2D([0], [0], c=key_pixel_colors[1], lw=2.0),
+    #   plt.Line2D([0], [0], c=key_pixel_colors[2], lw=2.0),
+    # ]
+    # handles = [
+    #   plt.Line2D([0], [0], c="red",      lw=1.2, label=label_main),
+    #   plt.Line2D([0], [0], c="blue",     lw=1.2, label=label_sec),
+    #   plt.Line2D([0], [0], c="darkgrey", lw=0.8, label="Background"),
+    #   tuple(lines_for_total),
+    # ]
+    # labels = [label_main, label_sec, "Background", "Total"]
+    # axes[0, 0].legend(
+    #   handles=handles,
+    #   labels=labels,
+    #   loc="upper left",
+    #   fontsize="small",
+    #   handler_map={tuple: HandlerTuple(ndivide=None)}
+    # )
+
+    # ------------------------------------------------------------------
+    #  custom handler: three coloured strokes separated by "/"
+    # ------------------------------------------------------------------
+    class HandlerTripleWithSlash(HandlerBase):
+        """
+        Draw three lines separated by forward slashes, with a little
+        horizontal padding around every slash.
+        """
+        def __init__(self, pad_frac=0.08, **kw):
+            super().__init__(**kw)
+            self.pad_frac = pad_frac    # fraction of the full handle-width
+
+        def create_artists(self, legend, tup, x0, y0, width, height, fontsize, trans):
+            # unpack the three Line2D that came in as a tuple
+            l1, l2, l3 = tup
+
+            # total free space taken up by two slashes  (each drawn as "/")
+            slash_width = width * 0.08
+            pad = width * self.pad_frac
+
+            # compute segment widths: split remaining space equally in three
+            w_line = (width - 2*slash_width - 4*pad) / 3.0
+
+            # helpful y-coordinate (centre of legend handle)
+            yc = y0 + height * 0.5
+
+            artists = []
+
+            # ------- first coloured stroke -------
+            x_left = x0
+            x_right = x_left + w_line
+            artists.append(Line2D([x_left, x_right], [yc, yc],
+                                color=l1.get_color(), lw=l1.get_linewidth(),
+                                solid_capstyle='butt', transform=trans))
+
+            # ------- slash -------
+            x_left = x_right + pad
+            x_right = x_left + slash_width
+            artists.append(Line2D([x_left, x_right], [y0 + height*0.1,
+                                                    y0 + height*0.9],
+                                color="k", lw=1.0, transform=trans))
+
+            # ------- second coloured stroke -------
+            x_left = x_right + pad
+            x_right = x_left + w_line
+            artists.append(Line2D([x_left, x_right], [yc, yc],
+                                color=l2.get_color(), lw=l2.get_linewidth(),
+                                solid_capstyle='butt', transform=trans))
+
+            # ------- second slash -------
+            x_left = x_right + pad
+            x_right = x_left + slash_width
+            artists.append(Line2D([x_left, x_right], [y0 + height*0.1,
+                                                    y0 + height*0.9],
+                                color="k", lw=1.0, transform=trans))
+
+            # ------- third coloured stroke -------
+            x_left = x_right + pad
+            x_right = x_left + w_line
+            artists.append(Line2D([x_left, x_right], [yc, yc],
+                                color=l3.get_color(), lw=l3.get_linewidth(),
+                                solid_capstyle='butt', transform=trans))
+
+            return artists
+
+    lines_for_total = [plt.Line2D([0], [0], c=c, lw=2.0) for c in key_pixel_colors]
+
     handles = [
-        plt.Line2D([0], [0], c="red",      lw=1.2, label=label_main),
-        plt.Line2D([0], [0], c="blue",     lw=1.2, label=label_sec),
-        plt.Line2D([0], [0], c="darkgrey", lw=0.8, label="Background"),
-        plt.Line2D([0], [0], c=key_pixel_colors[0], lw=2.0, label="Total"),
+        Line2D([0], [0], c='red',  lw=1.2, label=label_main),
+        Line2D([0], [0], c='blue', lw=1.2, label=label_sec),
+        Line2D([0], [0], c='grey', lw=0.8, label='Background'),
+        tuple(lines_for_total),
     ]
-    axes[0, 0].legend(handles=handles, loc="upper left", fontsize="small")
+
+    labels = [label_main, label_sec, "Background", "Total"]
+
+    axes[0, 0].legend(
+            handles=handles,
+            labels=labels,
+            loc="upper left",
+            fontsize="small",
+            handlelength=3,                 # make the handle box a bit wider
+            handler_map={tuple: HandlerTripleWithSlash(pad_frac=0.1)})
 
     # ---------------------------------------------------------------------
     # finish up
@@ -974,6 +1162,113 @@ def plot_spectrum(
     plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
+def plot_g_function(
+    goft,
+    line_name,
+    logT_grid,
+    logN_grid,
+    save="g_function.png",
+    xlim=None,
+    ylim=None,
+    show_vlines=True,
+    figsize=(6, 5)
+):
+    """
+    Plot G(logT, logN) for the specified emission line as a 2D colored image.
+    Optionally restrict x/y limits and plot vertical lines at mean+-2sigma for the
+    optimal density (where G is maximized when integrated over T).
+    """
+    g_data = goft[line_name]["g_tn"]
+
+    # Optionally crop logT_grid and g_data to xlim
+    if xlim is not None:
+        mask_T = (logT_grid >= xlim[0]) & (logT_grid <= xlim[1])
+        g_data = g_data[:, mask_T]
+        logT_grid_plot = logT_grid[mask_T]
+    else:
+        logT_grid_plot = logT_grid
+
+    # Optionally crop logN_grid and g_data to ylim
+    if ylim is not None:
+        mask_N = (logN_grid >= ylim[0]) & (logN_grid <= ylim[1])
+        g_data = g_data[mask_N, :]
+        logN_grid_plot = logN_grid[mask_N]
+    else:
+        logN_grid_plot = logN_grid
+
+    fig, ax = plt.subplots(figsize=figsize)
+    # # use pcolormesh so the axes “know” the exact grid values
+    # # X runs over logT, Y over logN, and g_data[i,j] corresponds to (logT_grid_plot[j], logN_grid_plot[i])
+    # X, Y = np.meshgrid(logT_grid_plot, logN_grid_plot)
+    # im = ax.pcolormesh(
+    #   X, Y, g_data,
+    #   shading='nearest',
+    #   cmap='Greys'
+    # )
+    extent = (
+        logT_grid_plot[0], logT_grid_plot[-1],
+        logN_grid_plot[0], logN_grid_plot[-1]
+    )
+    im = ax.imshow(
+        g_data,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        cmap="Greys",
+    )
+    cbar = fig.colorbar(im, ax=ax, orientation="vertical")
+    # Move the order of magnitude from the colorbar to the label
+    fig.canvas.draw()
+    offset_text = cbar.ax.yaxis.get_offset_text().get_text().replace("1e", "")
+    cbar.ax.yaxis.get_offset_text().set_visible(False)
+    cbar.set_label(rf"$G(T,N)$ [$10^{{{offset_text}}}$ erg cm$^3$/s]")
+    ax.set_xlabel(r"$\log_{10}(T\:\mathrm{[K]})$")
+    ax.set_ylabel(r"$\log_{10}(N_e\:\mathrm{[1/cm^{3}]})$")
+
+    # Plot vertical lines at mean+-2sigma for the optimal density
+    if show_vlines:
+        g_tn = goft[line_name]["g_tn"]
+        # Use possibly cropped logT_grid and logN_grid for vlines
+        g_tn_plot = g_tn
+        if ylim is not None:
+            g_tn_plot = g_tn_plot[mask_N, :]
+        if xlim is not None:
+            g_tn_plot = g_tn_plot[:, mask_T]
+        # Integrate G over T for each density
+        integrated_g_over_T = np.trapz(g_tn_plot, logT_grid_plot, axis=1)
+        optimal_density_idx = np.argmax(integrated_g_over_T)
+        optimal_density = logN_grid_plot[optimal_density_idx]
+        g_at_optimal_density = g_tn_plot[optimal_density_idx, :]
+
+        # Compute mean and std of logT weighted by G
+        mean_logT = np.average(logT_grid_plot, weights=g_at_optimal_density)
+        std_logT = np.sqrt(np.average((logT_grid_plot - mean_logT) ** 2, weights=g_at_optimal_density))
+        vlines = [mean_logT - 2 * std_logT, mean_logT + 2 * std_logT]
+        for vline in vlines:
+            ax.axvline(
+                vline,
+                color='grey',
+                linestyle=(0, (5, 10)),
+                linewidth=1,
+                alpha=1.0,
+                zorder=2,
+            )
+        # Add annotation for the vlines
+        ax.legend(
+            [plt.Line2D([0], [0], color='grey', linestyle=(0, (5, 5)), linewidth=1)],
+            [fr"$G(T,{{N_{{e}}={optimal_density:.1f}}})\pm 2\sigma_{{G}}$"],
+            loc="upper right",
+            fontsize="small",
+        )
+
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -984,7 +1279,7 @@ def plot_spectrum(
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = 8                # factor or False
+    downsample     = False                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
     limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
@@ -1075,6 +1370,18 @@ def main() -> None:
     # ----------------------------------------------------------
     print(f"Combining lines into a single spectrum cube ({print_mem()})")
     total_si, back_si = combine_lines(goft, main_line)
+    total_si *= u.erg/u.s/u.cm**2/u.sr/u.cm
+    back_si *= u.erg/u.s/u.cm**2/u.sr/u.cm
+
+    sigma_factor = 1.0
+    margin = 0.2
+    mean_idx, plus_idx, minus_idx = _find_mean_sigma_pixel(
+        total_si.value, margin, sigma_factor=sigma_factor
+    )
+
+    # Calculate Doppler velocity map before plotting
+    print(f"Calculating Doppler velocity map ({print_mem()})")
+    v_map = calculate_doppler_map(total_si.value, v_edges)
 
     # ----------------------------------------------------------------------
     # save the results
@@ -1082,15 +1389,28 @@ def main() -> None:
     output_file = "synthesised_spectra.pkl"
     globals().update(locals())
     dill.dump_session(output_file)
-    print(f"Saved {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
+    print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
-    globals().update(locals());raise ValueError("Kicking back to ipython")
+    output_file = "synthesised_spectra.npz"
+    np.savez(
+        output_file,
+        I_cube=total_si.cgs.value,
+        wl_grid=goft[main_line]["wl_grid"].to(u.cm).value,
+        spt_res_x=voxel_dx.to(u.cm).value,
+        wl0=goft[main_line]["wl0"].to(u.cm).value,
+        mean_idx=mean_idx,
+        plus_idx=plus_idx,
+        minus_idx=minus_idx,
+        sigma_factor=sigma_factor,
+        margin=margin
+    )
+    print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
 
     # ----------------------------------------------------------------------
     # call viewer after all processing is complete
     # ----------------------------------------------------------------------
     launch_viewer(
-        total_si     = total_si,
+        total_si     = total_si.value,
         goft         = goft,
         dem_map      = dem_map,
         wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
@@ -1103,15 +1423,10 @@ def main() -> None:
     # plot output
     # ----------------------------------------------------------------------
 
-    sigma_factor = 1.0
-    margin = 0.2
-    mean_idx, plus_idx, minus_idx = _find_mean_sigma_pixel(
-        total_si, margin, sigma_factor=sigma_factor
-    )
     key_pixel_colors = ["deeppink", "black", "mediumseagreen"]  # in order of minus, mean, plus
 
     plot_maps(
-        total_si, v_edges, voxel_dx, voxel_dy, downsample, margin,
+        total_si.value, v_map, voxel_dx, voxel_dy, downsample, margin,
         goft[main_line]["wl_grid"].cgs.value, "fig_synthetic_maps.png",
         mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
         sigma_factor=sigma_factor, key_pixel_colors=key_pixel_colors
@@ -1121,15 +1436,28 @@ def main() -> None:
         dem_map, em_tv, logT_centres, v_edges,
         plus_idx, mean_idx, minus_idx, sigma_factor,
         xlim=(5.5, 6.9),
-        ylim_dem=(25, 29),
+        ylim_dem=(26.5, 30),
         ylim_2d_dem=(-50, 50),
         save="fig_synthetic_dems.png",
         goft=goft, main_line=main_line,
         key_pixel_colors=key_pixel_colors,
+        logT_grid=logT_grid,
+        logN_grid=logN_grid,
+        figsize=(12, 6),
+        cbar_offset=1.325,
+        inset_axis_offset=0.77,
+    )
+
+    plot_g_function(
+        goft, main_line, logT_grid, logN_grid,
+        save="fig_g_function.png",
+        xlim=(5.5, 6.9),
+        show_vlines=True,
+        figsize=(6, 3)
     )
 
     plot_spectrum(
-        goft, total_si, goft[main_line]["wl_grid"].to('AA').value,
+        goft, total_si.value, goft[main_line]["wl_grid"].to('AA').value,
         minus_idx, mean_idx, plus_idx,
         main_line=main_line, secondary_line="Fe12_195.1790",
         key_pixel_colors=key_pixel_colors,
@@ -1137,9 +1465,10 @@ def main() -> None:
         save="fig_synthetic_spectra.png",
         xlim_vel=(-250, 250),
         yorders=9,
-        ylimits=(None, 8e11),
+        ylimits=(None, 8e13),
         main_label="Fe XII 195.119",
         secondary_label="Fe XII 195.179",
+        figsize=(12, 6)
     )
 
     globals().update(locals()); raise ValueError("Kicking back to ipython")
