@@ -107,6 +107,29 @@ def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
 
 
+def save_maps(path: str | Path, log_intensity: np.ndarray, v_map: u.Quantity,
+              x_pix_size: float, y_pix_size: float) -> None:
+    """Save intensity and velocity maps for later comparison."""
+    np.savez(
+        path,
+        log_si=log_intensity,
+        v_map=v_map.to(u.km / u.s).value,
+        x_pix_size=x_pix_size,
+        y_pix_size=y_pix_size,
+    )
+
+
+def load_maps(path: str | Path) -> dict:
+    """Load previously saved intensity and velocity maps."""
+    dat = np.load(path)
+    return dict(
+        log_si=dat["log_si"],
+        v_map=dat["v_map"],
+        x_pix_size=float(dat["x_pix_size"]),
+        y_pix_size=float(dat["y_pix_size"]),
+    )
+
+
 # -----------------------------------------------------------------------------
 # PSF handling
 # -----------------------------------------------------------------------------
@@ -450,8 +473,14 @@ def plot_radiometric_pipeline(
     def spectrum(stage_idx: int, row_idx: int) -> np.ndarray:
         return signals[stage_idx][idxs_reb[row_idx] + (slice(None),)]
 
-    fig, axes = plt.subplots(3, 4, figsize=(10, 6), sharex="row", constrained_layout=True)
-    fig.subplots_adjust(right=0.86, wspace=0.18, hspace=0.06)
+    fig, axes = plt.subplots(
+        3,
+        4,
+        figsize=(10, 6),
+        sharex="row",
+        gridspec_kw=dict(wspace=0.0, hspace=0.0),
+    )
+    fig.subplots_adjust(right=0.86)
 
     for row in range(3):
         colour = key_pixel_colors[row]
@@ -465,7 +494,7 @@ def plot_radiometric_pipeline(
         if row == 0:
             ax0.set_title("signal1/2/3", fontsize=8)
         ax0.set_ylabel(r"ph s$^{-1}$ cm$^{-2}$ sr$^{-1}$ cm$^{-1}$", color=colour, fontsize=7)
-        ax0.tick_params(direction="in", which="both", top=True, right=True)
+        ax0.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
         ax_r1 = ax0.twinx()
         sp2 = spectrum(2, row)
@@ -473,7 +502,7 @@ def plot_radiometric_pipeline(
         ax_r1.set_ylim(sp2.min(), sp2.max())
         ax_r1.set_ylabel(r"ph s$^{-1}$ sr$^{-1}$ cm$^{-1}$", color="tab:orange", fontsize=7)
         ax_r1.yaxis.labelpad = 8
-        ax_r1.tick_params(direction="in", colors="tab:orange", which="both", right=True)
+        ax_r1.tick_params(direction="in", colors="tab:orange", which="both", top=True, bottom=True, right=True)
         ax_r1.patch.set_visible(False)
 
         ax_r2 = ax0.twinx()
@@ -483,7 +512,7 @@ def plot_radiometric_pipeline(
         ax_r2.spines.right.set_position(("axes", 1.15))
         ax_r2.set_ylabel(r"ph s$^{-1}$ pix$^{-1}$", color="tab:blue", fontsize=7)
         ax_r2.yaxis.labelpad = 24
-        ax_r2.tick_params(direction="in", colors="tab:blue", which="both", right=True)
+        ax_r2.tick_params(direction="in", colors="tab:blue", which="both", top=True, bottom=True, right=True)
         ax_r2.patch.set_visible(False)
 
         ax1 = axes[row, 1]
@@ -492,7 +521,7 @@ def plot_radiometric_pipeline(
         if row == 0:
             ax1.set_title("signal4", fontsize=8)
         ax1.set_ylabel(r"ph s$^{-1}$ pix$^{-1}$ (PSF)", color=colour, fontsize=7)
-        ax1.tick_params(direction="in", which="both", top=True, right=True)
+        ax1.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
         ax2 = axes[row, 2]
         sp5 = spectrum(5, row)
@@ -500,7 +529,7 @@ def plot_radiometric_pipeline(
         if row == 0:
             ax2.set_title("signal5", fontsize=8)
         ax2.set_ylabel(r"e$^-$ pix$^{-1}$", color=colour, fontsize=7)
-        ax2.tick_params(direction="in", which="both", top=True, right=True)
+        ax2.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
         ax3 = axes[row, 3]
         sp6 = spectrum(6, row)
@@ -508,7 +537,7 @@ def plot_radiometric_pipeline(
         if row == 0:
             ax3.set_title("signal6/7", fontsize=8)
         ax3.set_ylabel(r"e$^-$ pix$^{-1}$ (stray)", color=colour, fontsize=7)
-        ax3.tick_params(direction="in", which="both", top=True, right=True)
+        ax3.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
         ax_r3 = ax3.twinx()
         sp7 = spectrum(7, row)
@@ -517,98 +546,222 @@ def plot_radiometric_pipeline(
         ax_r3.set_ylim(sp7.min(), sp7.max())
         ax_r3.set_ylabel(r"DN pix$^{-1}$", color="tab:red", fontsize=7)
         ax_r3.yaxis.labelpad = 16
-        ax_r3.tick_params(direction="in", colors="tab:red", which="both", right=True)
+        ax_r3.tick_params(direction="in", colors="tab:red", which="both", top=True, bottom=True, right=True)
         ax_r3.patch.set_visible(False)
 
         if row == 2:
             for col in range(4):
                 axes[row, col].set_xlabel("Wavelength [Å]")
+        for col in range(4):
+            axes[row, col].tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
     fig.savefig(save, dpi=300)
     plt.close(fig)
     return fig
 
 def plot_maps(
-  signal_cube: u.Quantity,
-  fit_cube: u.Quantity,
-  wl_axis: u.Quantity,
-  wl0: u.Quantity,
-  idx_sim_minus: Tuple[int, int] | None,
-  idx_sim_mean: Tuple[int, int] | None,
-  idx_sim_plus: Tuple[int, int] | None,
-  save: str,
-  key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    signal_cube: u.Quantity,
+    fit_cube: u.Quantity,
+    wl_axis: u.Quantity,
+    wl0: u.Quantity,
+    idx_sim_minus: Tuple[int, int] | None,
+    idx_sim_mean: Tuple[int, int] | None,
+    idx_sim_plus: Tuple[int, int] | None,
+    save: str,
+    key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    previous: dict | None = None,
+    save_data_path: str | None = None,
 ) -> None:
-  si = signal_cube.sum(axis=2)
-  log_si = np.log10(si, where=si > 0.0, out=np.zeros_like(si))
-  v_map = velocity_from_fit(fit_cube, wl0).to(u.km / u.s)
+    si = signal_cube.sum(axis=2)
+    log_si = np.log10(si, where=si > 0.0, out=np.zeros_like(si))
+    v_map = velocity_from_fit(fit_cube, wl0).to(u.km / u.s)
 
-  # --- Compute arcsec axes with correct pixel sizes ---
-  n_scan, n_slit = si.shape
-  # X: scan axis, pixel size = slit width
-  x_pix_size = SIM.slit_scan_step.to(u.arcsec).value
-  # Y: slit axis, pixel size = plate scale
-  y_pix_size = DET.plate_scale_angle.to(u.arcsec/u.pix).value
+    n_scan, n_slit = si.shape
+    x_pix_size = SIM.slit_scan_step.to(u.arcsec).value
+    y_pix_size = DET.plate_scale_angle.to(u.arcsec / u.pix).value
 
-  x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
-  y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
-  extent = [
-    x[0] - x_pix_size/2, x[-1] + x_pix_size/2,
-    y[0] - y_pix_size/2, y[-1] + y_pix_size/2
-  ]
+    x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
+    y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
+    extent = [
+        x[0] - x_pix_size / 2,
+        x[-1] + x_pix_size / 2,
+        y[0] - y_pix_size / 2,
+        y[-1] + y_pix_size / 2,
+    ]
 
-  fig, (axI, axV) = plt.subplots(1, 2, figsize=(10, 5))
-  imI = axI.imshow(log_si.T, origin="lower", aspect="auto",
-            cmap="afmhot", vmin=0, extent=extent)
-  axI.set_title(r'$\log_{10} \int I(\lambda) d\lambda$')
-  fig.colorbar(imI, ax=axI, orientation="horizontal",
-          label="log10 Intensity")
+    nrows = 2 if previous else 1
+    fig, axes = plt.subplots(
+        nrows,
+        2,
+        figsize=(10, 5 * nrows),
+        gridspec_kw=dict(wspace=0.0, hspace=0.0),
+    )
+    if nrows == 1:
+        axes = axes.reshape(1, 2)
 
-  imV = axV.imshow(v_map.T.value, origin="lower", aspect="auto",
-            cmap="RdBu_r", vmin=-15, vmax=15, extent=extent)
-  axV.set_title("Doppler velocity of peak intensity [km/s]")
-  fig.colorbar(imV, ax=axV, orientation="horizontal",
-          label="v [km/s]")
+    axI, axV = axes[0]
+    imI = axI.imshow(log_si.T, origin="lower", aspect="auto", cmap="afmhot", vmin=0, extent=extent)
+    imV = axV.imshow(v_map.T.value, origin="lower", aspect="auto", cmap="RdBu_r", vmin=-15, vmax=15, extent=extent)
 
-  # Set axis labels and ticks every 15 arcsec (e.g. -30, -15, 0, 15, 30)
-  interval = 15.0  # arcsec
-  max_x = max(abs(extent[0]), abs(extent[1]))
-  max_y = max(abs(extent[2]), abs(extent[3]))
-  xticks = np.arange(
-    -np.ceil(max_x/interval)*interval,
-     np.ceil(max_x/interval)*interval + interval/2,
-     interval
-  )
-  yticks = np.arange(
-    -np.ceil(max_y/interval)*interval,
-     np.ceil(max_y/interval)*interval + interval/2,
-     interval
-  )
-  xticks = xticks[(xticks >= extent[0]) & (xticks <= extent[1])]
-  yticks = yticks[(yticks >= extent[2]) & (yticks <= extent[3])]
+    cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal", pad=0.1)
+    cbarI.set_label(r"$\log_{10}\int I\,d\lambda$")
+    cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal", pad=0.1)
+    cbarV.set_label(r"$v$ [km/s]")
 
-  for ax in (axI, axV):
-    ax.set_xlabel("X [arcsec]")
-    ax.set_ylabel("Y [arcsec]")
-    ax.set_xlim(extent[0], extent[1])
-    ax.set_ylim(extent[2], extent[3])
+    def _format(ax):
+        ax.set_xlabel("X [arcsec]")
+        ax.set_ylabel("Y [arcsec]")
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+        interval = 15.0
+        max_x = max(abs(extent[0]), abs(extent[1]))
+        max_y = max(abs(extent[2]), abs(extent[3]))
+        xticks = np.arange(-np.ceil(max_x / interval) * interval, np.ceil(max_x / interval) * interval + interval / 2, interval)
+        yticks = np.arange(-np.ceil(max_y / interval) * interval, np.ceil(max_y / interval) * interval + interval / 2, interval)
+        xticks = xticks[(xticks >= extent[0]) & (xticks <= extent[1])]
+        yticks = yticks[(yticks >= extent[2]) & (yticks <= extent[3])]
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
+        ax.set_aspect(y_pix_size / x_pix_size)
+        ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+
+    _format(axI)
+    _format(axV)
+
+    for idx, color in zip([idx_sim_minus, idx_sim_mean, idx_sim_plus], key_pixel_colors):
+        if idx is not None:
+            x_pos = (idx[0] - n_scan // 2) * x_pix_size
+            y_pos = (idx[1] - n_slit // 2) * y_pix_size
+            for ax in (axI, axV):
+                ax.plot(x_pos, y_pos, marker="o", color=color, markersize=8, fillstyle="none", lw=2)
+
+    if save_data_path:
+        save_maps(save_data_path, log_si, v_map, x_pix_size, y_pix_size)
+
+    if previous:
+        log_si_p = previous["log_si"]
+        v_map_p = previous["v_map"]
+        x_pix_prev = previous["x_pix_size"]
+        y_pix_prev = previous["y_pix_size"]
+        n_scan_p, n_slit_p = log_si_p.shape
+        x_p = (np.arange(n_scan_p) - n_scan_p // 2) * x_pix_prev
+        y_p = (np.arange(n_slit_p) - n_slit_p // 2) * y_pix_prev
+        extent_p = [
+            x_p[0] - x_pix_prev / 2,
+            x_p[-1] + x_pix_prev / 2,
+            y_p[0] - y_pix_prev / 2,
+            y_p[-1] + y_pix_prev / 2,
+        ]
+
+        axI2, axV2 = axes[1]
+        imI2 = axI2.imshow(log_si_p.T, origin="lower", aspect="auto", cmap="afmhot", vmin=0, extent=extent_p)
+        imV2 = axV2.imshow(v_map_p.T, origin="lower", aspect="auto", cmap="RdBu_r", vmin=-15, vmax=15, extent=extent_p)
+        fig.colorbar(imI2, ax=axI2, orientation="horizontal", pad=0.1)
+        fig.colorbar(imV2, ax=axV2, orientation="horizontal", pad=0.1)
+
+        def _format_prev(ax):
+            ax.set_xlabel("X [arcsec]")
+            ax.set_ylabel("Y [arcsec]")
+            ax.set_xlim(extent_p[0], extent_p[1])
+            ax.set_ylim(extent_p[2], extent_p[3])
+            interval = 15.0
+            max_x = max(abs(extent_p[0]), abs(extent_p[1]))
+            max_y = max(abs(extent_p[2]), abs(extent_p[3]))
+            xticks = np.arange(-np.ceil(max_x / interval) * interval, np.ceil(max_x / interval) * interval + interval / 2, interval)
+            yticks = np.arange(-np.ceil(max_y / interval) * interval, np.ceil(max_y / interval) * interval + interval / 2, interval)
+            xticks = xticks[(xticks >= extent_p[0]) & (xticks <= extent_p[1])]
+            yticks = yticks[(yticks >= extent_p[2]) & (yticks <= extent_p[3])]
+            ax.set_xticks(xticks)
+            ax.set_yticks(yticks)
+            ax.set_aspect(y_pix_prev / x_pix_prev)
+            ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+
+        _format_prev(axI2)
+        _format_prev(axV2)
+
+    plt.tight_layout(pad=0.1)
+    plt.savefig(save, dpi=300)
+    plt.close(fig)
+
+
+def plot_velocity_std_map(
+    v_std_map: u.Quantity,
+    save: str,
+    x_pix_size: float,
+    y_pix_size: float,
+    key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    idx_minus: Tuple[int, int] | None = None,
+    idx_mean: Tuple[int, int] | None = None,
+    idx_plus: Tuple[int, int] | None = None,
+) -> None:
+    n_scan, n_slit = v_std_map.shape
+    x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
+    y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
+    extent = [x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2, y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2]
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    im = ax.imshow(v_std_map.T.to(u.km / u.s).value, origin="lower", aspect="auto", extent=extent, cmap="magma")
+    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", pad=0.1)
+    cbar.set_label(r"$\sigma_v$ [km/s]")
+
+    interval = 15.0
+    max_x = max(abs(extent[0]), abs(extent[1]))
+    max_y = max(abs(extent[2]), abs(extent[3]))
+    xticks = np.arange(-np.ceil(max_x / interval) * interval, np.ceil(max_x / interval) * interval + interval / 2, interval)
+    yticks = np.arange(-np.ceil(max_y / interval) * interval, np.ceil(max_y / interval) * interval + interval / 2, interval)
+    xticks = xticks[(xticks >= extent[0]) & (xticks <= extent[1])]
+    yticks = yticks[(yticks >= extent[2]) & (yticks <= extent[3])]
     ax.set_xticks(xticks)
     ax.set_yticks(yticks)
-    # Set correct aspect ratio: ratio of y_pix_size to x_pix_size
+    ax.set_xlabel("X [arcsec]")
+    ax.set_ylabel("Y [arcsec]")
     ax.set_aspect(y_pix_size / x_pix_size)
+    ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
 
-  # Overplot key pixels
-  for idx, color in zip([idx_sim_minus, idx_sim_mean, idx_sim_plus], key_pixel_colors):
-    if idx is not None:
-      x_pos = (idx[0] - n_scan // 2) * x_pix_size
-      y_pos = (idx[1] - n_slit // 2) * y_pix_size
-      for ax in (axI, axV):
-        ax.plot(x_pos, y_pos, marker="o", color=color,
-            markersize=8, fillstyle="none", lw=2)
+    for idx, color in zip([idx_minus, idx_mean, idx_plus], key_pixel_colors):
+        if idx is not None:
+            ax.plot(
+                (idx[0] - n_scan // 2) * x_pix_size,
+                (idx[1] - n_slit // 2) * y_pix_size,
+                marker="o",
+                color=color,
+                markersize=8,
+                fillstyle="none",
+                lw=2,
+            )
 
-  plt.tight_layout()
-  plt.savefig(save, dpi=300)
-  plt.close(fig)
+    plt.tight_layout(pad=0.1)
+    plt.savefig(save, dpi=300)
+    plt.close(fig)
+
+
+def plot_intensity_vs_vstd(
+    intensity: np.ndarray,
+    v_std: u.Quantity,
+    save: str,
+) -> None:
+    inten = intensity.ravel()
+    vstd = v_std.to(u.km / u.s).value.ravel()
+    mask = (inten > 0) & (vstd > 0)
+    inten = inten[mask]
+    vstd = vstd[mask]
+    log_i = np.log10(inten)
+    log_v = np.log10(vstd)
+    coeff = np.polyfit(log_i, log_v, 1)
+    fit_x = np.linspace(log_i.min(), log_i.max(), 100)
+    fit_y = coeff[0] * fit_x + coeff[1]
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(inten, vstd, s=4, color="tab:blue", alpha=0.6)
+    ax.plot(10 ** fit_x, 10 ** fit_y, color="red")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Intensity")
+    ax.set_ylabel(r"$\sigma_v$ [km/s]")
+    ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+    plt.tight_layout(pad=0.1)
+    plt.savefig(save, dpi=300)
+    plt.close(fig)
 
 
 # -----------------------------------------------------------------------------
@@ -617,6 +770,14 @@ def plot_maps(
 
 def main() -> None:
     global DET, TEL, SIM
+
+    prev_maps = None
+    save_maps_path = None
+    args = sys.argv[1:]
+    if "--prev" in args:
+        prev_maps = load_maps(args[args.index("--prev") + 1])
+    if "--save" in args:
+        save_maps_path = args[args.index("--save") + 1]
 
     # Load PSF
     print("Loading PSF files...")
@@ -642,14 +803,31 @@ def main() -> None:
         signals, fits = monte_carlo(cube_reb, wl_axis, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter)
         analysis_results = analyse(fits, fit_truth, wl0)
         plot_maps(
-            signals[0][-1],    # final stage of first simulation
-            fits[0],           # added fits[0] to use fitted centers
+            signals[0][-1],
+            fits[0],
             wl_axis,
             wl0,
             plotting["minus_idx"],
             plotting["mean_idx"],
             plotting["plus_idx"],
             save=f"fig_maps_{t_exp.to_value(u.s)}.png",
+            previous=prev_maps,
+            save_data_path=save_maps_path,
+        )
+        plot_velocity_std_map(
+            analysis_results["v_std"],
+            save=f"fig_vstd_{t_exp.to_value(u.s)}.png",
+            x_pix_size=SIM.slit_scan_step.to(u.arcsec).value,
+            y_pix_size=DET.plate_scale_angle.to(u.arcsec / u.pix).value,
+            idx_minus=plotting["minus_idx"],
+            idx_mean=plotting["mean_idx"],
+            idx_plus=plotting["plus_idx"],
+        )
+        si_map = signals[0][-1].sum(axis=2)
+        plot_intensity_vs_vstd(
+            si_map,
+            analysis_results["v_std"],
+            save=f"fig_int_vs_vstd_{t_exp.to_value(u.s)}.png",
         )
         plot_radiometric_pipeline(
             signals=signals[0],
