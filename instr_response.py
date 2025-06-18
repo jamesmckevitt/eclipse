@@ -20,10 +20,17 @@ import joblib
 from tqdm import tqdm
 import sys
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import sys
 from typing import Tuple
 import contextlib
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from datetime import datetime
+from matplotlib.lines import Line2D
+from matplotlib.legend_handler import HandlerBase
+import matplotlib
+import dill
+import os
 
 # -----------------------------------------------------------------------------
 # Configuration objects
@@ -39,10 +46,10 @@ class Detector:
     gain_e_per_dn: u.Quantity = 2.0 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
-    # wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel  # EUVST
-    wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel  # EIS
-    # plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel  # EUVST
-    plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel  # EIS
+    wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel  # EUVST
+    # wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel  # EIS
+    plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel  # EUVST
+    # plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel  # EIS
     si_fano: float = 0.115
 
     @property
@@ -53,12 +60,12 @@ class Detector:
 @dataclass
 class Telescope:
     D_ap: u.Quantity = 0.28 * u.m
-    # pm_eff: float = 0.161  # EUVST
-    # grat_eff: float = 0.0623
-    # filt_eff: float = 0.507
-    pm_eff: float = 1  # EIS
-    grat_eff: float = 1
-    filt_eff: float = 1
+    pm_eff: float = 0.161  # EUVST
+    grat_eff: float = 0.0623
+    filt_eff: float = 0.507
+    # pm_eff: float = 1  # EIS
+    # grat_eff: float = 1
+    # filt_eff: float = 1
     psf_focus_res: u.Quantity = 0.5 * u.um / u.pixel
     psf_mesh_res: u.Quantity = 6.12e-4 * u.mm / u.pixel
     psf_focus_file: Path = Path("data/swc/psf_euvst_v20230909_195119_focus.txt")
@@ -67,8 +74,8 @@ class Telescope:
 
     @property
     def collecting_area(self) -> u.Quantity:
-        # return 0.5 * np.pi * (self.D_ap / 2) ** 2  # EUVST
-        return (0.23/0.76) * (u.cm)**2  # EIS
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2  # EUVST
+        # return (0.23/0.76) * (u.cm)**2  # EIS
 
 
 @dataclass
@@ -76,10 +83,10 @@ class Simulation:
     expos: u.Quantity = u.Quantity([20], u.s)
     n_iter: int = 2
     vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
-    # slit_width: u.Quantity = 0.2 * u.arcsec  # EUVST 0.2" slit
-    # slit_scan_step: u.Quantity = 0.2 * u.arcsec
-    slit_width: u.Quantity = 4 * u.arcsec  # EIS 1" slit
-    slit_scan_step: u.Quantity = 4 * u.arcsec
+    slit_width: u.Quantity = 0.2 * u.arcsec  # EUVST 0.2" slit
+    slit_scan_step: u.Quantity = 0.2 * u.arcsec
+    # slit_width: u.Quantity = 1 * u.arcsec  # EIS 1" slit
+    # slit_scan_step: u.Quantity = 1 * u.arcsec
     ncpu: int = -1
 
     def __post_init__(self):
@@ -695,7 +702,7 @@ def plot_maps(
     *,
     xlim: Tuple[float, float] | None = None,
     ylim: Tuple[float, float] | None = None,
-    key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    key_pixel_colors: Iterable[str] = ("deeppink", "mediumseagreen", "black"),
     previous: dict | None = None,
     save_data_path: str | None = None,
 ) -> None:
@@ -724,8 +731,9 @@ def plot_maps(
     fig, axes = plt.subplots(
         nrows,
         2,
-        figsize=(10, 5 * nrows),
+        figsize=(11, 5),
         gridspec_kw=dict(wspace=0.0, hspace=0.0),
+        sharey="row",       # y-axis shared within each row (axV shares y with axI)
     )
     if nrows == 1:
         axes = axes.reshape(1, 2)
@@ -743,14 +751,17 @@ def plot_maps(
     # photon colour-bar
     # ------------------------------------------------------------------
     cbarI = fig.colorbar(imI, ax=axI, orientation="horizontal",
-                         pad=0.14, shrink=0.95)
-    cbarI.set_label(r"Photons per CCD row")
+                         pad=0.14, shrink=0.95, aspect=35)
+    # cbarI.set_label(r"ph/row ")
+    cbarI.set_label(
+        r"$\log_{10}\!\left(\sum_{\lambda\,\mathrm{pix}}I(\lambda)\:\mathrm{ }\left[\mathrm{ph/s/pix}\right]\right)$"
+    )
 
     # ------------------------------------------------------------------
     # velocity colour-bar (unchanged)
     # ------------------------------------------------------------------
     cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal",
-                         pad=0.14, extend="both", shrink=0.95)
+                         pad=0.14, extend="both", shrink=0.95, aspect=35)
     cbarV.set_label(r"$v$ [km/s]")
 
     # ---------------- spatial zoom if requested ----------------
@@ -764,7 +775,8 @@ def plot_maps(
     # ---------------- formatting, markers, save ----------------
     def _format(ax):
         ax.set_xlabel("X [arcsec]")
-        ax.set_ylabel("Y [arcsec]")
+        if ax is axI:
+            ax.set_ylabel("Y [arcsec]")
         ax.set_xlim(extent[0], extent[1])
         ax.set_ylim(extent[2], extent[3])
         interval = 15.0
@@ -783,59 +795,329 @@ def plot_maps(
     _format(axI)
     _format(axV)
 
-    for idx, color in zip([idx_sim_minus, idx_sim_mean, idx_sim_plus], key_pixel_colors):
+    markers = ["2", "3", "1"]
+    labels = [r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"]
+
+    # for idx, color, marker in zip(
+    for idx, color, marker, label in zip(
+        # [idx_sim_minus, idx_sim_mean, idx_sim_plus],
+        list(reversed([idx_sim_minus, idx_sim_mean, idx_sim_plus])),
+        key_pixel_colors,
+        markers,
+        # labels
+        # list(reversed(key_pixel_colors)),  # reverse this order (for some reason...)
+        # list(reversed(markers)),
+        list(reversed(labels))
+    ):
         if idx is not None:
             x_pos = (idx[0] - n_scan // 2) * x_pix_size
             y_pos = (idx[1] - n_slit // 2) * y_pix_size
             for ax in (axI, axV):
-                ax.plot(x_pos, y_pos, marker="o", color=color, markersize=8, fillstyle="none", lw=2)
+                ax.scatter(x_pos, y_pos, marker=marker, color=color, s=250, linewidth=2, label=label)
 
-    # if save_data_path:
-    #     save_maps(save_data_path, log_si, v_map, x_pix_size, y_pix_size)
-
-    # if previous:
-    #     log_si_p = previous["log_si"]
-    #     v_map_p = previous["v_map"]
-    #     x_pix_prev = previous["x_pix_size"]
-    #     y_pix_prev = previous["y_pix_size"]
-    #     n_scan_p, n_slit_p = log_si_p.shape
-    #     x_p = (np.arange(n_scan_p) - n_scan_p // 2) * x_pix_prev
-    #     y_p = (np.arange(n_slit_p) - n_slit_p // 2) * y_pix_prev
-    #     extent_p = [
-    #         x_p[0] - x_pix_prev / 2,
-    #         x_p[-1] + x_pix_prev / 2,
-    #         y_p[0] - y_pix_prev / 2,
-    #         y_p[-1] + y_pix_prev / 2,
-    #     ]
-
-    #     axI2, axV2 = axes[1]
-    #     imI2 = axI2.imshow(log_si_p.T, origin="lower", aspect="auto", cmap="afmhot", vmin=0, extent=extent_p)
-    #     imV2 = axV2.imshow(v_map_p.T, origin="lower", aspect="auto", cmap="RdBu_r", vmin=-15, vmax=15, extent=extent_p)
-    #     fig.colorbar(imI2, ax=axI2, orientation="horizontal", pad=0.1)
-    #     fig.colorbar(imV2, ax=axV2, orientation="horizontal", pad=0.1)
-
-    #     def _format_prev(ax):
-    #         ax.set_xlabel("X [arcsec]")
-    #         ax.set_ylabel("Y [arcsec]")
-    #         ax.set_xlim(extent_p[0], extent_p[1])
-    #         ax.set_ylim(extent_p[2], extent_p[3])
-    #         interval = 15.0
-    #         max_x = max(abs(extent_p[0]), abs(extent_p[1]))
-    #         max_y = max(abs(extent_p[2]), abs(extent_p[3]))
-    #         xticks = np.arange(-np.ceil(max_x / interval) * interval, np.ceil(max_x / interval) * interval + interval / 2, interval)
-    #         yticks = np.arange(-np.ceil(max_y / interval) * interval, np.ceil(max_y / interval) * interval + interval / 2, interval)
-    #         xticks = xticks[(xticks >= extent_p[0]) & (xticks <= extent_p[1])]
-    #         yticks = yticks[(yticks >= extent_p[2]) & (yticks <= extent_p[3])]
-    #         ax.set_xticks(xticks)
-    #         ax.set_yticks(yticks)
-    #         ax.set_aspect(1.0)
-    #         ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
-
-    #     _format_prev(axI2)
-    #     _format_prev(axV2)
+    axV.legend(
+        loc="upper right",
+        fontsize="small")
 
     plt.tight_layout()
-    plt.savefig(save, dpi=300)
+    plt.savefig(save, dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_exposure_time_map(
+    analysis_per_exp: dict[float, dict],
+    precision_requirement: float,
+    x_pix_size: float,
+    y_pix_size: float,
+    save: str,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> None:
+    """
+    Plot a map showing the minimum exposure time required to achieve the given Doppler velocity precision.
+
+    Parameters
+    ----------
+    analysis_per_exp : dict[float, dict]
+        Dictionary mapping exposure times (seconds) to analysis results (containing 'v_std' maps).
+    precision_requirement : float
+        Required velocity precision in km/s.
+    x_pix_size : float
+        Pixel size in X-direction (arcsec).
+    y_pix_size : float
+        Pixel size in Y-direction (arcsec).
+    save : str
+        Filename to save the plot.
+    cmap : str, optional
+        Colormap for the plot.
+    vmin, vmax : float, optional
+        Min/max values for colorbar scale.
+    """
+    exp_times_sorted = sorted(analysis_per_exp.keys())
+    shape = next(iter(analysis_per_exp.values()))["v_std"].shape
+    exp_time_map = np.full(shape, np.nan)
+
+    for exp_time in exp_times_sorted:
+        v_std_map = analysis_per_exp[exp_time]["v_std"].to(u.km / u.s).value
+        mask = (v_std_map <= precision_requirement) & np.isnan(exp_time_map)
+        exp_time_map[mask] = exp_time
+
+    n_scan, n_slit = exp_time_map.shape
+    x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
+    y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
+    extent = [x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2, y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(exp_time_map.T, origin="lower", aspect="auto", extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", pad=0.1, shrink=0.95, aspect=35)
+    cbar.set_label("Exposure time [s] to reach {:.1f} km/s precision".format(precision_requirement))
+
+    ax.set_xlabel("X [arcsec]")
+    ax.set_ylabel("Y [arcsec]")
+    ax.set_aspect(1.0)
+    ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_velocity_maps(
+    v_map: u.Quantity,
+    v_std_map: u.Quantity,
+    save: str,
+    x_pix_size: float,
+    y_pix_size: float,
+    key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    idx_minus: Tuple[int, int] | None = None,
+    idx_mean: Tuple[int, int] | None = None,
+    idx_plus: Tuple[int, int] | None = None,
+    vmin: float = -15,
+    vmax: float = 15,
+    std_vmax: float = 5,
+) -> None:
+    n_scan, n_slit = v_map.shape
+    x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
+    y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
+    extent = [x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2, y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2]
+
+    fig, (axV, axStd) = plt.subplots(1, 2, figsize=(11, 5), gridspec_kw=dict(wspace=0.0, hspace=0.0), sharey=True)
+
+    # Doppler velocity map (left panel)
+    imV = axV.imshow(v_map.T.to(u.km / u.s).value, origin="lower", aspect="auto",
+                     cmap="RdBu_r", vmin=vmin, vmax=vmax, extent=extent)
+    cbarV = fig.colorbar(imV, ax=axV, orientation="horizontal", pad=0.14, extend="both", shrink=0.95, aspect=35)
+    cbarV.set_label(r"$v$ [km/s]")
+
+    # Velocity standard deviation map (right panel)
+    imStd = axStd.imshow(v_std_map.T.to(u.km / u.s).value, origin="lower", aspect="auto",
+                         cmap="magma", vmin=0, vmax=std_vmax, extent=extent)
+    cbarStd = fig.colorbar(imStd, ax=axStd, orientation="horizontal", pad=0.14, shrink=0.95, aspect=35, extend="max")
+    cbarStd.set_label(r"$\sigma_v$ [km/s]")
+
+    # Formatting
+    for ax in [axV, axStd]:
+        ax.set_xlabel("X [arcsec]")
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+        ax.set_aspect(1.0)
+        ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+
+        interval = 15.0
+        max_x = max(abs(extent[0]), abs(extent[1]))
+        max_y = max(abs(extent[2]), abs(extent[3]))
+        xticks = np.arange(-np.ceil(max_x / interval) * interval, np.ceil(max_x / interval) * interval + interval / 2, interval)
+        yticks = np.arange(-np.ceil(max_y / interval) * interval, np.ceil(max_y / interval) * interval + interval / 2, interval)
+        xticks = xticks[(xticks >= extent[0]) & (xticks <= extent[1])]
+        yticks = yticks[(yticks >= extent[2]) & (yticks <= extent[3])]
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
+
+    axV.set_ylabel("Y [arcsec]")
+
+    # # Markers for key pixels
+    # markers = ["2", "3", "1"]
+    # labels = [r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"]
+    # for idx, color, marker, label in zip(
+    #     [idx_minus, idx_mean, idx_plus],
+    #     key_pixel_colors,
+    #     markers,
+    #     labels
+    # ):
+    #     if idx is not None:
+    #         x_pos = (idx[0] - n_scan // 2) * x_pix_size
+    #         y_pos = (idx[1] - n_slit // 2) * y_pix_size
+    #         for ax in (axV, axStd):
+    #             ax.scatter(x_pos, y_pos, marker=marker, color=color, s=250, linewidth=2, label=label)
+
+    # axStd.legend(loc="upper right", fontsize="small")
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_multi_maps(
+    npz_files: list[str | Path],
+    map_type: str = "intensity",                    # "intensity" | "velocity"
+    *,
+    key_pixel_colors: Iterable[str] = ("mediumseagreen", "black", "deeppink"),
+    markers: list[str] = ("2", "3", "1"),
+    labels: list[str]  = (r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"),
+    save: str = "fig_multi_maps.png",
+    figsize: tuple = (10, 6.75),
+):
+    """
+    Stack several intensity / velocity maps vertically.
+
+    If `map_type == "intensity"` the quantity shown is the *integrated photon
+    count per CCD row* (Σ_λ ph pix⁻¹ s⁻¹) exactly like in `plot_maps`, not the
+    specific intensity.
+    """
+    # ------------------------------------------------------------------
+    # ---- load maps + ancillary info ----------------------------------
+    maps, dxs, dys, idxs_list = [], [], [], []
+    for npz_file in npz_files:
+        dat = np.load(npz_file, allow_pickle=True)
+
+        # ---- map -----------------------------------------------------
+        if map_type == "intensity":
+            # Prefer integrated photon map derived from first_signals[4]
+            if "first_signals" in dat.files:
+                photon_cube = dat["first_signals"][4]          # signal4
+                if isinstance(photon_cube, np.ndarray):
+                    m = photon_cube.sum(axis=2)                       # ph  pix⁻¹ s⁻¹
+                else:                                                 # Quantity
+                    m = photon_cube.sum(axis=2).value
+            elif "si_map" in dat:
+                m = dat["si_map"]                                     # fallback
+            elif "log_si" in dat:
+                m = 10 ** dat["log_si"]
+            else:
+                raise ValueError(f"no suitable intensity map in {npz_file}")
+        elif map_type == "velocity":
+            if "analysis_res" in dat:
+                m = dat["analysis_res"].item()["v_mean"].to_value(u.km / u.s)
+            elif "v_map" in dat:
+                m = dat["v_map"]
+            else:
+                raise ValueError(f"no velocity map in {npz_file}")
+        else:
+            raise ValueError("map_type must be 'intensity' or 'velocity'")
+        maps.append(m)
+
+        # ---- pixel sizes --------------------------------------------
+        if {"x_pix_size", "y_pix_size"} <= set(dat.files):
+            dxs.append(float(dat["x_pix_size"]))
+            dys.append(float(dat["y_pix_size"]))
+        else:
+            sim = dat["SIM"].item()
+            det = dat["DET"].item()
+            dxs.append(sim.slit_scan_step.to_value(u.arcsec))
+            dys.append(det.plate_scale_angle.to_value(u.arcsec / u.pix))
+
+        # ---- key-pixel indices --------------------------------------
+        idxs: list[tuple[int, int] | None] = [None, None, None]
+        if "plotting" in dat.files:
+            plotting = dat["plotting"].item()
+            for n, k in enumerate(("minus_idx", "mean_idx", "plus_idx")):
+                if plotting.get(k) is not None:
+                    idxs[n] = tuple(plotting[k])
+        idxs_list.append(idxs)
+
+    # ------------------------------------------------------------------
+    # ---- figure + adaptive GridSpec ----------------------------------
+    nrows   = len(maps)
+    heights = [m.shape[1] * dy for m, dy in zip(maps, dys)]
+    fig     = plt.figure(figsize=figsize)
+    gs      = fig.add_gridspec(nrows, 1, height_ratios=heights, hspace=0.0)
+    axes    = [fig.add_subplot(gs[i, 0]) for i in range(nrows)]
+
+    # ------------------------------------------------------------------
+    # ---- global X-extent (shared across rows) ------------------------
+    xmins, xmaxs = [], []
+    for m, dx in zip(maps, dxs):
+        n_scan = m.shape[0]
+        x      = (np.arange(n_scan) - n_scan // 2) * dx
+        xmins.append(x[0] - dx / 2)
+        xmaxs.append(x[-1] + dx / 2)
+    xlim = (min(xmins), max(xmaxs))
+
+    # ------------------------------------------------------------------
+    # ---- plot each map ----------------------------------------------
+    for ax, m, dx, dy, idxs in zip(axes, maps, dxs, dys, idxs_list):
+        n_scan, n_slit = m.shape
+        x = (np.arange(n_scan) - n_scan // 2) * dx
+        y = (np.arange(n_slit) - n_slit // 2) * dy
+        extent = [x[0] - dx / 2, x[-1] + dx / 2, y[0] - dy / 2, y[-1] + dy / 2]
+
+        # ---- data + colour scaling ----------------------------------
+        if map_type == "intensity":
+            data = np.log10(m, out=np.zeros_like(m), where=m > 0)
+            vmin, vmax = np.nanmin(data), np.nanmax(data)
+            cmap       = "afmhot"
+            cbar_label = r"$\log_{10}\!\left(\sum_{\lambda\,\mathrm{pix}}I(\lambda)\:\mathrm{ }\left[\mathrm{ph/s/pix}\right]\right)$"
+        else:  # velocity
+            data = m
+            vmax = np.nanmax(np.abs(data))
+            vmin = -vmax
+            cmap = "RdBu_r"
+            cbar_label = r"$v$ [km/s]"
+
+        im = ax.imshow(
+            data.T,
+            origin="lower",
+            aspect="auto",
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            extent=extent,
+        )
+
+        # ---- ticks / labels ----------------------------------------
+        ax.set_xlim(*xlim)
+        ax.set_aspect(1)
+        ax.tick_params(direction="in", which="both", top=True, right=True)
+
+        # ---- markers -----------------------------------------------
+        for idx, color, marker, lab in zip(
+            reversed(idxs),
+            key_pixel_colors,
+            markers,
+            reversed(labels),
+        ):
+            if idx is None:
+                continue
+            # ax.scatter(
+            #     (idx[0] - n_scan // 2) * dx,
+            #     (idx[1] - n_slit // 2) * dy,
+            #     marker=marker,
+            #     color=color,
+            #     s=230,
+            #     lw=2,
+            #     label=lab,
+            # )
+        # place legend only on the bottom row, lower-right corner
+        # if ax is axes[-1]:
+        #     ax.legend(loc="lower right", fontsize="small")
+
+        # ---- individual colour-bar ---------------------------------
+        cbar = fig.colorbar(
+            im,
+            ax=ax,
+            orientation="vertical",
+            pad=0.04,
+            shrink=0.92,
+            aspect=20,
+        )
+        cbar.set_label(cbar_label)
+
+    axes[-1].set_xlabel("X [arcsec]")
+    for ax in axes:
+        ax.set_ylabel("Y [arcsec]")
+
+    plt.savefig(save, dpi=600, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -855,7 +1137,7 @@ def plot_velocity_std_map(
     extent = [x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2, y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2]
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    im = ax.imshow(v_std_map.T.to(u.km / u.s).value, origin="lower", aspect="auto", extent=extent, cmap="magma")
+    im = ax.imshow(v_std_map.T.to(u.km / u.s).value, origin="lower", aspect="auto", extent=extent, cmap="magma", vmin=0, vmax=5)
     cbar = fig.colorbar(im, ax=ax, orientation="horizontal", pad=0.1)
     cbar.set_label(r"$\sigma_v$ [km/s]")
 
@@ -894,28 +1176,272 @@ def plot_intensity_vs_vstd(
     intensity: np.ndarray,
     v_std: u.Quantity,
     save: str,
+    *,                           # keep new kw-only args after here
+    fit_intensity_min: float | None = None,
+    vstd_max: float | None = None,                 # NEW: upper σ_v cut-off (km/s)
 ) -> None:
+    """
+    Scatter of per-pixel intensity versus 1-σ velocity uncertainty plus two
+    log–log linear fits.  A pop-up window lets the user click two points;
+    a power-law (straight in log-log space) passing through them is added
+    to the main plot.
+
+    Parameters
+    ----------
+    intensity : ndarray
+        Σ_λ photon count per CCD pixel [ph s⁻¹ pix⁻¹].
+    v_std : Quantity
+        Velocity standard-deviation map [km s⁻¹].
+    save : str
+        Output filename.
+    fit_intensity_min : float, optional
+        Ignore pixels with intensity < this value when fitting.
+    vstd_max : float, optional
+        Ignore pixels with σ_v > this value (km s⁻¹) in both scatter and fits.
+    """
     inten = intensity.ravel()
-    vstd = v_std.to(u.km / u.s).value.ravel()
-    mask = (inten > 0) & (vstd > 0)
-    inten = inten[mask]
-    vstd = vstd[mask]
-    log_i = np.log10(inten)
-    log_v = np.log10(vstd)
-    coeff = np.polyfit(log_i, log_v, 1)
-    fit_x = np.linspace(log_i.min(), log_i.max(), 100)
+    vstd  = v_std.to(u.km / u.s).value.ravel()
+
+    # ------------------------------------------------------------------
+    # ---- basic masks --------------------------------------------------
+    valid_scatter = (inten > 0) & (vstd > 0)
+    if vstd_max is not None:                          #  ← NEW
+        valid_scatter &= (vstd <= vstd_max)
+
+    if fit_intensity_min is not None:
+        valid_fit = valid_scatter & (inten >= fit_intensity_min)
+    else:
+        valid_fit = valid_scatter
+
+    # ------------------------------------------------------------------
+    # ---- log-space arrays --------------------------------------------
+    log_i_all = np.log10(inten[valid_scatter])
+    log_v_all = np.log10(vstd [valid_scatter])
+
+    log_i_fit = np.log10(inten[valid_fit])
+    log_v_fit = np.log10(vstd [valid_fit])
+
+    # ------------------------------------------------------------------
+    # ---- global linear fit (log–log) ---------------------------------
+    coeff = np.polyfit(log_i_fit, log_v_fit, 1)
+    fit_x = np.linspace(log_i_fit.min(), log_i_fit.max(), 100)
     fit_y = coeff[0] * fit_x + coeff[1]
 
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.scatter(inten, vstd, s=4, color="tab:blue", alpha=0.6)
-    ax.plot(10 ** fit_x, 10 ** fit_y, color="red")
+    # ------------------------------------------------------------------
+    # ---- ridge (upper envelope) fit ----------------------------------
+    nbins = 25
+    bins  = np.linspace(log_i_fit.min(), log_i_fit.max(), nbins + 1)
+    bin_cent  = 0.5 * (bins[:-1] + bins[1:])
+    max_log_v = np.full(nbins, np.nan)
+    for k in range(nbins):
+        m = (log_i_fit >= bins[k]) & (log_i_fit < bins[k + 1])
+        if np.any(m):
+            max_log_v[k] = log_v_fit[m].max()
+    valid_bin   = ~np.isnan(max_log_v)
+    ridge_coeff = np.polyfit(bin_cent[valid_bin], max_log_v[valid_bin], 1)
+    ridge_y     = ridge_coeff[0] * fit_x + ridge_coeff[1]
+
+    # ------------------------------------------------------------------
+    # ---- main figure --------------------------------------------------
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.scatter(inten[valid_scatter], vstd[valid_scatter],
+               s=1, color="black", alpha=1)
+    # ax.plot(10 ** fit_x, 10 ** fit_y,
+    #         color="red", label="global fit")
+    # ax.plot(10 ** fit_x, 10 ** ridge_y,
+    #         color="limegreen", ls="--", lw=1.5, label="ridge fit")
+
+    # ------------------------------------------------------------------
+    # # ---- optional vertical / horizontal threshold lines --------------
+    # if fit_intensity_min is not None:
+    #     ax.axvline(fit_intensity_min, color="grey", ls=":", lw=1)
+    # if vstd_max is not None:                          #  ← NEW
+    #     ax.axhline(vstd_max, color="grey", ls=":", lw=1)
+
+    # ------------------------------------------------------------------
+    # ---- pop-up for manual two-point power-law -----------------------
+    try:
+        if matplotlib.get_backend().lower() not in {
+            "agg", "module://matplotlib_inline.backend_inline"
+        }:
+            pop_fig, pop_ax = plt.subplots()
+            pop_ax.scatter(inten[valid_scatter], vstd[valid_scatter],
+                           s=4, color="tab:blue", alpha=0.6)
+            pop_ax.set_xscale("log")
+            pop_ax.set_yscale("log")
+            pop_ax.set_xlabel("Intensity")
+            pop_ax.set_ylabel(r"$\sigma_v$ [km/s]")
+            pop_ax.set_title("Click two points to define a power-law")
+            pop_ax.tick_params(direction="in", which="both",
+                               top=True, right=True)
+
+            plt.show(block=False)
+            pts = np.array(pop_fig.ginput(2, timeout=-1))
+            plt.close(pop_fig)
+
+            if pts.shape == (2, 2):
+                (x1, y1), (x2, y2) = pts
+                if x1 > 0 and x2 > 0 and y1 > 0 and y2 > 0:
+                    m = (np.log10(y2) - np.log10(y1)) / (np.log10(x2) - np.log10(x1))
+                    c = np.log10(y1) - m * np.log10(x1)
+
+                    x_line = np.logspace(np.log10(inten[valid_scatter].min()),
+                                         np.log10(inten[valid_scatter].max()), 200)
+                    y_line = 10 ** (m * np.log10(x_line) + c)
+
+                    label = rf"Ridge fit: $y = {10**c:.2g}\,x^{{{m:.2g}}}$"
+                    ax.plot(x_line, y_line, color="purple", lw=1.4, label=label)
+    except Exception as exc:
+        warnings.warn(f"Interactive line selection skipped ({exc})")
+
+    # ------------------------------------------------------------------
+    # ---- final cosmetics & save --------------------------------------
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Intensity")
+    # ax.set_xlabel("Intensity")
+    ax.set_xlabel(r"Intensity [erg/s/cm$^2$/sr]")
     ax.set_ylabel(r"$\sigma_v$ [km/s]")
-    ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+    ax.legend(fontsize="small")
+    ax.tick_params(direction="in", which="both", top=True, bottom=True,
+                   left=True, right=True)
+
     plt.tight_layout(pad=0.1)
     plt.savefig(save, dpi=300)
+    plt.close(fig)
+
+def plot_spectra(
+    dn_cube: u.Quantity,
+    wl_axis: u.Quantity,
+    idx_sim_minus: Tuple[int, int] | None,
+    idx_sim_mean: Tuple[int, int] | None,
+    idx_sim_plus: Tuple[int, int] | None,
+    wl0: u.Quantity,
+    *,                                       # keep following args keyword-only
+    fit_cube: u.Quantity | np.ndarray,
+    sigma_factor: float = 1.0,
+    key_pixel_colors: Tuple[str, str, str] = ("deeppink", "black", "mediumseagreen"),
+    save: str = "fig_spectra_dn.png",
+    figsize: Tuple[float, float] = (6, 9.5),
+) -> None:
+    """
+    Vertical layout (+1 σ at top, mean centre, −1 σ bottom) with a shared
+    wavelength axis (bottom) and a shared velocity axis (top).  Each panel has
+    an independent y-axis.  No vertical gaps between panels.
+    """
+    # ------------------------------------------------------------------
+    # ---- handy converters --------------------------------------------
+    wl_A  = wl_axis.to(u.angstrom).value
+    wl0_A = wl0.to(u.angstrom).value
+    c_kms = const.c.to_value(u.km / u.s)
+    wl2v  = lambda wl: (wl - wl0_A) / wl0_A * c_kms
+    v2wl  = lambda v: wl0_A * (1 + v / c_kms)
+
+    # ------------------------------------------------------------------
+    # ---- ordering:  +σ,  μ,  −σ --------------------------------------
+    idxs   = [idx_sim_plus, idx_sim_mean, idx_sim_minus]
+    titles = [
+        rf"$\mu + {sigma_factor:.0f}\sigma$",
+        r"$\mu$",
+        rf"$\mu - {sigma_factor:.0f}\sigma$",
+    ]
+
+    # ------------------------------------------------------------------
+    # ---- create stacked axes via GridSpec ----------------------------
+    fig = plt.figure(figsize=figsize)
+    gs  = fig.add_gridspec(nrows=3, ncols=1, hspace=0.0)
+    axes = gs.subplots(sharex=True)
+
+    # ------------------------------------------------------------------
+    # ---- x-axis limits & tick locations ------------------------------
+    v_lim        = (-250, 250)                               # km s⁻¹
+    wl_lim_A     = v2wl(np.array(v_lim))
+    v_ticks      = np.arange(-200, 201, 100)                 # every 100 km s⁻¹
+    wl_tick_A    = v2wl(v_ticks)
+
+    # ------------------------------------------------------------------
+    # ---- loop over the three panels ----------------------------------
+    first_secax: plt.Axes | None = None
+    for ax, idx, title, color in zip(axes, idxs, titles, key_pixel_colors):
+        if idx is None:
+            ax.set_visible(False)
+            continue
+
+        # -------- observed spectrum -----------------------------------
+        sel   = dn_cube[idx + (slice(None),)]
+        spec  = sel.value if isinstance(sel, u.Quantity) else sel
+        ax.step(wl_A, spec, where="mid", color=color, lw=1.5, zorder=2)
+
+        # -------- fitted Gaussian ------------------------------------
+        p = fit_cube[idx + (slice(None),)]
+        if np.all(p != -1):
+            peak, centre, sigma, back = (p[k].value for k in range(4))
+            wl_hi = np.linspace(wl_axis.cgs.value.min(),
+                                wl_axis.cgs.value.max(),
+                                wl_axis.size * 10)           # ×10 sampling
+            gauss = gaussian(wl_hi, peak, centre, sigma, back)
+            ax.plot((wl_hi * u.cm).to_value(u.angstrom),
+                    gauss, ls="--", color=color, lw=1.0, zorder=1)
+
+        # -------- set y-axis lower limit to 0 -------------------------
+        ax.set_ylim(bottom=0)
+
+        # -------- cosmetics ------------------------------------------
+        ax.set_ylabel("DN/pix")
+        ax.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
+        ax.grid(ls=":", alpha=0.5)
+
+        # ticks on all four sides, pointing inwards
+        ax.tick_params(direction="in", which="both", top=True, right=True)
+
+        # -------------- velocity axis (top) --------------------------
+        secax = ax.secondary_xaxis("top", functions=(wl2v, v2wl))
+        secax.set_xlim(*v_lim)
+        secax.set_xticks(v_ticks)
+        secax.tick_params(direction="in", which="both", top=True)
+
+        if first_secax is None:
+            # first visible panel → keep labels
+            # secax.set_xlabel("Velocity [km/s]")
+            secax.set_xlabel("Velocity (Fe XII 195.119 Å) [km/s]")
+            first_secax = secax
+        else:
+            # other panels: keep ticks but drop labels
+            secax.set_xlabel("")
+            secax.set_xticklabels([])
+
+        # ------------------------------------------------------------------
+        # Right-side “σ-label” styled like a y-axis label
+        # ------------------------------------------------------------------
+        ax.annotate(
+            title,
+            xy=(1.02, 0.5), xycoords=("axes fraction", "axes fraction"),
+            rotation=90,
+            ha="left", va="center",
+            fontsize=ax.yaxis.label.get_size(),
+        )
+
+    # ------------------------------------------------------------------
+    # ---- move scientific-notation offset to the y-label --------------
+    fig.canvas.draw()  # populate offset texts
+    for ax in axes:
+        if not ax.get_visible():
+            continue
+        off_txt = ax.yaxis.get_offset_text().get_text()
+        if off_txt:                                      # e.g. '1e3'
+            exponent = off_txt.replace("1e", "")
+            ax.yaxis.get_offset_text().set_visible(False)
+            ax.set_ylabel(fr"Intensity [$10^{{{exponent}}}$ DN/pix]")
+
+    # ------------------------------------------------------------------
+    # ---- shared X-axis (bottom wavelength axis) ----------------------
+    axes[-1].set_xlabel("Wavelength [Å]")
+    axes[-1].set_xlim(*wl_lim_A)
+    axes[-1].set_xticks(wl_tick_A)
+    axes[-1].set_xticklabels([f"{w:.3f}" for w in wl_tick_A])
+    axes[-1].tick_params(direction="in", which="both", top=True, right=True)
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -968,62 +1494,122 @@ def main() -> None:
         first_signal_per_exp[sec] = signals[0]          # tuple of 8 stages
         first_fit_per_exp[sec]    = fits[0]
         analysis_per_exp[sec]     = analyse(fits, v_true, wl0)
-        si_map_per_exp[sec]       = signals[0][-1].sum(axis=2)
         del signals, fits
 
-    # globals().update(locals());raise ValueError("Kicking back to ipython")
+    output_file = "instr_modelling.pkl"
+    globals().update(locals())
+    dill.dump_session(output_file)
+    print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
     # ---------------------------  Post-processing plots  ---------------------------
-    print("Post-processing results...")
-    for t_exp in SIM.expos:
-        sec = t_exp.to_value(u.s)
-        first_signals = first_signal_per_exp[sec]
-        first_fits    = first_fit_per_exp[sec]
-        analysis_res  = analysis_per_exp[sec]
-        si_map        = si_map_per_exp[sec]
+    # print("Post-processing results...")
+    # for t_exp in SIM.expos:
+    #     sec = t_exp.to_value(u.s)
+    #     first_signals = first_signal_per_exp[sec]
+    #     first_fits    = first_fit_per_exp[sec]
+    #     analysis_res  = analysis_per_exp[sec]
 
-        plot_maps(
-            cube_reb,
-            first_fits,
-            wl_axis,
-            wl0,
-            plotting["minus_idx"],
-            plotting["mean_idx"],
-            plotting["plus_idx"],
-            photon_cube=first_signals[4],
-            save=f"fig_maps_{sec}.png",
-            previous=prev_maps,
-            save_data_path=save_maps_path,
-        )
+    #     ts   = datetime.now().strftime("%y%m%d_%H%M")
+    #     path = f"{ts}_exp{sec:.1f}.npz"
+    #     np.savez(
+    #         path,
+    #         first_signals=first_signals,
+    #         first_fits=first_fits,
+    #         analysis_res=analysis_res,
+    #         TEL=TEL,
+    #         DET=DET,
+    #         SIM=SIM,
+    #         plotting=plotting,
+    #     )
+    #     print(f"Saved data for exposure {sec} s to {path}")
 
-        plot_radiometric_pipeline(
-            signals=first_signals,
-            wl_axis=wl_axis,
-            idx_sim_minus=plotting["minus_idx"],
-            idx_sim_mean=plotting["mean_idx"],
-            idx_sim_plus=plotting["plus_idx"],
-            spt_pitch_sim=spt_sim,
-            spt_pitch_instr=DET.plate_scale_length,
-            save=f"fig_radiometric_pipeline_{sec}.png",
-        )
+    #     globals().update(locals());raise ValueError("Kicking back to ipython")
 
-        plot_velocity_std_map(
-            v_std_map=analysis_res["v_std"],
-            save=f"fig_vstd_{sec}.png",
-            x_pix_size=SIM.slit_scan_step.to(u.arcsec).value,
-            y_pix_size=DET.plate_scale_angle.to(u.arcsec / u.pix).value,
-            idx_minus=plotting["minus_idx"],
-            idx_mean=plotting["mean_idx"],
-            idx_plus=plotting["plus_idx"],
-        )
+    #     plot_maps(
+    #         cube_reb,
+    #         first_fits,
+    #         wl_axis,
+    #         wl0,
+    #         plotting["minus_idx"],
+    #         plotting["mean_idx"],
+    #         plotting["plus_idx"],
+    #         photon_cube=first_signals[4],
+    #         save=f"fig_maps_{sec}.png",
+    #         previous=prev_maps,
+    #         save_data_path=save_maps_path,
+    #     )
 
-        plot_intensity_vs_vstd(
-            intensity=si_map,                      # photons per CCD row
-            v_std=analysis_res["v_std"],
-            save=f"fig_int_vs_vstd_{sec}.png",
-        )
+    #     plot_radiometric_pipeline(
+    #         signals=first_signals,
+    #         wl_axis=wl_axis,
+    #         idx_sim_minus=plotting["minus_idx"],
+    #         idx_sim_mean=plotting["mean_idx"],
+    #         idx_sim_plus=plotting["plus_idx"],
+    #         spt_pitch_sim=spt_sim,
+    #         spt_pitch_instr=DET.plate_scale_length,
+    #         save=f"fig_radiometric_pipeline_{sec}.png",
+    #     )
 
-    print("Done.")
+    #     plot_velocity_std_map(
+    #         v_std_map=analysis_res["v_std"],
+    #         save=f"fig_vstd_{sec}.png",
+    #         x_pix_size=SIM.slit_scan_step.to(u.arcsec).value,
+    #         y_pix_size=DET.plate_scale_angle.to(u.arcsec / u.pix).value,
+    #         idx_minus=plotting["minus_idx"],
+    #         idx_mean=plotting["mean_idx"],
+    #         idx_plus=plotting["plus_idx"],
+    #     )
+
+    #     plot_intensity_vs_vstd(
+    #         intensity=first_signals[0].sum(axis=2) * (wl_axis[1] - wl_axis[0]).cgs.value,
+    #         v_std=analysis_res["v_std"],
+    #         save=f"fig_int_vs_vstd_{sec}.png",
+    #         vstd_max=1e9,
+    #     )
+
+    #     plot_spectra(
+    #         dn_cube=first_signals[7],
+    #         wl_axis=wl_axis,
+    #         idx_sim_minus=plotting["minus_idx"],
+    #         idx_sim_mean=plotting["mean_idx"],
+    #         idx_sim_plus=plotting["plus_idx"],
+    #         wl0=wl0,
+    #         fit_cube=first_fits,                 # <-- new argument
+    #         sigma_factor=plotting["sigma_factor"],
+    #         key_pixel_colors=("mediumseagreen", "black", "deeppink"),
+    #         save=f"fig_spectra_dn_{sec}.png",
+    #     )
+
+    #     plot_velocity_maps(
+    #         analysis_res["v_mean"],
+    #         analysis_res["v_std"],
+    #         save=f"fig_velocity_maps_{sec}.png",
+    #         x_pix_size=SIM.slit_scan_step.to_value(u.arcsec),
+    #         y_pix_size=DET.plate_scale_angle.to_value(u.arcsec / u.pix),
+    #         idx_minus=plotting["minus_idx"],
+    #         idx_mean=plotting["mean_idx"],
+    #         idx_plus=plotting["plus_idx"],
+    #     )
+
+    plot_exposure_time_map(
+        analysis_per_exp=analysis_per_exp,
+        precision_requirement=2.0,  # km/s
+        x_pix_size=SIM.slit_scan_step.to_value(u.arcsec),
+        y_pix_size=DET.plate_scale_angle.to_value(u.arcsec / u.pix),
+        save="fig_exposure_time_map.png",
+        cmap="viridis",
+    )
+
+    # npz_files = [
+    #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/eis_250618_2009_exp20.0.npz",
+    #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/euvst_250618_2015_exp20.0.npz"
+    # ]
+    # plot_multi_maps(
+    #     [str(f) for f in npz_files],
+    #     map_type="intensity",
+    #     save="fig_multi_intensity.png",
+    #     figsize=(8, 5.5),
+    # )
 
 if __name__ == "__main__":
     main()
