@@ -31,6 +31,7 @@ from matplotlib.legend_handler import HandlerBase
 import matplotlib
 import dill
 import os
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
 # -----------------------------------------------------------------------------
 # Configuration objects
@@ -80,8 +81,8 @@ class Telescope:
 
 @dataclass
 class Simulation:
-    expos: u.Quantity = u.Quantity([20], u.s)
-    n_iter: int = 2
+    expos: u.Quantity = u.Quantity([0.5, 1, 2, 5, 10, 20, 40, 80], u.s)
+    n_iter: int = 50
     vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
     slit_width: u.Quantity = 0.2 * u.arcsec  # EUVST 0.2" slit
     slit_scan_step: u.Quantity = 0.2 * u.arcsec
@@ -831,52 +832,84 @@ def plot_exposure_time_map(
     y_pix_size: float,
     save: str,
     cmap: str = "viridis",
-    vmin: float | None = None,
-    vmax: float | None = None,
 ) -> None:
     """
-    Plot a map showing the minimum exposure time required to achieve the given Doppler velocity precision.
+    Draw a *discrete* map showing the minimum exposure time that fulfils the
+    requested Doppler-velocity precision.
 
-    Parameters
-    ----------
-    analysis_per_exp : dict[float, dict]
-        Dictionary mapping exposure times (seconds) to analysis results (containing 'v_std' maps).
-    precision_requirement : float
-        Required velocity precision in km/s.
-    x_pix_size : float
-        Pixel size in X-direction (arcsec).
-    y_pix_size : float
-        Pixel size in Y-direction (arcsec).
-    save : str
-        Filename to save the plot.
-    cmap : str, optional
-        Colormap for the plot.
-    vmin, vmax : float, optional
-        Min/max values for colorbar scale.
+    Pixels that never reach the required precision remain white.  
+    The colour-bar’s “extend-max” triangle is also painted white so it is
+    visually associated with those pixels.
     """
-    exp_times_sorted = sorted(analysis_per_exp.keys())
-    shape = next(iter(analysis_per_exp.values()))["v_std"].shape
-    exp_time_map = np.full(shape, np.nan)
+    # ------------------------------------------------------------------
+    # ---- build per-pixel “best exposure” map (in *index* space) -------
+    # ------------------------------------------------------------------
+    exp_times_sorted = sorted(analysis_per_exp.keys())          # e.g. [0.5, 1, 2 …]
+    n_levels         = len(exp_times_sorted)
 
-    for exp_time in exp_times_sorted:
-        v_std_map = analysis_per_exp[exp_time]["v_std"].to(u.km / u.s).value
-        mask = (v_std_map <= precision_requirement) & np.isnan(exp_time_map)
-        exp_time_map[mask] = exp_time
+    shape   = next(iter(analysis_per_exp.values()))["v_std"].shape
+    idx_map = np.full(shape, np.nan)                           # pixel → exp-index
 
-    n_scan, n_slit = exp_time_map.shape
+    for idx, exp_time in enumerate(exp_times_sorted):
+        v_std_map = analysis_per_exp[exp_time]["v_std"].to_value(u.km / u.s)
+        mask      = (v_std_map <= precision_requirement) & np.isnan(idx_map)
+        idx_map[mask] = idx                                       # store index
+
+    # ------------------------------------------------------------------
+    # ---- spatial coordinates -----------------------------------------
+    n_scan, n_slit = idx_map.shape
     x = (np.arange(n_scan) - n_scan // 2) * x_pix_size
     y = (np.arange(n_slit) - n_slit // 2) * y_pix_size
-    extent = [x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2, y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2]
+    extent = [
+        x[0] - x_pix_size / 2, x[-1] + x_pix_size / 2,
+        y[0] - y_pix_size / 2, y[-1] + y_pix_size / 2,
+    ]
 
+    # ------------------------------------------------------------------
+    # ---- discrete colormap & normalisation ---------------------------
+    cmap_discrete = ListedColormap(
+        plt.get_cmap(cmap)(np.linspace(0, 1, n_levels))
+    )
+    cmap_discrete.set_over("white")   # colour for “extend-max” triangle
+    cmap_discrete.set_bad("white")    # NaNs (unreached precision) → white
+
+    norm = BoundaryNorm(np.arange(-0.5, n_levels + 0.5, 1), n_levels)
+
+    # ------------------------------------------------------------------
+    # ---- plot --------------------------------------------------------
     fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(exp_time_map.T, origin="lower", aspect="auto", extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
-    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", pad=0.1, shrink=0.95, aspect=35)
-    cbar.set_label("Exposure time [s] to reach {:.1f} km/s precision".format(precision_requirement))
 
+    im = ax.imshow(
+        np.ma.masked_invalid(idx_map).T,      # mask NaNs → white
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        cmap=cmap_discrete,
+        norm=norm,
+    )
+
+    # ---- colour-bar with discrete ticks ------------------------------
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        orientation="horizontal",
+        pad=0.12,
+        ticks=np.arange(n_levels),
+        shrink=0.95,
+        aspect=35,
+        extend="max",                 # show white triangle on the right
+    )
+    cbar.set_ticklabels([f"{t:g} s" for t in exp_times_sorted])
+    cbar.set_label(
+        rf"Minimum exposure time to reach $\sigma_v \leq {precision_requirement:.1f}\:\mathrm{{km/s}}$"
+    )
+
+    # ------------------------------------------------------------------
+    # ---- cosmetics ---------------------------------------------------
     ax.set_xlabel("X [arcsec]")
     ax.set_ylabel("Y [arcsec]")
-    ax.set_aspect(1.0)
-    ax.tick_params(direction="in", which="both", top=True, bottom=True, left=True, right=True)
+    ax.set_aspect(1)
+    ax.tick_params(direction="in", which="both", top=True, right=True)
 
     plt.tight_layout()
     plt.savefig(save, dpi=300, bbox_inches="tight")
@@ -1179,25 +1212,27 @@ def plot_intensity_vs_vstd(
     *,                           # keep new kw-only args after here
     fit_intensity_min: float | None = None,
     vstd_max: float | None = None,                 # NEW: upper σ_v cut-off (km/s)
+    idx_minus: Tuple[int, int] | None = None,      # NEW
+    idx_mean : Tuple[int, int] | None = None,      # NEW
+    idx_plus : Tuple[int, int] | None = None,      # NEW
+    key_pixel_colors: Tuple[str, str, str] = ("deeppink", "black", "mediumseagreen"),
+    labels: Tuple[str, str, str] = (r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"),
 ) -> None:
     """
     Scatter of per-pixel intensity versus 1-σ velocity uncertainty plus two
-    log–log linear fits.  A pop-up window lets the user click two points;
-    a power-law (straight in log-log space) passing through them is added
-    to the main plot.
+    log–log linear fits.  Optionally draws vertical lines at the intensities
+    of reference pixels (μ−σ, μ, μ+σ).
 
     Parameters
     ----------
-    intensity : ndarray
-        Σ_λ photon count per CCD pixel [ph s⁻¹ pix⁻¹].
-    v_std : Quantity
-        Velocity standard-deviation map [km s⁻¹].
-    save : str
-        Output filename.
-    fit_intensity_min : float, optional
-        Ignore pixels with intensity < this value when fitting.
-    vstd_max : float, optional
-        Ignore pixels with σ_v > this value (km s⁻¹) in both scatter and fits.
+    …
+    idx_minus / idx_mean / idx_plus : tuple(int,int), optional
+        Indices of the “μ−σ”, “μ”, “μ+σ” pixels.  If provided, a vertical
+        line is drawn at the corresponding intensity.
+    key_pixel_colors : tuple(str,str,str), optional
+        Colours for the three reference pixels.
+    labels : tuple(str,str,str), optional
+        Legend labels for the three reference pixels.
     """
     inten = intensity.ravel()
     vstd  = v_std.to(u.km / u.s).value.ravel()
@@ -1227,6 +1262,22 @@ def plot_intensity_vs_vstd(
     fit_x = np.linspace(log_i_fit.min(), log_i_fit.max(), 100)
     fit_y = coeff[0] * fit_x + coeff[1]
 
+    # -------- create equation string for legend -----------------------
+    m_global = coeff[0]
+    c_global = coeff[1]
+    A_global = 10 ** c_global
+    # Format A_global in scientific notation as 10^{exp}
+    if A_global != 0:
+        exp_A = int(np.floor(np.log10(abs(A_global))))
+        mant_A = A_global / (10 ** exp_A)
+        if np.isclose(mant_A, 1.0):
+            A_str = fr"10^{{{exp_A}}}"
+        else:
+            A_str = fr"{mant_A:.2g} \times 10^{{{exp_A}}}"
+    else:
+        A_str = "0"
+    label_global = f"$\\sigma_v = {A_str} \\cdot I^{{{m_global:.2g}}}$"
+
     # ------------------------------------------------------------------
     # ---- ridge (upper envelope) fit ----------------------------------
     nbins = 25
@@ -1245,60 +1296,35 @@ def plot_intensity_vs_vstd(
     # ---- main figure --------------------------------------------------
     fig, ax = plt.subplots(figsize=(5, 3))
     ax.scatter(inten[valid_scatter], vstd[valid_scatter],
-               s=1, color="black", alpha=1)
-    # ax.plot(10 ** fit_x, 10 ** fit_y,
-    #         color="red", label="global fit")
+               s=1, color="dimgray", alpha=1)
+    ax.plot(10 ** fit_x, 10 ** fit_y,
+            color="red", label=label_global)
     # ax.plot(10 ** fit_x, 10 ** ridge_y,
     #         color="limegreen", ls="--", lw=1.5, label="ridge fit")
 
     # ------------------------------------------------------------------
-    # # ---- optional vertical / horizontal threshold lines --------------
-    # if fit_intensity_min is not None:
-    #     ax.axvline(fit_intensity_min, color="grey", ls=":", lw=1)
-    # if vstd_max is not None:                          #  ← NEW
-    #     ax.axhline(vstd_max, color="grey", ls=":", lw=1)
-
-    # ------------------------------------------------------------------
-    # ---- pop-up for manual two-point power-law -----------------------
-    try:
-        if matplotlib.get_backend().lower() not in {
-            "agg", "module://matplotlib_inline.backend_inline"
-        }:
-            pop_fig, pop_ax = plt.subplots()
-            pop_ax.scatter(inten[valid_scatter], vstd[valid_scatter],
-                           s=4, color="tab:blue", alpha=0.6)
-            pop_ax.set_xscale("log")
-            pop_ax.set_yscale("log")
-            pop_ax.set_xlabel("Intensity")
-            pop_ax.set_ylabel(r"$\sigma_v$ [km/s]")
-            pop_ax.set_title("Click two points to define a power-law")
-            pop_ax.tick_params(direction="in", which="both",
-                               top=True, right=True)
-
-            plt.show(block=False)
-            pts = np.array(pop_fig.ginput(2, timeout=-1))
-            plt.close(pop_fig)
-
-            if pts.shape == (2, 2):
-                (x1, y1), (x2, y2) = pts
-                if x1 > 0 and x2 > 0 and y1 > 0 and y2 > 0:
-                    m = (np.log10(y2) - np.log10(y1)) / (np.log10(x2) - np.log10(x1))
-                    c = np.log10(y1) - m * np.log10(x1)
-
-                    x_line = np.logspace(np.log10(inten[valid_scatter].min()),
-                                         np.log10(inten[valid_scatter].max()), 200)
-                    y_line = 10 ** (m * np.log10(x_line) + c)
-
-                    label = rf"Ridge fit: $y = {10**c:.2g}\,x^{{{m:.2g}}}$"
-                    ax.plot(x_line, y_line, color="purple", lw=1.4, label=label)
-    except Exception as exc:
-        warnings.warn(f"Interactive line selection skipped ({exc})")
+    # ---- optional vertical lines for key pixels ----------------------
+    # requested = [
+    #     (idx_minus, key_pixel_colors[0], labels[0]),
+    #     (idx_mean,  key_pixel_colors[1], labels[1]),
+    #     (idx_plus,  key_pixel_colors[2], labels[2]),
+    # ]
+    requested = [
+        (idx_plus,  key_pixel_colors[2], labels[2]),
+        (idx_mean,  key_pixel_colors[1], labels[1]),
+        (idx_minus, key_pixel_colors[0], labels[0]),
+    ]
+    for idx, colour, lab in requested:
+        if idx is None:
+            continue
+        inten_val = intensity[idx]
+        if inten_val > 0:
+            ax.axvline(inten_val, color=colour, ls="--", lw=1.3, label=lab)
 
     # ------------------------------------------------------------------
     # ---- final cosmetics & save --------------------------------------
     ax.set_xscale("log")
     ax.set_yscale("log")
-    # ax.set_xlabel("Intensity")
     ax.set_xlabel(r"Intensity [erg/s/cm$^2$/sr]")
     ax.set_ylabel(r"$\sigma_v$ [km/s]")
     ax.legend(fontsize="small")
@@ -1307,6 +1333,86 @@ def plot_intensity_vs_vstd(
 
     plt.tight_layout(pad=0.1)
     plt.savefig(save, dpi=300)
+    plt.close(fig)
+
+def plot_vstd_vs_exposure(
+    analysis_per_exp: dict[float, dict],
+    *,                                        # --- all arguments after this are keyword-only
+    idx_minus: Tuple[int, int] | None = None,
+    idx_mean : Tuple[int, int] | None = None,
+    idx_plus : Tuple[int, int] | None = None,
+    key_pixel_colors: Tuple[str, str, str] = ("deeppink", "black", "mediumseagreen"),
+    labels: Tuple[str, str, str] = (r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"),
+    save: str = "fig_vstd_vs_exposure.png",
+    log_x: bool = True,
+    log_y: bool = True,                     # <-- NEW
+    vstd_max: float | None = None,
+) -> None:
+    """
+    σ_v versus exposure time for the reference pixels.
+
+    …
+    log_y : bool, optional
+        Set y-axis to logarithmic scale if *True*.
+    """
+    exp_times = sorted(analysis_per_exp.keys())                     # ascending [s]
+
+    # ---- keep only the pixels that were actually requested ----------
+    # requested = [
+    #     (idx_minus, key_pixel_colors[0], labels[0]),
+    #     (idx_mean,  key_pixel_colors[1], labels[1]),
+    #     (idx_plus,  key_pixel_colors[2], labels[2]),
+    # ]
+    requested = [
+        (idx_plus,  key_pixel_colors[2], labels[2]),
+        (idx_mean,  key_pixel_colors[1], labels[1]),
+        (idx_minus, key_pixel_colors[0], labels[0]),
+    ]
+    requested = [(idx, col, lab) for idx, col, lab in requested if idx is not None]
+    if not requested:
+        warnings.warn("No pixel indices provided; nothing to plot.")
+        return
+
+    # ---- gather σ_v --------------------------------------------------
+    curves: dict[Tuple[int, int], list[float]] = {
+        idx: [] for idx, _, _ in requested
+    }
+    for sec in exp_times:
+        v_std_map = analysis_per_exp[sec]["v_std"].to_value(u.km / u.s)
+        for idx in curves.keys():
+            val = v_std_map[idx]
+            if vstd_max is not None and val > vstd_max:
+                val = np.nan
+            curves[idx].append(val)
+
+    # ---- plot --------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(5.25, 3.5))
+    for (idx, color, lab) in requested:
+        y = curves[idx]
+        if not np.all(np.isnan(y)):
+            ax.plot(exp_times, y, marker="o", color=color, label=lab)
+
+    ax.set_xlabel("Exposure time [s]")
+    ax.set_ylabel(r"$\sigma_v$ [km/s]")
+
+    if log_x:
+        ax.set_xscale("log")
+        ax.set_xticks(exp_times)
+        ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+
+    if log_y:                               # <-- NEW
+        ax.set_yscale("log")
+
+    ax.set_ylim(bottom=0)
+    if vstd_max is not None:
+        ax.set_ylim(top=vstd_max)
+
+    ax.grid(ls=":", alpha=0.5)
+    ax.legend(fontsize="small")
+    ax.tick_params(direction="in", which="both", top=True, right=True)
+
+    plt.tight_layout()
+    plt.savefig(save, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 def plot_spectra(
@@ -1560,12 +1666,12 @@ def main() -> None:
     #         idx_plus=plotting["plus_idx"],
     #     )
 
-    #     plot_intensity_vs_vstd(
-    #         intensity=first_signals[0].sum(axis=2) * (wl_axis[1] - wl_axis[0]).cgs.value,
-    #         v_std=analysis_res["v_std"],
-    #         save=f"fig_int_vs_vstd_{sec}.png",
-    #         vstd_max=1e9,
-    #     )
+        # plot_intensity_vs_vstd(
+        #     intensity=first_signals[0].sum(axis=2) * (wl_axis[1] - wl_axis[0]).cgs.value,
+        #     v_std=analysis_res["v_std"],
+        #     save=f"fig_int_vs_vstd_{sec}.png",
+        #     vstd_max=1e9,
+        # )
 
     #     plot_spectra(
     #         dn_cube=first_signals[7],
@@ -1599,6 +1705,43 @@ def main() -> None:
         save="fig_exposure_time_map.png",
         cmap="viridis",
     )
+
+    # ------------------------------------------------------------------
+    #  Intensity vs. velocity-STD scatter for the 20 s exposure (1st run)
+    # ------------------------------------------------------------------
+    sec = 20.0  # seconds
+    if sec in first_signal_per_exp:
+        # Σ_λ intensity (ph s⁻¹ pix⁻¹) – same definition as elsewhere
+        wl_pitch = (wl_axis[1] - wl_axis[0]).cgs
+        intensity_20s = (first_signal_per_exp[sec][0].sum(axis=2) * wl_pitch).value
+
+        v_std_20s = analysis_per_exp[sec]["v_std"]
+
+        plot_intensity_vs_vstd(
+            intensity=intensity_20s,
+            v_std=v_std_20s,
+            save="fig_intensity_vs_vstd_20s.png",
+            vstd_max=1e9,  # km/s
+            fit_intensity_min=1e2,
+            idx_minus=plotting.get("minus_idx"),
+            idx_mean=plotting.get("mean_idx"),
+            idx_plus=plotting.get("plus_idx"),
+        )
+
+
+    # ---------------------------------------------------------------
+    #  Velocity-uncertainty versus exposure time for key pixels
+    # ---------------------------------------------------------------
+    plot_vstd_vs_exposure(
+        analysis_per_exp=analysis_per_exp,
+        idx_minus=plotting.get("minus_idx"),
+        idx_mean=plotting.get("mean_idx"),
+        idx_plus=plotting.get("plus_idx"),
+        save="fig_vstd_vs_exposure.png",
+        log_x=True,
+        vstd_max=60,  # km/s
+    )
+
 
     # npz_files = [
     #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/eis_250618_2009_exp20.0.npz",
