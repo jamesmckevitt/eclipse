@@ -1,11 +1,9 @@
 from __future__ import annotations
-
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Tuple
 import math
-
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -32,12 +30,15 @@ import matplotlib
 import dill
 import os
 from matplotlib.colors import ListedColormap, BoundaryNorm
+import yaml
+import argparse
+import os
 
 # -----------------------------------------------------------------------------
 # Configuration objects
 # -----------------------------------------------------------------------------
 @dataclass
-class Detector:
+class Detector_SWC:
     qe_vis: float = 1.0
     qe_euv: float = 0.76
     e_per_ph_euv: u.Quantity = 18.0 * u.electron / u.photon
@@ -47,58 +48,83 @@ class Detector:
     gain_e_per_dn: u.Quantity = 2.0 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
-    wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel  # EUVST
-    # wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel  # EIS
-    plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel  # EUVST
-    # plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel  # EIS
+    wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
+    plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     si_fano: float = 0.115
 
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
+class Detector_EIS:
+    qe_euv: float = 1  # EIS telescope effective area already includes QE
+    pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
+    wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel
+    plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel
+
+    @property
+    def plate_scale_length(self) -> u.Quantity:
+        return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
 @dataclass
-class Telescope:
+class Telescope_EUVST:
     D_ap: u.Quantity = 0.28 * u.m
-    pm_eff: float = 0.161  # EUVST
+    pm_eff: float = 0.161
     grat_eff: float = 0.0623
     filt_eff: float = 0.507
-    # pm_eff: float = 1  # EIS
-    # grat_eff: float = 1
-    # filt_eff: float = 1
     psf_focus_res: u.Quantity = 0.5 * u.um / u.pixel
     psf_mesh_res: u.Quantity = 6.12e-4 * u.mm / u.pixel
     psf_focus_file: Path = Path("data/swc/psf_euvst_v20230909_195119_focus.txt")
     psf_mesh_file: Path = Path("data/swc/psf_euvst_v20230909_derived_195119_mesh.txt")
     psf: np.ndarray | None = field(default=None, init=False)
+    vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
+    contamination: float = 1.0
 
     @property
     def collecting_area(self) -> u.Quantity:
-        return 0.5 * np.pi * (self.D_ap / 2) ** 2  # EUVST
-        # return (0.23/0.76) * (u.cm)**2  # EIS
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2
 
+    @property
+    def throughput(self) -> float:
+        return self.pm_eff * self.grat_eff * self.filt_eff * self.contamination
+
+    @property
+    def ea_and_throughput(self) -> u.Quantity:
+        return self.collecting_area * self.throughput
+
+class Telescope_EIS:
+    ea_and_throughput = 0.23 * u.cm**2
 
 @dataclass
 class Simulation:
-    expos: u.Quantity = u.Quantity([0.5, 1, 2, 5, 10, 20, 40, 80], u.s)
-    n_iter: int = 50
-    vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
-    slit_width: u.Quantity = 0.2 * u.arcsec  # EUVST 0.2" slit
-    slit_scan_step: u.Quantity = 0.2 * u.arcsec
-    # slit_width: u.Quantity = 1 * u.arcsec  # EIS 1" slit
-    # slit_scan_step: u.Quantity = 1 * u.arcsec
-    ncpu: int = -1
+  expos: u.Quantity = u.Quantity([0.5, 1, 2, 5, 10, 20, 40, 80], u.s)
+  n_iter: int = 50
+  slit_width: u.Quantity = 0.2 * u.arcsec
+  ncpu: int = -1
+  instrument: str = "SWC"
+  contamination: list[float] = field(default_factory=lambda: [1.0])
 
-    def __post_init__(self):
-        if self.slit_width != self.slit_scan_step:
-            raise NotImplementedError(
-                "Code cannot yet properly handle different values for slit width and scan step size. "
-            )
+  @property
+  def slit_scan_step(self) -> u.Quantity:
+    return self.slit_width
+
+  def __post_init__(self):
+    allowed_slits = {
+      "EIS": [1, 2, 4],
+      "SWC": [0.2, 0.4, 1],
+    }
+    inst = self.instrument.upper()
+    slit_val = self.slit_width.to_value(u.arcsec)
+    if inst == "EIS":
+      if slit_val not in allowed_slits["EIS"]:
+        raise ValueError("For EIS, slit_width must be 1, 2, or 4 arcsec.")
+    elif inst in ("SWC"):
+      if slit_val not in allowed_slits["SWC"]:
+        raise ValueError("For SWC, slit_width must be 0.2, 0.4, or 1 arcsec.")
 
 # Global configuration used by plotting helpers --------------------------------
-DET = Detector()
-TEL = Telescope()
+DET = Detector_SWC()
+TEL = Telescope_EUVST()
 SIM = Simulation()
 
 
@@ -238,7 +264,7 @@ def rebin_atmosphere(
     cube_sim: u.Quantity,
     wl_sim: u.Quantity,
     spt_sim: u.Quantity,
-    det: Detector,
+    det: Detector_SWC,
     sim: Simulation,
     plotting: dict,
 ) -> Tuple[u.Quantity, u.Quantity, dict]:
@@ -398,8 +424,8 @@ def intensity_to_photons(I: u.Quantity, wl_axis: u.Quantity) -> u.Quantity:
     return (I / E_ph).to(u.photon / u.s / u.cm**2 / u.sr / u.cm)
 
 
-def add_effective_area(ph_cm2_sr_cm_s: u.Quantity, tel: Telescope) -> u.Quantity:
-    A_eff = tel.collecting_area.cgs * tel.pm_eff * tel.grat_eff * tel.filt_eff
+def add_effective_area(ph_cm2_sr_cm_s: u.Quantity, tel: Telescope_EUVST) -> u.Quantity:
+    A_eff = tel.ea_and_throughput.cgs
     return ph_cm2_sr_cm_s * A_eff
 
 
@@ -416,7 +442,7 @@ def apply_psf(signal: u.Quantity, psf: np.ndarray) -> u.Quantity:
     return blurred * signal.unit
 
 
-def to_electrons(photon_rate: u.Quantity, t_exp: u.Quantity, det: Detector) -> u.Quantity:
+def to_electrons(photon_rate: u.Quantity, t_exp: u.Quantity, det: Detector_SWC) -> u.Quantity:
     e_per_ph = fano_noise(det.e_per_ph_euv.value, det.si_fano) * u.electron / u.photon
     e = photon_rate * t_exp * det.qe_euv * e_per_ph
     e += det.dark_current * t_exp
@@ -425,7 +451,7 @@ def to_electrons(photon_rate: u.Quantity, t_exp: u.Quantity, det: Detector) -> u
     return e
 
 
-def to_dn(electrons: u.Quantity, det: Detector) -> u.Quantity:
+def to_dn(electrons: u.Quantity, det: Detector_SWC) -> u.Quantity:
     dn = electrons / det.gain_e_per_dn
     dn = dn.to(det.max_dn.unit)
     dn[dn > det.max_dn] = det.max_dn
@@ -441,7 +467,7 @@ def add_poisson(data: u.Quantity) -> u.Quantity:
     return np.random.poisson(data.value) * unit
 
 
-def add_stray_light(electrons: u.Quantity, t_exp: u.Quantity, det: Detector, sim: Simulation) -> u.Quantity:
+def add_stray_light(electrons: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, sim: Simulation) -> u.Quantity:
     n_vis_ph = np.random.poisson((sim.vis_sl * t_exp).value, size=electrons.shape) * (u.photon / u.pixel)
     e_per_ph = fano_noise(det.e_per_ph_vis.value, det.si_fano) * (u.electron / u.photon)
     return electrons + n_vis_ph * e_per_ph * det.qe_vis
@@ -505,7 +531,7 @@ def fit_cube_gauss(signal_cube: u.Quantity, wv: u.Quantity, n_jobs: int = Simula
 # Monte-Carlo wrapper
 # -----------------------------------------------------------------------------
 
-def simulate_once(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector, tel: Telescope, sim: Simulation) -> Tuple[u.Quantity, ...]:
+def simulate_once(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation) -> Tuple[u.Quantity, ...]:
 
     signal0 = add_poisson(I_cube)
     signal1 = intensity_to_photons(signal0, wl_axis)
@@ -518,7 +544,7 @@ def simulate_once(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, de
 
     return (signal0, signal1, signal2, signal3, signal4, signal5, signal6, signal7)
 
-def monte_carlo(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector, tel: Telescope, sim: Simulation, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+def monte_carlo(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
     signals, fits = [], []
     for _ in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
         signals.append(simulate_once(I_cube, wl_axis, t_exp, det, tel, sim))
@@ -1556,23 +1582,60 @@ def plot_spectra(
 # -----------------------------------------------------------------------------
 
 def main() -> None:
-    global DET, TEL, SIM
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, help="YAML config file", required=True)
+    parser.add_argument("--prev", type=str, help="Previous maps file", default=None)
+    parser.add_argument("--save", type=str, help="Save maps path", default=None)
+    args = parser.parse_args()
+
+    # Load YAML config
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+
+    # Set up instrument, detector, telescope, simulation from config
+    instrument = config.get("instrument", "SWC").upper()
+    contamination_list = config.get("contamination", [1.0])
+    exposures = config.get("expos", [0.5, 1, 2, 5, 10, 20, 40, 80])
+    n_iter = config.get("n_iter", 50)
+    ncpu = config.get("ncpu", -1)
+    slit_width = u.Quantity(config.get("slit_width", 0.2), u.arcsec)
+
+    # Choose instrument
+    if instrument == "SWC":
+        DET = Detector_SWC()
+        TEL = Telescope_EUVST()
+    elif instrument == "EIS":
+        DET = Detector_EIS()
+        TEL = Telescope_EIS()
+    else:
+        raise ValueError(f"Unknown instrument: {instrument}")
+
+    # Set up Simulation object
+    SIM = Simulation(
+        expos=u.Quantity(exposures, u.s),
+        n_iter=n_iter,
+        slit_width=slit_width,
+        ncpu=ncpu,
+        instrument=instrument,
+        contamination=contamination_list,
+    )
 
     prev_maps = None
     save_maps_path = None
-    args = sys.argv[1:]
-    if "--prev" in args:
-        prev_maps = load_maps(args[args.index("--prev") + 1])
-    if "--save" in args:
-        save_maps_path = args[args.index("--save") + 1]
+    if args.prev:
+        prev_maps = load_maps(args.prev)
+    if args.save:
+        save_maps_path = args.save
 
-    # Load PSF
-    print("Loading PSF files...")
-    psf_focus = _load_psf_ascii(TEL.psf_focus_file, skip=21)
-    psf_mesh = _load_psf_ascii(TEL.psf_mesh_file, skip=16)
-    psf_focus = _resample_psf(psf_focus, TEL.psf_focus_res, DET.pix_size)
-    psf_mesh = _resample_psf(psf_mesh, TEL.psf_mesh_res, DET.pix_size)
-    TEL.psf = _combine_psfs(psf_focus, psf_mesh, size=5)
+    # Load PSF (only for SWC/EUVST)
+    if instrument == "SWC":
+        print("Loading PSF files...")
+        psf_focus = _load_psf_ascii(TEL.psf_focus_file, skip=21)
+        psf_mesh = _load_psf_ascii(TEL.psf_mesh_file, skip=16)
+        psf_focus = _resample_psf(psf_focus, TEL.psf_focus_res, DET.pix_size)
+        psf_mesh = _resample_psf(psf_mesh, TEL.psf_mesh_res, DET.pix_size)
+        TEL.psf = _combine_psfs(psf_focus, psf_mesh, size=5)
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
@@ -1586,24 +1649,36 @@ def main() -> None:
     v_true = velocity_from_fit(fit_truth, wl0)
 
     # --- Efficient in-memory buffers for post-loop plotting -----------------
-    first_signal_per_exp: dict[float, Tuple[u.Quantity, ...]] = {}
-    first_fit_per_exp:    dict[float, u.Quantity] = {}
-    analysis_per_exp:     dict[float, dict] = {}
-    si_map_per_exp:       dict[float, np.ndarray] = {}
+    results = {}
 
-    # Monte-Carlo simulation for each exposure time
-    for t_exp in tqdm(SIM.expos, desc="Exposure time", unit="exposure"):
-        signals, fits = monte_carlo(
-            cube_reb, wl_axis, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter
-        )
-        sec = t_exp.to_value(u.s)
-        first_signal_per_exp[sec] = signals[0]          # tuple of 8 stages
-        first_fit_per_exp[sec]    = fits[0]
-        analysis_per_exp[sec]     = analyse(fits, v_true, wl0)
-        del signals, fits
+    # Loop over contamination and exposure time
+    for contamination in contamination_list:
+        TEL.contamination = contamination
 
-    output_file = "instr_modelling.pkl"
-    globals().update(locals())
+        first_signal_per_exp: dict[float, Tuple[u.Quantity, ...]] = {}
+        first_fit_per_exp:    dict[float, u.Quantity] = {}
+        analysis_per_exp:     dict[float, dict] = {}
+
+        for t_exp in tqdm(SIM.expos, desc=f"Exposure time (contam={contamination})", unit="exposure"):
+            signals, fits = monte_carlo(
+                cube_reb, wl_axis, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter
+            )
+            sec = t_exp.to_value(u.s)
+            first_signal_per_exp[sec] = signals[0]          # tuple of 8 stages
+            first_fit_per_exp[sec]    = fits[0]
+            analysis_per_exp[sec]     = analyse(fits, v_true, wl0)
+            del signals, fits
+
+        # Save results for this contamination
+        results[contamination] = {
+            "first_signal_per_exp": first_signal_per_exp,
+            "first_fit_per_exp": first_fit_per_exp,
+            "analysis_per_exp": analysis_per_exp,
+        }
+
+    # Save all results to a pickle file
+    config_base = os.path.splitext(os.path.basename(args.config))[0]
+    output_file = f"{config_base}.pkl"
     dill.dump_session(output_file)
     print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
@@ -1697,62 +1772,62 @@ def main() -> None:
     #         idx_plus=plotting["plus_idx"],
     #     )
 
-    plot_exposure_time_map(
-        analysis_per_exp=analysis_per_exp,
-        precision_requirement=2.0,  # km/s
-        x_pix_size=SIM.slit_scan_step.to_value(u.arcsec),
-        y_pix_size=DET.plate_scale_angle.to_value(u.arcsec / u.pix),
-        save="fig_exposure_time_map.png",
-        cmap="viridis",
-    )
-
-    # ------------------------------------------------------------------
-    #  Intensity vs. velocity-STD scatter for the 20 s exposure (1st run)
-    # ------------------------------------------------------------------
-    sec = 20.0  # seconds
-    if sec in first_signal_per_exp:
-        # Σ_λ intensity (ph s⁻¹ pix⁻¹) – same definition as elsewhere
-        wl_pitch = (wl_axis[1] - wl_axis[0]).cgs
-        intensity_20s = (first_signal_per_exp[sec][0].sum(axis=2) * wl_pitch).value
-
-        v_std_20s = analysis_per_exp[sec]["v_std"]
-
-        plot_intensity_vs_vstd(
-            intensity=intensity_20s,
-            v_std=v_std_20s,
-            save="fig_intensity_vs_vstd_20s.png",
-            vstd_max=1e9,  # km/s
-            fit_intensity_min=1e2,
-            idx_minus=plotting.get("minus_idx"),
-            idx_mean=plotting.get("mean_idx"),
-            idx_plus=plotting.get("plus_idx"),
-        )
-
-
-    # ---------------------------------------------------------------
-    #  Velocity-uncertainty versus exposure time for key pixels
-    # ---------------------------------------------------------------
-    plot_vstd_vs_exposure(
-        analysis_per_exp=analysis_per_exp,
-        idx_minus=plotting.get("minus_idx"),
-        idx_mean=plotting.get("mean_idx"),
-        idx_plus=plotting.get("plus_idx"),
-        save="fig_vstd_vs_exposure.png",
-        log_x=True,
-        vstd_max=60,  # km/s
-    )
-
-
-    # npz_files = [
-    #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/eis_250618_2009_exp20.0.npz",
-    #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/euvst_250618_2015_exp20.0.npz"
-    # ]
-    # plot_multi_maps(
-    #     [str(f) for f in npz_files],
-    #     map_type="intensity",
-    #     save="fig_multi_intensity.png",
-    #     figsize=(8, 5.5),
+    # plot_exposure_time_map(
+    #     analysis_per_exp=analysis_per_exp,
+    #     precision_requirement=2.0,  # km/s
+    #     x_pix_size=SIM.slit_scan_step.to_value(u.arcsec),
+    #     y_pix_size=DET.plate_scale_angle.to_value(u.arcsec / u.pix),
+    #     save="fig_exposure_time_map.png",
+    #     cmap="viridis",
     # )
+
+    # # ------------------------------------------------------------------
+    # #  Intensity vs. velocity-STD scatter for the 20 s exposure (1st run)
+    # # ------------------------------------------------------------------
+    # sec = 20.0  # seconds
+    # if sec in first_signal_per_exp:
+    #     # Σ_λ intensity (ph s⁻¹ pix⁻¹) – same definition as elsewhere
+    #     wl_pitch = (wl_axis[1] - wl_axis[0]).cgs
+    #     intensity_20s = (first_signal_per_exp[sec][0].sum(axis=2) * wl_pitch).value
+
+    #     v_std_20s = analysis_per_exp[sec]["v_std"]
+
+    #     plot_intensity_vs_vstd(
+    #         intensity=intensity_20s,
+    #         v_std=v_std_20s,
+    #         save="fig_intensity_vs_vstd_20s.png",
+    #         vstd_max=1e9,  # km/s
+    #         fit_intensity_min=1e2,
+    #         idx_minus=plotting.get("minus_idx"),
+    #         idx_mean=plotting.get("mean_idx"),
+    #         idx_plus=plotting.get("plus_idx"),
+    #     )
+
+
+    # # ---------------------------------------------------------------
+    # #  Velocity-uncertainty versus exposure time for key pixels
+    # # ---------------------------------------------------------------
+    # plot_vstd_vs_exposure(
+    #     analysis_per_exp=analysis_per_exp,
+    #     idx_minus=plotting.get("minus_idx"),
+    #     idx_mean=plotting.get("mean_idx"),
+    #     idx_plus=plotting.get("plus_idx"),
+    #     save="fig_vstd_vs_exposure.png",
+    #     log_x=True,
+    #     vstd_max=60,  # km/s
+    # )
+
+
+    # # npz_files = [
+    # #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/eis_250618_2009_exp20.0.npz",
+    # #     "/gpfs/data/fs70652/jamesm/solar/solc/solc_euvst_sw_response/euvst_250618_2015_exp20.0.npz"
+    # # ]
+    # # plot_multi_maps(
+    # #     [str(f) for f in npz_files],
+    # #     map_type="intensity",
+    # #     save="fig_multi_intensity.png",
+    # #     figsize=(8, 5.5),
+    # # )
 
 if __name__ == "__main__":
     main()
