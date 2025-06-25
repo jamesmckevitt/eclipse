@@ -33,6 +33,8 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 import yaml
 import argparse
 import os
+import pickle
+import dataclasses
 
 # -----------------------------------------------------------------------------
 # Configuration objects
@@ -58,6 +60,7 @@ class Detector_SWC:
 
 class Detector_EIS:
     qe_euv: float = 1  # EIS telescope effective area already includes QE
+    qe_vis: float = 1
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel
@@ -65,6 +68,28 @@ class Detector_EIS:
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
+    
+    @property
+    def e_per_ph_euv(self) -> u.Quantity:
+        return Detector_SWC.e_per_ph_euv
+    @property
+    def e_per_ph_vis(self) -> u.Quantity:
+        return Detector_SWC.e_per_ph_vis
+    @property
+    def read_noise_rms(self) -> u.Quantity:
+        return Detector_SWC.read_noise_rms
+    @property
+    def dark_current(self) -> u.Quantity:
+        return Detector_SWC.dark_current
+    @property
+    def gain_e_per_dn(self) -> u.Quantity:
+        return Detector_SWC.gain_e_per_dn
+    @property
+    def max_dn(self) -> u.Quantity:
+        return Detector_SWC.max_dn
+    @property
+    def si_fano(self) -> float:
+        return Detector_SWC.si_fano
 
 @dataclass
 class Telescope_EUVST:
@@ -77,7 +102,6 @@ class Telescope_EUVST:
     psf_focus_file: Path = Path("data/swc/psf_euvst_v20230909_195119_focus.txt")
     psf_mesh_file: Path = Path("data/swc/psf_euvst_v20230909_derived_195119_mesh.txt")
     psf: np.ndarray | None = field(default=None, init=False)
-    vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
     contamination: float = 1.0
 
     @property
@@ -102,6 +126,7 @@ class Simulation:
   slit_width: u.Quantity = 0.2 * u.arcsec
   ncpu: int = -1
   instrument: str = "SWC"
+  vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
   contamination: list[float] = field(default_factory=lambda: [1.0])
 
   @property
@@ -537,7 +562,10 @@ def simulate_once(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, de
     signal1 = intensity_to_photons(signal0, wl_axis)
     signal2 = add_effective_area(signal1, tel)
     signal3 = photons_to_pixel_rate(signal2, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
-    signal4 = apply_psf(signal3, tel.psf)
+    if sim.instrument.upper() == "SWC":
+        signal4 = apply_psf(signal3, tel.psf)
+    else:
+        signal4 = signal3
     signal5 = to_electrons(signal4, t_exp, det)
     signal6 = add_stray_light(signal5, t_exp, det, sim)
     signal7 = to_dn(signal6, det)
@@ -1676,11 +1704,28 @@ def main() -> None:
             "analysis_per_exp": analysis_per_exp,
         }
 
-    # Save all results to a pickle file
+    # Save all results and configuration to a compressed npz file
     config_base = os.path.splitext(os.path.basename(args.config))[0]
-    output_file = f"{config_base}.pkl"
-    dill.dump_session(output_file)
-    print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
+    output_file = f"{config_base}_results.npz"
+
+    pkl_file = output_file.replace(".npz", ".pkl")
+    with open(pkl_file, "wb") as f:
+        dill.dump(
+            {
+                "results":  results,
+                "config":   config,
+                "plotting": plotting,
+                "cube_reb": cube_reb,
+                "wl_axis":  wl_axis,
+                "wl0":      wl0,
+                "spt_sim":  spt_sim,
+                "DET":      DET,
+                "TEL":      TEL,
+                "SIM":      SIM,
+            },
+            f,
+        )
+    print(f"Saved results and configuration to {output_file.replace('.npz', '.pkl')} ({os.path.getsize(output_file.replace('.npz', '.pkl')) / 1e6:.1f} MB)")
 
     # ---------------------------  Post-processing plots  ---------------------------
     # print("Post-processing results...")
