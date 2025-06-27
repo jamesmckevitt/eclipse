@@ -8,6 +8,8 @@ import glob
 import dill
 from instr_response import angle_to_distance
 import matplotlib
+from typing import Tuple, Iterable
+from tqdm import tqdm
 
 def plot_radiometric_pipeline(
     signals: Tuple[u.Quantity, ...],
@@ -1111,66 +1113,69 @@ def plot_all_for_simulation(
             vstd_max=60,
         )
 
-def plot_vstd_vs_contamination(
-    results_files: list[str],
-    *,
-    key_pixel_colors: Tuple[str, str, str] = ("deeppink", "black", "mediumseagreen"),
-    labels: Tuple[str, str, str] = (r"$\mu-1\sigma$", r"$\mu$", r"$\mu+1\sigma$"),
-    save: str = "fig_vstd_vs_contamination.png",
-    vstd_max: float | None = None,
-):
+
+def plot_vstd_vs_contamination(results_files: list[str], save_prefix: str = "fig_vstd_vs_contamination"):
     """
-    Plot σ_v for the three reference pixels as a function of carbon contamination thickness.
+    Plot Doppler velocity standard deviation vs C thickness for the mean pixel, for all specified files,
+    for each available exposure time.
     """
-    contamination_thicknesses = []
-    vstd_minus = []
-    vstd_mean = []
-    vstd_plus = []
+    import dill
+    import matplotlib.pyplot as plt
+    import astropy.units as u
+    import numpy as np
+    import os
+
+    # Gather all exposure times across all files
+    all_exp_times = set()
+    per_file_data = []
 
     for file in results_files:
-        results, config, plotting, cube_reb, wl_axis, wl0, spt_sim, DET, SIM = load_pkl_results(file)
-        # Assume only one contamination value per file
-        contamination = list(results.keys())[0]
-        contamination_thicknesses.append(float(contamination))
-        analysis_per_exp = results[contamination]["analysis_per_exp"]
-        # Use the longest exposure time (last key)
-        exp_time = sorted(analysis_per_exp.keys())[-1]
-        v_std_map = analysis_per_exp[exp_time]["v_std"].to_value(u.km / u.s)
-        idx_minus = plotting.get("minus_idx")
-        idx_mean = plotting.get("mean_idx")
-        idx_plus = plotting.get("plus_idx")
-        vstd_minus.append(v_std_map[idx_minus] if idx_minus is not None else np.nan)
-        vstd_mean.append(v_std_map[idx_mean] if idx_mean is not None else np.nan)
-        vstd_plus.append(v_std_map[idx_plus] if idx_plus is not None else np.nan)
+        with open(file, "rb") as f:
+            dat = dill.load(f)
+        config = dat["config"]["config"]
+        plotting = dat["plotting"]
+        results = dat["results"]
+        c_thick = config.get("c_thickness", "0 nm")
+        c_thick = u.Quantity(c_thick)
+        analysis_per_exp = results["analysis_per_exp"]
+        all_exp_times.update(analysis_per_exp.keys())
+        per_file_data.append({
+            "c_thick": c_thick.to(u.angstrom).value,
+            "analysis_per_exp": analysis_per_exp,
+            "plotting": plotting,
+        })
 
-    contamination_thicknesses = np.array(contamination_thicknesses)
-    vstd_minus = np.array(vstd_minus)
-    vstd_mean = np.array(vstd_mean)
-    vstd_plus = np.array(vstd_plus)
+    # For each exposure time, collect vstds for all files
+    for sec in sorted(all_exp_times):
+        c_thicks = []
+        vstds = []
+        for entry in per_file_data:
+            analysis_per_exp = entry["analysis_per_exp"]
+            plotting = entry["plotting"]
+            idx_mean = plotting.get("mean_idx")
+            if sec in analysis_per_exp and idx_mean is not None:
+                v_std_map = analysis_per_exp[sec]["v_std"]
+                v_std_map = np.transpose(v_std_map, (0,2,1))
+                vstds.append(v_std_map[idx_mean].to_value(u.km / u.s))
+                c_thicks.append(entry["c_thick"])
+        c_thicks = np.array(c_thicks)
+        vstds = np.array(vstds)
+        order = np.argsort(c_thicks)
+        c_thicks = c_thicks[order]
+        vstds = vstds[order]
 
-    # Sort by contamination thickness
-    idx_sort = np.argsort(contamination_thicknesses)
-    contamination_thicknesses = contamination_thicknesses[idx_sort]
-    vstd_minus = vstd_minus[idx_sort]
-    vstd_mean = vstd_mean[idx_sort]
-    vstd_plus = vstd_plus[idx_sort]
+        plt.figure(figsize=(6, 4))
+        plt.plot(c_thicks, vstds, marker="o", color="black", label="mean pixel")
+        plt.xlabel("C thickness [Å]")
+        plt.ylabel(r"$\sigma_v$ [km/s]")
+        plt.title(f"Exposure time: {sec:.1f} s")
+        plt.grid(ls=":", alpha=0.5)
+        plt.tight_layout()
+        save = f"{save_prefix}_{sec:.1f}s.png"
+        plt.savefig(save, dpi=300)
+        plt.close()
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(contamination_thicknesses, vstd_minus, marker="o", color=key_pixel_colors[0], label=labels[0])
-    ax.plot(contamination_thicknesses, vstd_mean, marker="o", color=key_pixel_colors[1], label=labels[1])
-    ax.plot(contamination_thicknesses, vstd_plus, marker="o", color=key_pixel_colors[2], label=labels[2])
 
-    ax.set_xlabel("Carbon contamination thickness [nm]")
-    ax.set_ylabel(r"$\sigma_v$ [km/s]")
-    if vstd_max is not None:
-        ax.set_ylim(top=vstd_max)
-    ax.set_ylim(bottom=0)
-    ax.legend(fontsize="small")
-    ax.grid(ls=":", alpha=0.5)
-    ax.tick_params(direction="in", which="both", top=True, right=True)
-    plt.tight_layout()
-    plt.savefig(save, dpi=300, bbox_inches="tight")
-    plt.close(fig)
 
 def main():
 
@@ -1203,15 +1208,18 @@ def main():
 
     # Example usage for multi-file vstd vs contamination plot:
     # Uncomment and specify your files below:
-    # results_files = [
-    #     "sim1_results.pkl",
-    #     "sim2_results.pkl",
-    #     "sim3_results.pkl",
-    # ]
-    # plot_vstd_vs_contamination(
-    #     results_files,
-    #     save="fig_vstd_vs_contamination.png"
-    # )
+    results_files = [
+        "./run/result/swc_slit0.2_oxide95_carbon0.pkl",
+        "./run/result/swc_slit0.2_oxide95_carbon40.pkl",
+        "./run/result/swc_slit0.2_oxide95_carbon80.pkl",
+        "./run/result/swc_slit0.2_oxide95_carbon120.pkl",
+        "./run/result/swc_slit0.2_oxide95_carbon160.pkl",
+        "./run/result/swc_slit0.2_oxide95_carbon200.pkl",
+    ]
+    plot_vstd_vs_contamination(
+        results_files,
+        save_prefix="fig_vstd_vs_contamination"
+    )
 
 if __name__ == "__main__":
     main()
