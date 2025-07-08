@@ -23,6 +23,13 @@ from scipy.optimize import curve_fit
 from joblib import Parallel, delayed
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.legend_handler import HandlerBase
+from ndcube import NDCube
+from astropy.wcs import WCS
+from astropy.visualization import LogStretch, ImageNormalize
+from types import MethodType
+from astropy.coordinates import SkyCoord
+from datetime import datetime
+import shutil
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -460,36 +467,40 @@ def launch_viewer(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-def _find_mean_sigma_pixel(total_si, margin_frac=0.20, sigma_factor=1.0):
+def _find_mean_sigma_pixel(ndcube, margin_frac=0.20, sigma_factor=1.0):
     """
-    Return (mean_idx_global, plus_sigma_idx_global, minus_sigma_idx_global, margin)
+    Return (mean_coord, plus_sigma_coord, minus_sigma_coord)
     corresponding to the pixel intensities nearest to the mean and
-    mean +- (sigma_factor)*std.
+    mean +- (sigma_factor)*std, as SkyCoord coordinates using pixel_to_world.
     """
-    nx, ny, _ = total_si.shape
-    margin = int(margin_frac * min(nx, ny))
-    inner = total_si[margin:nx - margin, margin:ny - margin]
-    summed = inner.sum(axis=2)
-    flat = summed.ravel()
 
-    mean_val = np.mean(flat)
-    std_val = np.std(flat)
+    # Account for margin and crop to inner region
+    nx, ny = ndcube.data.shape
+    margin = int(margin_frac * min(nx, ny))
+    inner = ndcube.data[margin:nx - margin, margin:ny - margin]
+
+    # Calculate mean and standard deviation
+    mean_val = np.mean(inner)
+    std_val = np.std(inner)
     plus_sigma_val = mean_val + sigma_factor * std_val
     minus_sigma_val = mean_val - sigma_factor * std_val
 
-    mean_idx_flat = np.argmin(np.abs(flat - mean_val))
-    plus_sigma_idx_flat = np.argmin(np.abs(flat - plus_sigma_val))
-    minus_sigma_idx_flat = np.argmin(np.abs(flat - minus_sigma_val))
+    # Find indices of the closest pixels to mean, mean + sigma, and mean - sigma
+    mean_idx = np.unravel_index(np.argmin(np.abs(inner - mean_val)), inner.shape)
+    plus_sigma_idx = np.unravel_index(np.argmin(np.abs(inner - plus_sigma_val)), inner.shape)
+    minus_sigma_idx = np.unravel_index(np.argmin(np.abs(inner - minus_sigma_val)), inner.shape)
 
-    mean_idx = np.unravel_index(mean_idx_flat, summed.shape)
-    plus_sigma_idx = np.unravel_index(plus_sigma_idx_flat, summed.shape)
-    minus_sigma_idx = np.unravel_index(minus_sigma_idx_flat, summed.shape)
-
+    # Convert to global pixel indices
     mean_idx_global = (mean_idx[0] + margin, mean_idx[1] + margin)
     plus_sigma_idx_global = (plus_sigma_idx[0] + margin, plus_sigma_idx[1] + margin)
     minus_sigma_idx_global = (minus_sigma_idx[0] + margin, minus_sigma_idx[1] + margin)
 
-    return mean_idx_global, plus_sigma_idx_global, minus_sigma_idx_global
+    # Use pixel_to_world to get SkyCoord coordinates
+    mean_coord = ndcube.wcs.pixel_to_world(mean_idx_global[1], mean_idx_global[0])
+    plus_sigma_coord = ndcube.wcs.pixel_to_world(plus_sigma_idx_global[1], plus_sigma_idx_global[0])
+    minus_sigma_coord = ndcube.wcs.pixel_to_world(minus_sigma_idx_global[1], minus_sigma_idx_global[0])
+
+    return mean_coord, plus_sigma_coord, minus_sigma_coord
 
 
 def calculate_doppler_map(total_si, v_edges):
@@ -1280,14 +1291,18 @@ def plot_g_function(
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = False                # factor or False
+    downsample     = 4                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
-    limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
+    limit_lines    = ['Fe12_195.1190']            # e.g. ['Fe12_195.1190'] to speed up
     vel_res        = 5 * u.km / u.s
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
     voxel_dx, voxel_dy = 0.192 * u.Mm, 0.192 * u.Mm
+    if downsample:
+        voxel_dz *= downsample
+        voxel_dx *= downsample
+        voxel_dy *= downsample
     mean_mol_wt    = 1.29                    # solar [doi:10.1051/0004-6361:20041507]
     # ----------------------------------------------------------
 
@@ -1372,106 +1387,152 @@ def main() -> None:
     print(f"Combining lines into a single spectrum cube ({print_mem()})")
     total_si, back_si = combine_lines(goft, main_line)
     total_si *= u.erg/u.s/u.cm**2/u.sr/u.cm
-    back_si *= u.erg/u.s/u.cm**2/u.sr/u.cm
+
+    # ----------------------------------------------------------
+    # calculate integrated intensities
+    # ----------------------------------------------------------
+    print(f"Calculating the integrated intensities ({print_mem()})")
+    dwl = np.diff(goft[main_line]["wl_grid"].to(u.cm))
+    total_ii = np.sum(total_si[:, :, :-1] * dwl, axis=2)
+
+    # globals().update(locals());raise ValueError("Kicking back to ipython")
+
+    # ----------------------------------------------------------
+    # make heliocentric ndcubes
+    # ----------------------------------------------------------
+
+    nx, ny, nl = total_si.shape
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ['WAVE', 'SOLY', 'SOLX']
+    wcs.wcs.cunit = ['cm', 'Mm', 'Mm']
+    wcs.wcs.crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]
+    wcs.wcs.cdelt = [np.diff(goft[main_line]["wl_grid"].to(u.cm).value)[0],
+                     voxel_dy.to(u.Mm).value,
+                     voxel_dx.to(u.Mm).value
+                     ]
+    sim_si = NDCube(
+        total_si,
+        wcs=wcs,
+        unit=total_si.unit
+    )
+
+    nx, ny = total_ii.shape
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ['SOLY', 'SOLX']
+    wcs.wcs.cunit = ['Mm', 'Mm']
+    wcs.wcs.crpix = [(ny + 1) / 2, (nx + 1) / 2]
+    wcs.wcs.cdelt = [voxel_dy.to(u.Mm).value,
+                     voxel_dx.to(u.Mm).value]
+    sim_ii = NDCube(
+        data=total_ii,
+        wcs=wcs,
+        unit=total_ii.unit
+    )
 
     sigma_factor = 1.0
     margin = 0.2
-    mean_idx, plus_idx, minus_idx = _find_mean_sigma_pixel(
-        total_si.value, margin, sigma_factor=sigma_factor
+    mean_coords, plus_coords, minus_coords = _find_mean_sigma_pixel(
+        sim_ii, margin, sigma_factor=sigma_factor
     )
-
-    # Calculate Doppler velocity map before plotting
-    print(f"Calculating Doppler velocity map ({print_mem()})")
-    v_map = calculate_doppler_map(total_si.value, v_edges)
 
     # ----------------------------------------------------------------------
     # save the results
     # ----------------------------------------------------------------------
-    output_file = "synthesised_spectra.pkl"
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    output_file = f"synthesised_spectra_{timestamp}.pkl"
+    with open(output_file, "wb") as f:
+        pickle.dump({
+            "sim_si": sim_si,
+            "sim_ii": sim_ii,
+            "wl0": goft[main_line]["wl0"].to(u.cm).value,
+            "plus_coords": plus_coords,
+            "mean_coords": mean_coords,
+            "minus_coords": minus_coords,
+            "sigma_factor": sigma_factor,
+            "margin": margin,
+        }, f)
+    print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
+
+    # Copy the output_file to the desired location, overwriting if it exists
+    dest_path = Path("./run/input/synthesised_spectra.pkl")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(output_file, dest_path)
+    print(f"Copied {output_file} to {dest_path}")
+
+    output_file = f"synthesised_spectra_session_{timestamp}.pkl"
     globals().update(locals())
     dill.dump_session(output_file)
     print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
 
-    output_file = "synthesised_spectra.npz"
-    np.savez(
-        output_file,
-        I_cube=total_si.cgs.value,
-        wl_grid=goft[main_line]["wl_grid"].to(u.cm).value,
-        spt_res_x=voxel_dx.to(u.cm).value,
-        wl0=goft[main_line]["wl0"].to(u.cm).value,
-        mean_idx=mean_idx,
-        plus_idx=plus_idx,
-        minus_idx=minus_idx,
-        sigma_factor=sigma_factor,
-        margin=margin
-    )
-    print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
+    # # ----------------------------------------------------------------------
+    # # call viewer after all processing is complete
+    # # ----------------------------------------------------------------------
+    # launch_viewer(
+    #     total_si     = total_si.value,
+    #     goft         = goft,
+    #     dem_map      = dem_map,
+    #     wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
+    #     v_edges      = v_edges,
+    #     logT_centres = logT_centres,
+    #     main_line    = main_line,
+    # )
 
-    # ----------------------------------------------------------------------
-    # call viewer after all processing is complete
-    # ----------------------------------------------------------------------
-    launch_viewer(
-        total_si     = total_si.value,
-        goft         = goft,
-        dem_map      = dem_map,
-        wl_ref       = goft[main_line]["wl_grid"].to(u.AA).value,
-        v_edges      = v_edges,
-        logT_centres = logT_centres,
-        main_line    = main_line,
-    )
+    # # ----------------------------------------------------------------------
+    # # plot output
+    # # ----------------------------------------------------------------------
 
-    # ----------------------------------------------------------------------
-    # plot output
-    # ----------------------------------------------------------------------
+    # # Calculate Doppler velocity map before plotting
+    # print(f"Calculating Doppler velocity map ({print_mem()})")
+    # v_map = calculate_doppler_map(total_si.value, v_edges)
 
-    key_pixel_colors = ["deeppink", "black", "mediumseagreen"]  # in order of minus, mean, plus
+    # key_pixel_colors = ["deeppink", "black", "mediumseagreen"]  # in order of minus, mean, plus
 
-    plot_maps(
-        total_si.value, v_map, voxel_dx, voxel_dy, downsample, margin,
-        goft[main_line]["wl_grid"].cgs.value, "fig_synthetic_maps.png",
-        mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
-        sigma_factor=sigma_factor, key_pixel_colors=key_pixel_colors
-    )
+    # plot_maps(
+    #     total_si.value, v_map, voxel_dx, voxel_dy, downsample, margin,
+    #     goft[main_line]["wl_grid"].cgs.value, "fig_synthetic_maps.png",
+    #     mean_idx=mean_idx, plus_sigma_idx=plus_idx, minus_sigma_idx=minus_idx,
+    #     sigma_factor=sigma_factor, key_pixel_colors=key_pixel_colors
+    # )
 
-    plot_dems(
-        dem_map, em_tv, logT_centres, v_edges,
-        plus_idx, mean_idx, minus_idx, sigma_factor,
-        xlim=(5.5, 6.9),
-        ylim_dem=(26.5, 30),
-        ylim_2d_dem=(-50, 50),
-        save="fig_synthetic_dems.png",
-        goft=goft, main_line=main_line,
-        key_pixel_colors=key_pixel_colors,
-        logT_grid=logT_grid,
-        logN_grid=logN_grid,
-        figsize=(12, 6),
-        cbar_offset=1.325,
-        inset_axis_offset=0.77,
-    )
+    # plot_dems(
+    #     dem_map, em_tv, logT_centres, v_edges,
+    #     plus_idx, mean_idx, minus_idx, sigma_factor,
+    #     xlim=(5.5, 6.9),
+    #     ylim_dem=(26.5, 30),
+    #     ylim_2d_dem=(-50, 50),
+    #     save="fig_synthetic_dems.png",
+    #     goft=goft, main_line=main_line,
+    #     key_pixel_colors=key_pixel_colors,
+    #     logT_grid=logT_grid,
+    #     logN_grid=logN_grid,
+    #     figsize=(12, 6),
+    #     cbar_offset=1.325,
+    #     inset_axis_offset=0.77,
+    # )
 
-    plot_g_function(
-        goft, main_line, logT_grid, logN_grid,
-        save="fig_g_function.png",
-        xlim=(5.5, 6.9),
-        show_vlines=True,
-        figsize=(6, 3)
-    )
+    # plot_g_function(
+    #     goft, main_line, logT_grid, logN_grid,
+    #     save="fig_g_function.png",
+    #     xlim=(5.5, 6.9),
+    #     show_vlines=True,
+    #     figsize=(6, 3)
+    # )
 
-    plot_spectrum(
-        goft, total_si.value, goft[main_line]["wl_grid"].to('AA').value,
-        minus_idx, mean_idx, plus_idx,
-        main_line=main_line, secondary_line="Fe12_195.1790",
-        key_pixel_colors=key_pixel_colors,
-        sigma_factor=sigma_factor,
-        save="fig_synthetic_spectra.png",
-        xlim_vel=(-250, 250),
-        yorders=9,
-        ylimits=(None, 8e13),
-        main_label="Fe XII 195.119",
-        secondary_label="Fe XII 195.179",
-        figsize=(12, 6)
-    )
+    # plot_spectrum(
+    #     goft, total_si.value, goft[main_line]["wl_grid"].to('AA').value,
+    #     minus_idx, mean_idx, plus_idx,
+    #     main_line=main_line, secondary_line="Fe12_195.1790",
+    #     key_pixel_colors=key_pixel_colors,
+    #     sigma_factor=sigma_factor,
+    #     save="fig_synthetic_spectra.png",
+    #     xlim_vel=(-250, 250),
+    #     yorders=9,
+    #     ylimits=(None, 8e13),
+    #     main_label="Fe XII 195.119",
+    #     secondary_label="Fe XII 195.179",
+    #     figsize=(12, 6)
+    # )
 
-    globals().update(locals()); raise ValueError("Kicking back to ipython")
 if __name__ == "__main__":
     main()
