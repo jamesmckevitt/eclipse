@@ -7,6 +7,7 @@ import math
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
+import astropy.wcs
 from astropy.nddata import NDData
 from specutils import Spectrum1D
 from specutils.manipulation import FluxConservingResampler
@@ -34,6 +35,10 @@ import yaml
 import argparse
 import os
 import scipy.interpolate
+from ndcube import NDCube
+import pickle
+from astropy.wcs import WCS
+import reproject
 
 # ------------------------------------------------------------------
 #  Throughput helpers & AluminiumFilter
@@ -55,12 +60,12 @@ def _interp_tr(wavelength_nm: float, wl_tab: np.ndarray, tr_tab: np.ndarray) -> 
 class AluminiumFilter:
     """Multi-layer EUV filter (Al + Al₂O₃ + C) in front of SWC detector."""
     al_thickness: u.Quantity = 1500 * u.angstrom
-    oxide_thickness: u.Quantity = 100 * u.angstrom
+    oxide_thickness: u.Quantity = 95 * u.angstrom
     c_thickness: u.Quantity = 0 * u.angstrom
     mesh_throughput: float = 0.8
-    al_table: Path = Path("data/throughputs/throughput_aluminium_1000_angstrom.dat")
-    oxide_table: Path = Path("data/throughputs/throughput_aluminium_oxide_1000_angstrom.dat")
-    c_table: Path = Path("data/throughputs/throughput_carbon_1000_angstrom.dat")
+    al_table: Path = Path("data/throughput/throughput_aluminium_1000_angstrom.dat")
+    oxide_table: Path = Path("data/throughput/throughput_aluminium_oxide_1000_angstrom.dat")
+    c_table: Path = Path("data/throughput/throughput_carbon_1000_angstrom.dat")
     table_thickness: u.Quantity = 1000 * u.angstrom
 
     def total_throughput(self, wl0: u.Quantity) -> float:
@@ -139,8 +144,8 @@ class Telescope_EUVST:
     grat_eff: float = 0.0623
     psf_focus_res: u.Quantity = 0.5 * u.um / u.pixel
     psf_mesh_res: u.Quantity = 6.12e-4 * u.mm / u.pixel
-    psf_focus_file: Path = Path("data/swc/psf_euvst_v20230909_195119_focus.txt")
-    psf_mesh_file: Path = Path("data/swc/psf_euvst_v20230909_derived_195119_mesh.txt")
+    psf_focus_file: Path = Path("data/psf/psf_euvst_v20230909_195119_focus.txt")
+    psf_mesh_file: Path = Path("data/psf/psf_euvst_v20230909_derived_195119_mesh.txt")
     psf: np.ndarray | None = field(default=None, init=False)
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
 
@@ -155,19 +160,17 @@ class Telescope_EUVST:
         return self.collecting_area * self.throughput(wl0)
 
 class Telescope_EIS:
-    @property
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
         return 0.23 * u.cm**2
 
 @dataclass
 class Simulation:
   expos: u.Quantity = u.Quantity([0.5, 1, 2, 5, 10, 20, 40, 80], u.s)
-  n_iter: int = 50
+  n_iter: int = 25
   slit_width: u.Quantity = 0.2 * u.arcsec
   ncpu: int = -1
   instrument: str = "SWC"
-  vis_sl: u.Quantity = 1 * u.photon / (u.s * u.pixel)
-  contamination: list[float] = field(default_factory=lambda: [1.0])
+  vis_sl: u.Quantity = 0 * u.photon / (u.s * u.pixel)
 
   @property
   def slit_scan_step(self) -> u.Quantity:
@@ -223,6 +226,13 @@ def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
 
 
+def distance_to_angle(distance: u.Quantity) -> u.Quantity:
+    if distance.unit.physical_type != "length":
+        raise ValueError("Input must be a length")
+    # return 2 * np.arctan(distance / (2 * const.au)).to(u.rad) * u.rad
+    return (2 * np.arctan(distance / (2 * const.au))).to(u.arcsec)
+
+
 def parse_yaml_input(val):
     if isinstance(val, str):
         return u.Quantity(val)
@@ -273,6 +283,144 @@ def tqdm_joblib(tqdm_object):
         tqdm_object.close()
 
 
+def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution):
+    """
+    Resample the spectral axis of an NDCube using FluxConservingResampler.
+
+    Parameters
+    ----------
+    ndcube : NDCube
+        The input NDCube.
+    spectral_axis : int
+        The index of the spectral axis (e.g., 0, 1, or 2).
+    output_resolution : astropy.units.Quantity
+        The desired output spectral resolution (e.g., 0.01 * u.nm).
+
+    Returns
+    -------
+    NDCube
+        A new NDCube with the spectral axis resampled.
+    """
+    # Get the world coordinates of the spectral axis
+    spectral_world = ndcube.axis_world_coords(spectral_axis)[0]
+    spectral_world = spectral_world.to(output_resolution.unit)
+
+    # Define new spectral grid
+    new_spec_grid = np.arange(
+        spectral_world.min().value,
+        spectral_world.max().value + output_resolution.value,
+        output_resolution.value
+    ) * output_resolution.unit
+
+    n_spec = len(new_spec_grid)
+
+    # Move spectral axis to last for easier iteration
+    data = np.moveaxis(ndcube.data, spectral_axis, -1)
+    shape = data.shape
+    flat_data = data.reshape(-1, shape[-1])
+
+    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
+    resampled = np.zeros((flat_data.shape[0], n_spec))
+
+    def _resample_pixel(i):
+      spec = Spectrum1D(flux=flat_data[i] * ndcube.unit, spectral_axis=spectral_world)
+      res = resampler(spec, new_spec_grid)
+      return res.flux.value
+
+    with tqdm_joblib(tqdm(total=flat_data.shape[0], desc="Resampling spectral axis", unit="pixel", leave=False)):
+      results = Parallel(n_jobs=-1)(
+        delayed(_resample_pixel)(i) for i in range(flat_data.shape[0])
+      )
+    resampled = np.vstack(results)
+
+    # Reshape back to original spatial shape, but with new spectral length
+    new_shape = list(shape[:-1]) + [n_spec]
+    resampled = resampled.reshape(new_shape)
+
+    # Move spectral axis back to original position
+    resampled = np.moveaxis(resampled, -1, spectral_axis)
+
+    # Update WCS for new spectral axis
+    new_wcs = ndcube.wcs.deepcopy()
+
+    wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # Reverse axis order for WCS
+    center_pixel = (n_spec + 1) / 2  # 1-based index (FITS convention)
+    new_wcs.wcs.crpix[wcs_axis] = center_pixel
+    new_wcs.wcs.crval[wcs_axis] = new_spec_grid[int(center_pixel - 1)].to_value(new_wcs.wcs.cunit[wcs_axis])
+    new_wcs.wcs.cdelt[wcs_axis] = (new_spec_grid[1] - new_spec_grid[0]).to_value(new_wcs.wcs.cunit[wcs_axis])
+
+    return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit)
+
+
+def reproject_ndcube_heliocentric_to_helioprojective(
+    new_cube_spec: NDCube,
+    sim: Simulation,
+    det: Detector_SWC,
+) -> NDCube:
+    """ Reproject an NDCube from heliocentric to helioprojective coordinates. """
+
+    nx, ny, _ = new_cube_spec.shape
+    wcs_hc = new_cube_spec.wcs
+
+    dx = wcs_hc.wcs.cdelt[2] * wcs_hc.wcs.cunit[2]
+    dy = wcs_hc.wcs.cdelt[1] * wcs_hc.wcs.cunit[1]
+    x_angle = distance_to_angle(dx)
+    y_angle = distance_to_angle(dy)
+
+    wcs_hp = WCS(naxis=3)
+    wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
+    wcs_hp.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
+    wcs_hp.wcs.crpix = [wcs_hc.wcs.crpix[0],
+                        (ny + 1) / 2,
+                        (nx + 1) / 2]
+    wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
+    wcs_hp.wcs.cdelt = [wcs_hc.wcs.cdelt[0], y_angle.to_value(u.arcsec), x_angle.to_value(u.arcsec)]
+    new_cube_spec_hp = NDCube(new_cube_spec.data, wcs=wcs_hp, unit=new_cube_spec.unit)
+
+    nx_in, ny_in, nl_in = new_cube_spec_hp.shape
+    fov_x = nx_in * x_angle
+    fov_y = ny_in * y_angle
+    pitch_x = sim.slit_width
+    pitch_y = det.plate_scale_angle
+    nx_out = int(np.floor((fov_x / pitch_x).decompose().value))
+    ny_out = int(np.floor((fov_y / pitch_y).decompose().value))
+    shape_out = [nx_out, ny_out, nl_in]
+
+    crpix_spec = (shape_out[2] + 1) / 2
+    crpix_y = (shape_out[1] + 1) / 2
+    crpix_x = (shape_out[0] + 1) / 2
+
+    wcs_tgt = WCS(naxis=3)
+    wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
+    wcs_tgt.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
+    wcs_tgt.wcs.crpix = [crpix_spec, crpix_y, crpix_x]
+    wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
+    wcs_tgt.wcs.cdelt = [wcs_hc.wcs.cdelt[0],
+                        (det.plate_scale_angle * u.pix).to_value(u.arcsec),
+                        (sim.slit_width).to_value(u.arcsec)]
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="target cannot be converted to ICRS",
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="No observer defined on WCS, SpectralCoord will be converted without any velocity frame change",
+            category=UserWarning,
+        )
+        new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
+            wcs_tgt,
+            shape_out=shape_out,
+            algorithm='interpolation',
+            parallel=True,
+            order='bilinear',
+        ) * new_cube_spec_hp.unit
+
+    return new_cube_spec_hp_spat
+
+
 # -----------------------------------------------------------------------------
 # PSF handling
 # -----------------------------------------------------------------------------
@@ -316,175 +464,139 @@ def _combine_psfs(psf_focus: np.ndarray, psf_mesh: np.ndarray, crop: float = 0.9
 # -----------------------------------------------------------------------------
 
 
-def load_atmosphere(npz_file: str) -> Tuple[u.Quantity, u.Quantity, u.Quantity, u.Quantity, dict]:
-    dat = np.load(npz_file)
-    cube = dat["I_cube"] * (u.erg / u.s / u.cm**2 / u.sr / u.cm)
-    wl_grid = dat["wl_grid"] * u.cm
-    spt_res = dat["spt_res_x"] * (u.cm/u.pix)
-    wl0 = dat["wl0"] * u.cm
+def load_atmosphere(pkl_file: str) -> Tuple[u.Quantity, u.Quantity, dict]:
+    with open(pkl_file, "rb") as f:
+        tmp = pickle.load(f)
+    cube = tmp["sim_si"]
+    wl0 = tmp["wl0"]
     plotting = {
-        "mean_idx": tuple(dat["mean_idx"]),
-        "minus_idx": tuple(dat["minus_idx"]),
-        "plus_idx": tuple(dat["plus_idx"]),
-        "sigma_factor": float(dat["sigma_factor"]),
-        "margin": int(dat["margin"]),
+        "plus_coords": tuple(tmp["plus_coords"]),
+        "mean_coords": tuple(tmp["mean_coords"]),
+        "minus_coords": tuple(tmp["minus_coords"]),
+        "sigma_factor": float(tmp["sigma_factor"]),
+        "margin": int(tmp["margin"]),
     }
-    return cube, wl_grid, spt_res, wl0, plotting
+    return cube, wl0, plotting
 
 
 def rebin_atmosphere(
     cube_sim: u.Quantity,
-    wl_sim: u.Quantity,
-    spt_sim: u.Quantity,
     det: Detector_SWC,
     sim: Simulation,
     plotting: dict,
 ) -> Tuple[u.Quantity, u.Quantity, dict]:
-    y_pitch_out = det.plate_scale_length
-    slit_width_as = sim.slit_width
-    scan_step_as = sim.slit_scan_step
+
     print("  Spectral rebinning to instrument resolution (nx,ny,*nl*)...")
+    cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix)
 
-    wl_det = np.arange(
-        wl_sim[0].to(u.cm).value,
-        wl_sim[-1].to(u.cm).value + det.wvl_res.to(u.cm/u.pix).value,
-        det.wvl_res.to(u.cm/u.pix).value,
-    ) * wl_sim.unit
-    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
+    print("  Spatially rebinning to plate scale (nx,*ny*,nl) and slit width (*nx*,ny,nl)...")
 
-    def _reb_spec_block(block):
-        block_nx, ny, nl = block.shape
-        out = np.zeros((block_nx, ny, len(wl_det)))
-        for i in range(block_nx):
-            for j in range(ny):
-                spec = Spectrum1D(block[i, j, :] * cube_sim.unit, spectral_axis=wl_sim)
-                out[i, j, :] = resampler(spec, wl_det).flux.value
-        return out
-
-    # Parallelise over chunks along the first axis for better scaling
-    n_chunks = min(16, cube_sim.shape[0])
-    chunk_size = cube_sim.shape[0] // n_chunks
-    blocks = [
-        cube_sim.value[i * chunk_size : (i + 1) * chunk_size if i < n_chunks - 1 else cube_sim.shape[0]]
-        for i in range(n_chunks)
-    ]
-
-    # total number of blocks corresponds to the number of Parallel tasks
-    with tqdm_joblib(tqdm(total=len(blocks), desc="  > spectral rebin", leave=False)):
-        results = Parallel(n_jobs=sim.ncpu if sim.ncpu > 0 else -1)(
-            delayed(_reb_spec_block)(block) for block in blocks
-        )
-
-    cube_spec = np.concatenate(results, axis=0) * cube_sim.unit
-
-    # ------------------------------------------------------------------
-    # Helper: flux-conserving resample of a 3-D cube along one axis
-    # ------------------------------------------------------------------
-    def _resample_axis(cube, old_step, new_step, axis, n_jobs):
-        """
-        Parameters
-        ----------
-        cube : Quantity[(Nx, Ny, Nl)]
-            The data cube.
-        old_step : Quantity
-            Physical size of one native pixel (same units for X & Y).
-        new_step : Quantity
-            Desired size of one output pixel (same units as old_step).
-        axis : {0, 1}
-            0 → rebin X (first) axis, 1 → rebin Y (second) axis.
-        n_jobs : int
-            Passed to joblib.Parallel.
-
-        Returns
-        -------
-        reb : Quantity
-            Cube rebinned along `axis`, flux conserved.
-        """
-        # ---------- coordinate grids ------------------------------------------------
-        if axis == 0:         # X axis
-            Nx, Ny, Nl = cube.shape
-            Ny_range   = range(Ny)
-            N_in       = Nx
-        else:                 # Y axis
-            Nx, Ny, Nl = cube.shape
-            Ny_range   = range(Nx)          # we will iterate over X instead
-            N_in       = Ny
-
-        x_in   = np.arange(N_in) * old_step               # pixel centres
-        tot_len = N_in * old_step
-        N_out = int(np.floor((tot_len / new_step).decompose().value))
-        x_out = (np.arange(N_out) + 0.5) * new_step       # centre of each new pixel
-
-        # ---------- single 1-D resampler we re-use everywhere -----------------------
-        fcr = FluxConservingResampler(extrapolation_treatment="zero_fill")
-
-        # ---------- loop over “rows" in parallel ------------------------------------
-        def _one_row(j):
-            """
-            Resample one (λ-stacked) 1-D row: either (Nx, Nl) at fixed Y
-            or (Ny, Nl) at fixed X, depending on `axis`.
-            Returns a 2-D array (N_out, Nl) in plain numpy dtype.
-            """
-            if axis == 0:                          # rebin along X for fixed Y=j
-                row = cube[:, j, :]                # shape (Nx, Nl)
-            else:                                  # rebin along Y for fixed X=j
-                row = cube[j, :, :]                # shape (Ny, Nl)
-
-            out = np.empty((N_out, Nl), dtype=cube.dtype)
-            for k in range(Nl):
-                spec = Spectrum1D(row[:, k] * cube.unit, spectral_axis=x_in)
-                out[:, k] = fcr(spec, x_out).flux.value
-            return out
-
-        with tqdm_joblib(
-            tqdm(total=len(Ny_range), desc="  > spatial rebin", leave=False)
-        ):
-            stacked = Parallel(n_jobs=n_jobs)(
-                delayed(_one_row)(j) for j in Ny_range
-            )
-
-        # ---------- assemble cube back in correct orientation -----------------------
-        reb_val = np.stack(stacked, axis=1 if axis == 0 else 0)  # (N_out, Ny, Nl) or (Nx, N_out, Nl)
-        return reb_val * cube.unit
-    # ------------------------------------------------------------------
-
-
-    print("  Scanning slit across observation (*nx*,ny,nl)...")
-    dx_len   = (spt_sim * u.pix).to(u.cm) if spt_sim.unit.is_equivalent(u.cm/u.pix) else spt_sim.to(u.cm)
-    slit_w   = angle_to_distance(slit_width_as).to(u.cm)
-    cube_scan = _resample_axis(
+    # Reproject does not support non-celestial WCS (07/2025), so can't reproject directly.
+    # The workaround: Turn existing NDCube into a new one with celestial WCS, then reproject to the appropriate resolution.
+    # The next problem: NDCube does not (because astropy does not) support flux-conserving reprojection.
+    # The interpolation sampling can be done with a new function here:
+    # Reproject to helioprojective coordinates with new spatial resolution
+    cube_det = reproject_ndcube_heliocentric_to_helioprojective(
         cube_spec,
-        old_step = dx_len,
-        new_step = slit_w,
-        axis     = 0,                # rebin X
-        n_jobs   = sim.ncpu if sim.ncpu > 0 else -1,
+        sim,
+        det
     )
 
-    print("  Rebinning each slit scan to detector plate scale (nx,*ny*,nl)...")
-    y_pitch_cm = (y_pitch_out * u.pix).to(u.cm) if y_pitch_out.unit.is_equivalent(u.cm/u.pix) else y_pitch_out.to(u.cm)
-    cube_det = _resample_axis(
-        cube_scan,
-        old_step = dx_len,           # same native step in Y
-        new_step = y_pitch_cm,
-        axis     = 1,                # rebin Y
-        n_jobs   = sim.ncpu if sim.ncpu > 0 else -1,
-    )
+    # The original approach, not compatible with NDCube, was to hack the flux conserving spectral resampler to conserve flux, included here:
+    # # ------------------------------------------------------------------
+    # # Helper: flux-conserving resample of a 3-D cube along one axis
+    # # ------------------------------------------------------------------
+    # def _resample_axis(cube, old_step, new_step, axis, n_jobs):
+    #     """
+    #     Parameters
+    #     ----------
+    #     cube : Quantity[(Nx, Ny, Nl)]
+    #         The data cube.
+    #     old_step : Quantity
+    #         Physical size of one native pixel (same units for X & Y).
+    #     new_step : Quantity
+    #         Desired size of one output pixel (same units as old_step).
+    #     axis : {0, 1}
+    #         0 → rebin X (first) axis, 1 → rebin Y (second) axis.
+    #     n_jobs : int
+    #         Passed to joblib.Parallel.
 
-    # --- Calculate new iloc for plotting indices ---
-    def map_idx(idx):
-        if idx is None:
-            return None
-        x_factor = (spt_sim / angle_to_distance(scan_step_as)).decompose().value
-        y_factor = (spt_sim / y_pitch_out).decompose().value
-        x_new = int(round(idx[0] * x_factor))
-        y_new = int(round(idx[1] * y_factor))
-        return (x_new, y_new)
+    #     Returns
+    #     -------
+    #     reb : Quantity
+    #         Cube rebinned along `axis`, flux conserved.
+    #     """
+    #     # ---------- coordinate grids ------------------------------------------------
+    #     if axis == 0:         # X axis
+    #         Nx, Ny, Nl = cube.shape
+    #         Ny_range   = range(Ny)
+    #         N_in       = Nx
+    #     else:                 # Y axis
+    #         Nx, Ny, Nl = cube.shape
+    #         Ny_range   = range(Nx)          # we will iterate over X instead
+    #         N_in       = Ny
 
-    plotting_new = plotting.copy()
-    for key in ["mean_idx", "minus_idx", "plus_idx"]:
-        plotting_new[key] = map_idx(plotting.get(key))
+    #     x_in   = np.arange(N_in) * old_step               # pixel centres
+    #     tot_len = N_in * old_step
+    #     N_out = int(np.floor((tot_len / new_step).decompose().value))
+    #     x_out = (np.arange(N_out) + 0.5) * new_step       # centre of each new pixel
 
-    return cube_det, wl_det, plotting_new
+    #     # ---------- single 1-D resampler we re-use everywhere -----------------------
+    #     fcr = FluxConservingResampler(extrapolation_treatment="zero_fill")
+
+    #     # ---------- loop over “rows" in parallel ------------------------------------
+    #     def _one_row(j):
+    #         """
+    #         Resample one (λ-stacked) 1-D row: either (Nx, Nl) at fixed Y
+    #         or (Ny, Nl) at fixed X, depending on `axis`.
+    #         Returns a 2-D array (N_out, Nl) in plain numpy dtype.
+    #         """
+    #         if axis == 0:                          # rebin along X for fixed Y=j
+    #             row = cube[:, j, :]                # shape (Nx, Nl)
+    #         else:                                  # rebin along Y for fixed X=j
+    #             row = cube[j, :, :]                # shape (Ny, Nl)
+
+    #         out = np.empty((N_out, Nl), dtype=cube.dtype)
+    #         for k in range(Nl):
+    #             spec = Spectrum1D(row[:, k] * cube.unit, spectral_axis=x_in)
+    #             out[:, k] = fcr(spec, x_out).flux.value
+    #         return out
+
+    #     with tqdm_joblib(
+    #         tqdm(total=len(Ny_range), desc="  > spatial rebin", leave=False)
+    #     ):
+    #         stacked = Parallel(n_jobs=n_jobs)(
+    #             delayed(_one_row)(j) for j in Ny_range
+    #         )
+
+    #     # ---------- assemble cube back in correct orientation -----------------------
+    #     reb_val = np.stack(stacked, axis=1 if axis == 0 else 0)  # (N_out, Ny, Nl) or (Nx, N_out, Nl)
+    #     return reb_val * cube.unit
+    # # ------------------------------------------------------------------
+
+
+    # print("  Scanning slit across observation (*nx*,ny,nl)...")
+    # dx_len   = (spt_sim * u.pix).to(u.cm) if spt_sim.unit.is_equivalent(u.cm/u.pix) else spt_sim.to(u.cm)
+    # slit_w   = angle_to_distance(slit_width_as).to(u.cm)
+    # cube_scan = _resample_axis(
+    #     cube_spec,
+    #     old_step = dx_len,
+    #     new_step = slit_w,
+    #     axis     = 0,                # rebin X
+    #     n_jobs   = sim.ncpu if sim.ncpu > 0 else -1,
+    # )
+
+    # print("  Rebinning each slit scan to detector plate scale (nx,*ny*,nl)...")
+    # y_pitch_cm = (y_pitch_out * u.pix).to(u.cm) if y_pitch_out.unit.is_equivalent(u.cm/u.pix) else y_pitch_out.to(u.cm)
+    # cube_det = _resample_axis(
+    #     cube_scan,
+    #     old_step = dx_len,           # same native step in Y
+    #     new_step = y_pitch_cm,
+    #     axis     = 1,                # rebin Y
+    #     n_jobs   = sim.ncpu if sim.ncpu > 0 else -1,
+    # )
+
+    return cube_det
 
 
 # -----------------------------------------------------------------------------
@@ -573,8 +685,10 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
             return np.array([-1, -1, -1, -1])
 
 
-def fit_cube_gauss(signal_cube: u.Quantity, wv: u.Quantity, n_jobs: int = Simulation.ncpu) -> u.Quantity:
+# def fit_cube_gauss(signal_cube: u.Quantity, wv: u.Quantity, n_jobs: int = Simulation.ncpu) -> u.Quantity:
+def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> u.Quantity:
     n_scan, n_slit, _ = signal_cube.shape
+    wv = signal_cube.axis_world_coords(2)[0].cgs
 
     def _fit_block(block):
         block_nx, n_slit, n_wl = block.shape
@@ -583,19 +697,12 @@ def fit_cube_gauss(signal_cube: u.Quantity, wv: u.Quantity, n_jobs: int = Simula
             for j in range(n_slit):
                 out[i, j, :] = _fit_one(wv.value, block[i, j, :])
         return out
-
-    n_chunks = min(16, signal_cube.shape[0])
-    chunk_size = signal_cube.shape[0] // n_chunks
-    blocks = [
-        signal_cube.value[i * chunk_size : (i + 1) * chunk_size if i < n_chunks - 1 else signal_cube.shape[0]]
-        for i in range(n_chunks)
-    ]
-    # use context manager so tqdm works with joblib
-    with tqdm_joblib(tqdm(total=len(blocks), desc="Fit chunks", leave=False)):
-        results = Parallel(n_jobs=n_jobs if n_jobs > 0 else -1)(
-            delayed(_fit_block)(block) for block in blocks
+    
+    with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks", leave=False)):
+        arr = Parallel(n_jobs=n_jobs if n_jobs > 0 else -1)(
+            delayed(_fit_block)(signal_cube.data[i:i+1]) for i in range(n_scan)
         )
-    arr = np.concatenate(results, axis=0)
+
     return arr * np.array([signal_cube.unit, wv.unit, wv.unit, signal_cube.unit])
 
 
@@ -634,14 +741,14 @@ def monte_carlo(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det:
 def velocity_from_fit(
     fit_arr: u.Quantity | np.ndarray,
     wl0: u.Quantity,
-    chunk_size: int = 128,
+    n_jobs: int = -1,
 ) -> u.Quantity:
     """
     Convert fitted line centres to LOS velocity.
     Works with either a Quantity array or an object-dtype array whose
-    elements are Quantities. A tqdm bar (leave=False) shows progress.
+    elements are Quantities. Uses joblib.Parallel for speed.
     """
-    centres_raw = fit_arr[..., 1]                       # (n_scan, n_slit)
+    centres_raw = fit_arr[..., 1]  # (n_scan, n_slit)
     # Ensure we have a pure Quantity array
     if isinstance(centres_raw, u.Quantity):
         centres = centres_raw.to(wl0.unit)
@@ -650,17 +757,18 @@ def velocity_from_fit(
         centres = u.Quantity(get_val(centres_raw), wl0.unit)
 
     n_scan = centres.shape[0]
-    v_val = np.empty_like(centres.value)                # float buffer
-    mask_bad = np.all(fit_arr == -1, axis=-1)
 
-    for i0 in tqdm(range(0, n_scan, chunk_size),
-                   desc="Velocity", leave=False):
-        i1 = min(i0 + chunk_size, n_scan)
-        v_chunk = ((centres[i0:i1] - wl0) / wl0 * const.c).to(u.cm/u.s)
-        v_val[i0:i1] = v_chunk.value
+    def _one_row(i):
+        return ((centres[i] - wl0) / wl0 * const.c).to(u.cm / u.s).value
+
+    with tqdm_joblib(tqdm(total=n_scan, desc="Velocity calc", leave=False)):
+        v_val = np.array(
+            Parallel(n_jobs=n_jobs)(
+                delayed(_one_row)(i) for i in range(n_scan)
+            )
+        )
 
     v = v_val * (u.cm / u.s)
-    v = np.where(mask_bad, -1 * u.cm / u.s, v)
     return v
 
 
@@ -697,15 +805,17 @@ def main() -> None:
     instrument = config.get("instrument", "SWC").upper()
     psf = config.get("psf", False)
     exposures = config.get("expos", [1])
-    n_iter = config.get("n_iter", 5)
+    n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
     slit_width = config.get("slit_width", '0.2 arcsec')
     oxide_thickness = config.get("oxide_thickness", '0 nm')
     c_thickness = config.get("c_thickness", '0 nm')
+    vis_sl = config.get("vis_sl", '0 photon / (s * pixel)')
 
     slit_width = parse_yaml_input(slit_width)
     oxide_thickness = parse_yaml_input(oxide_thickness)
     c_thickness = parse_yaml_input(c_thickness)
+    vis_sl = parse_yaml_input(vis_sl)
 
     if instrument == "SWC":
         filter_obj = AluminiumFilter(
@@ -722,13 +832,16 @@ def main() -> None:
     else:
         raise ValueError(f"Unknown instrument: {instrument}")
 
-    SIM = Simulation(
+    SIM_kwargs = dict(
         expos=u.Quantity(exposures, u.s),
         n_iter=n_iter,
         slit_width=slit_width,
         ncpu=ncpu,
         instrument=instrument,
     )
+    SIM_kwargs["vis_sl"] = vis_sl
+
+    SIM = Simulation(**SIM_kwargs)
 
     # Load PSF (only for SWC/EUVST)
     if instrument == "SWC" and psf:
@@ -741,13 +854,15 @@ def main() -> None:
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
-    cube_sim, wl_sim, spt_sim, wl0, plotting = load_atmosphere("synthesised_spectra.npz")
+    cube_sim, wl0, plotting = load_atmosphere("./run/input/synthesised_spectra.pkl")
 
     print("Rebinning atmosphere cube to instrument resolution for each slit position...")
-    cube_reb, wl_axis, plotting = rebin_atmosphere(cube_sim, wl_sim, spt_sim, DET, SIM, plotting)
+    cube_reb = rebin_atmosphere(cube_sim, DET, SIM, plotting)
+
+    globals().update(locals());raise ValueError("Kicking back to ipython")
 
     print("Fitting ground truth cube...")
-    fit_truth = fit_cube_gauss(cube_reb.cgs, wl_axis.cgs)
+    fit_truth = fit_cube_gauss(cube_reb)
     v_true = velocity_from_fit(fit_truth, wl0)
 
     # --- Efficient in-memory buffers for post-loop plotting -----------------
@@ -763,7 +878,7 @@ def main() -> None:
             cube_reb, wl_axis, t_exp, DET, TEL, SIM, wl0, n_iter=SIM.n_iter
         )
         sec = t_exp.to_value(u.s)
-        first_signal_per_exp[sec] = signals[0]          # tuple of 8 stages
+        first_signal_per_exp[sec] = signals[0][-1]
         first_fit_per_exp[sec]    = fits[0]
         analysis_per_exp[sec]     = analyse(fits, v_true, wl0)
         del signals, fits
@@ -775,21 +890,28 @@ def main() -> None:
         "analysis_per_exp": analysis_per_exp,
     }
 
-    # Save all results and configuration to a compressed npz file
-    config_base = os.path.splitext(os.path.basename(args.config))[0]
-    output_file = f"{config_base}_results.npz"
+    # Ensure input config path is of the form "run/input/XXXX.yaml"
+    config_path = Path(args.config)
+    if not (config_path.parent == Path("run/input") and config_path.suffix == ".yaml"):
+        raise ValueError("Config file must be in 'run/input/XXXX.yaml' format.")
+
+    # Prepare output path in run/result/XXXX.pkl
+    config_base = config_path.stem
+    output_dir = Path("run/result")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f"{config_base}.pkl"
 
     # Gather configuration and instrument/detector/telescope settings
     config_dict = {
-      "config": config,
-      "instrument": instrument,
-      "DET": DET,
-      "TEL": TEL,
-      "SIM": SIM,
+        "config": config,
+        "instrument": instrument,
+        "DET": DET,
+        "TEL": TEL,
+        "SIM": SIM,
     }
 
     # Save results and all plotting-relevant objects using numpy
-    with open(output_file.replace(".npz", ".pkl"), "wb") as f:
+    with open(output_file, "wb") as f:
         dill.dump({
             "results": results,
             "config": config_dict,
@@ -801,7 +923,76 @@ def main() -> None:
             "DET": DET,
             "SIM": SIM,
         }, f)
-    print(f"Saved results and configuration to {output_file.replace('.npz', '.pkl')} ({os.path.getsize(output_file.replace('.npz', '.pkl')) / 1e6:.1f} MB)")
+    print(f"Saved results and configuration to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+
+
+
+
+
+    saved_vars = {
+        "results": results,
+        "config": config_dict,
+        "plotting": plotting,
+        "cube_reb": cube_reb,
+        "wl_axis": wl_axis,
+        "wl0": wl0,
+        "spt_sim": spt_sim,
+        "DET": DET,
+        "SIM": SIM,
+    }
+
+    print("\nSaved variable sizes (MB):")
+    import gc
+
+    def total_size(o, handlers={}, verbose=False):
+        """Returns the approximate memory footprint of an object and all of its contents."""
+        from sys import getsizeof
+        from itertools import chain
+        from collections import deque
+        from astropy.wcs import WCS
+
+        dict_handler = lambda d: chain.from_iterable(d.items())
+        all_handlers = {tuple: iter,
+                        list: iter,
+                        deque: iter,
+                        dict: dict_handler,
+                        set: iter,
+                        frozenset: iter,
+                       }
+        all_handlers.update(handlers)
+        seen = set()
+        default_size = getsizeof(0)
+
+        def sizeof(o):
+            if id(o) in seen:
+                return 0
+            seen.add(id(o))
+            s = getsizeof(o, default_size)
+
+            if hasattr(o, "nbytes"):
+                try:
+                    s = o.nbytes
+                except Exception:
+                    pass
+
+            for typ, handler in all_handlers.items():
+                if isinstance(o, typ):
+                    s += sum(map(sizeof, handler(o)))
+                    break
+            return s
+
+        return sizeof(o)
+
+    for k, v in saved_vars.items():
+        size_bytes = total_size(v)
+        print(f"  {k:12s}: {size_bytes / 1e6:.4f} MB")
+
+
+    # seperately, print the size of the items in the results dict
+    print("\nSaved results sizes (MB):")
+    for k, v in results.items():
+        size_bytes = total_size(v)
+        print(f"  {k:12s}: {size_bytes / 1e6:.4f} MB")
 
 if __name__ == "__main__":
     main()
