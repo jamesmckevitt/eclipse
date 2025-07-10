@@ -6,6 +6,7 @@
 *.h5
 *.npz
 data/**
+run/**
 *.pkl
 *.out
 *.sh
