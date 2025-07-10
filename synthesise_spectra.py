@@ -1395,8 +1395,6 @@ def main() -> None:
     dwl = np.diff(goft[main_line]["wl_grid"].to(u.cm))
     total_ii = np.sum(total_si[:, :, :-1] * dwl, axis=2)
 
-    # globals().update(locals());raise ValueError("Kicking back to ipython")
-
     # ----------------------------------------------------------
     # make heliocentric ndcubes
     # ----------------------------------------------------------
@@ -1406,6 +1404,9 @@ def main() -> None:
     wcs.wcs.ctype = ['WAVE', 'SOLY', 'SOLX']
     wcs.wcs.cunit = ['cm', 'Mm', 'Mm']
     wcs.wcs.crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]
+    wcs.wcs.crval = [goft[main_line]["wl0"].to(u.cm).value,
+                     0,
+                     0]
     wcs.wcs.cdelt = [np.diff(goft[main_line]["wl_grid"].to(u.cm).value)[0],
                      voxel_dy.to(u.Mm).value,
                      voxel_dx.to(u.Mm).value
@@ -1413,7 +1414,10 @@ def main() -> None:
     sim_si = NDCube(
         total_si,
         wcs=wcs,
-        unit=total_si.unit
+        unit=total_si.unit,
+        meta={
+            "rest_wav": goft[main_line]["wl0"]
+        }
     )
 
     nx, ny = total_ii.shape
@@ -1426,7 +1430,10 @@ def main() -> None:
     sim_ii = NDCube(
         data=total_ii,
         wcs=wcs,
-        unit=total_ii.unit
+        unit=total_ii.unit,
+        meta={
+            "rest_wav": goft[main_line]["wl0"]
+        }
     )
 
     sigma_factor = 1.0
@@ -1440,12 +1447,14 @@ def main() -> None:
     # ----------------------------------------------------------------------
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    output_file = f"synthesised_spectra_{timestamp}.pkl"
+    scratch_dir = Path("scratch")
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    output_file = scratch_dir / f"synthesised_spectra_{timestamp}.pkl"
     with open(output_file, "wb") as f:
         pickle.dump({
             "sim_si": sim_si,
             "sim_ii": sim_ii,
-            "wl0": goft[main_line]["wl0"].to(u.cm).value,
             "plus_coords": plus_coords,
             "mean_coords": mean_coords,
             "minus_coords": minus_coords,
@@ -1454,7 +1463,6 @@ def main() -> None:
         }, f)
     print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
 
-    # Copy the output_file to the desired location, overwriting if it exists
     dest_path = Path("./run/input/synthesised_spectra.pkl")
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(output_file, dest_path)
