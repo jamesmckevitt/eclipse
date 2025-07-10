@@ -1023,7 +1023,10 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     config_path = Path(args.config)
     config_base = config_path.stem
-    output_file = f"instrument_response_{config_base}_{timestamp}.pkl"
+    scratch_dir = Path("scratch")
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    output_file = scratch_dir / f"instrument_response_{config_base}_{timestamp}.pkl"
     with open(output_file, "wb") as f:
         dill.dump({
             "results": results,
@@ -1043,10 +1046,11 @@ def main() -> None:
     shutil.copyfile(output_file, dest_path)
     print(f"Copied {output_file} to {dest_path})")
 
-    output_file = f"instrument_response_session_{config_base}_{timestamp}.pkl"
+    # Save dill session to scratch directory
+    session_file = scratch_dir / f"instrument_response_session_{config_base}_{timestamp}.pkl"
     globals().update(locals())
-    dill.dump_session(output_file)
-    print(f"Saved session to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+    dill.dump_session(session_file)
+    print(f"Saved session to {session_file} ({os.path.getsize(session_file) / 1e6:.1f} MB)")
 
 if __name__ == "__main__":
 
