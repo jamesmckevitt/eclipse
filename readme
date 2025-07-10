@@ -1,0 +1,19 @@
+Edit make_gofnt.pro with the desired emission lines. CHIANTI can be used to identify these.
+
+Run this with:
+
+idl -e "make_goft"
+
+Run the line synthesis using:
+
+python synthesise_spectra.py
+
+Run the instrument response function using:
+
+python instr_response.py --config ./run/input/config.yaml
+
+This can be looped in bash using:
+
+for config in ./run/input/*.yaml; do
+  python instr_response.py --config "$config"
+done
