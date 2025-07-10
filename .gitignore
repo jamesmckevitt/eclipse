@@ -10,3 +10,4 @@ run/**
 *.pkl
 *.out
 *.sh
+__pycache__/**

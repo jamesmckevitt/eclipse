@@ -1,4 +1,4 @@
-Edit make_gofnt.pro with the desired emission lines. CHIANTI can be used to identify these.
+Edit make_gofnt.pro with the desired emission lines and location of CHIANTI files. CHIANTI can be used to identify these.
 
 Run this with:
 
