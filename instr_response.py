@@ -30,6 +30,7 @@ from matplotlib.legend_handler import HandlerBase
 import matplotlib
 import dill
 import os
+import shutil
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import yaml
 import argparse
@@ -349,7 +350,7 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution):
     new_wcs.wcs.crval[wcs_axis] = new_spec_grid[int(center_pixel - 1)].to_value(new_wcs.wcs.cunit[wcs_axis])
     new_wcs.wcs.cdelt[wcs_axis] = (new_spec_grid[1] - new_spec_grid[0]).to_value(new_wcs.wcs.cunit[wcs_axis])
 
-    return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit)
+    return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
 
 
 def reproject_ndcube_heliocentric_to_helioprojective(
@@ -375,7 +376,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(
                         (nx + 1) / 2]
     wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
     wcs_hp.wcs.cdelt = [wcs_hc.wcs.cdelt[0], y_angle.to_value(u.arcsec), x_angle.to_value(u.arcsec)]
-    new_cube_spec_hp = NDCube(new_cube_spec.data, wcs=wcs_hp, unit=new_cube_spec.unit)
+    new_cube_spec_hp = NDCube(new_cube_spec.data, wcs=wcs_hp, unit=new_cube_spec.unit, meta=new_cube_spec.meta)
 
     nx_in, ny_in, nl_in = new_cube_spec_hp.shape
     fov_x = nx_in * x_angle
@@ -399,24 +400,13 @@ def reproject_ndcube_heliocentric_to_helioprojective(
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec),
                         (sim.slit_width).to_value(u.arcsec)]
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="target cannot be converted to ICRS",
-            category=UserWarning,
-        )
-        warnings.filterwarnings(
-            "ignore",
-            message="No observer defined on WCS, SpectralCoord will be converted without any velocity frame change",
-            category=UserWarning,
-        )
-        new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
-            wcs_tgt,
-            shape_out=shape_out,
-            algorithm='interpolation',
-            parallel=True,
-            order='bilinear',
-        ) * new_cube_spec_hp.unit
+    new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
+        wcs_tgt,
+        shape_out=shape_out,
+        algorithm='interpolation',
+        parallel=True,
+        order='bilinear',
+    ) * new_cube_spec_hp.unit
 
     return new_cube_spec_hp_spat
 
@@ -468,7 +458,6 @@ def load_atmosphere(pkl_file: str) -> Tuple[u.Quantity, u.Quantity, dict]:
     with open(pkl_file, "rb") as f:
         tmp = pickle.load(f)
     cube = tmp["sim_si"]
-    wl0 = tmp["wl0"]
     plotting = {
         "plus_coords": tuple(tmp["plus_coords"]),
         "mean_coords": tuple(tmp["mean_coords"]),
@@ -476,14 +465,13 @@ def load_atmosphere(pkl_file: str) -> Tuple[u.Quantity, u.Quantity, dict]:
         "sigma_factor": float(tmp["sigma_factor"]),
         "margin": int(tmp["margin"]),
     }
-    return cube, wl0, plotting
+    return cube, plotting
 
 
 def rebin_atmosphere(
     cube_sim: u.Quantity,
     det: Detector_SWC,
     sim: Simulation,
-    plotting: dict,
 ) -> Tuple[u.Quantity, u.Quantity, dict]:
 
     print("  Spectral rebinning to instrument resolution (nx,ny,*nl*)...")
@@ -603,12 +591,15 @@ def rebin_atmosphere(
 # Radiometric pipeline
 # -----------------------------------------------------------------------------
 
-def intensity_to_photons(I: u.Quantity, wl_axis: u.Quantity) -> u.Quantity:
+def intensity_to_photons(I: u.Quantity) -> u.Quantity:
+    wl_axis = I.axis_world_coords(2)[0]
     E_ph = (const.h * const.c / wl_axis).to("erg") * (1 / u.photon)
     return (I / E_ph).to(u.photon / u.s / u.cm**2 / u.sr / u.cm)
 
 
-def add_effective_area(ph_cm2_sr_cm_s: u.Quantity, tel: Telescope_EUVST, wl0: u.Quantity, wl_axis: u.Quantity) -> u.Quantity:
+def add_effective_area(ph_cm2_sr_cm_s: u.Quantity, tel: Telescope_EUVST) -> u.Quantity:
+    wl0 = ph_cm2_sr_cm_s.meta['rest_wav']
+    wl_axis = ph_cm2_sr_cm_s.axis_world_coords(2)[0]
     A_eff = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
     return ph_cm2_sr_cm_s * A_eff
 
@@ -618,43 +609,181 @@ def photons_to_pixel_rate(ph_sr_cm_s: u.Quantity, wl_pitch: u.Quantity, plate_sc
     return ph_sr_cm_s * pixel_solid_angle * wl_pitch
 
 
-def apply_psf(signal: u.Quantity, psf: np.ndarray) -> u.Quantity:
-    n_scan, n_slit, _ = signal.shape
-    blurred = np.empty_like(signal.value)
+def apply_psf(signal: NDCube, psf: np.ndarray) -> NDCube:
+    """
+    Convolve each detector row (first axis) of an NDCube with a 2-D PSF.
+
+    Parameters
+    ----------
+    signal : NDCube
+        Input cube with shape (n_scan, n_slit, n_lambda).
+        The first axis is stepped by the raster scan.
+    psf : np.ndarray
+        2-D point-spread function sampled on the detector grid
+        (dispersion x slit-height).
+
+    Returns
+    -------
+    NDCube
+        New cube with identical WCS / unit / meta but PSF-blurred data.
+    """
+    data_in = signal.data                       # ndarray view (no units)
+    n_scan   = data_in.shape[0]
+
+    blurred = np.empty_like(data_in)
     for i in range(n_scan):
-        blurred[i] = convolve2d(signal.value[i], psf, mode="same")
-    return blurred * signal.unit
+        blurred[i] = convolve2d(data_in[i], psf, mode="same")
+
+    return NDCube(
+        data=blurred,
+        wcs=signal.wcs.deepcopy(),
+        unit=signal.unit,
+        meta=signal.meta,
+    )
 
 
-def to_electrons(photon_rate: u.Quantity, t_exp: u.Quantity, det: Detector_SWC) -> u.Quantity:
-    e_per_ph = fano_noise(det.e_per_ph_euv.value, det.si_fano) * u.electron / u.photon
-    e = photon_rate * t_exp * det.qe_euv * e_per_ph
-    e += det.dark_current * t_exp
-    e += np.random.normal(0, det.read_noise_rms.value, photon_rate.shape) * (u.electron / u.pixel)
-    e[e < 0] = 0
-    return e
+def to_electrons(photon_rate: NDCube, t_exp: u.Quantity, det: Detector_SWC) -> NDCube:
+    """
+    Convert a photon-rate NDCube to an electron-count NDCube.
+
+    Parameters
+    ----------
+    photon_rate : NDCube
+        Cube of photon s⁻¹ pixel⁻¹.
+    t_exp : Quantity
+        Exposure time.
+    det : Detector_SWC
+        Detector description.
+
+    Returns
+    -------
+    NDCube
+        Electron counts per pixel for the given exposure.
+    """
+    rate_q = photon_rate.data * photon_rate.unit                      # Quantity array
+
+    e_per_ph = fano_noise(det.e_per_ph_euv.value, det.si_fano) * (u.electron / u.photon)
+
+    e = rate_q * t_exp * det.qe_euv * e_per_ph                        # signal
+    e += det.dark_current * t_exp                                     # dark current
+    e += np.random.normal(0, det.read_noise_rms.value,
+                          photon_rate.data.shape) * (u.electron / u.pixel)  # read noise
+
+    e = e.to(u.electron / u.pixel)
+    e_val = e.value
+    e_val[e_val < 0] = 0                                              # clip negatives
+
+    return NDCube(
+        data=e_val,
+        wcs=photon_rate.wcs.deepcopy(),
+        unit=e.unit,
+        meta=photon_rate.meta,
+    )
 
 
-def to_dn(electrons: u.Quantity, det: Detector_SWC) -> u.Quantity:
-    dn = electrons / det.gain_e_per_dn
-    dn = dn.to(det.max_dn.unit)
-    dn[dn > det.max_dn] = det.max_dn
-    return dn
+def to_dn(electrons: NDCube, det: Detector_SWC) -> NDCube:
+    """
+    Convert an electron-count NDCube to DN and clip at the detector's full-well.
+
+    Parameters
+    ----------
+    electrons : NDCube
+        Electron counts per pixel (u.electron / u.pixel).
+    det : Detector_SWC
+        Detector description containing the gain and max DN.
+
+    Returns
+    -------
+    NDCube
+        Same cube in DN / pixel, with values clipped to det.max_dn.
+    """
+    dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
+    dn_q = dn_q.to(det.max_dn.unit)
+
+    dn_val = dn_q.value
+    dn_val[dn_val > det.max_dn.value] = det.max_dn.value                  # clip
+
+    return NDCube(
+        data=dn_val,
+        wcs=electrons.wcs.deepcopy(),
+        unit=dn_q.unit,
+        meta=electrons.meta,
+    )
 
 
 # -----------------------------------------------------------------------------
 # Noise & stray-light models
 # -----------------------------------------------------------------------------
 
-def add_poisson(data: u.Quantity) -> u.Quantity:
-    unit = data.unit
-    return np.random.poisson(data.value) * unit
+def add_poisson(cube: NDCube) -> NDCube:
+    """
+    Apply Poisson noise to an input NDCube and return a new NDCube
+    with the same WCS, unit, and metadata.
+
+    Parameters
+    ----------
+    cube : NDCube
+        Input data cube.
+
+    Returns
+    -------
+    NDCube
+        New cube containing Poisson-noised data.
+    """
+    noisy = np.random.poisson(cube.data) * cube.unit
+    return NDCube(
+        data=noisy.value,
+        wcs=cube.wcs.deepcopy(),
+        unit=noisy.unit,
+        meta=cube.meta,
+    )
 
 
-def add_stray_light(electrons: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, sim: Simulation) -> u.Quantity:
-    n_vis_ph = np.random.poisson((sim.vis_sl * t_exp).value, size=electrons.shape) * (u.photon / u.pixel)
+def add_stray_light(
+    electrons: NDCube,
+    t_exp: u.Quantity,
+    det: Detector_SWC,
+    sim: Simulation
+) -> NDCube:
+    """
+    Add visible-light stray-light to a cube of electron counts.
+
+    Parameters
+    ----------
+    electrons : NDCube
+        Electron counts per pixel (unit: u.electron / u.pixel).
+    t_exp : astropy.units.Quantity
+        Exposure time.
+    det : Detector_SWC
+        Detector description.
+    sim : Simulation
+        Simulation parameters (contains vis_sl - photon/s/pix).
+
+    Returns
+    -------
+    NDCube
+        New cube with stray-light signal added.
+    """
+    # Draw Poisson realisation of stray-light photons
+    n_vis_ph = np.random.poisson(
+        (sim.vis_sl * t_exp).to_value(u.photon / u.pixel),
+        size=electrons.data.shape
+    ) * (u.photon / u.pixel)
+
+    # Convert photons to electrons
     e_per_ph = fano_noise(det.e_per_ph_vis.value, det.si_fano) * (u.electron / u.photon)
-    return electrons + n_vis_ph * e_per_ph * det.qe_vis
+    stray_e  = n_vis_ph * e_per_ph * det.qe_vis               # u.electron / pixel
+
+    # Add to original signal
+    out_q = electrons.data * electrons.unit + stray_e
+    out_q = out_q.to(electrons.unit)
+
+    return NDCube(
+        data=out_q.value,
+        wcs=electrons.wcs.deepcopy(),
+        unit=out_q.unit,
+        meta=electrons.meta,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -710,27 +839,24 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> u.Quantity:
 # Monte-Carlo wrapper
 # -----------------------------------------------------------------------------
 
-def simulate_once(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, wl0: u.Quantity) -> Tuple[u.Quantity, ...]:
+def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation) -> Tuple[u.Quantity, ...]:
 
     signal0 = add_poisson(I_cube)
-    signal1 = intensity_to_photons(signal0, wl_axis)
-    signal2 = add_effective_area(signal1, tel, wl0, wl_axis)
+    signal1 = intensity_to_photons(signal0)
+    signal2 = add_effective_area(signal1, tel)
     signal3 = photons_to_pixel_rate(signal2, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
-    if sim.instrument.upper() == "SWC" and tel.psf is not None:
-        signal4 = apply_psf(signal3, tel.psf)
-    else:
-        signal4 = signal3
+    signal4 = signal3  # signal4 = apply_psf(signal3, tel.psf)
     signal5 = to_electrons(signal4, t_exp, det)
     signal6 = add_stray_light(signal5, t_exp, det, sim)
     signal7 = to_dn(signal6, det)
 
     return (signal0, signal1, signal2, signal3, signal4, signal5, signal6, signal7)
 
-def monte_carlo(I_cube: u.Quantity, wl_axis: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, wl0: u.Quantity, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+def monte_carlo(I_cube: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
     signals, fits = [], []
     for _ in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
-        signals.append(simulate_once(I_cube, wl_axis, t_exp, det, tel, sim, wl0))
-        fits.append(fit_cube_gauss(signals[-1][-1], wl_axis))
+        signals.append(simulate_once(I_cube, t_exp, det, tel, sim))
+        fits.append(fit_cube_gauss(signals[-1][-1]))
     return np.array(signals), np.array(fits)
 
 
@@ -831,6 +957,12 @@ def main() -> None:
             raise ValueError("EIS does not support oxide or C thicknesses.")
     else:
         raise ValueError(f"Unknown instrument: {instrument}")
+    
+    if psf:
+        if instrument != "SWC":
+            raise ValueError("PSF loading is only supported for SWC/EUVST instrument.")
+        if instrument == "SWC":
+            raise NotImplementedError("PSF loading is not implemented yet, waiting for NAOJ measurements of mirror scattering.")
 
     SIM_kwargs = dict(
         expos=u.Quantity(exposures, u.s),
@@ -854,16 +986,14 @@ def main() -> None:
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
-    cube_sim, wl0, plotting = load_atmosphere("./run/input/synthesised_spectra.pkl")
+    cube_sim, plotting = load_atmosphere("./run/input/synthesised_spectra.pkl")
 
     print("Rebinning atmosphere cube to instrument resolution for each slit position...")
-    cube_reb = rebin_atmosphere(cube_sim, DET, SIM, plotting)
-
-    globals().update(locals());raise ValueError("Kicking back to ipython")
+    cube_reb = rebin_atmosphere(cube_sim, DET, SIM)
 
     print("Fitting ground truth cube...")
     fit_truth = fit_cube_gauss(cube_reb)
-    v_true = velocity_from_fit(fit_truth, wl0)
+    v_true = velocity_from_fit(fit_truth, cube_reb.meta['rest_wav'])
 
     # --- Efficient in-memory buffers for post-loop plotting -----------------
     results = {}
@@ -875,12 +1005,12 @@ def main() -> None:
 
     for t_exp in tqdm(SIM.expos, desc=f"Exposure time", unit="exposure"):
         signals, fits = monte_carlo(
-            cube_reb, wl_axis, t_exp, DET, TEL, SIM, wl0, n_iter=SIM.n_iter
+            cube_reb, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter
         )
         sec = t_exp.to_value(u.s)
         first_signal_per_exp[sec] = signals[0][-1]
         first_fit_per_exp[sec]    = fits[0]
-        analysis_per_exp[sec]     = analyse(fits, v_true, wl0)
+        analysis_per_exp[sec]     = analyse(fits, v_true, cube_reb.meta['rest_wav'])
         del signals, fits
 
     # Save results for this run
@@ -890,109 +1020,46 @@ def main() -> None:
         "analysis_per_exp": analysis_per_exp,
     }
 
-    # Ensure input config path is of the form "run/input/XXXX.yaml"
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     config_path = Path(args.config)
-    if not (config_path.parent == Path("run/input") and config_path.suffix == ".yaml"):
-        raise ValueError("Config file must be in 'run/input/XXXX.yaml' format.")
-
-    # Prepare output path in run/result/XXXX.pkl
     config_base = config_path.stem
-    output_dir = Path("run/result")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{config_base}.pkl"
-
-    # Gather configuration and instrument/detector/telescope settings
-    config_dict = {
-        "config": config,
-        "instrument": instrument,
-        "DET": DET,
-        "TEL": TEL,
-        "SIM": SIM,
-    }
-
-    # Save results and all plotting-relevant objects using numpy
+    output_file = f"instrument_response_{config_base}_{timestamp}.pkl"
     with open(output_file, "wb") as f:
         dill.dump({
             "results": results,
-            "config": config_dict,
-            "plotting": plotting,
-            "cube_reb": cube_reb,
-            "wl_axis": wl_axis,
-            "wl0": wl0,
-            "spt_sim": spt_sim,
+            "config": config,
+            "instrument": instrument,
             "DET": DET,
+            "TEL": TEL,
             "SIM": SIM,
+            "plotting": plotting,
+            "cube_sim": cube_sim,
+            "cube_reb": cube_reb
         }, f)
-    print(f"Saved results and configuration to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+    print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
 
+    dest_path = Path(f"run/result/instrument_response_{config_base}.pkl")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(output_file, dest_path)
+    print(f"Copied {output_file} to {dest_path})")
 
-
-
-
-    saved_vars = {
-        "results": results,
-        "config": config_dict,
-        "plotting": plotting,
-        "cube_reb": cube_reb,
-        "wl_axis": wl_axis,
-        "wl0": wl0,
-        "spt_sim": spt_sim,
-        "DET": DET,
-        "SIM": SIM,
-    }
-
-    print("\nSaved variable sizes (MB):")
-    import gc
-
-    def total_size(o, handlers={}, verbose=False):
-        """Returns the approximate memory footprint of an object and all of its contents."""
-        from sys import getsizeof
-        from itertools import chain
-        from collections import deque
-        from astropy.wcs import WCS
-
-        dict_handler = lambda d: chain.from_iterable(d.items())
-        all_handlers = {tuple: iter,
-                        list: iter,
-                        deque: iter,
-                        dict: dict_handler,
-                        set: iter,
-                        frozenset: iter,
-                       }
-        all_handlers.update(handlers)
-        seen = set()
-        default_size = getsizeof(0)
-
-        def sizeof(o):
-            if id(o) in seen:
-                return 0
-            seen.add(id(o))
-            s = getsizeof(o, default_size)
-
-            if hasattr(o, "nbytes"):
-                try:
-                    s = o.nbytes
-                except Exception:
-                    pass
-
-            for typ, handler in all_handlers.items():
-                if isinstance(o, typ):
-                    s += sum(map(sizeof, handler(o)))
-                    break
-            return s
-
-        return sizeof(o)
-
-    for k, v in saved_vars.items():
-        size_bytes = total_size(v)
-        print(f"  {k:12s}: {size_bytes / 1e6:.4f} MB")
-
-
-    # seperately, print the size of the items in the results dict
-    print("\nSaved results sizes (MB):")
-    for k, v in results.items():
-        size_bytes = total_size(v)
-        print(f"  {k:12s}: {size_bytes / 1e6:.4f} MB")
+    output_file = f"instrument_response_session_{config_base}_{timestamp}.pkl"
+    globals().update(locals())
+    dill.dump_session(output_file)
+    print(f"Saved session to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
 
 if __name__ == "__main__":
-    main()
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="target cannot be converted to ICRS",
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="No observer defined on WCS, SpectralCoord will be converted without any velocity frame change",
+            category=UserWarning,
+        )
+
+        main()
