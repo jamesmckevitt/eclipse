@@ -11,3 +11,4 @@ run/**
 *.out
 *.sh
 __pycache__/**
+scratch/**
