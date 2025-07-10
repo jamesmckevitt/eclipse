@@ -1346,7 +1346,7 @@ def main() -> None:
     # read contribution functions
     # ----------------------------------------------------------
     print(f"Loading contribution functions ({print_mem()})")
-    goft, logT_grid, logN_grid = read_goft("gofnt.sav", limit_lines, precision)
+    goft, logT_grid, logN_grid = read_goft("./data/gofnt.sav", limit_lines, precision)
 
     # attach wavelength grid and mark background lines
     for name, info in goft.items():
