@@ -1294,7 +1294,7 @@ def main() -> None:
     downsample     = 4                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
-    limit_lines    = ['Fe12_195.1190']            # e.g. ['Fe12_195.1190'] to speed up
+    limit_lines    = ['Fe12_195.1190', "Fe12_195.1790"]            # e.g. ['Fe12_195.1190'] to speed up
     vel_res        = 5 * u.km / u.s
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
@@ -1442,6 +1442,32 @@ def main() -> None:
         sim_ii, margin, sigma_factor=sigma_factor
     )
 
+    # ----------------------------------------------------------
+    # build per-line specific-intensity cubes
+    # ----------------------------------------------------------
+    line_cubes = {}
+    for name, info in goft.items():
+        cube_line = info["si"]                               # (nx,ny,nλ_line)
+
+        nx, ny, nl = cube_line.shape
+
+        wcs_line = WCS(naxis=3)
+        wcs_line.wcs.ctype = ['WAVE', 'SOLY', 'SOLX']
+        wcs_line.wcs.cunit = ['cm',   'Mm',   'Mm']
+        wcs_line.wcs.crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]
+        wcs_line.wcs.crval = [info["wl0"].to(u.cm).value, 0, 0]
+        wcs_line.wcs.cdelt = [np.diff(info["wl_grid"].to(u.cm).value)[0],
+                              voxel_dy.to(u.Mm).value,
+                              voxel_dx.to(u.Mm).value]
+
+        line_cubes[name] = NDCube(
+            cube_line,
+            wcs=wcs_line,
+            unit=total_si.unit,
+            meta={"rest_wav": info["wl0"]}
+        )
+    print(f"Built per-line cubes: {len(line_cubes)} lines")
+
     # ----------------------------------------------------------------------
     # save the results
     # ----------------------------------------------------------------------
@@ -1455,6 +1481,7 @@ def main() -> None:
         pickle.dump({
             "sim_si": sim_si,
             "sim_ii": sim_ii,
+            "line_cubes": line_cubes,
             "plus_coords": plus_coords,
             "mean_coords": mean_coords,
             "minus_coords": minus_coords,
@@ -1468,7 +1495,7 @@ def main() -> None:
     shutil.copyfile(output_file, dest_path)
     print(f"Copied {output_file} to {dest_path}")
 
-    output_file = f"synthesised_spectra_session_{timestamp}.pkl"
+    output_file = scratch_dir / f"synthesised_spectra_session_{timestamp}.pkl"
     globals().update(locals())
     dill.dump_session(output_file)
     print(f"Saved the session to {output_file} ({os.path.getsize(output_file) / 1e9:.2f} GB)")
