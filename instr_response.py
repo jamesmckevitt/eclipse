@@ -369,7 +369,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(
     y_angle = distance_to_angle(dy)
 
     wcs_hp = WCS(naxis=3)
-    wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
+    wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
     wcs_hp.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
     wcs_hp.wcs.crpix = [wcs_hc.wcs.crpix[0],
                         (ny + 1) / 2,
@@ -392,7 +392,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(
     crpix_x = (shape_out[0] + 1) / 2
 
     wcs_tgt = WCS(naxis=3)
-    wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
+    wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
     wcs_tgt.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
     wcs_tgt.wcs.crpix = [crpix_spec, crpix_y, crpix_x]
     wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
@@ -473,7 +473,7 @@ def rebin_atmosphere(
     det: Detector_SWC,
     sim: Simulation,
 ) -> Tuple[u.Quantity, u.Quantity, dict]:
-
+    
     print("  Spectral rebinning to instrument resolution (nx,ny,*nl*)...")
     cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix)
 
@@ -814,25 +814,35 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
             return np.array([-1, -1, -1, -1])
 
 
-# def fit_cube_gauss(signal_cube: u.Quantity, wv: u.Quantity, n_jobs: int = Simulation.ncpu) -> u.Quantity:
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> u.Quantity:
-    n_scan, n_slit, _ = signal_cube.shape
-    wv = signal_cube.axis_world_coords(2)[0].cgs
+    """
+    Fit a Gaussian to every (slit x wavelength) spectrum.
 
-    def _fit_block(block):
-        block_nx, n_slit, n_wl = block.shape
-        out = np.zeros((block_nx, n_slit, 4))
-        for i in range(block_nx):
-            for j in range(n_slit):
-                out[i, j, :] = _fit_one(wv.value, block[i, j, :])
+    Returns an array of shape (n_scan, n_slit, 4) with the parameters
+    [peak, centre, sigma, background] for each spatial pixel.
+    """
+
+    n_scan, n_slit, _ = signal_cube.shape
+    wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis (Quantity)
+
+    def _fit_block(spec_block: np.ndarray) -> np.ndarray:
+        """
+        Fit all spectra of one raster position (shape: n_slit x n_wl).
+        """
+        out = np.zeros((n_slit, 4))
+        for j in range(n_slit):
+            out[j, :] = _fit_one(wv.value, spec_block[j, :])
         return out
-    
+
     with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks", leave=False)):
-        arr = Parallel(n_jobs=n_jobs if n_jobs > 0 else -1)(
-            delayed(_fit_block)(signal_cube.data[i:i+1]) for i in range(n_scan)
+        results = Parallel(n_jobs=n_jobs if n_jobs > 0 else -1)(
+            delayed(_fit_block)(signal_cube.data[i]) for i in range(n_scan)
         )
 
-    return arr * np.array([signal_cube.unit, wv.unit, wv.unit, signal_cube.unit])
+    # Stack to (n_scan, n_slit, 4) with units
+    arr = (np.stack(results, axis=0) * np.array([signal_cube.unit, wv.unit, wv.unit, signal_cube.unit], dtype=object))
+
+    return arr
 
 
 # -----------------------------------------------------------------------------
@@ -853,11 +863,14 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det: Detector_SWC, tel: Tel
     return (signal0, signal1, signal2, signal3, signal4, signal5, signal6, signal7)
 
 def monte_carlo(I_cube: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
-    signals, fits = [], []
+    dn_signals, dn_fits = [], []
     for _ in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
-        signals.append(simulate_once(I_cube, t_exp, det, tel, sim))
-        fits.append(fit_cube_gauss(signals[-1][-1]))
-    return np.array(signals), np.array(fits)
+        signal = simulate_once(I_cube, t_exp, det, tel, sim)
+        dn_signal = signal[-1]
+        dn_signals.append(dn_signal)
+        dn_fit = fit_cube_gauss(dn_signal)
+        dn_fits.append(dn_fit)
+    return np.array(dn_signals), np.array(dn_fits)
 
 
 # -----------------------------------------------------------------------------
@@ -1004,14 +1017,14 @@ def main() -> None:
     analysis_per_exp:     dict[float, dict] = {}
 
     for t_exp in tqdm(SIM.expos, desc=f"Exposure time", unit="exposure"):
-        signals, fits = monte_carlo(
+        dn_signals, dn_fits = monte_carlo(
             cube_reb, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter
         )
         sec = t_exp.to_value(u.s)
-        first_signal_per_exp[sec] = signals[0][-1]
-        first_fit_per_exp[sec]    = fits[0]
-        analysis_per_exp[sec]     = analyse(fits, v_true, cube_reb.meta['rest_wav'])
-        del signals, fits
+        first_signal_per_exp[sec] = dn_signals[0]
+        first_fit_per_exp[sec]    = dn_fits[0]
+        analysis_per_exp[sec]     = analyse(dn_fits, v_true, cube_reb.meta['rest_wav'])
+        del dn_signals, dn_fits
 
     # Save results for this run
     results = {
@@ -1044,7 +1057,7 @@ def main() -> None:
     dest_path = Path(f"run/result/instrument_response_{config_base}.pkl")
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(output_file, dest_path)
-    print(f"Copied {output_file} to {dest_path})")
+    print(f"Copied {output_file} to {dest_path}")
 
     # Save dill session to scratch directory
     session_file = scratch_dir / f"instrument_response_session_{config_base}_{timestamp}.pkl"
