@@ -191,7 +191,7 @@ class Simulation:
       if slit_val not in allowed_slits["SWC"]:
         raise ValueError("For SWC, slit_width must be 0.2, 0.4, or 1 arcsec.")
 
-# Global configuration used by plotting helpers --------------------------------
+# Global configuration --------------------------------
 DET = Detector_SWC()
 TEL = Telescope_EUVST()
 SIM = Simulation()
@@ -456,16 +456,9 @@ def _combine_psfs(psf_focus: np.ndarray, psf_mesh: np.ndarray, crop: float = 0.9
 
 def load_atmosphere(pkl_file: str) -> Tuple[u.Quantity, u.Quantity, dict]:
     with open(pkl_file, "rb") as f:
-        tmp = pickle.load(f)
+        tmp = dill.load(f)
     cube = tmp["sim_si"]
-    plotting = {
-        "plus_coords": tuple(tmp["plus_coords"]),
-        "mean_coords": tuple(tmp["mean_coords"]),
-        "minus_coords": tuple(tmp["minus_coords"]),
-        "sigma_factor": float(tmp["sigma_factor"]),
-        "margin": int(tmp["margin"]),
-    }
-    return cube, plotting
+    return cube
 
 
 def rebin_atmosphere(
@@ -863,14 +856,16 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det: Detector_SWC, tel: Tel
     return (signal0, signal1, signal2, signal3, signal4, signal5, signal6, signal7)
 
 def monte_carlo(I_cube: u.Quantity, t_exp: u.Quantity, det: Detector_SWC, tel: Telescope_EUVST, sim: Simulation, n_iter: int = 5) -> Tuple[np.ndarray, np.ndarray]:
-    dn_signals, dn_fits = [], []
+    dn_signals, dn_fits, photon_signals = [], [], []
     for _ in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
         signal = simulate_once(I_cube, t_exp, det, tel, sim)
         dn_signal = signal[-1]
         dn_signals.append(dn_signal)
+        photon_signal = signal[4]
+        photon_signals.append(photon_signal)
         dn_fit = fit_cube_gauss(dn_signal)
         dn_fits.append(dn_fit)
-    return np.array(dn_signals), np.array(dn_fits)
+    return np.array(dn_signals), np.array(dn_fits), np.array(photon_signals)
 
 
 # -----------------------------------------------------------------------------
@@ -999,7 +994,7 @@ def main() -> None:
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
-    cube_sim, plotting = load_atmosphere("./run/input/synthesised_spectra.pkl")
+    cube_sim = load_atmosphere("./run/input/synthesised_spectra.pkl")
 
     print("Rebinning atmosphere cube to instrument resolution for each slit position...")
     cube_reb = rebin_atmosphere(cube_sim, DET, SIM)
@@ -1008,27 +1003,30 @@ def main() -> None:
     fit_truth = fit_cube_gauss(cube_reb)
     v_true = velocity_from_fit(fit_truth, cube_reb.meta['rest_wav'])
 
-    # --- Efficient in-memory buffers for post-loop plotting -----------------
+    # --- Efficient in-memory buffers -----------------
     results = {}
 
     # Loop over exposure time only (no contamination loop)
-    first_signal_per_exp: dict[float, Tuple[u.Quantity, ...]] = {}
+    first_dn_signal_per_exp: dict[float, Tuple[u.Quantity, ...]] = {}
+    first_photon_signal_per_exp: dict[float, Tuple[u.Quantity, ...]] = {}
     first_fit_per_exp:    dict[float, u.Quantity] = {}
     analysis_per_exp:     dict[float, dict] = {}
 
     for t_exp in tqdm(SIM.expos, desc=f"Exposure time", unit="exposure"):
-        dn_signals, dn_fits = monte_carlo(
+        dn_signals, dn_fits, photon_signals = monte_carlo(
             cube_reb, t_exp, DET, TEL, SIM, n_iter=SIM.n_iter
         )
         sec = t_exp.to_value(u.s)
-        first_signal_per_exp[sec] = dn_signals[0]
+        first_dn_signal_per_exp[sec] = dn_signals[0]
+        first_photon_signal_per_exp[sec] = photon_signals[0]
         first_fit_per_exp[sec]    = dn_fits[0]
         analysis_per_exp[sec]     = analyse(dn_fits, v_true, cube_reb.meta['rest_wav'])
         del dn_signals, dn_fits
 
     # Save results for this run
     results = {
-        "first_signal_per_exp": first_signal_per_exp,
+        "first_dn_signal_per_exp": first_dn_signal_per_exp,
+        "first_photon_signal_per_exp": first_photon_signal_per_exp,
         "first_fit_per_exp": first_fit_per_exp,
         "analysis_per_exp": analysis_per_exp,
     }
@@ -1048,7 +1046,6 @@ def main() -> None:
             "DET": DET,
             "TEL": TEL,
             "SIM": SIM,
-            "plotting": plotting,
             "cube_sim": cube_sim,
             "cube_reb": cube_reb
         }, f)
