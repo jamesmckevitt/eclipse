@@ -27,8 +27,7 @@ Run the line synthesis using:
 python synthesise_spectra.py
 ```
 
-This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here:
-[Download Synthesised Atmosphere](https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R)
+This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
 
 ### 3. Simulate the instrument response
 
