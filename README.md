@@ -1,11 +1,13 @@
 # M-ECLIPSES: MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW
 
+```
   __  __        ______ _____ _      _____ _____   _____ ______  _____ 
- |  \/  |      |  ____/ ____| |    |_   _|  __ \ / ____|  ____|/ ____|
- | \  / |______| |__ | |    | |      | | | |__) | (___ | |__  | (___  
- | |\/| |______|  __|| |    | |      | | |  ___/ \___ \|  __|  \___ \ 
- | |  | |      | |___| |____| |____ _| |_| |     ____) | |____ ____) |
- |_|  |_|      |______\_____|______|_____|_|    |_____/|______|_____/ 
+  |  \/  |      |  ____/ ____| |    |_   _|  __ \ / ____|  ____|/ ____|
+  | \  / |______| |__ | |    | |      | | | |__) | (___ | |__  | (___  
+  | |\/| |______|  __|| |    | |      | | |  ___/ \___ \|  __|  \___ \ 
+  | |  | |      | |___| |____| |____ _| |_| |     ____) | |____ ____) |
+  |_|  |_|      |______\_____|______|_____|_|    |_____/|______|_____/ 
+```
 
 The M-ECLIPSES code (MSSL Emission Calculation and Line Intensity Predition for SOLAR-C EUVST-SW) is used to forward model the performance of the ESA/MSSL short wavelenth camera, par of the EUV spectrograph EUVST, on SOLAR-C.
 
