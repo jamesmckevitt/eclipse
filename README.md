@@ -9,7 +9,7 @@
   |_|  |_|      |______\_____|______|_____|_|    |_____/|______|_____/ 
 ```
 
-The M-ECLIPSES code (MSSL Emission Calculation and Line Intensity Predition for SOLAR-C EUVST-SW) is used to forward model the performance of the ESA/MSSL short wavelenth camera, par of the EUV spectrograph EUVST, on SOLAR-C.
+The M-ECLIPSES code (MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW) is used to forward model the performance of the ESA/MSSL short wavelength camera, part of the EUV spectrograph EUVST, on SOLAR-C.
 
 Contact: James McKevitt (jm2@mssl.ucl.ac.uk). License: Contact for permission to use.
 
