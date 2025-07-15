@@ -332,10 +332,10 @@ def combine_lines(goft: dict, main_line: str):
 def main() -> None:
     # ---------------- user-tunable parameters -----------------
     precision      = np.float64       # global float dtype
-    downsample     = 4                # factor or False
+    downsample     = False                # factor or False
     primary_lines  = ["Fe12_195.1190", "Fe12_195.1790"]
     main_line      = "Fe12_195.1190"
-    limit_lines    = ['Fe12_195.1190', "Fe12_195.1790"]            # e.g. ['Fe12_195.1190'] to speed up
+    limit_lines    = False            # e.g. ['Fe12_195.1190'] to speed up
     vel_res        = 5 * u.km / u.s
     vel_lim        = 300 * u.km / u.s
     voxel_dz       = 0.064 * u.Mm
@@ -517,6 +517,11 @@ def main() -> None:
             "sim_si": sim_si,
             "sim_ii": sim_ii,
             "line_cubes": line_cubes,
+            "dem_map": dem_map,
+            "em_tv": em_tv,
+            "logT_centres": logT_centres,
+            "v_edges": v_edges,
+            "goft": goft,
         }, f)
     print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
 
