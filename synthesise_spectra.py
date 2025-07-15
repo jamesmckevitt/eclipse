@@ -522,6 +522,8 @@ def main() -> None:
             "logT_centres": logT_centres,
             "v_edges": v_edges,
             "goft": goft,
+            "logT_grid": logT_grid,
+            "logN_grid": logN_grid,
         }, f)
     print(f"Saved the key information to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
 
