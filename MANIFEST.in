@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include euvst_response *.py
+recursive-include data *
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude scratch *
+exclude *.pkl
+exclude *.png
+exclude *.out
+exclude job.*
