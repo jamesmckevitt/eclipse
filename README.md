@@ -68,6 +68,70 @@ This step can require a lot of memory at full resolution. A fully synthesised at
 
 ### 3. Simulate the instrument response
 
+#### Configuration File
+
+M-ECLIPSES uses YAML configuration files to specify simulation parameters. You can specify single values or lists of values for parameter sweeps.
+
+Here's a complete example configuration file:
+
+```yaml
+# Example configuration showing how to specify multiple parameter values
+# Each parameter can be either a single value or a list of values
+
+# Instrument selection
+instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
+
+# Point Spread Function
+psf: False  # Enable PSF convolution (currently only planned for SWC)
+
+# Exposure times - can be single value or list
+expos: [0.5 s, 1 s, 2 s, 5 s, 10 s, 20 s, 40 s, 80 s]
+
+# Monte Carlo simulation parameters
+n_iter: 25      # Number of Monte Carlo iterations (more = better statistics)
+ncpu: -1        # Number of CPU cores (-1 = use all available)
+
+# Parameter sweeps - you can specify single values or lists for any parameter
+# The simulation will run all combinations of parameters
+
+# Slit width - affects spatial resolution
+slit_width: 0.2 arcsec  # Typical values: 0.1-1.0 arcsec
+# Or sweep multiple values:
+# slit_width: [0.1 arcsec, 0.2 arcsec, 0.5 arcsec]
+
+# Filter parameters (SWC only)
+# Thickness of aluminum oxide layer on entrance filter
+oxide_thickness: 95 angstrom  # Default
+# Or sweep multiple values:
+# oxide_thickness: [50 angstrom, 95 angstrom, 150 angstrom]
+
+# Carbon contamination thickness on filter
+c_thickness: 0 angstrom  # Start with no contamination
+# Or model contamination buildup:
+# c_thickness: [0 angstrom, 25 angstrom, 50 angstrom, 100 angstrom]
+
+# Visible stray light level
+vis_sl: 0 photon / (s * pixel)  # Ideal case (no stray light)
+# Or model stray light:
+# vis_sl: [0, 1e3, 1e4] photon / (s * pixel)
+```
+
+#### Parameter Descriptions
+
+| Parameter | Description | Units | Typical Range |
+|-----------|-------------|-------|---------------|
+| `instrument` | Instrument type | `SWC` or `EIS` | - |
+| `psf` | Enable PSF convolution | `True`/`False` | - |
+| `expos` | Exposure time(s) | seconds | 0.1 - 100 s |
+| `n_iter` | Monte Carlo iterations | integer | 10 - 100 |
+| `ncpu` | CPU cores to use | integer | 1 - (max cores) |
+| `slit_width` | Slit width | arcsec | 0.1 - 1.0 |
+| `oxide_thickness` | Al₂O₃ filter thickness | angstrom/nm | 50 - 200 Å |
+| `c_thickness` | Carbon contamination | angstrom/nm | 0 - 100 Å |
+| `vis_sl` | Visible stray light | photon/(s·pixel) | 0 - 1e5 |
+
+#### Running Simulations
+
 Run the instrument response function using:
 ```bash
 m-eclipses --config ./run/input/config.yaml
@@ -79,6 +143,14 @@ for config in ./run/input/*.yaml; do
   m-eclipses --config "$config"
 done
 ```
+
+#### Output
+
+Results are saved as pickle files in the `scratch/` directory with descriptive filenames based on the parameter ranges, and copied to `run/result/`. The output includes:
+- Simulated detector signals (DN and photon counts)
+- Fitted spectral line parameters (intensity, velocity, width)
+- Statistical analysis of velocity precision vs. exposure time
+- Ground truth comparisons
 
 ## Acknowledgements
 
