@@ -116,19 +116,7 @@ vis_sl: 0 photon / (s * pixel)  # Ideal case (no stray light)
 # vis_sl: [0, 1e3, 1e4] photon / (s * pixel)
 ```
 
-#### Parameter Descriptions
-
-| Parameter | Description | Units | Typical Range |
-|-----------|-------------|-------|---------------|
-| `instrument` | Instrument type | `SWC` or `EIS` | - |
-| `psf` | Enable PSF convolution | `True`/`False` | - |
-| `expos` | Exposure time(s) | seconds | 0.1 - 100 s |
-| `n_iter` | Monte Carlo iterations | integer | 10 - 100 |
-| `ncpu` | CPU cores to use | integer | 1 - (max cores) |
-| `slit_width` | Slit width | arcsec | 0.1 - 1.0 |
-| `oxide_thickness` | Al₂O₃ filter thickness | angstrom/nm | 50 - 200 Å |
-| `c_thickness` | Carbon contamination | angstrom/nm | 0 - 100 Å |
-| `vis_sl` | Visible stray light | photon/(s·pixel) | 0 - 1e5 |
+For guidence on recommended values, see McKevitt et al. (2025) (in prep.).
 
 #### Running Simulations
 
