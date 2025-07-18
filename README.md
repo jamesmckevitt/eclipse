@@ -75,9 +75,6 @@ M-ECLIPSES uses YAML configuration files to specify simulation parameters. You c
 Here's a complete example configuration file:
 
 ```yaml
-# Example configuration showing how to specify multiple parameter values
-# Each parameter can be either a single value or a list of values
-
 # Instrument selection
 instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
 
@@ -95,7 +92,7 @@ ncpu: -1        # Number of CPU cores (-1 = use all available)
 # The simulation will run all combinations of parameters
 
 # Slit width - affects spatial resolution
-slit_width: 0.2 arcsec  # Typical values: 0.1-1.0 arcsec
+slit_width: 0.2 arcsec  # Narrowest slit on EUVST
 # Or sweep multiple values:
 # slit_width: [0.1 arcsec, 0.2 arcsec, 0.5 arcsec]
 
@@ -109,6 +106,11 @@ oxide_thickness: 95 angstrom  # Default
 c_thickness: 0 angstrom  # Start with no contamination
 # Or model contamination buildup:
 # c_thickness: [0 angstrom, 25 angstrom, 50 angstrom, 100 angstrom]
+
+# Aluminum filter thickness
+aluminium_thickness: 1485 angstrom  # Default thickness
+# Or test different thicknesses:
+# aluminium_thickness: [1000 angstrom, 1485 angstrom, 2000 angstrom]
 
 # Visible stray light level
 vis_sl: 0 photon / (s * pixel)  # Ideal case (no stray light)

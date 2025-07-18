@@ -31,7 +31,7 @@ def _interp_tr(wavelength_nm: float, wl_tab: np.ndarray, tr_tab: np.ndarray) -> 
 @dataclass
 class AluminiumFilter:
     """Multi-layer EUV filter (Al + Al₂O₃ + C) in front of SWC detector."""
-    al_thickness: u.Quantity = 1500 * u.angstrom
+    al_thickness: u.Quantity = 1485 * u.angstrom
     oxide_thickness: u.Quantity = 95 * u.angstrom
     c_thickness: u.Quantity = 0 * u.angstrom
     mesh_throughput: float = 0.8
@@ -144,8 +144,12 @@ class Telescope_EIS:
 
 @dataclass
 class Simulation:
-    """Simulation configuration and parameters."""
-    expos: u.Quantity = u.Quantity([0.5, 1, 2, 5, 10, 20, 40, 80], u.s)
+    """
+    Simulation configuration and parameters.
+    
+    The expos parameter is a single exposure time for this simulation.
+    """
+    expos: u.Quantity = 1.0 * u.s  # Single exposure time
     n_iter: int = 25
     slit_width: u.Quantity = 0.2 * u.arcsec
     ncpu: int = -1
