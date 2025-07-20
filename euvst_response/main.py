@@ -67,6 +67,7 @@ def main() -> None:
     oxide_thicknesses = ensure_list(parse_yaml_input(config.get("oxide_thickness", ['95 nm'])))
     c_thicknesses = ensure_list(parse_yaml_input(config.get("c_thickness", ['0 nm'])))
     aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
+    ccd_temperatures = ensure_list(config.get("ccd_temperature", [-60]))  # Temperature in Celsius
     vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * pixel)'])))
     exposures = ensure_list(parse_yaml_input(config.get("expos", ['1 s'])))
 
@@ -86,7 +87,7 @@ def main() -> None:
     all_results = {}
 
     # Loop over all parameter combinations
-    total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(vis_sl_vals) * len(exposures)
+    total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures)
     print(f"Running {total_combinations} parameter combinations...")
     
     combination_idx = 0
@@ -107,31 +108,44 @@ def main() -> None:
         for oxide_thickness in oxide_thicknesses:
             for c_thickness in c_thicknesses:
                 for aluminium_thickness in aluminium_thicknesses:
-                    for vis_sl in vis_sl_vals:
-                        for exposure in exposures:
-                            combination_idx += 1
-                            print(f"--- Combination {combination_idx}/{total_combinations} ---")
-                            print(f"Slit width: {slit_width}")
-                            print(f"Oxide thickness: {oxide_thickness}")
-                            print(f"Carbon thickness: {c_thickness}")
-                            print(f"Aluminium thickness: {aluminium_thickness}")
-                            print(f"Visible stray light: {vis_sl}")
-                            print(f"Exposure time: {exposure}")
-                            
-                            # Set up telescope configuration for this combination
-                            if instrument == "SWC":
-                                filter_obj = AluminiumFilter(
-                                    oxide_thickness=oxide_thickness,
-                                    c_thickness=c_thickness,
-                                    al_thickness=aluminium_thickness,
-                                )
-                                TEL = Telescope_EUVST(filter=filter_obj)
-                            elif instrument == "EIS":
-                                TEL = Telescope_EIS()
-                                if oxide_thickness.value != 0 or c_thickness.value != 0:
-                                    raise ValueError("EIS does not support oxide or C thicknesses.")
-                                if aluminium_thickness.value != 1485:
-                                    raise ValueError("EIS does not support custom aluminium thicknesses.")
+                    for ccd_temperature in ccd_temperatures:
+                        for vis_sl in vis_sl_vals:
+                            for exposure in exposures:
+                                combination_idx += 1
+                                print(f"--- Combination {combination_idx}/{total_combinations} ---")
+                                print(f"Slit width: {slit_width}")
+                                print(f"Oxide thickness: {oxide_thickness}")
+                                print(f"Carbon thickness: {c_thickness}")
+                                print(f"Aluminium thickness: {aluminium_thickness}")
+                                print(f"CCD temperature: {ccd_temperature}°C")
+                                print(f"Visible stray light: {vis_sl}")
+                                print(f"Exposure time: {exposure}")
+                                
+                                # Set up telescope configuration for this combination
+                                if instrument == "SWC":
+                                    filter_obj = AluminiumFilter(
+                                        oxide_thickness=oxide_thickness,
+                                        c_thickness=c_thickness,
+                                        al_thickness=aluminium_thickness,
+                                    )
+                                    TEL = Telescope_EUVST(filter=filter_obj)
+                                elif instrument == "EIS":
+                                    TEL = Telescope_EIS()
+                                    if oxide_thickness.value != 0 or c_thickness.value != 0:
+                                        raise ValueError("EIS does not support oxide or C thicknesses.")
+                                    if aluminium_thickness.value != 1485:
+                                        raise ValueError("EIS does not support custom aluminium thicknesses.")
+                                
+                                # Set up detector configuration with calculated dark current
+                                if instrument == "SWC":
+                                    # Create a detector with calculated dark current for this temperature
+                                    DET = Detector_SWC.with_temperature(ccd_temperature)
+                                    print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                elif instrument == "EIS":
+                                    DET = Detector_EIS.with_temperature(ccd_temperature)
+                                    print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                else:
+                                    raise ValueError(f"Unknown instrument: {instrument}")
 
                             if psf:
                                 if instrument != "SWC":
@@ -160,6 +174,8 @@ def main() -> None:
                                 slit_width.to_value(u.arcsec),
                                 oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
                                 c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
+                                aluminium_thickness.to_value(u.AA),
+                                ccd_temperature,
                                 vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl,
                                 sec
                             )
@@ -169,6 +185,8 @@ def main() -> None:
                                     "slit_width": slit_width,
                                     "oxide_thickness": oxide_thickness,
                                     "c_thickness": c_thickness,
+                                    "aluminium_thickness": aluminium_thickness,
+                                    "ccd_temperature": ccd_temperature,
                                     "vis_sl": vis_sl,
                                     "exposure": exposure,
                                 },

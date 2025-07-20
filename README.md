@@ -112,6 +112,11 @@ aluminium_thickness: 1485 angstrom  # Default thickness
 # Or test different thicknesses:
 # aluminium_thickness: [1000 angstrom, 1485 angstrom, 2000 angstrom]
 
+# CCD temperature for dark current calculation
+ccd_temperature: -60  # Temperature in Celsius (typical operating temperature)
+# Or test different temperatures:
+# ccd_temperature: [-60, -40, -20]  # Range of possible CCD temperatures
+
 # Visible stray light level
 vis_sl: 0 photon / (s * pixel)  # Ideal case (no stray light)
 # Or model stray light:

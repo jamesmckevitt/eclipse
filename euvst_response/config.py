@@ -63,13 +63,78 @@ class Detector_SWC:
     e_per_ph_euv: u.Quantity = 18.0 * u.electron / u.photon
     e_per_ph_vis: u.Quantity = 2.0 * u.electron / u.photon
     read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
-    dark_current: u.Quantity = 1.0 * u.electron / (u.pixel * u.s)
+    dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
+    _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293K
     gain_e_per_dn: u.Quantity = 2.0 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     si_fano: float = 0.115
+
+    @staticmethod
+    def calculate_dark_current(temp_celsius: float) -> u.Quantity:
+        """
+        Calculate dark current based on CCD temperature.
+        
+        Uses the formula: Q_d = Q_d0 * 122 * T^3 * e^(-6400/T)
+        where Q_d0 = 20000 e-/pix/s at 293K
+        
+        Parameters
+        ----------
+        temp_celsius : float
+            CCD temperature in Celsius
+            
+        Returns
+        -------
+        dark_current : u.Quantity
+            Dark current in electrons per pixel per second
+            
+        Raises
+        ------
+        ValueError
+            If temperature is above 300K (27°C)
+        """
+        import numpy as np
+        
+        # Convert Celsius to Kelvin
+        temp_kelvin = temp_celsius + 273.15
+        
+        # Check temperature limits
+        if temp_kelvin > 300:
+            max_celsius = 300 - 273.15
+            raise ValueError(f"Cannot calculate dark current at {temp_celsius}°C. "
+                           f"Maximum temperature is {max_celsius:.1f}°C")
+        
+        # Apply minimum temperature limit (clamp to 230K)
+        if temp_kelvin < 230:
+            temp_kelvin = 230
+            
+        # Calculate dark current using the provided formula
+        # Q_d = Q_d0 * 122 * T^3 * e^(-6400/T)
+        Q_d0 = Detector_SWC._dark_current_293k.value  # electrons/pix/s at 293K
+        dark_current = Q_d0 * 122 * (temp_kelvin**3) * np.exp(-6400/temp_kelvin)
+        
+        return dark_current * u.electron / (u.pixel * u.s)
+
+    @classmethod
+    def with_temperature(cls, temp_celsius: float):
+        """
+        Create a detector instance with dark current calculated from temperature.
+        
+        Parameters
+        ----------
+        temp_celsius : float
+            CCD temperature in Celsius
+            
+        Returns
+        -------
+        detector : Detector_SWC
+            Detector instance with calculated dark current
+        """
+        from dataclasses import replace
+        dark_current = cls.calculate_dark_current(temp_celsius)
+        return replace(cls(), dark_current=dark_current)
 
     @property
     def plate_scale_length(self) -> u.Quantity:
@@ -98,9 +163,40 @@ class Detector_EIS:
     @property
     def read_noise_rms(self) -> u.Quantity:
         return Detector_SWC.read_noise_rms
+    @staticmethod
+    def calculate_dark_current(temp_celsius: float) -> u.Quantity:
+        """Calculate dark current - uses same formula as SWC detector."""
+        return Detector_SWC.calculate_dark_current(temp_celsius)
+    
+    @classmethod
+    def with_temperature(cls, temp_celsius: float):
+        """
+        Create a detector instance with dark current calculated from temperature.
+        
+        Parameters
+        ----------
+        temp_celsius : float
+            CCD temperature in Celsius
+            
+        Returns
+        -------
+        detector : Detector_EIS
+            Detector instance with calculated dark current
+        """
+        # For EIS, we need to create a modified instance
+        # Since it inherits properties from SWC, we can't use dataclass replace
+        detector = cls()
+        detector._temp_celsius = temp_celsius
+        detector._calculated_dark_current = cls.calculate_dark_current(temp_celsius)
+        return detector
+    
     @property
     def dark_current(self) -> u.Quantity:
+        """Return calculated dark current if available, otherwise default."""
+        if hasattr(self, '_calculated_dark_current'):
+            return self._calculated_dark_current
         return Detector_SWC.dark_current
+    
     @property
     def gain_e_per_dn(self) -> u.Quantity:
         return Detector_SWC.gain_e_per_dn
