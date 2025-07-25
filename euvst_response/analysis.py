@@ -139,6 +139,7 @@ def get_results_for_combination(
     ccd_temperature: u.Quantity = None,
     vis_sl: u.Quantity = None,
     exposure: u.Quantity = None,
+    psf: bool = None,
     debug: bool = False
 ) -> Dict[str, Any]:
     """
@@ -162,6 +163,8 @@ def get_results_for_combination(
         Stray light level with units (e.g., 0 * u.photon / (u.s * u.pixel)). If None, uses first available.
     exposure : u.Quantity, optional
         Exposure time with units (e.g., 80 * u.s). If None, uses first available.
+    psf : bool, optional
+        PSF setting (True or False). If None, uses first available.
     debug : bool, optional
         If True, print debugging information about available keys.
         
@@ -184,10 +187,11 @@ def get_results_for_combination(
         print(f"Available CCD temperatures: {param_ranges['ccd_temperatures']} °C")
         print(f"Available stray light values: {[vs.to_value() if hasattr(vs, 'to_value') else vs for vs in param_ranges['vis_sl_vals']]}")
         print(f"Available exposures: {[ex.to_value(u.s) for ex in param_ranges['exposures']]}")
+        print(f"Available PSF settings: {param_ranges.get('psf_settings', [])}")
     
     # Check if no parameters were specified at all
     no_params_specified = all(param is None for param in [slit_width, oxide_thickness, c_thickness, 
-                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure])
+                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf])
     
     if no_params_specified and len(all_combinations) > 1:
         print(f"Error: No parameters specified, but {len(all_combinations)} combinations are available!")
@@ -203,7 +207,8 @@ def get_results_for_combination(
         'aluminium_thickness': aluminium_thickness,
         'ccd_temperature': ccd_temperature,
         'vis_sl': vis_sl,
-        'exposure': exposure
+        'exposure': exposure,
+        'psf': psf
     }
     
     # FIRST: Check if the specified parameters match multiple combinations
@@ -211,7 +216,7 @@ def get_results_for_combination(
     matching_combinations = []
     
     for key in all_combinations.keys():
-        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure = key
+        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf = key
         
         # Check if this combination matches all specified (non-None) parameters
         matches = True
@@ -230,6 +235,8 @@ def get_results_for_combination(
             if abs(key_vis_sl - vis_sl_val) > 1e-10:
                 matches = False
         if exposure is not None and abs(key_exposure - exposure.to_value(u.s)) > 1e-10:
+            matches = False
+        if psf is not None and key_psf != psf:
             matches = False
             
         if matches:
@@ -266,6 +273,8 @@ def get_results_for_combination(
         vis_sl = param_ranges["vis_sl_vals"][0]
     if exposure is None:
         exposure = param_ranges["exposures"][0]
+    if psf is None:
+        psf = param_ranges["psf_settings"][0]
     
     # Convert units to the same format as stored in keys (without units)
     slit_width_val = slit_width.to_value(u.arcsec)
@@ -276,9 +285,9 @@ def get_results_for_combination(
     vis_sl_val = vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl
     exposure_val = exposure.to_value(u.s)
     
-    # Find matching combination (7-element key format)
+    # Find matching combination (8-element key format)
     target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
-                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val)
+                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val, psf)
     
     if debug:
         print(f"Target key: {target_key}")
@@ -324,17 +333,17 @@ def summary_table(results: Dict[str, Any]) -> None:
     param_ranges = results["results"]["parameter_ranges"]
     
     print("Parameter Combination Summary")
-    print("=" * 120)
-    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (Å)':<10} {'CCD (°C)':<10} {'Stray Light':<12} {'Exp (s)':<10}")
-    print("-" * 120)
+    print("=" * 135)
+    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (Å)':<10} {'CCD (°C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5}")
+    print("-" * 135)
     
     for key, combo_results in all_combinations.items():
-        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure = key
+        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf = key
         params = combo_results["parameters"]
         
-        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f}")
+        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5}")
     
-    print("-" * 120)
+    print("-" * 135)
     print(f"Total combinations: {len(all_combinations)}")
     print(f"Exposure times: {[exp.to_value(u.s) for exp in param_ranges['exposures']]}")
 
