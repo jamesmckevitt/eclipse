@@ -219,12 +219,9 @@ class Telescope_EUVST:
     D_ap: u.Quantity = 0.28 * u.m
     pm_eff: float = 0.161
     grat_eff: float = 0.0623
-    psf_focus_res: u.Quantity = 0.5 * u.um / u.pixel
-    psf_mesh_res: u.Quantity = 6.12e-4 * u.mm / u.pixel
-    psf_focus_file: Path = Path("data/psf/psf_euvst_v20230909_195119_focus.txt")
-    psf_mesh_file: Path = Path("data/psf/psf_euvst_v20230909_derived_195119_mesh.txt")
-    psf: np.ndarray | None = field(default=None, init=False)
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
+    psf_type: str = "gaussian"
+    psf_params: list = field(default_factory=lambda: [0.343 * u.pixel])  # FWHM of 0.805 pix from 0.128 arcsec from optical design RSC-2022021B in sigma
 
     @property
     def collecting_area(self) -> u.Quantity:
@@ -237,8 +234,12 @@ class Telescope_EUVST:
         return self.collecting_area * self.throughput(wl0)
 
 
+@dataclass
 class Telescope_EIS:
     """Hinode/EIS telescope configuration for comparison."""
+    psf_type: str = "gaussian"
+    psf_params: list = field(default_factory=lambda: [1.28 * u.pixel])  # FWHM of 3 in sigma
+    
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
         # Effective area including detector QE is 0.23 cm2
             # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
@@ -260,6 +261,7 @@ class Simulation:
     ncpu: int = -1
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.pixel)
+    psf: bool = False
 
     @property
     def slit_scan_step(self) -> u.Quantity:

@@ -67,6 +67,18 @@ def main() -> None:
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
 
+    if psf:
+        if instrument == "SWC":
+            warnings.warn(
+                "The SWC PSF is the modelled PSF including simulations and some microroughness measurements. Final PSF will be measured before launch.",
+                UserWarning,
+            )
+        elif instrument == "EIS":
+            warnings.warn(
+                "The EIS PSF is not well understood. We use a symmetrical Voigt profile with a FWHM of 3 pixels from Ugarte-Urra (2016) EIS Software Note 2.",
+                UserWarning,
+            )
+
     # Parse configuration parameters - can be single values or lists
     # Each parameter combination will be run independently, including exposure times
     slit_widths = ensure_list(parse_yaml_input(config.get("slit_width", ['0.2 arcsec'])))
@@ -124,6 +136,7 @@ def main() -> None:
             slit_width=slit_width,
             ncpu=ncpu,
             instrument=instrument,
+            psf=psf,
         )
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
@@ -169,12 +182,6 @@ def main() -> None:
                                 else:
                                     raise ValueError(f"Unknown instrument: {instrument}")
 
-                                if psf:
-                                    if instrument != "SWC":
-                                        raise ValueError("PSF loading is only supported for SWC/EUVST instrument.")
-                                    if instrument == "SWC":
-                                        raise NotImplementedError("PSF loading is not implemented yet, waiting for NAOJ measurements of mirror scattering.")
-
                                 # Create simulation object
                                 SIM = Simulation(
                                     expos=exposure,  # Single exposure value
@@ -183,6 +190,7 @@ def main() -> None:
                                     ncpu=ncpu,
                                     instrument=instrument,
                                     vis_sl=vis_sl,
+                                    psf=psf,
                                 )
 
                                 # Run Monte Carlo for this single parameter combination

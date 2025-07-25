@@ -9,6 +9,7 @@ import astropy.constants as const
 from ndcube import NDCube
 from scipy.signal import convolve2d
 from .utils import wl_to_vel, vel_to_wl
+from scipy.special import voigt_profile
 
 
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det) -> np.ndarray:
@@ -126,27 +127,77 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     )
 
 
-def apply_psf(signal: NDCube, psf: np.ndarray) -> NDCube:
+def apply_psf(signal: NDCube, tel) -> NDCube:
     """
-    Convolve each detector row (first axis) of an NDCube with a 2-D PSF.
+    Convolve each detector row (first axis) of an NDCube with a parameterized PSF.
 
     Parameters
     ----------
     signal : NDCube
         Input cube with shape (n_scan, n_slit, n_lambda).
         The first axis is stepped by the raster scan.
-    psf : np.ndarray
-        2-D point-spread function sampled on the detector grid
-        (dispersion x slit-height).
+    tel : Telescope_EUVST or Telescope_EIS
+        Telescope configuration containing PSF parameters.
+        For Gaussian: psf_params = [width]
+        For Voigt: psf_params = [width, gamma]
 
     Returns
     -------
     NDCube
         New cube with identical WCS / unit / meta but PSF-blurred data.
     """
-    data_in = signal.data                       # ndarray view (no units)
-    n_scan   = data_in.shape[0]
+    
+    # Extract data and units
+    data_in = signal.data  # ndarray view (no units)
+    unit = signal.unit
+    n_scan, n_slit, n_lambda = data_in.shape
 
+    # Get PSF parameters from telescope
+    psf_type = tel.psf_type.lower()
+    psf_params = tel.psf_params
+    
+    # Extract width parameter (first parameter for both Gaussian and Voigt)
+    width_pixels = psf_params[0].to(u.pixel).value
+    
+    # Create 2D PSF kernel
+    # Make kernel size based on width (use 6*width to capture most of the profile)
+    kernel_size = max(7, int(6 * width_pixels))
+    if kernel_size % 2 == 0:  # Ensure odd size for symmetric kernel
+        kernel_size += 1
+    
+    # Create coordinate grids centered at 0
+    center = kernel_size // 2
+    y, x = np.mgrid[:kernel_size, :kernel_size]
+    y = y - center
+    x = x - center
+    
+    # Create radial distance from center
+    r = np.sqrt(x**2 + y**2)
+    
+    # Create PSF based on type
+    if psf_type == "gaussian":
+        sigma = width_pixels
+        psf = np.exp(-0.5 * (r / sigma)**2)
+        
+    elif psf_type == "voigt":
+        # For Voigt: need both width and gamma parameters
+        if len(psf_params) < 2:
+            raise ValueError("Voigt PSF requires two parameters: [width, gamma]")
+
+        sigma_gauss = width_pixels
+        # Get gamma parameter for Lorentzian component
+        gamma_lorentz = psf_params[1].to(u.pixel).value
+        
+        # Create 2D Voigt PSF (approximate as radially symmetric)
+        psf = voigt_profile(r, sigma_gauss, gamma_lorentz)
+        
+    else:
+        raise ValueError(f"Unsupported PSF type: {psf_type}. Supported types: 'gaussian', 'voigt'")
+    
+    # Normalize PSF
+    psf = psf / np.sum(psf)
+
+    # Convolve each scan position
     blurred = np.empty_like(data_in)
     for i in range(n_scan):
         blurred[i] = convolve2d(data_in[i], psf, mode="same")
@@ -154,7 +205,7 @@ def apply_psf(signal: NDCube, psf: np.ndarray) -> NDCube:
     return NDCube(
         data=blurred,
         wcs=signal.wcs.deepcopy(),
-        unit=signal.unit,
+        unit=unit,
         meta=signal.meta,
     )
 
