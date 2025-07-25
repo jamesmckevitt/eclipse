@@ -20,6 +20,14 @@ from .radiometric import (
 from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
+from .analysis import (
+    load_instrument_response_results,
+    get_parameter_combinations,
+    analyse_fit_statistics,
+    get_results_for_combination,
+    summary_table,
+    create_sunpy_maps_from_combo
+)
 
 __all__ = [
     "Detector_SWC", "Detector_EIS", "Telescope_EUVST", "Telescope_EIS", 
@@ -30,5 +38,11 @@ __all__ = [
     "to_dn", "add_stray_light",
     "fit_cube_gauss", "velocity_from_fit", "width_from_fit", "analyse",
     "simulate_once", "monte_carlo",
-    "main"
+    "main",
+    "load_instrument_response_results",
+    "get_parameter_combinations",
+    "analyse_fit_statistics", 
+    "get_results_for_combination",
+    "summary_table",
+    "create_sunpy_maps_from_combo"
 ]

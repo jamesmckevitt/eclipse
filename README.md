@@ -48,6 +48,27 @@ import euvst_response
 from euvst_response import AluminiumFilter, Detector_SWC, Telescope_EUVST
 ```
 
+### Analysis Tutorial
+
+For analyzing simulation results, see the included Jupyter notebook `analysis_tutorial.ipynb` which demonstrates how to:
+
+- Load simulation results
+- Explore parameter combinations
+- Analyze fit statistics and compute velocity/line width errors
+- Create SunPy maps for visualization
+
+The analysis functions are now available directly from the package:
+
+```python
+from euvst_response import (
+    load_instrument_response_results,
+    get_results_for_combination,
+    analyse_fit_statistics,
+    create_sunpy_maps_from_combo,
+    summary_table
+)
+```
+
 ### 1. Generate contribution functions for the desired emission lines
 
 Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
