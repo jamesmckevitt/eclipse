@@ -11,6 +11,76 @@ from scipy.signal import convolve2d
 from .utils import wl_to_vel, vel_to_wl
 
 
+def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det) -> np.ndarray:
+    """
+    Vectorized version of Fano noise calculation for improved performance.
+    
+    Parameters
+    ----------
+    photon_counts : np.ndarray
+        Array of photon counts (unitless values)
+    rest_wavelength : u.Quantity
+        Rest wavelength with units
+    det : Detector_SWC or Detector_EIS
+        Detector object with fano noise parameters
+        
+    Returns
+    -------
+    np.ndarray
+        Array of electron counts with Fano noise applied
+    """
+    # Handle zero or negative photon counts
+    mask_positive = photon_counts > 0
+    electron_counts = np.zeros_like(photon_counts)
+    
+    if not np.any(mask_positive):
+        return electron_counts
+    
+    # Get CCD temperature - must be set via with_temperature()
+    if not hasattr(det, '_ccd_temperature'):
+        raise ValueError("CCD temperature not set. Use Detector_SWC.with_temperature() to create detector instance.")
+    
+    # Convert to Kelvin for the calculation
+    temp_kelvin = det._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+    
+    # Convert wavelength to photon energy: E = hc/λ
+    photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
+    
+    # Calculate temperature-dependent energy per electron-hole pair
+    w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
+    
+    # Mean number of electrons per photon
+    mean_electrons_per_photon = photon_energy_ev / w_T
+    
+    # Fano noise variance per photon
+    sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)
+    
+    # Work only with positive photon counts
+    positive_photons = photon_counts[mask_positive]
+    
+    # For efficiency, use a simpler approximation for most cases
+    # The exact method is: for each photon, sample from Normal(mean_e, sigma_fano)
+    # Approximation: for N photons, sample from Normal(N*mean_e, sqrt(N)*sigma_fano)
+    # This is mathematically equivalent for large N and much faster
+    
+    mean_total_electrons = positive_photons * mean_electrons_per_photon
+    std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
+    
+    # Sample total electrons per pixel
+    total_electrons = np.random.normal(
+        loc=mean_total_electrons,
+        scale=std_total_electrons
+    )
+    
+    # Ensure non-negative
+    total_electrons = np.maximum(total_electrons, 0)
+    
+    # Map back to full array
+    electron_counts[mask_positive] = total_electrons
+    
+    return electron_counts
+
+
 def intensity_to_photons(I: NDCube) -> NDCube:
     """Convert intensity to photon flux."""
     wl_axis = I.axis_world_coords(2)[0]
@@ -109,23 +179,18 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
     """
     # Get rest wavelength from metadata (keep as Quantity with units)
     rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
-    
-    # The photon_counts now already include the exposure time, so we just need QE
-    photon_counts_with_qe = (photon_counts.data * photon_counts.unit * det.qe_euv).to_value(u.photon / u.pixel)
-    
-    # Apply proper Fano noise per pixel using the detector's method
-    # Flatten arrays for processing
-    flat_photons = photon_counts_with_qe.flatten()
-    flat_electrons = np.zeros_like(flat_photons)
-    
-    # Apply Fano noise to each pixel using detector's method
-    for i, n_photons in enumerate(flat_photons):
-        flat_electrons[i] = det.fano_noise(n_photons, rest_wavelength)
-    
-    # Reshape back to original shape and convert to quantity
-    electron_counts = flat_electrons.reshape(photon_counts_with_qe.shape)
+
+    # Apply quantum efficiency first using binomial distribution (proper physics)
+    photons_detected = np.random.binomial(
+        photon_counts.to(u.photon/u.pix).data.astype(int),  # Extract unitless data
+        det.qe_euv
+    )
+
+    # Apply proper Fano noise per pixel using a vectorized approach
+    electron_counts = _vectorized_fano_noise(photons_detected.astype(float), rest_wavelength, det)
+
     e = electron_counts * (u.electron / u.pixel)
-    
+
     # Add dark current and read noise (these still depend on exposure time)
     e += det.dark_current * t_exp                                     # dark current
     e += np.random.normal(0, det.read_noise_rms.value,
@@ -259,20 +324,15 @@ def add_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim) -> NDCube:
     # Assume visible stray light is ~600nm (typical visible wavelength)
     visible_wavelength = 600 * u.nm  # Keep as Quantity with units
     
-    # Apply proper Fano noise to visible photons per pixel using detector's method
-    flat_vis_photons = n_vis_ph.to_value(u.photon / u.pixel).flatten()
-    flat_vis_electrons = np.zeros_like(flat_vis_photons)
+    # Apply quantum efficiency first, then vectorized Fano noise
+    vis_photons_detected = np.random.binomial(
+        n_vis_ph.to_value(u.photon / u.pixel).astype(int),
+        det.qe_vis
+    )
     
-    # Apply Fano noise to each pixel for visible light
-    for i, n_photons in enumerate(flat_vis_photons):
-        if n_photons > 0:
-            # Apply quantum efficiency
-            detected_photons = np.random.binomial(int(np.round(n_photons)), det.qe_vis)
-            if detected_photons > 0:
-                flat_vis_electrons[i] = det.fano_noise(detected_photons, visible_wavelength)
-    
-    # Reshape back and convert to quantity
-    stray_electrons = flat_vis_electrons.reshape(n_vis_ph.shape) * (u.electron / u.pixel)
+    # Apply vectorized Fano noise to detected visible photons
+    stray_electrons_values = _vectorized_fano_noise(vis_photons_detected.astype(float), visible_wavelength, det)
+    stray_electrons = stray_electrons_values * (u.electron / u.pixel)
 
     # Add to original signal
     out_q = electrons.data * electrons.unit + stray_electrons

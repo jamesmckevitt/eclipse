@@ -70,9 +70,27 @@ def main() -> None:
     # Parse configuration parameters - can be single values or lists
     # Each parameter combination will be run independently, including exposure times
     slit_widths = ensure_list(parse_yaml_input(config.get("slit_width", ['0.2 arcsec'])))
-    oxide_thicknesses = ensure_list(parse_yaml_input(config.get("oxide_thickness", ['95 nm'])))
-    c_thicknesses = ensure_list(parse_yaml_input(config.get("c_thickness", ['0 nm'])))
-    aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
+    
+    # Handle instrument-specific parameters
+    if instrument == "SWC":
+        # SWC requires oxide, carbon, and aluminium thickness parameters
+        oxide_thicknesses = ensure_list(parse_yaml_input(config.get("oxide_thickness", ['95 angstrom'])))
+        c_thicknesses = ensure_list(parse_yaml_input(config.get("c_thickness", ['0 angstrom'])))
+        aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
+    elif instrument == "EIS":
+        # EIS doesn't use these parameters - check they weren't specified
+        if "oxide_thickness" in config:
+            raise ValueError("EIS does not support oxide thickness parameter. Remove 'oxide_thickness' from configuration.")
+        if "c_thickness" in config:
+            raise ValueError("EIS does not support carbon thickness parameter. Remove 'c_thickness' from configuration.")
+        if "aluminium_thickness" in config:
+            raise ValueError("EIS does not support custom aluminium thickness parameter. Remove 'aluminium_thickness' from configuration.")
+        
+        # Set defaults for EIS (these won't be used but are needed for parameter combination logic)
+        oxide_thicknesses = [0 * u.nm]
+        c_thicknesses = [0 * u.nm] 
+        aluminium_thicknesses = [1500 * u.angstrom]
+    
     ccd_temperatures = ensure_list(parse_yaml_input(config.get("ccd_temperature", ['-60 Celsius'])))  # Temperature in Celsius
     vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * pixel)'])))
     exposures = ensure_list(parse_yaml_input(config.get("expos", ['1 s'])))
@@ -138,10 +156,7 @@ def main() -> None:
                                     TEL = Telescope_EUVST(filter=filter_obj)
                                 elif instrument == "EIS":
                                     TEL = Telescope_EIS()
-                                    if oxide_thickness.value != 0 or c_thickness.value != 0:
-                                        raise ValueError("EIS does not support oxide or C thicknesses.")
-                                    if aluminium_thickness.value != 1485:
-                                        raise ValueError("EIS does not support custom aluminium thicknesses.")
+                                    # EIS uses fixed filter configuration - no custom parameters needed
                                 
                                 # Set up detector configuration with calculated dark current
                                 if instrument == "SWC":

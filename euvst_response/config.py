@@ -118,86 +118,6 @@ class Detector_SWC:
 
         return dark_current * u.electron / (u.pixel * u.s)
 
-    def fano_noise(self, n_photons: float, rest_wavelength: u.Quantity) -> int:
-        """
-        Generate proper Fano noise for electron statistics based on CCD temperature.
-        
-        Parameters
-        ----------
-        n_photons : float
-            Number of photons absorbed
-        rest_wavelength : u.Quantity
-            Rest wavelength (any length unit, will be converted to Angstrom)
-        
-        Returns
-        -------
-        int
-            Total number of electrons generated (with proper Fano noise)
-        
-        Notes
-        -----
-        The mean energy per electron-hole pair w(T) is given by:
-        w(T) = 3.71 - 0.0006 × (T - 300) eV
-        
-        For each photon, the variance is σ²_Fano = F × N_e = F × E/w(T)
-        where E is the photon energy and N_e is the mean electrons per photon.
-        """
-        import numpy as np
-        
-        if n_photons <= 0:
-            return 0
-        
-        # Get CCD temperature - must be set via with_temperature()
-        if not hasattr(self, '_ccd_temperature'):
-            raise ValueError("CCD temperature not set. Use Detector_SWC.with_temperature() to create detector instance.")
-        
-        # Convert to Kelvin for the calculation (use original temperature, not clamped)
-        temp_kelvin = self._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
-        
-        # Convert wavelength to Angstrom for energy calculation
-        rest_wavelength_aa = rest_wavelength.to(u.angstrom).value
-        
-        # Convert wavelength to photon energy: E = hc/λ
-        # hc = 12398.4 eV·Å (Planck constant × speed of light)
-        photon_energy_ev = 12398.4 / rest_wavelength_aa
-        
-        # Calculate temperature-dependent energy per electron-hole pair
-        w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
-        
-        # Mean number of electrons per photon
-        mean_electrons_per_photon = photon_energy_ev / w_T
-        
-        # Fano noise variance per photon
-        sigma_fano_per_photon = np.sqrt(self.si_fano * mean_electrons_per_photon)
-        
-        # For efficiency, handle integer and fractional parts separately
-        n_photons_int = int(n_photons)
-        n_photons_frac = n_photons - n_photons_int
-        
-        total_electrons = 0
-        
-        # Handle integer photons
-        if n_photons_int > 0:
-            # For each photon, generate electrons with Fano noise
-            electrons_per_photon = np.random.normal(
-                loc=mean_electrons_per_photon,
-                scale=sigma_fano_per_photon,
-                size=n_photons_int
-            )
-            # Ensure non-negative and sum up
-            electrons_per_photon = np.maximum(electrons_per_photon, 0)
-            total_electrons += np.sum(electrons_per_photon)
-        
-        # Handle fractional photon (probabilistically)
-        if n_photons_frac > 0 and np.random.random() < n_photons_frac:
-            fractional_electrons = np.random.normal(
-                loc=mean_electrons_per_photon,
-                scale=sigma_fano_per_photon
-            )
-            total_electrons += max(fractional_electrons, 0)
-        
-        return int(round(total_electrons))
-
     @classmethod
     def with_temperature(cls, temp: u.Quantity):
         """
@@ -228,7 +148,7 @@ class Detector_SWC:
 @dataclass
 class Detector_EIS:
     """Hinode/EIS detector configuration for comparison."""
-    qe_euv: float = 1  # EIS telescope effective area already includes QE
+    qe_euv: float = 0.64  # EIS SW Note 2
     qe_vis: float = 1
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel
@@ -291,16 +211,6 @@ class Detector_EIS:
     @property
     def si_fano(self) -> float:
         return Detector_SWC.si_fano
-    
-    def fano_noise(self, n_photons: float, rest_wavelength: u.Quantity) -> int:
-        """Use the same Fano noise calculation as SWC detector."""
-        # Create a temporary SWC detector with our temperature settings
-        if not hasattr(self, '_ccd_temperature'):
-            raise ValueError("CCD temperature not set. Use Detector_EIS.with_temperature() to create detector instance.")
-        
-        temp_swc = Detector_SWC()
-        temp_swc._ccd_temperature = self._ccd_temperature  # Use same temperature with units
-        return temp_swc.fano_noise(n_photons, rest_wavelength)
 
 
 @dataclass
@@ -330,7 +240,11 @@ class Telescope_EUVST:
 class Telescope_EIS:
     """Hinode/EIS telescope configuration for comparison."""
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
-        return 0.23 * u.cm**2
+        # Effective area including detector QE is 0.23 cm2
+            # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
+            # https://solarb.mssl.ucl.ac.uk/SolarB/eis_docs/eis_notes/02_RADIOMETRIC_CALIBRATION/eis_swnote_02.pdf
+        # The QE value taken from software note two is 0.64. Therefore, returning the throughput:
+        return (0.23 * u.cm**2) / 0.64
 
 
 @dataclass
