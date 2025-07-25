@@ -27,13 +27,6 @@ def gaussian(wave, peak, centre, sigma, back):
     return peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2) + back
 
 
-def fano_noise(E: float, fano: float) -> int:
-    """Generate Fano noise for electron statistics."""
-    sigma = np.sqrt(fano * E)
-    n = np.random.normal(loc=E, scale=sigma)
-    return int(max(round(n), 0))
-
-
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     """Convert angular size to linear distance at 1 AU."""
     if angle.unit.physical_type != "angle":

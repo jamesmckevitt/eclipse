@@ -16,9 +16,10 @@ from tqdm import tqdm
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
 from .data_processing import load_atmosphere, rebin_atmosphere
-from .fitting import fit_cube_gauss, velocity_from_fit, analyse
+from .fitting import fit_cube_gauss
 from .monte_carlo import monte_carlo
 from .utils import parse_yaml_input, ensure_list
+import numpy as np
 
 
 def main() -> None:
@@ -51,6 +52,11 @@ def main() -> None:
     parser.add_argument("--config", type=str, help="YAML config file", required=True)
     args = parser.parse_args()
 
+    # Check if config file exists
+    config_path = Path(args.config)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Config file not found: {args.config}")
+
     # Load YAML config
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
@@ -67,7 +73,7 @@ def main() -> None:
     oxide_thicknesses = ensure_list(parse_yaml_input(config.get("oxide_thickness", ['95 nm'])))
     c_thicknesses = ensure_list(parse_yaml_input(config.get("c_thickness", ['0 nm'])))
     aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
-    ccd_temperatures = ensure_list(config.get("ccd_temperature", [-60]))  # Temperature in Celsius
+    ccd_temperatures = ensure_list(parse_yaml_input(config.get("ccd_temperature", ['-60 Celsius'])))  # Temperature in Celsius
     vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * pixel)'])))
     exposures = ensure_list(parse_yaml_input(config.get("expos", ['1 s'])))
 
@@ -96,14 +102,15 @@ def main() -> None:
         print(f"\nRebinning atmosphere cube for slit width {slit_width}...")
         SIM_temp = Simulation(
             expos=1.0 * u.s,  # Temporary value for rebinning
+            n_iter=n_iter,
             slit_width=slit_width,
+            ncpu=ncpu,
             instrument=instrument,
         )
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
         print("Fitting ground truth cube...")
-        fit_truth = fit_cube_gauss(cube_reb)
-        v_true = velocity_from_fit(fit_truth, cube_reb.meta['rest_wav'])
+        fit_truth = fit_cube_gauss(cube_reb, n_jobs=ncpu)
         
         for oxide_thickness in oxide_thicknesses:
             for c_thickness in c_thicknesses:
@@ -117,7 +124,7 @@ def main() -> None:
                                 print(f"Oxide thickness: {oxide_thickness}")
                                 print(f"Carbon thickness: {c_thickness}")
                                 print(f"Aluminium thickness: {aluminium_thickness}")
-                                print(f"CCD temperature: {ccd_temperature}°C")
+                                print(f"CCD temperature: {ccd_temperature}")
                                 print(f"Visible stray light: {vis_sl}")
                                 print(f"Exposure time: {exposure}")
                                 
@@ -147,62 +154,102 @@ def main() -> None:
                                 else:
                                     raise ValueError(f"Unknown instrument: {instrument}")
 
-                            if psf:
-                                if instrument != "SWC":
-                                    raise ValueError("PSF loading is only supported for SWC/EUVST instrument.")
-                                if instrument == "SWC":
-                                    raise NotImplementedError("PSF loading is not implemented yet, waiting for NAOJ measurements of mirror scattering.")
+                                if psf:
+                                    if instrument != "SWC":
+                                        raise ValueError("PSF loading is only supported for SWC/EUVST instrument.")
+                                    if instrument == "SWC":
+                                        raise NotImplementedError("PSF loading is not implemented yet, waiting for NAOJ measurements of mirror scattering.")
 
-                            # Create simulation object
-                            SIM = Simulation(
-                                expos=exposure,  # Single exposure value
-                                n_iter=n_iter,
-                                slit_width=slit_width,
-                                ncpu=ncpu,
-                                instrument=instrument,
-                                vis_sl=vis_sl,
-                            )
+                                # Create simulation object
+                                SIM = Simulation(
+                                    expos=exposure,  # Single exposure value
+                                    n_iter=n_iter,
+                                    slit_width=slit_width,
+                                    ncpu=ncpu,
+                                    instrument=instrument,
+                                    vis_sl=vis_sl,
+                                )
 
-                            # Run Monte Carlo for this single parameter combination
-                            dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
-                                cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
-                            )
-                            
-                            # Store results for this parameter combination
-                            sec = exposure.to_value(u.s)
-                            param_key = (
-                                slit_width.to_value(u.arcsec),
-                                oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
-                                c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
-                                aluminium_thickness.to_value(u.AA),
-                                ccd_temperature,
-                                vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl,
-                                sec
-                            )
-                            
-                            all_results[param_key] = {
-                                "parameters": {
-                                    "slit_width": slit_width,
-                                    "oxide_thickness": oxide_thickness,
-                                    "c_thickness": c_thickness,
-                                    "aluminium_thickness": aluminium_thickness,
-                                    "ccd_temperature": ccd_temperature,
-                                    "vis_sl": vis_sl,
-                                    "exposure": exposure,
-                                },
-                                "dn_signals": dn_signals,
-                                "photon_signals": photon_signals,
-                                "dn_fits": dn_fits,
-                                "photon_fits": photon_fits,
-                                "analysis": analyse(dn_fits, v_true, cube_reb.meta['rest_wav']),
-                                "ground_truth": {
-                                    "fit_truth": fit_truth,
-                                    "v_true": v_true,
+                                # Run Monte Carlo for this single parameter combination
+                                dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
+                                    cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
+                                )
+
+                                def process_fit_results(fits):
+                                    """
+                                    Process fit results from Monte Carlo simulations.
+                                    Returns a dict with first_fit, mean, std (with units if present).
+                                    """
+                                    import astropy.units as u
+
+                                    # Check if fits have units (astropy Quantity)
+                                    has_units = hasattr(fits[0, 0, 0, 0], "unit")
+                                    fits_shape = fits.shape
+
+                                    # Extract units for each parameter
+                                    fits_units = np.empty(fits_shape[-1], dtype=object)
+                                    for i in range(fits_shape[-1]):
+                                        fits_units[i] = u.Unit(fits[0, 0, 0, i].unit)
+                                    # Strip units for computation
+                                    fits_values = np.empty(fits_shape, dtype=float)
+                                    for i in tqdm(range(fits_shape[0]), desc="Processing fits", leave=False):
+                                        for j in range(fits_shape[1]):
+                                            for k in range(fits_shape[2]):
+                                                for l in range(fits_shape[3]):
+                                                    fits_values[i, j, k, l] = fits[i, j, k, l].value
+                                    # Compute stats
+                                    mean = fits_values.mean(axis=0)
+                                    std = fits_values.std(axis=0)
+                                    # Re-attach units
+                                    mean_with_units = np.empty(fits_shape[1:], dtype=object)
+                                    std_with_units = np.empty(fits_shape[1:], dtype=object)
+                                    for j in tqdm(range(fits_shape[1]), desc="Reattaching units to fit stats", leave=False):
+                                        for k in range(fits_shape[2]):
+                                            for l in range(fits_shape[3]):
+                                                mean_with_units[j, k, l] = mean[j, k, l] * fits_units[l]
+                                                std_with_units[j, k, l] = std[j, k, l] * fits_units[l]
+                                    return {
+                                        "first_fit": fits[0],
+                                        "mean": mean_with_units,
+                                        "std": std_with_units,
+                                    }
+                                
+                                dn_fit_stats = process_fit_results(dn_fits)
+                                photon_fit_stats = process_fit_results(photon_fits)
+
+                                # Store results for this parameter combination
+                                sec = exposure.to_value(u.s)
+                                param_key = (
+                                    slit_width.to_value(u.arcsec),
+                                    oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
+                                    c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
+                                    aluminium_thickness.to_value(u.AA),
+                                    ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
+                                    vis_sl.to_value(u.photon / (u.s * u.pixel)),
+                                    sec
+                                )
+                                
+                                all_results[param_key] = {
+                                    "parameters": {
+                                        "slit_width": slit_width,
+                                        "oxide_thickness": oxide_thickness,
+                                        "c_thickness": c_thickness,
+                                        "aluminium_thickness": aluminium_thickness,
+                                        "ccd_temperature": ccd_temperature,
+                                        "vis_sl": vis_sl,
+                                        "exposure": exposure,
+                                    },
+                                    "first_dn_signal": dn_signals[0],
+                                    "first_photon_signal": photon_signals[0],
+                                    "dn_fit_stats": dn_fit_stats,
+                                    "photon_fit_stats": photon_fit_stats,
+                                    "ground_truth": {
+                                        "fit_truth": fit_truth,
+                                    }
                                 }
-                            }
-                            
-                            # Clean up memory
-                            del dn_signals, dn_fits, photon_signals, photon_fits
+                                
+                                # Clean up memory
+                                del dn_signals, dn_fits, photon_signals, photon_fits, dn_fit_stats, photon_fit_stats
 
     # Prepare final results structure
     results = {
@@ -211,6 +258,8 @@ def main() -> None:
             "slit_widths": slit_widths,
             "oxide_thicknesses": oxide_thicknesses,
             "c_thicknesses": c_thicknesses,
+            "aluminium_thicknesses": aluminium_thicknesses,
+            "ccd_temperatures": ccd_temperatures,
             "vis_sl_vals": vis_sl_vals,
             "exposures": exposures,
         }
@@ -229,12 +278,12 @@ def main() -> None:
         "config": config,
         "instrument": instrument,
         "cube_sim": cube_sim,
+        "cube_reb": cube_reb,
       }, f)
 
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
 
     print(f"Instrument response simulation complete!")
-    print(f"Results saved to: {output_file}")
     print(f"Total parameter combinations: {total_combinations}")
 
 

@@ -4,14 +4,25 @@ Setup script for M-ECLIPSES package.
 
 from setuptools import setup, find_packages
 from pathlib import Path
+import re
 
 # Read the README file for long description
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 
+# Get version from __init__.py
+def get_version():
+    """Extract version from __init__.py file."""
+    init_file = this_directory / "euvst_response" / "__init__.py"
+    content = init_file.read_text()
+    match = re.search(r'^__version__ = [\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
+    if match:
+        return match.group(1)
+    raise RuntimeError("Unable to find version string.")
+
 setup(
     name="m-eclipses",
-    version="1.0.0",
+    version=get_version(),
     author="James McKevitt",
     author_email="jm2@mssl.ucl.ac.uk",
     description="MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW",

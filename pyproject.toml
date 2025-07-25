@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "m-eclipses"
-version = "1.0.0"
+dynamic = ["version"]
 authors = [
     {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
 ]
@@ -54,6 +54,9 @@ Repository = "https://github.com/jamesmckevitt/solc_euvst_sw_response"
 
 [tool.setuptools.packages.find]
 include = ["euvst_response*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "euvst_response.__version__"}
 
 [tool.setuptools.package-data]
 euvst_response = ["data/**/*"]

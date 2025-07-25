@@ -7,6 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import __version__
 from .main import main as run_simulation
 
 
@@ -40,7 +41,7 @@ def main():
     parser.add_argument(
         "--version", 
         action="version", 
-        version="M-ECLIPSES 1.0.0"
+        version=f"M-ECLIPSES {__version__}"
     )
     
     parser.add_argument(

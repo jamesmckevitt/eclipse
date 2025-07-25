@@ -9,6 +9,7 @@ import numpy as np
 import astropy.units as u
 import scipy.interpolate
 from .utils import angle_to_distance
+import numpy as np
 
 
 # ------------------------------------------------------------------
@@ -73,7 +74,7 @@ class Detector_SWC:
     si_fano: float = 0.115
 
     @staticmethod
-    def calculate_dark_current(temp_celsius: float) -> u.Quantity:
+    def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
         """
         Calculate dark current based on CCD temperature.
         
@@ -82,8 +83,8 @@ class Detector_SWC:
         
         Parameters
         ----------
-        temp_celsius : float
-            CCD temperature in Celsius
+        temp : u.Quantity
+            CCD temperature with units (e.g., -60 * u.deg_C)
             
         Returns
         -------
@@ -95,46 +96,129 @@ class Detector_SWC:
         ValueError
             If temperature is above 300K (27°C)
         """
-        import numpy as np
         
-        # Convert Celsius to Kelvin
-        temp_kelvin = temp_celsius + 273.15
-        
+        temp_kelvin = temp.to(u.Kelvin, equivalencies=u.temperature())
+
+        max_temp = 300 * u.K
+        min_temp = 230 * u.K
+
         # Check temperature limits
-        if temp_kelvin > 300:
-            max_celsius = 300 - 273.15
-            raise ValueError(f"Cannot calculate dark current at {temp_celsius}°C. "
-                           f"Maximum temperature is {max_celsius:.1f}°C")
+        if temp_kelvin > max_temp:
+            raise ValueError(f"Cannot calculate dark current at {temp_kelvin}. "
+                           f"Maximum temperature is {max_temp}")
         
         # Apply minimum temperature limit (clamp to 230K)
-        if temp_kelvin < 230:
-            temp_kelvin = 230
+        if temp_kelvin < min_temp:
+            temp_kelvin = min_temp
             
         # Calculate dark current using the provided formula
         # Q_d = Q_d0 * 122 * T^3 * e^(-6400/T)
-        Q_d0 = Detector_SWC._dark_current_293k.value  # electrons/pix/s at 293K
-        dark_current = Q_d0 * 122 * (temp_kelvin**3) * np.exp(-6400/temp_kelvin)
-        
+        Q_d0 = Detector_SWC._dark_current_293k.to_value(u.electron / (u.pixel * u.s))
+        dark_current = Q_d0 * 122 * (temp_kelvin.value**3) * np.exp(-6400/temp_kelvin.value)
+
         return dark_current * u.electron / (u.pixel * u.s)
 
+    def fano_noise(self, n_photons: float, rest_wavelength: u.Quantity) -> int:
+        """
+        Generate proper Fano noise for electron statistics based on CCD temperature.
+        
+        Parameters
+        ----------
+        n_photons : float
+            Number of photons absorbed
+        rest_wavelength : u.Quantity
+            Rest wavelength (any length unit, will be converted to Angstrom)
+        
+        Returns
+        -------
+        int
+            Total number of electrons generated (with proper Fano noise)
+        
+        Notes
+        -----
+        The mean energy per electron-hole pair w(T) is given by:
+        w(T) = 3.71 - 0.0006 × (T - 300) eV
+        
+        For each photon, the variance is σ²_Fano = F × N_e = F × E/w(T)
+        where E is the photon energy and N_e is the mean electrons per photon.
+        """
+        import numpy as np
+        
+        if n_photons <= 0:
+            return 0
+        
+        # Get CCD temperature - must be set via with_temperature()
+        if not hasattr(self, '_ccd_temperature'):
+            raise ValueError("CCD temperature not set. Use Detector_SWC.with_temperature() to create detector instance.")
+        
+        # Convert to Kelvin for the calculation (use original temperature, not clamped)
+        temp_kelvin = self._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+        
+        # Convert wavelength to Angstrom for energy calculation
+        rest_wavelength_aa = rest_wavelength.to(u.angstrom).value
+        
+        # Convert wavelength to photon energy: E = hc/λ
+        # hc = 12398.4 eV·Å (Planck constant × speed of light)
+        photon_energy_ev = 12398.4 / rest_wavelength_aa
+        
+        # Calculate temperature-dependent energy per electron-hole pair
+        w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
+        
+        # Mean number of electrons per photon
+        mean_electrons_per_photon = photon_energy_ev / w_T
+        
+        # Fano noise variance per photon
+        sigma_fano_per_photon = np.sqrt(self.si_fano * mean_electrons_per_photon)
+        
+        # For efficiency, handle integer and fractional parts separately
+        n_photons_int = int(n_photons)
+        n_photons_frac = n_photons - n_photons_int
+        
+        total_electrons = 0
+        
+        # Handle integer photons
+        if n_photons_int > 0:
+            # For each photon, generate electrons with Fano noise
+            electrons_per_photon = np.random.normal(
+                loc=mean_electrons_per_photon,
+                scale=sigma_fano_per_photon,
+                size=n_photons_int
+            )
+            # Ensure non-negative and sum up
+            electrons_per_photon = np.maximum(electrons_per_photon, 0)
+            total_electrons += np.sum(electrons_per_photon)
+        
+        # Handle fractional photon (probabilistically)
+        if n_photons_frac > 0 and np.random.random() < n_photons_frac:
+            fractional_electrons = np.random.normal(
+                loc=mean_electrons_per_photon,
+                scale=sigma_fano_per_photon
+            )
+            total_electrons += max(fractional_electrons, 0)
+        
+        return int(round(total_electrons))
+
     @classmethod
-    def with_temperature(cls, temp_celsius: float):
+    def with_temperature(cls, temp: u.Quantity):
         """
         Create a detector instance with dark current calculated from temperature.
         
         Parameters
         ----------
-        temp_celsius : float
-            CCD temperature in Celsius
+        temp : u.Quantity
+            CCD temperature with units (e.g., -60 * u.deg_C)
             
         Returns
         -------
         detector : Detector_SWC
-            Detector instance with calculated dark current
+            Detector instance with calculated dark current and stored temperature
         """
         from dataclasses import replace
-        dark_current = cls.calculate_dark_current(temp_celsius)
-        return replace(cls(), dark_current=dark_current)
+        dark_current = cls.calculate_dark_current(temp)
+        
+        detector = replace(cls(), dark_current=dark_current)
+        detector._ccd_temperature = temp  # Store original temperature with units
+        return detector
 
     @property
     def plate_scale_length(self) -> u.Quantity:
@@ -164,30 +248,31 @@ class Detector_EIS:
     def read_noise_rms(self) -> u.Quantity:
         return Detector_SWC.read_noise_rms
     @staticmethod
-    def calculate_dark_current(temp_celsius: float) -> u.Quantity:
+    def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
         """Calculate dark current - uses same formula as SWC detector."""
-        return Detector_SWC.calculate_dark_current(temp_celsius)
+        return Detector_SWC.calculate_dark_current(temp)
     
     @classmethod
-    def with_temperature(cls, temp_celsius: float):
+    def with_temperature(cls, temp: u.Quantity):
         """
         Create a detector instance with dark current calculated from temperature.
         
         Parameters
         ----------
-        temp_celsius : float
-            CCD temperature in Celsius
+        temp : u.Quantity
+            CCD temperature with units (e.g., -60 * u.deg_C)
             
         Returns
         -------
         detector : Detector_EIS
-            Detector instance with calculated dark current
+            Detector instance with calculated dark current and stored temperature
         """
         # For EIS, we need to create a modified instance
         # Since it inherits properties from SWC, we can't use dataclass replace
         detector = cls()
-        detector._temp_celsius = temp_celsius
-        detector._calculated_dark_current = cls.calculate_dark_current(temp_celsius)
+        detector._ccd_temperature = temp  # Store original temperature with units
+        detector._calculated_dark_current = cls.calculate_dark_current(temp)
+        
         return detector
     
     @property
@@ -206,6 +291,16 @@ class Detector_EIS:
     @property
     def si_fano(self) -> float:
         return Detector_SWC.si_fano
+    
+    def fano_noise(self, n_photons: float, rest_wavelength: u.Quantity) -> int:
+        """Use the same Fano noise calculation as SWC detector."""
+        # Create a temporary SWC detector with our temperature settings
+        if not hasattr(self, '_ccd_temperature'):
+            raise ValueError("CCD temperature not set. Use Detector_EIS.with_temperature() to create detector instance.")
+        
+        temp_swc = Detector_SWC()
+        temp_swc._ccd_temperature = self._ccd_temperature  # Use same temperature with units
+        return temp_swc.fano_noise(n_photons, rest_wavelength)
 
 
 @dataclass

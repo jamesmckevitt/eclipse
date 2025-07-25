@@ -24,7 +24,7 @@ def load_atmosphere(pkl_file: str) -> NDCube:
     return cube
 
 
-def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution):
+def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
     """
     Resample the spectral axis of an NDCube using FluxConservingResampler.
 
@@ -36,6 +36,8 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution):
         The index of the spectral axis (e.g., 0, 1, or 2).
     output_resolution : astropy.units.Quantity
         The desired output spectral resolution (e.g., 0.01 * u.nm).
+    ncpu : int, optional
+        Number of CPU cores to use for parallel processing. Default is -1 (use all cores).
 
     Returns
     -------
@@ -69,7 +71,7 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution):
         return res.flux.value
 
     with tqdm_joblib(tqdm(total=flat_data.shape[0], desc="Resampling spectral axis", unit="pixel", leave=False)):
-        results = Parallel(n_jobs=-1)(
+        results = Parallel(n_jobs=ncpu)(
             delayed(_resample_pixel)(i) for i in range(flat_data.shape[0])
         )
     resampled = np.vstack(results)
@@ -147,7 +149,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
     return new_cube_spec_hp_spat
 
 
-def rebin_atmosphere(cube_sim, det, sim):
+def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     """
     Rebin synthetic atmosphere cube to instrument resolution and spatial sampling.
     
@@ -159,6 +161,8 @@ def rebin_atmosphere(cube_sim, det, sim):
         Detector configuration
     sim : Simulation
         Simulation configuration
+    use_dask : bool, optional
+        Whether to use Dask for automatic parallelization (default: True)
         
     Returns
     -------
@@ -166,7 +170,8 @@ def rebin_atmosphere(cube_sim, det, sim):
         Rebinned cube at instrument resolution
     """
     print("  Spectral rebinning to instrument resolution (nx,ny,*nl*)...")
-    cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix)
+
+    cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix, ncpu=sim.ncpu)
 
     print("  Spatially rebinning to plate scale (nx,*ny*,nl) and slit width (*nx*,ny,nl)...")
     cube_det = reproject_ndcube_heliocentric_to_helioprojective(
