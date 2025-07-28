@@ -3,6 +3,8 @@ include LICENSE
 include pyproject.toml
 recursive-include euvst_response *.py
 recursive-include data *
+recursive-exclude data/atmosphere *
+exclude data/gofnt.sav
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 recursive-exclude scratch *
