@@ -101,6 +101,8 @@ instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
 
 # Point Spread Function
 psf: False  # Enable PSF convolution (currently only planned for SWC)
+# Or test with and without PSF:
+# psf: [True, False]  # Run simulations both with and without PSF
 
 # Exposure times - can be single value or list
 expos: [0.5 s, 1 s, 2 s, 5 s, 10 s, 20 s, 40 s, 80 s]

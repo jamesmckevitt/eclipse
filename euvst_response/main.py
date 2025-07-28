@@ -22,6 +22,50 @@ from .utils import parse_yaml_input, ensure_list
 import numpy as np
 
 
+def deduplicate_list(param_list, param_name):
+    """
+    Remove duplicates from a parameter list and warn if duplicates were found.
+    
+    Parameters
+    ----------
+    param_list : list
+        List of parameter values that may contain duplicates.
+    param_name : str
+        Name of the parameter for warning messages.
+        
+    Returns
+    -------
+    list
+        List with duplicates removed, preserving original order.
+    """
+    seen = set()
+    deduplicated = []
+    duplicates_found = False
+    
+    for item in param_list:
+        # For quantities, compare values and units; for other types, compare directly
+        if hasattr(item, 'unit'):
+            # Create a comparable key from value and unit
+            key = (item.value, str(item.unit))
+        else:
+            key = item
+            
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(item)
+        else:
+            duplicates_found = True
+    
+    if duplicates_found:
+        warnings.warn(
+            f"Duplicate values found in '{param_name}' parameter list. "
+            f"Removed duplicates: {len(param_list)} -> {len(deduplicated)} unique values.",
+            UserWarning
+        )
+    
+    return deduplicated
+
+
 def main() -> None:
     """Main function for running instrument response simulations."""
     
@@ -64,6 +108,7 @@ def main() -> None:
     # Set up instrument, detector, telescope, simulation from config
     instrument = config.get("instrument", "SWC").upper()
     psf_settings = ensure_list(config.get("psf", [False]))  # Handle PSF as a list
+    psf_settings = deduplicate_list(psf_settings, "psf")  # Remove duplicates
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
 
@@ -83,13 +128,17 @@ def main() -> None:
     # Parse configuration parameters - can be single values or lists
     # Each parameter combination will be run independently, including exposure times
     slit_widths = ensure_list(parse_yaml_input(config.get("slit_width", ['0.2 arcsec'])))
+    slit_widths = deduplicate_list(slit_widths, "slit_width")
     
     # Handle instrument-specific parameters
     if instrument == "SWC":
         # SWC requires oxide, carbon, and aluminium thickness parameters
         oxide_thicknesses = ensure_list(parse_yaml_input(config.get("oxide_thickness", ['95 angstrom'])))
+        oxide_thicknesses = deduplicate_list(oxide_thicknesses, "oxide_thickness")
         c_thicknesses = ensure_list(parse_yaml_input(config.get("c_thickness", ['0 angstrom'])))
+        c_thicknesses = deduplicate_list(c_thicknesses, "c_thickness")
         aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
+        aluminium_thicknesses = deduplicate_list(aluminium_thicknesses, "aluminium_thickness")
     elif instrument == "EIS":
         # EIS doesn't use these parameters - check they weren't specified
         if "oxide_thickness" in config:
@@ -105,8 +154,11 @@ def main() -> None:
         aluminium_thicknesses = [1500 * u.angstrom]
     
     ccd_temperatures = ensure_list(parse_yaml_input(config.get("ccd_temperature", ['-60 Celsius'])))  # Temperature in Celsius
+    ccd_temperatures = deduplicate_list(ccd_temperatures, "ccd_temperature")
     vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * pixel)'])))
+    vis_sl_vals = deduplicate_list(vis_sl_vals, "vis_sl")
     exposures = ensure_list(parse_yaml_input(config.get("expos", ['1 s'])))
+    exposures = deduplicate_list(exposures, "expos")
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
