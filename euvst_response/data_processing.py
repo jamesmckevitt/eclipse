@@ -9,7 +9,7 @@ import astropy.units as u
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from specutils import Spectrum1D
+from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
@@ -66,7 +66,7 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     resampled = np.zeros((flat_data.shape[0], n_spec))
 
     def _resample_pixel(i):
-        spec = Spectrum1D(flux=flat_data[i] * ndcube.unit, spectral_axis=spectral_world)
+        spec = Spectrum(flux=flat_data[i] * ndcube.unit, spectral_axis=spectral_world)
         res = resampler(spec, new_spec_grid)
         return res.flux.value
 
