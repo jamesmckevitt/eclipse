@@ -12,3 +12,7 @@ run/**
 *.sh
 **/__pycache__/
 scratch/**
+*.egg-info/
+build/
+dist/
+.eggs/
