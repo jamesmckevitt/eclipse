@@ -9,15 +9,21 @@ import numpy as np
 import astropy.units as u
 import scipy.interpolate
 from .utils import angle_to_distance
-import numpy as np
+from importlib.resources import files
 
 
 # ------------------------------------------------------------------
 #  Throughput helpers & AluminiumFilter
 # ------------------------------------------------------------------
-def _load_throughput_table(path: str | Path) -> tuple[u.Quantity, np.ndarray]:
+def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """Return (λ, T) arrays from a 2-col ASCII table (skip comments). λ is in nm."""
-    arr = np.loadtxt(path, skiprows=2)
+    content = path.read_text()
+    lines = content.strip().split('\n')[2:]  # Skip first 2 lines
+    data = []
+    for line in lines:
+        if line.strip() and not line.strip().startswith('#'):
+            data.append([float(x) for x in line.split()])
+    arr = np.array(data)
     wl = arr[:, 0] * u.nm
     tr = arr[:, 1]
     return wl, tr
@@ -36,9 +42,9 @@ class AluminiumFilter:
     oxide_thickness: u.Quantity = 95 * u.angstrom
     c_thickness: u.Quantity = 0 * u.angstrom
     mesh_throughput: float = 0.8
-    al_table: Path = Path("data/throughput/throughput_aluminium_1000_angstrom.dat")
-    oxide_table: Path = Path("data/throughput/throughput_aluminium_oxide_1000_angstrom.dat")
-    c_table: Path = Path("data/throughput/throughput_carbon_1000_angstrom.dat")
+    al_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat')
+    oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
+    c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
 
     def total_throughput(self, wl0: u.Quantity) -> float:
