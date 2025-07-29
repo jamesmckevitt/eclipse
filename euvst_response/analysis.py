@@ -452,6 +452,7 @@ def create_sunpy_maps_from_combo(
     width_data_clean = width_quantity.to(u.AA).value
     
     maps['line_width_from_fit'] = sunpy.map.Map(width_data_clean.T, wcs_2d)
+    maps['line_width_from_fit'].meta['bunit'] = str(u.AA)
     
     # Mean line width across all iterations
     # Handle line width data properly
@@ -459,11 +460,13 @@ def create_sunpy_maps_from_combo(
     w_mean_data_clean = w_mean.to(u.AA).value
 
     maps['line_width_mean'] = sunpy.map.Map(w_mean_data_clean.T, wcs_2d)
+    maps['line_width_mean'].meta['bunit'] = str(u.AA)
 
     # Line width standard deviation (uncertainty)
     w_std = analysis["w_std"]
     w_std_data_clean = w_std.to(u.AA).value
     maps['line_width_std'] = sunpy.map.Map(w_std_data_clean.T, wcs_2d)
+    maps['line_width_std'].meta['bunit'] = str(u.AA)
     
     # Set appropriate visualization settings for common map types
     # Also ensure correct aspect ratio for all maps
