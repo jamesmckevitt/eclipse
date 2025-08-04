@@ -63,7 +63,7 @@ class AluminiumFilter:
         """Calculate visible light throughput reduction due to aluminum filter (For every 170 Angstrom of aluminum, throughput is reduced by factor of 10)."""
         thickness_aa = self.al_thickness.to(u.angstrom).value
         layers = thickness_aa / 170.0
-        return 10.0 ** (-layers)
+        return 10.0 ** (-layers) * self.mesh_throughput
 
 
 # -----------------------------------------------------------------------------
