@@ -10,14 +10,84 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 import sunpy.map
+import h5py
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+from ndcube import NDCube
 from .fitting import velocity_from_fit, width_from_fit
+from tqdm import tqdm
+
+
+def _reconstruct_fit_stats_with_units(fit_stats_stripped: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reconstruct fit statistics with units from stripped data.
+    
+    Parameters
+    ----------
+    fit_stats_stripped : dict
+        Dictionary with keys: first_fit_data, mean_data, std_data, units
+        
+    Returns
+    -------
+    dict
+        Dictionary with reconstructed astropy quantities: first_fit, mean, std
+    """
+    # Get the stripped data and units
+    first_fit_data = fit_stats_stripped["first_fit_data"]
+    mean_data = fit_stats_stripped["mean_data"]
+    std_data = fit_stats_stripped["std_data"]
+    unit_strings = fit_stats_stripped["units"]
+    
+    # Convert unit strings back to astropy units
+    fits_units = [u.Unit(unit_str) for unit_str in unit_strings]
+    
+    # Reconstruct object arrays with units
+    first_fit_with_units = np.empty(first_fit_data.shape, dtype=object)
+    mean_with_units = np.empty(mean_data.shape, dtype=object)
+    std_with_units = np.empty(std_data.shape, dtype=object)
+    
+    # Attach units to each element
+    for j in tqdm(range(first_fit_data.shape[0]), desc="Reconstructing fit stats", leave=False):
+        for k in range(first_fit_data.shape[1]):
+            for l in range(first_fit_data.shape[2]):
+                first_fit_with_units[j, k, l] = first_fit_data[j, k, l] * fits_units[l]
+                mean_with_units[j, k, l] = mean_data[j, k, l] * fits_units[l]
+                std_with_units[j, k, l] = std_data[j, k, l] * fits_units[l]
+    
+    return {
+        "first_fit": first_fit_with_units,
+        "mean": mean_with_units,
+        "std": std_with_units,
+    }
+
+
+def _reconstruct_signal_with_units(signal_data, signal_unit_str, signal_wcs) -> NDCube:
+    """
+    Reconstruct NDCube signal with units from stripped data.
+    
+    Parameters
+    ----------
+    signal_data : numpy.ndarray
+        Signal data array
+    signal_unit_str : str
+        Unit string
+    signal_wcs : WCS
+        World coordinate system
+        
+    Returns
+    -------
+    NDCube
+        Reconstructed NDCube with units
+    """
+    signal_unit = u.Unit(signal_unit_str)
+    signal_quantity = signal_data * signal_unit
+    return NDCube(signal_quantity, wcs=signal_wcs)
 
 
 def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     """
-    Load instrument response results from the new multi-parameter format.
+    Load instrument response results and reconstruct units for compatibility.
+    Handles both old format (with embedded units) and new format (stripped units).
     
     Parameters
     ----------
@@ -27,11 +97,73 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     Returns
     -------
     dict
-        Dictionary containing all results and metadata.
+        Dictionary containing all results and metadata with reconstructed units.
     """
     with open(filepath, "rb") as f:
         data = dill.load(f)
+    
+    # Check if this is the new format by looking for stripped data keys
+    if "results" in data and "all_combinations" in data["results"]:
+        for param_key, combination_results in data["results"]["all_combinations"].items():
+            # Reconstruct fit statistics for new format
+            if "dn_fit_stats" in combination_results:
+                combination_results["dn_fit_stats"] = _reconstruct_fit_stats_with_units(
+                    combination_results["dn_fit_stats"]
+                )
+            if "photon_fit_stats" in combination_results:
+                combination_results["photon_fit_stats"] = _reconstruct_fit_stats_with_units(
+                    combination_results["photon_fit_stats"]
+                )
+            
+            # Reconstruct signal NDCubes for new format
+            if all(key in combination_results for key in ["first_dn_signal_data", "first_dn_signal_unit", "first_dn_signal_wcs"]):
+                combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
+                    combination_results["first_dn_signal_data"],
+                    combination_results["first_dn_signal_unit"],
+                    combination_results["first_dn_signal_wcs"]
+                )
+            if all(key in combination_results for key in ["first_photon_signal_data", "first_photon_signal_unit", "first_photon_signal_wcs"]):
+                combination_results["first_photon_signal"] = _reconstruct_signal_with_units(
+                    combination_results["first_photon_signal_data"],
+                    combination_results["first_photon_signal_unit"],
+                    combination_results["first_photon_signal_wcs"]
+                )
+            
+            # Reconstruct fit_truth for new format
+            if "ground_truth" in combination_results and "fit_truth_data" in combination_results["ground_truth"]:
+                fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
+                fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
+                
+                # Convert unit strings back to astropy units  
+                fits_units = [u.Unit(unit_str) for unit_str in fit_truth_units]
+                
+                # Reconstruct object array with units
+                fit_truth_with_units = np.empty(fit_truth_data.shape, dtype=object)
+                for j in tqdm(range(fit_truth_data.shape[0]), desc="Reconstructing fit truth", leave=False):
+                    for k in range(fit_truth_data.shape[1]):
+                        for l in range(fit_truth_data.shape[2]):
+                            fit_truth_with_units[j, k, l] = fit_truth_data[j, k, l] * fits_units[l]
+                
+                combination_results["ground_truth"]["fit_truth"] = fit_truth_with_units
+    
     return data
+
+
+def get_parameter_combinations(results: Dict[str, Any]) -> List[Tuple]:
+    """
+    Get all parameter combinations that were simulated.
+    
+    Parameters
+    ----------
+    results : dict
+        Results dictionary from load_instrument_response_results.
+        
+    Returns
+    -------
+    list of tuples
+        List of parameter combination keys.
+    """
+    return list(results["results"]["all_combinations"].keys())
 
 
 def get_parameter_combinations(results: Dict[str, Any]) -> List[Tuple]:
@@ -140,6 +272,7 @@ def get_results_for_combination(
     vis_sl: u.Quantity = None,
     exposure: u.Quantity = None,
     psf: bool = None,
+    enable_pinholes: bool = None,
     debug: bool = False
 ) -> Dict[str, Any]:
     """
@@ -165,6 +298,8 @@ def get_results_for_combination(
         Exposure time with units (e.g., 80 * u.s). If None, uses first available.
     psf : bool, optional
         PSF setting (True or False). If None, uses first available.
+    enable_pinholes : bool, optional
+        Pinhole effects setting (True or False). If None, uses first available.
     debug : bool, optional
         If True, print debugging information about available keys.
         
@@ -188,10 +323,11 @@ def get_results_for_combination(
         print(f"Available stray light values: {[vs.to_value() if hasattr(vs, 'to_value') else vs for vs in param_ranges['vis_sl_vals']]}")
         print(f"Available exposures: {[ex.to_value(u.s) for ex in param_ranges['exposures']]}")
         print(f"Available PSF settings: {param_ranges.get('psf_settings', [])}")
+        print(f"Available pinhole settings: {param_ranges.get('enable_pinholes_vals', [])}")
     
     # Check if no parameters were specified at all
     no_params_specified = all(param is None for param in [slit_width, oxide_thickness, c_thickness, 
-                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf])
+                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf, enable_pinholes])
     
     if no_params_specified and len(all_combinations) > 1:
         print(f"Error: No parameters specified, but {len(all_combinations)} combinations are available!")
@@ -208,7 +344,8 @@ def get_results_for_combination(
         'ccd_temperature': ccd_temperature,
         'vis_sl': vis_sl,
         'exposure': exposure,
-        'psf': psf
+        'psf': psf,
+        'enable_pinholes': enable_pinholes
     }
     
     # FIRST: Check if the specified parameters match multiple combinations
@@ -216,7 +353,7 @@ def get_results_for_combination(
     matching_combinations = []
     
     for key in all_combinations.keys():
-        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf = key
+        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf, key_enable_pinholes = key
         
         # Check if this combination matches all specified (non-None) parameters
         matches = True
@@ -238,6 +375,8 @@ def get_results_for_combination(
             matches = False
         if psf is not None and key_psf != psf:
             matches = False
+        if enable_pinholes is not None and key_enable_pinholes != enable_pinholes:
+            matches = False
             
         if matches:
             matching_combinations.append(key)
@@ -248,9 +387,9 @@ def get_results_for_combination(
         print(f"Use summary_table(results) to see all available parameter combinations.")
         print(f"Matching combinations found:")
         for i, combo in enumerate(matching_combinations[:5]):  # Show first 5
-            slit, oxide, carbon, aluminium, ccd, vis_sl, exp = combo
+            slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val = combo
             print(f"  {i+1}: slit={slit:.2f}arcsec, oxide={oxide:.1f}nm, carbon={carbon:.1f}nm, "
-                  f"Al={aluminium:.0f}Å, CCD={ccd:.1f}°C, stray={vis_sl:.2g}, exp={exp:.1f}s")
+                  f"Al={aluminium:.0f}Å, CCD={ccd:.1f}°C, stray={vis_sl:.2g}, exp={exp:.1f}s, psf={psf_val}, pinholes={enable_pinholes_val}")
         if len(matching_combinations) > 5:
             print(f"  ... and {len(matching_combinations) - 5} more")
         raise ValueError(f"Multiple combinations match your parameters. Please specify more parameters to select a unique combination.")
@@ -275,6 +414,8 @@ def get_results_for_combination(
         exposure = param_ranges["exposures"][0]
     if psf is None:
         psf = param_ranges["psf_settings"][0]
+    if enable_pinholes is None:
+        enable_pinholes = param_ranges["enable_pinholes_vals"][0]
     
     # Convert units to the same format as stored in keys (without units)
     slit_width_val = slit_width.to_value(u.arcsec)
@@ -285,9 +426,9 @@ def get_results_for_combination(
     vis_sl_val = vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl
     exposure_val = exposure.to_value(u.s)
     
-    # Find matching combination (8-element key format)
+    # Find matching combination (9-element key format)
     target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
-                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val, psf)
+                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val, psf, enable_pinholes)
     
     if debug:
         print(f"Target key: {target_key}")
@@ -333,17 +474,17 @@ def summary_table(results: Dict[str, Any]) -> None:
     param_ranges = results["results"]["parameter_ranges"]
     
     print("Parameter Combination Summary")
-    print("=" * 135)
-    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (Å)':<10} {'CCD (°C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5}")
-    print("-" * 135)
+    print("=" * 155)
+    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (Å)':<10} {'CCD (°C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}")
+    print("-" * 155)
     
     for key, combo_results in all_combinations.items():
-        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf = key
+        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf, enable_pinholes = key
         params = combo_results["parameters"]
         
-        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5}")
+        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5} {str(enable_pinholes):<8}")
     
-    print("-" * 135)
+    print("-" * 155)
     print(f"Total combinations: {len(all_combinations)}")
     print(f"Exposure times: {[exp.to_value(u.s) for exp in param_ranges['exposures']]}")
 
