@@ -287,7 +287,7 @@ class Simulation:
     def __post_init__(self):
         allowed_slits = {
             "EIS": [1, 2, 4],
-            "SWC": [0.2, 0.4, 1],
+            "SWC": [0.2, 0.4, 0.8, 1.6],
         }
         inst = self.instrument.upper()
         slit_val = self.slit_width.to_value(u.arcsec)
@@ -296,4 +296,4 @@ class Simulation:
                 raise ValueError("For EIS, slit_width must be 1, 2, or 4 arcsec.")
         elif inst in ("SWC"):
             if slit_val not in allowed_slits["SWC"]:
-                raise ValueError("For SWC, slit_width must be 0.2, 0.4, or 1 arcsec.")
+                raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
