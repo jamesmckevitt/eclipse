@@ -12,6 +12,77 @@ import joblib
 from tqdm import tqdm
 
 
+# Global debug flag - can be set by command line or configuration
+DEBUG_MODE = False
+
+
+def set_debug_mode(enabled: bool):
+    """Set global debug mode."""
+    global DEBUG_MODE
+    DEBUG_MODE = enabled
+
+
+def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None):
+    """
+    Break into IPython debugger if debug mode is enabled.
+    
+    Usage:
+        debug_break("Check values here", locals(), globals())
+    or:
+        debug_break("Error occurred")
+    """
+    if not DEBUG_MODE:
+        return
+        
+    print(f"\n=== DEBUG BREAK: {message} ===")
+    
+    try:
+        # Try to import and start IPython
+        from IPython import embed
+        
+        # Prepare namespace for IPython
+        user_ns = {}
+        if locals_dict:
+            user_ns.update(locals_dict)
+        if globals_dict:
+            user_ns.update(globals_dict)
+            
+        print("Starting IPython session...")
+        print("Available variables:", list(user_ns.keys()) if user_ns else "None provided")
+        print("Type 'exit()' or Ctrl+D to continue execution")
+        
+        # Start IPython with the provided namespace
+        embed(user_ns=user_ns)
+        
+    except ImportError:
+        print("IPython not available. Using standard Python debugger...")
+        import pdb
+        pdb.set_trace()
+
+
+def debug_on_error(func):
+    """
+    Decorator to automatically break into debugger on exceptions when debug mode is enabled.
+    
+    Usage:
+        @debug_on_error
+        def my_function():
+            # your code here
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"\n=== EXCEPTION IN {func.__name__}: {e} ===")
+                # Get the frame where the exception occurred
+                import sys
+                frame = sys.exc_info()[2].tb_frame
+                debug_break(f"Exception in {func.__name__}: {e}", frame.f_locals, frame.f_globals)
+            raise
+    return wrapper
+
+
 def wl_to_vel(wl: u.Quantity, wl0: u.Quantity) -> u.Quantity:
     """Convert wavelength to line-of-sight velocity."""
     return (wl - wl0) / wl0 * const.c

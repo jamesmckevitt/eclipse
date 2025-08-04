@@ -56,6 +56,12 @@ def main():
         action="store_true",
         help="Just print the logo and exit"
     )
+    
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode - drops to IPython on errors"
+    )
 
     args = parser.parse_args()
 
@@ -82,7 +88,10 @@ def main():
     print("-" * 60)
     
     # Set up sys.argv for the main function (it expects argparse format)
-    sys.argv = ["m-eclipses", "--config", args.config]
+    if args.debug:
+        sys.argv = ["m-eclipses", "--config", args.config, "--debug"]
+    else:
+        sys.argv = ["m-eclipses", "--config", args.config]
     
     try:
         run_simulation()
