@@ -13,12 +13,15 @@ import dill
 import yaml
 import astropy.units as u
 from tqdm import tqdm
+import gzip
+import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
 from .data_processing import load_atmosphere, rebin_atmosphere
 from .fitting import fit_cube_gauss
 from .monte_carlo import monte_carlo
-from .utils import parse_yaml_input, ensure_list
+from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error
+import numpy as np
 import numpy as np
 
 
@@ -66,6 +69,7 @@ def deduplicate_list(param_list, param_name):
     return deduplicated
 
 
+@debug_on_error
 def main() -> None:
     """Main function for running instrument response simulations."""
     
@@ -94,7 +98,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, help="YAML config file", required=True)
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
+    
+    # Set debug mode globally
+    set_debug_mode(args.debug)
+    if args.debug:
+        print("Debug mode enabled - will break to IPython on errors")
 
     # Check if config file exists
     config_path = Path(args.config)
@@ -163,6 +173,14 @@ def main() -> None:
     # Parse pinhole parameters
     enable_pinholes_vals = ensure_list(config.get("enable_pinholes", [False]))
     enable_pinholes_vals = deduplicate_list(enable_pinholes_vals, "enable_pinholes")
+
+    # if pinholes are enabled, raise warning that this is only intended to be used by the instrument team
+    if any(enable_pinholes_vals):
+        warnings.warn(
+            "Pinhole effects are only intended for use by the instrument team. "
+            "Please contact MSSL for more information.",
+            UserWarning
+        )
     
     # Parse pinhole sizes and positions (these are not swept - used together for multiple pinholes per simulation)
     pinhole_sizes = []
@@ -292,6 +310,9 @@ def main() -> None:
                                             pinhole_positions=pinhole_positions if enable_pinholes else [],
                                         )
 
+                                        # # Debug breakpoint - inspect simulation parameters
+                                        # debug_break("Before Monte Carlo simulation", locals(), globals())
+
                                         # Run Monte Carlo for this single parameter combination
                                         dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
                                             cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
@@ -300,7 +321,7 @@ def main() -> None:
                                         def process_fit_results(fits):
                                             """
                                             Process fit results from Monte Carlo simulations.
-                                            Returns a dict with first_fit, mean, std (with units if present).
+                                            Returns a dict with stripped data and units stored separately for faster saving.
                                             """
                                             import astropy.units as u
 
@@ -309,31 +330,30 @@ def main() -> None:
                                             fits_shape = fits.shape
 
                                             # Extract units for each parameter
-                                            fits_units = np.empty(fits_shape[-1], dtype=object)
+                                            fits_units = []
                                             for i in range(fits_shape[-1]):
-                                                fits_units[i] = u.Unit(fits[0, 0, 0, i].unit)
-                                            # Strip units for computation
+                                                fits_units.append(str(fits[0, 0, 0, i].unit))
+                                            
+                                            # Strip units for computation and storage
                                             fits_values = np.empty(fits_shape, dtype=float)
                                             for i in tqdm(range(fits_shape[0]), desc="Processing fits", leave=False):
                                                 for j in range(fits_shape[1]):
                                                     for k in range(fits_shape[2]):
                                                         for l in range(fits_shape[3]):
                                                             fits_values[i, j, k, l] = fits[i, j, k, l].value
-                                            # Compute stats
+                                            
+                                            # Compute stats on stripped data
                                             mean = fits_values.mean(axis=0)
                                             std = fits_values.std(axis=0)
-                                            # Re-attach units
-                                            mean_with_units = np.empty(fits_shape[1:], dtype=object)
-                                            std_with_units = np.empty(fits_shape[1:], dtype=object)
-                                            for j in tqdm(range(fits_shape[1]), desc="Reattaching units to fit stats", leave=False):
-                                                for k in range(fits_shape[2]):
-                                                    for l in range(fits_shape[3]):
-                                                        mean_with_units[j, k, l] = mean[j, k, l] * fits_units[l]
-                                                        std_with_units[j, k, l] = std[j, k, l] * fits_units[l]
+                                            
+                                            # Strip units from first fit too
+                                            first_fit_values = fits_values[0]
+                                            
                                             return {
-                                                "first_fit": fits[0],
-                                                "mean": mean_with_units,
-                                                "std": std_with_units,
+                                                "first_fit_data": first_fit_values,
+                                                "mean_data": mean,
+                                                "std_data": std,
+                                                "units": fits_units,  # List of unit strings
                                             }
                                         
                                         dn_fit_stats = process_fit_results(dn_fits)
@@ -353,6 +373,20 @@ def main() -> None:
                                             enable_pinholes
                                         )
                                         
+                                        # Extract data and units from signals for faster saving
+                                        first_dn_signal = dn_signals[0]
+                                        first_photon_signal = photon_signals[0]
+                                        
+                                        # Strip units from fit_truth
+                                        fit_truth_data = np.empty(fit_truth.shape, dtype=float)
+                                        fit_truth_units = []
+                                        for i in range(fit_truth.shape[-1]):
+                                            fit_truth_units.append(str(fit_truth[0, 0, i].unit))
+                                        for j in range(fit_truth.shape[0]):
+                                            for k in range(fit_truth.shape[1]):
+                                                for l in range(fit_truth.shape[2]):
+                                                    fit_truth_data[j, k, l] = fit_truth[j, k, l].value
+                                        
                                         all_results[param_key] = {
                                             "parameters": {
                                                 "slit_width": slit_width,
@@ -367,12 +401,18 @@ def main() -> None:
                                                 "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
                                                 "pinhole_positions": pinhole_positions if enable_pinholes else [],
                                             },
-                                            "first_dn_signal": dn_signals[0],
-                                            "first_photon_signal": photon_signals[0],
+                                            # Store signal data and units separately
+                                            "first_dn_signal_data": first_dn_signal.data,
+                                            "first_dn_signal_unit": str(first_dn_signal.unit),
+                                            "first_dn_signal_wcs": first_dn_signal.wcs,
+                                            "first_photon_signal_data": first_photon_signal.data,
+                                            "first_photon_signal_unit": str(first_photon_signal.unit),
+                                            "first_photon_signal_wcs": first_photon_signal.wcs,
                                             "dn_fit_stats": dn_fit_stats,
                                             "photon_fit_stats": photon_fit_stats,
                                             "ground_truth": {
-                                                "fit_truth": fit_truth,
+                                                "fit_truth_data": fit_truth_data,
+                                                "fit_truth_units": fit_truth_units,
                                             }
                                         }
                                         
@@ -400,7 +440,7 @@ def main() -> None:
     # Generate output filename based on config file
     config_path = Path(args.config)
     config_base = config_path.stem
-    output_file = Path(f"run/result/instrument_response_{config_base}.pkl")
+    output_file = Path(f"run/result/{config_base}.pkl")
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"\nSaving results to {output_file}")
