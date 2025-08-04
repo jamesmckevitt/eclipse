@@ -155,10 +155,44 @@ def main() -> None:
     
     ccd_temperatures = ensure_list(parse_yaml_input(config.get("ccd_temperature", ['-60 Celsius'])))  # Temperature in Celsius
     ccd_temperatures = deduplicate_list(ccd_temperatures, "ccd_temperature")
-    vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * pixel)'])))
+    vis_sl_vals = ensure_list(parse_yaml_input(config.get("vis_sl", ['0 photon / (s * cm^2)'])))
     vis_sl_vals = deduplicate_list(vis_sl_vals, "vis_sl")
     exposures = ensure_list(parse_yaml_input(config.get("expos", ['1 s'])))
     exposures = deduplicate_list(exposures, "expos")
+
+    # Parse pinhole parameters
+    enable_pinholes_vals = ensure_list(config.get("enable_pinholes", [False]))
+    enable_pinholes_vals = deduplicate_list(enable_pinholes_vals, "enable_pinholes")
+    
+    # Parse pinhole sizes and positions (these are not swept - used together for multiple pinholes per simulation)
+    pinhole_sizes = []
+    pinhole_positions = []
+    
+    if "pinhole_sizes" in config:
+        pinhole_sizes = ensure_list(parse_yaml_input(config["pinhole_sizes"]))
+    if "pinhole_positions" in config:
+        pinhole_positions = ensure_list(config["pinhole_positions"])
+    
+    # Validate pinhole configuration
+    if len(pinhole_sizes) != len(pinhole_positions) and len(pinhole_sizes) > 0:
+        raise ValueError("pinhole_sizes and pinhole_positions must have the same length")
+    
+    # Check if pinholes are enabled with EIS instrument
+    if instrument == "EIS" and any(enable_pinholes_vals):
+        raise ValueError("Pinhole effects are not supported for EIS instrument. Pinholes are only available for SWC.")
+    
+    # Check if pinhole parameters are specified for EIS
+    if instrument == "EIS":
+        if "pinhole_sizes" in config:
+            raise ValueError("EIS does not support pinhole_sizes parameter. Remove 'pinhole_sizes' from configuration.")
+        if "pinhole_positions" in config:
+            raise ValueError("EIS does not support pinhole_positions parameter. Remove 'pinhole_positions' from configuration.")
+        if "enable_pinholes" in config and any(config.get("enable_pinholes", [False])):
+            raise ValueError("EIS does not support enable_pinholes parameter. Remove 'enable_pinholes' from configuration.")
+    
+    if any(enable_pinholes_vals) and len(pinhole_sizes) == 0:
+        warnings.warn("enable_pinholes is True but no pinhole_sizes specified. Pinhole effects will be disabled.")
+        enable_pinholes_vals = [False]
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
@@ -176,7 +210,7 @@ def main() -> None:
     all_results = {}
 
     # Loop over all parameter combinations
-    total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures) * len(psf_settings)
+    total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures) * len(psf_settings) * len(enable_pinholes_vals)
     print(f"Running {total_combinations} parameter combinations...")
     
     combination_idx = 0
@@ -203,133 +237,147 @@ def main() -> None:
                         for vis_sl in vis_sl_vals:
                             for exposure in exposures:
                                 for psf in psf_settings:
-                                    combination_idx += 1
-                                    print(f"--- Combination {combination_idx}/{total_combinations} ---")
-                                    print(f"Slit width: {slit_width}")
-                                    print(f"Oxide thickness: {oxide_thickness}")
-                                    print(f"Carbon thickness: {c_thickness}")
-                                    print(f"Aluminium thickness: {aluminium_thickness}")
-                                    print(f"CCD temperature: {ccd_temperature}")
-                                    print(f"Visible stray light: {vis_sl}")
-                                    print(f"Exposure time: {exposure}")
-                                    print(f"PSF enabled: {psf}")
-                                    
-                                    # Set up telescope configuration for this combination
-                                    if instrument == "SWC":
-                                        filter_obj = AluminiumFilter(
-                                            oxide_thickness=oxide_thickness,
-                                            c_thickness=c_thickness,
-                                            al_thickness=aluminium_thickness,
+                                    for enable_pinholes in enable_pinholes_vals:
+                                        combination_idx += 1
+                                        print(f"--- Combination {combination_idx}/{total_combinations} ---")
+                                        print(f"Slit width: {slit_width}")
+                                        print(f"Oxide thickness: {oxide_thickness}")
+                                        print(f"Carbon thickness: {c_thickness}")
+                                        print(f"Aluminium thickness: {aluminium_thickness}")
+                                        print(f"CCD temperature: {ccd_temperature}")
+                                        print(f"Visible stray light (before filter): {vis_sl}")
+                                        print(f"Exposure time: {exposure}")
+                                        print(f"PSF enabled: {psf}")
+                                        print(f"Pinhole effects enabled: {enable_pinholes}")
+                                        if enable_pinholes and len(pinhole_sizes) > 0:
+                                            print(f"Pinhole sizes: {pinhole_sizes}")
+                                            print(f"Pinhole positions: {pinhole_positions}")
+                                        
+                                        # Set up telescope configuration for this combination
+                                        if instrument == "SWC":
+                                            filter_obj = AluminiumFilter(
+                                                oxide_thickness=oxide_thickness,
+                                                c_thickness=c_thickness,
+                                                al_thickness=aluminium_thickness,
+                                            )
+                                            TEL = Telescope_EUVST(filter=filter_obj)
+                                        elif instrument == "EIS":
+                                            TEL = Telescope_EIS()
+                                            # EIS uses fixed filter configuration - no custom parameters needed
+                                        else:
+                                            raise ValueError(f"Unknown instrument: {instrument}")
+
+                                        # Set up detector configuration with calculated dark current
+                                        if instrument == "SWC":
+                                            # Create a detector with calculated dark current for this temperature
+                                            DET = Detector_SWC.with_temperature(ccd_temperature)
+                                            print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                        elif instrument == "EIS":
+                                            DET = Detector_EIS.with_temperature(ccd_temperature)
+                                            print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                        else:
+                                            raise ValueError(f"Unknown instrument: {instrument}")
+
+                                        # Create simulation object
+                                        SIM = Simulation(
+                                            expos=exposure,  # Single exposure value
+                                            n_iter=n_iter,
+                                            slit_width=slit_width,
+                                            ncpu=ncpu,
+                                            instrument=instrument,
+                                            vis_sl=vis_sl,
+                                            psf=psf,
+                                            enable_pinholes=enable_pinholes,
+                                            pinhole_sizes=pinhole_sizes if enable_pinholes else [],
+                                            pinhole_positions=pinhole_positions if enable_pinholes else [],
                                         )
-                                        TEL = Telescope_EUVST(filter=filter_obj)
-                                    elif instrument == "EIS":
-                                        TEL = Telescope_EIS()
-                                        # EIS uses fixed filter configuration - no custom parameters needed
-                                    
-                                    # Set up detector configuration with calculated dark current
-                                    if instrument == "SWC":
-                                        # Create a detector with calculated dark current for this temperature
-                                        DET = Detector_SWC.with_temperature(ccd_temperature)
-                                        print(f"Calculated dark current: {DET.dark_current:.2e}")
-                                    elif instrument == "EIS":
-                                        DET = Detector_EIS.with_temperature(ccd_temperature)
-                                        print(f"Calculated dark current: {DET.dark_current:.2e}")
-                                    else:
-                                        raise ValueError(f"Unknown instrument: {instrument}")
 
-                                    # Create simulation object
-                                    SIM = Simulation(
-                                        expos=exposure,  # Single exposure value
-                                        n_iter=n_iter,
-                                        slit_width=slit_width,
-                                        ncpu=ncpu,
-                                        instrument=instrument,
-                                        vis_sl=vis_sl,
-                                        psf=psf,
-                                    )
+                                        # Run Monte Carlo for this single parameter combination
+                                        dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
+                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
+                                        )
 
-                                    # Run Monte Carlo for this single parameter combination
-                                    dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
-                                        cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
-                                    )
+                                        def process_fit_results(fits):
+                                            """
+                                            Process fit results from Monte Carlo simulations.
+                                            Returns a dict with first_fit, mean, std (with units if present).
+                                            """
+                                            import astropy.units as u
 
-                                    def process_fit_results(fits):
-                                        """
-                                        Process fit results from Monte Carlo simulations.
-                                        Returns a dict with first_fit, mean, std (with units if present).
-                                        """
-                                        import astropy.units as u
+                                            # Check if fits have units (astropy Quantity)
+                                            has_units = hasattr(fits[0, 0, 0, 0], "unit")
+                                            fits_shape = fits.shape
 
-                                        # Check if fits have units (astropy Quantity)
-                                        has_units = hasattr(fits[0, 0, 0, 0], "unit")
-                                        fits_shape = fits.shape
-
-                                        # Extract units for each parameter
-                                        fits_units = np.empty(fits_shape[-1], dtype=object)
-                                        for i in range(fits_shape[-1]):
-                                            fits_units[i] = u.Unit(fits[0, 0, 0, i].unit)
-                                        # Strip units for computation
-                                        fits_values = np.empty(fits_shape, dtype=float)
-                                        for i in tqdm(range(fits_shape[0]), desc="Processing fits", leave=False):
-                                            for j in range(fits_shape[1]):
+                                            # Extract units for each parameter
+                                            fits_units = np.empty(fits_shape[-1], dtype=object)
+                                            for i in range(fits_shape[-1]):
+                                                fits_units[i] = u.Unit(fits[0, 0, 0, i].unit)
+                                            # Strip units for computation
+                                            fits_values = np.empty(fits_shape, dtype=float)
+                                            for i in tqdm(range(fits_shape[0]), desc="Processing fits", leave=False):
+                                                for j in range(fits_shape[1]):
+                                                    for k in range(fits_shape[2]):
+                                                        for l in range(fits_shape[3]):
+                                                            fits_values[i, j, k, l] = fits[i, j, k, l].value
+                                            # Compute stats
+                                            mean = fits_values.mean(axis=0)
+                                            std = fits_values.std(axis=0)
+                                            # Re-attach units
+                                            mean_with_units = np.empty(fits_shape[1:], dtype=object)
+                                            std_with_units = np.empty(fits_shape[1:], dtype=object)
+                                            for j in tqdm(range(fits_shape[1]), desc="Reattaching units to fit stats", leave=False):
                                                 for k in range(fits_shape[2]):
                                                     for l in range(fits_shape[3]):
-                                                        fits_values[i, j, k, l] = fits[i, j, k, l].value
-                                        # Compute stats
-                                        mean = fits_values.mean(axis=0)
-                                        std = fits_values.std(axis=0)
-                                        # Re-attach units
-                                        mean_with_units = np.empty(fits_shape[1:], dtype=object)
-                                        std_with_units = np.empty(fits_shape[1:], dtype=object)
-                                        for j in tqdm(range(fits_shape[1]), desc="Reattaching units to fit stats", leave=False):
-                                            for k in range(fits_shape[2]):
-                                                for l in range(fits_shape[3]):
-                                                    mean_with_units[j, k, l] = mean[j, k, l] * fits_units[l]
-                                                    std_with_units[j, k, l] = std[j, k, l] * fits_units[l]
-                                        return {
-                                            "first_fit": fits[0],
-                                            "mean": mean_with_units,
-                                            "std": std_with_units,
-                                        }
-                                    
-                                    dn_fit_stats = process_fit_results(dn_fits)
-                                    photon_fit_stats = process_fit_results(photon_fits)
+                                                        mean_with_units[j, k, l] = mean[j, k, l] * fits_units[l]
+                                                        std_with_units[j, k, l] = std[j, k, l] * fits_units[l]
+                                            return {
+                                                "first_fit": fits[0],
+                                                "mean": mean_with_units,
+                                                "std": std_with_units,
+                                            }
+                                        
+                                        dn_fit_stats = process_fit_results(dn_fits)
+                                        photon_fit_stats = process_fit_results(photon_fits)
 
-                                    # Store results for this parameter combination
-                                    sec = exposure.to_value(u.s)
-                                    param_key = (
-                                        slit_width.to_value(u.arcsec),
-                                        oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
-                                        c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
-                                        aluminium_thickness.to_value(u.AA),
-                                        ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
-                                        vis_sl.to_value(u.photon / (u.s * u.pixel)),
-                                        sec,
-                                        psf
-                                    )
-                                    
-                                    all_results[param_key] = {
-                                        "parameters": {
-                                            "slit_width": slit_width,
-                                            "oxide_thickness": oxide_thickness,
-                                            "c_thickness": c_thickness,
-                                            "aluminium_thickness": aluminium_thickness,
-                                            "ccd_temperature": ccd_temperature,
-                                            "vis_sl": vis_sl,
-                                            "exposure": exposure,
-                                            "psf": psf,
-                                        },
-                                        "first_dn_signal": dn_signals[0],
-                                        "first_photon_signal": photon_signals[0],
-                                        "dn_fit_stats": dn_fit_stats,
-                                        "photon_fit_stats": photon_fit_stats,
-                                        "ground_truth": {
-                                            "fit_truth": fit_truth,
+                                        # Store results for this parameter combination
+                                        sec = exposure.to_value(u.s)
+                                        param_key = (
+                                            slit_width.to_value(u.arcsec),
+                                            oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
+                                            c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
+                                            aluminium_thickness.to_value(u.AA),
+                                            ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
+                                            vis_sl.to_value(u.photon / (u.s * u.cm**2)),
+                                            sec,
+                                            psf,
+                                            enable_pinholes
+                                        )
+                                        
+                                        all_results[param_key] = {
+                                            "parameters": {
+                                                "slit_width": slit_width,
+                                                "oxide_thickness": oxide_thickness,
+                                                "c_thickness": c_thickness,
+                                                "aluminium_thickness": aluminium_thickness,
+                                                "ccd_temperature": ccd_temperature,
+                                                "vis_sl": vis_sl,
+                                                "exposure": exposure,
+                                                "psf": psf,
+                                                "enable_pinholes": enable_pinholes,
+                                                "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
+                                                "pinhole_positions": pinhole_positions if enable_pinholes else [],
+                                            },
+                                            "first_dn_signal": dn_signals[0],
+                                            "first_photon_signal": photon_signals[0],
+                                            "dn_fit_stats": dn_fit_stats,
+                                            "photon_fit_stats": photon_fit_stats,
+                                            "ground_truth": {
+                                                "fit_truth": fit_truth,
+                                            }
                                         }
-                                    }
-                                    
-                                    # Clean up memory
-                                    del dn_signals, dn_fits, photon_signals, photon_fits, dn_fit_stats, photon_fit_stats
+                                        
+                                        # Clean up memory
+                                        del dn_signals, dn_fits, photon_signals, photon_fits, dn_fit_stats, photon_fit_stats
 
     # Prepare final results structure
     results = {
@@ -343,6 +391,9 @@ def main() -> None:
             "vis_sl_vals": vis_sl_vals,
             "exposures": exposures,
             "psf_settings": psf_settings,
+            "enable_pinholes_vals": enable_pinholes_vals,
+            "pinhole_sizes": pinhole_sizes,
+            "pinhole_positions": pinhole_positions,
         }
     }
 

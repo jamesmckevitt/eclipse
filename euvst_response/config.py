@@ -5,6 +5,7 @@ Configuration classes for instruments, detectors, and simulation parameters.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List
 import numpy as np
 import astropy.units as u
 import scipy.interpolate
@@ -58,6 +59,12 @@ class AluminiumFilter:
         t_c  = _interp_tr(wl_nm, wl_c,  tr_c)  ** (self.c_thickness.cgs / self.table_thickness.cgs)
         return t_al * t_ox * t_c * self.mesh_throughput
 
+    def visible_light_throughput(self) -> float:
+        """Calculate visible light throughput reduction due to aluminum filter (For every 170 Angstrom of aluminum, throughput is reduced by factor of 10)."""
+        thickness_aa = self.al_thickness.to(u.angstrom).value
+        layers = thickness_aa / 170.0
+        return 10.0 ** (-layers)
+
 
 # -----------------------------------------------------------------------------
 # Configuration objects
@@ -78,6 +85,7 @@ class Detector_SWC:
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     si_fano: float = 0.115
+    filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
 
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
@@ -266,8 +274,11 @@ class Simulation:
     slit_width: u.Quantity = 0.2 * u.arcsec
     ncpu: int = -1
     instrument: str = "SWC"
-    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.pixel)
+    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
     psf: bool = False
+    enable_pinholes: bool = False
+    pinhole_sizes: List[u.Quantity] = field(default_factory=list)
+    pinhole_positions: List[float] = field(default_factory=list)
 
     @property
     def slit_scan_step(self) -> u.Quantity:
