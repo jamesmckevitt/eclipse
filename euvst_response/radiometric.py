@@ -8,7 +8,7 @@ import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
 from scipy.signal import convolve2d
-from .utils import wl_to_vel, vel_to_wl
+from .utils import wl_to_vel, vel_to_wl, debug_break
 from scipy.special import voigt_profile
 
 
@@ -370,8 +370,8 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
         New cube with stray-light signal added.
     """
     # Convert vis_sl from photon/s/cm2 to photon/s/pixel using detector pixel area
-    pixel_area = (det.pix_size**2)
-    vis_sl_per_pixel = (sim.vis_sl.cgs * pixel_area.cgs).to(u.photon / u.s) / u.pixel
+    pixel_area = ((det.pix_size*1*u.pix)**2)/u.pix  # cm/pix -> cm2/pixel
+    vis_sl_per_pixel = (sim.vis_sl * pixel_area).to(u.photon / (u.s * u.pixel))
     
     # Apply filter throughput if telescope with filter is available
     if tel is not None and hasattr(tel, 'filter'):
@@ -446,56 +446,59 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
     # Visible light wavelength (typical)
     visible_wavelength = 600 * u.nm
     
-    # Calculate pixel area
-    pixel_area = det.pix_size**2
-    
     # Initialize additional electron contributions
     additional_electrons = np.zeros_like(electrons.data)
-    
+
     for pinhole_diameter, pinhole_position in zip(sim.pinhole_sizes, sim.pinhole_positions):
         # Calculate pinhole area
         pinhole_area = np.pi * (pinhole_diameter / 2)**2
         
         # === Visible Light Contribution Through Pinhole ===
-        # Convert visible flux from per cm2 to per pixel, then scale by pinhole area ratio
-        vis_flux_per_pixel_before = sim.vis_sl * pixel_area * t_exp  # Total photons per pixel before filter
-        area_ratio = (pinhole_area / pixel_area).to(u.dimensionless_unscaled).value
-        vis_flux_through_pinhole = vis_flux_per_pixel_before * area_ratio  # Scale by pinhole area
+        # Calculate total photons incident on the pinhole area (unfiltered)
+        # sim.vis_sl is photon/s/cm², pinhole_area is in cm²
+        vis_photons_per_sec_through_pinhole = sim.vis_sl * pinhole_area
+        vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
         
-        # Visible light through pinhole bypasses filter (no attenuation)
+        # Calculate visible diffraction pattern - this shows how the pinhole photons spread
+        n_scan, n_slit, n_spectral = data_shape
+        vis_pattern = calculate_pinhole_diffraction_pattern(
+            detector_shape=(n_slit, n_spectral),
+            pixel_size=det.pix_size*u.pix,
+            pinhole_diameter=pinhole_diameter,
+            pinhole_position_slit=pinhole_position,
+            slit_width=sim.slit_width,
+            plate_scale=det.plate_scale_angle,
+            distance=det.filter_distance,
+            wavelength=visible_wavelength
+        )
         
-        # Calculate visible diffraction pattern
-        if len(data_shape) == 3:  # (n_scan, n_slit, n_spectral)
-            n_scan, n_slit, n_spectral = data_shape
-            vis_pattern = calculate_pinhole_diffraction_pattern(
-                detector_shape=(n_slit, n_spectral),
-                pixel_size=det.pix_size,
-                pinhole_diameter=pinhole_diameter,
-                pinhole_position_slit=pinhole_position,
-                slit_width=sim.slit_width,
-                plate_scale=det.plate_scale_angle,
-                distance=det.filter_distance,
-                wavelength=visible_wavelength
-            )
+        # Distribute the total pinhole photons according to diffraction pattern
+        # vis_pattern is normalized (peak = 1), so we need to ensure photon conservation
+        # Normalize the pattern so the total integrated intensity equals 1.0
+        pattern_total = np.sum(vis_pattern)
+        if pattern_total > 0:
+            vis_pattern_normalized = vis_pattern / pattern_total
         else:
-            raise ValueError(f"Unexpected data shape for pinhole calculation: {data_shape}")
+            vis_pattern_normalized = vis_pattern
+
+        vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
         
         # Sample Poisson photons for this pinhole contribution
-        vis_photons_total = vis_flux_through_pinhole.to(u.photon / u.pixel).value * vis_pattern
-        vis_photons_poisson = np.random.poisson(vis_photons_total)
+        vis_photons_poisson = np.random.poisson(vis_photons_distributed)
         
         # Apply quantum efficiency
         vis_photons_detected = np.random.binomial(
             vis_photons_poisson.astype(int),
             det.qe_vis
         )
-        
+
         # Apply Fano noise to detected visible photons
         vis_electrons_values = _vectorized_fano_noise(vis_photons_detected.astype(float), visible_wavelength, det)
-        
+
         # Add to all scan positions (visible light affects all equally)
-        additional_electrons += vis_electrons_values
-    
+        for scan_idx in range(n_scan):
+            additional_electrons[scan_idx] += vis_electrons_values
+
     # Add pinhole contributions to original signal
     additional_electrons_quantity = additional_electrons * (u.electron / u.pixel)
     out_q = electrons.data * electrons.unit + additional_electrons_quantity

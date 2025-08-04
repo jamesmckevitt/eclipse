@@ -126,7 +126,8 @@ def calculate_pinhole_diffraction_pattern(
 def apply_euv_pinhole_diffraction(
     photon_counts: NDCube,
     det,
-    sim
+    sim,
+    tel
 ) -> NDCube:
     """
     Apply EUV pinhole diffraction effects to photon counts.
@@ -136,14 +137,21 @@ def apply_euv_pinhole_diffraction(
     focusing optics PSF (primary mirror + grating) since the filter is 
     positioned after these optical elements.
     
+    This function correctly handles the physics by:
+    1. Subtracting the filtered EUV signal in pinhole regions 
+    2. Adding the unattenuated EUV signal through pinholes
+    
     Parameters
     ----------
     photon_counts : NDCube
         EUV photon counts per pixel (shape: n_scan, n_slit, n_spectral)
+        These should already have filter throughput applied.
     det : Detector_SWC
         Detector configuration
     sim : Simulation
         Simulation configuration containing pinhole parameters
+    tel : Telescope_EUVST
+        Telescope configuration (needed to calculate filter throughput)
         
     Returns
     -------
@@ -161,24 +169,39 @@ def apply_euv_pinhole_diffraction(
     rest_wavelength = photon_counts.meta['rest_wav']
     
     # Calculate pixel area
-    pixel_area = det.pix_size**2
+    pixel_area = (det.pix_size*1*u.pix)**2
     
     # Initialize additional photon contributions
     additional_photons = np.zeros_like(photon_counts.data)
+    
+    # Get the wavelength axis and calculate filter throughput for EUV
+    wl_axis = photon_counts.axis_world_coords(2)[0]
+    
+    # Calculate filter throughput at each wavelength
+    filter_throughput_spectrum = np.array([tel.filter.total_throughput(wl) for wl in wl_axis])
     
     for pinhole_diameter, pinhole_position in zip(sim.pinhole_sizes, sim.pinhole_positions):
         # Calculate pinhole area
         pinhole_area = np.pi * (pinhole_diameter / 2)**2
         
-        # === EUV Contribution ===
-        # For EUV: flux through pinhole bypasses filter completely (throughput = 1.0)
-        # Scale existing EUV photon flux by ratio of pinhole area to pixel area
+        # === Physics Correction for EUV ===
+        # Current photon_counts already have filter attenuation applied
+        # We need to:
+        # 1. Back-calculate what the unfiltered signal would be
+        # 2. Apply pinhole diffraction to that unfiltered signal  
+        # 3. Subtract the over-counted filtered signal in pinhole regions
+
         area_ratio = (pinhole_area / pixel_area).to(u.dimensionless_unscaled).value
+        
+        # Calculate theoretical diffraction size for validation
+        # First Airy minimum: r = 1.22 * lambda * distance / diameter
+        theoretical_radius = (1.22 * rest_wavelength * det.filter_distance / pinhole_diameter).to(u.m)
+        theoretical_radius_pixels = (theoretical_radius / (det.pix_size*1*u.pix)).to(u.dimensionless_unscaled).value
         
         # Calculate EUV diffraction pattern
         euv_pattern = calculate_pinhole_diffraction_pattern(
             detector_shape=(n_slit, n_spectral),
-            pixel_size=det.pix_size,
+            pixel_size=det.pix_size*u.pix,
             pinhole_diameter=pinhole_diameter,
             pinhole_position_slit=pinhole_position,
             slit_width=sim.slit_width,
@@ -187,141 +210,46 @@ def apply_euv_pinhole_diffraction(
             wavelength=rest_wavelength
         )
         
-        # Scale EUV contribution by pinhole area and add diffraction pattern
+        # For EUV, the diffraction pattern is much smaller than visible light
+        # Normalize the pattern to ensure total integrated intensity equals 1.0
+        # This is crucial for proper photon conservation
+        pattern_total = np.sum(euv_pattern)
+        if pattern_total > 0:
+            euv_pattern_normalized = euv_pattern / pattern_total
+        else:
+            euv_pattern_normalized = euv_pattern
+        
+        # Process each scan position
         for i in range(n_scan):
-            # Take the EUV flux at this scan position and scale by pinhole
-            euv_base_flux = photon_counts.data[i, :, :] * area_ratio
-            additional_photons[i, :, :] += euv_base_flux * euv_pattern
+            # Current filtered signal at this scan position
+            filtered_signal = photon_counts.data[i, :, :]  # Shape: (n_slit, n_spectral)
+            
+            # Back-calculate unfiltered signal (before filter attenuation)
+            # filtered_signal = unfiltered_signal × filter_throughput
+            # So: unfiltered_signal = filtered_signal / filter_throughput
+            unfiltered_signal = filtered_signal / filter_throughput_spectrum[np.newaxis, :]
+            
+            # Calculate what would come through pinhole (unattenuated)
+            # Use normalized pattern to ensure proper photon conservation
+            pinhole_signal = unfiltered_signal * area_ratio * euv_pattern_normalized
+            
+            # Calculate what we incorrectly have from filter in pinhole regions
+            # (filtered signal weighted by diffraction pattern and area ratio)
+            overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
+            
+            # Net correction: add unfiltered pinhole signal, subtract overcounted filtered signal
+            # This simplifies to: filtered_signal × area_ratio × pattern × (1/filter_throughput - 1)
+            # Physical meaning: 
+            # - unfiltered × area_ratio × pattern = total light through pinhole
+            # - filtered × area_ratio × pattern = incorrectly counted filtered light
+            # - difference = net additional light from pinhole
+            correction = (pinhole_signal - overcounted_filtered)
+            
+            # Equivalent simplified form (more efficient):
+            # correction = filtered_signal * area_ratio * euv_pattern * (1/filter_throughput_spectrum[np.newaxis, :] - 1)
+            additional_photons[i, :, :] += correction
     
     # Create new photon counts with EUV pinhole contributions
-    new_data = photon_counts.data + additional_photons
-    
-    return NDCube(
-        data=new_data,
-        wcs=photon_counts.wcs.deepcopy(),
-        unit=photon_counts.unit,
-        meta=photon_counts.meta,
-    )
-
-
-def apply_pinhole_effects(
-    photon_counts: NDCube,
-    t_exp: u.Quantity,
-    det,
-    sim,
-    vis_sl_before_filter: u.Quantity,
-    pinhole_sizes: List[u.Quantity],
-    pinhole_positions: List[float],
-    filter_distance: u.Quantity,
-    aluminum_filter
-) -> NDCube:
-    """
-    Apply pinhole diffraction effects to photon counts, including both EUV and visible light.
-    
-    Parameters
-    ----------
-    photon_counts : NDCube
-        EUV photon counts per pixel (shape: n_scan, n_slit, n_spectral)
-    t_exp : u.Quantity
-        Exposure time
-    det : Detector
-        Detector configuration
-    sim : Simulation
-        Simulation configuration
-    vis_sl_before_filter : u.Quantity
-        Visible light flux before filter (photon/s/cm²)
-    pinhole_sizes : list of u.Quantity
-        Diameters of pinholes
-    pinhole_positions : list of float
-        Positions along slit as fractions (0.0 to 1.0)
-    filter_distance : u.Quantity
-        Distance from filter to detector
-    aluminum_filter : AluminiumFilter
-        Aluminum filter object for throughput calculations
-        
-    Returns
-    -------
-    NDCube
-        Modified photon counts with pinhole contributions added
-    """
-    if len(pinhole_sizes) != len(pinhole_positions):
-        raise ValueError("pinhole_sizes and pinhole_positions must have the same length")
-    
-    if len(pinhole_sizes) == 0:
-        return photon_counts  # No pinholes, return unchanged
-    
-    # Get detector and data properties
-    data_shape = photon_counts.data.shape  # (n_scan, n_slit, n_spectral)
-    n_scan, n_slit, n_spectral = data_shape
-    
-    # Get rest wavelength for EUV calculations
-    rest_wavelength = photon_counts.meta['rest_wav']
-    
-    # Visible light wavelength (typical)
-    visible_wavelength = 600 * u.nm
-    
-    # Calculate pixel area and pinhole areas
-    pixel_area = det.pix_size**2
-    
-    # Initialize additional photon contributions
-    additional_photons = np.zeros_like(photon_counts.data)
-    
-    # Calculate visible light throughput reduction through aluminum filter
-    vis_throughput_filter = aluminum_filter.visible_light_throughput()
-    
-    for pinhole_diameter, pinhole_position in zip(pinhole_sizes, pinhole_positions):
-        # Calculate pinhole area
-        pinhole_area = np.pi * (pinhole_diameter / 2)**2
-        
-        # === EUV Contribution ===
-        # For EUV: flux through pinhole bypasses filter completely (throughput = 1.0)
-        # Scale existing EUV photon flux by ratio of pinhole area to pixel area
-        area_ratio = (pinhole_area / pixel_area).to(u.dimensionless_unscaled).value
-        
-        # Calculate EUV diffraction pattern
-        euv_pattern = calculate_pinhole_diffraction_pattern(
-            detector_shape=(n_slit, n_spectral),
-            pixel_size=det.pix_size,
-            pinhole_diameter=pinhole_diameter,
-            pinhole_position_slit=pinhole_position,
-            slit_width=sim.slit_width,
-            plate_scale=det.plate_scale_angle,
-            distance=filter_distance,
-            wavelength=rest_wavelength
-        )
-        
-        # Scale EUV contribution by pinhole area and add diffraction pattern
-        for i in range(n_scan):
-            # Take the EUV flux at this scan position and scale by pinhole
-            euv_base_flux = photon_counts.data[i, :, :] * area_ratio
-            additional_photons[i, :, :] += euv_base_flux * euv_pattern
-        
-        # === Visible Light Contribution ===
-        # Convert visible flux from per cm² to per pixel
-        vis_flux_per_pixel_before = vis_sl_before_filter * pixel_area * t_exp  # Total photons per pixel before filter
-        vis_flux_through_pinhole = vis_flux_per_pixel_before * area_ratio  # Scale by pinhole area
-        
-        # Visible light through pinhole bypasses filter (no attenuation)
-        # For comparison, normal visible flux through filter would be:
-        # vis_flux_through_filter = vis_flux_per_pixel_before * vis_throughput_filter
-        
-        # Calculate visible diffraction pattern
-        vis_pattern = calculate_pinhole_diffraction_pattern(
-            detector_shape=(n_slit, n_spectral),
-            pixel_size=det.pix_size,
-            pinhole_diameter=pinhole_diameter,
-            pinhole_position_slit=pinhole_position,
-            slit_width=sim.slit_width,
-            plate_scale=det.plate_scale_angle,
-            distance=filter_distance,
-            wavelength=visible_wavelength
-        )
-        
-        # Add visible light contribution to all scan positions
-        vis_contribution = vis_flux_through_pinhole.to(u.photon / u.pixel).value * vis_pattern
-        additional_photons += vis_contribution
-    
-    # Create new photon counts with pinhole contributions
     new_data = photon_counts.data + additional_photons
     
     return NDCube(

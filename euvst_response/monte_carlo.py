@@ -54,7 +54,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     
     # Convert to pixel counts
     photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
-    
+
     # Apply focusing optics PSF (primary mirror + diffraction grating)
     if sim.psf:
         photons_focused = apply_focusing_optics_psf(photons_pixels, tel)
@@ -63,7 +63,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     
     # Apply EUV pinhole diffraction effects (after focusing optics, if enabled)
     if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
-        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim)
+        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
     else:
         photons_euv_pinholes = photons_focused
     
