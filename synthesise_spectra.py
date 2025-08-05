@@ -482,7 +482,7 @@ def main() -> None:
     # ----------------------------------------------------------
     line_cubes = {}
     for name, info in goft.items():
-        cube_line = info["si"]                               # (nx,ny,nλ_line)
+        cube_line = info["si"]                               # (nx,ny,n_lambda_line)
 
         nx, ny, nl = cube_line.shape
 
