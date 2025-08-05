@@ -69,6 +69,34 @@ from euvst_response import (
 )
 ```
 
+### DEM Analysis (Advanced)
+
+If you ran simulations with the `--save_dem` flag, you can access DEM (Differential Emission Measure) data for advanced plotting:
+
+```python
+from euvst_response import (
+    load_instrument_response_results,
+    get_dem_data_from_results,
+    check_dem_data_availability,
+    load_atmosphere_with_dem_data
+)
+
+# Load results
+results = load_instrument_response_results("run/result/your_results.pkl")
+
+# Check if DEM data is available
+if check_dem_data_availability(results):
+    # Extract DEM data
+    dem_data = get_dem_data_from_results(results)
+    
+    # Access DEM plotting data
+    dem_map = dem_data['dem_map']           # Shape: (nx, ny, nT)
+    em_tv = dem_data['em_tv']               # Shape: (nx, ny, nT, nv)
+    logT_centres = dem_data['logT_centres'] # Temperature bin centers
+    v_edges = dem_data['v_edges']           # Velocity bin edges
+    goft = dem_data['goft']                 # Contribution functions
+```
+
 ### 1. Generate contribution functions for the desired emission lines
 
 Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
@@ -159,6 +187,18 @@ Run the instrument response function using:
 m-eclipses --config ./run/input/config.yaml
 ```
 
+For advanced analysis including DEM plotting capabilities, add the `--save_dem` flag:
+```bash
+m-eclipses --config ./run/input/config.yaml --save_dem
+```
+
+This will include DEM (Differential Emission Measure) data in the saved results, enabling advanced plotting functions but massively increasing file size and memory requirements.
+
+**Command-line options:**
+- `--config`: Path to YAML configuration file (required)
+- `--save_dem`: Include DEM data in results for advanced plotting (optional)
+- `--debug`: Enable debug mode with IPython breakpoints on errors (optional)
+
 This can be looped in bash using:
 ```bash
 for config in ./run/input/*.yaml; do
@@ -173,6 +213,7 @@ Results are saved as pickle files in the `scratch/` directory with descriptive f
 - Fitted spectral line parameters (intensity, velocity, width)
 - Statistical analysis of velocity precision vs. exposure time
 - Ground truth comparisons
+- **DEM data (if `--save_dem` flag was used)**: Differential Emission Measure maps, EM(T,v) cubes, contribution functions, and temperature/velocity grids for advanced plotting
 
 ## Acknowledgements
 
