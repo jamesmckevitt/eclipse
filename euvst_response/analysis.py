@@ -461,6 +461,42 @@ def get_results_for_combination(
         raise ValueError("No matching parameter combination found")
 
 
+def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract DEM data from loaded instrument response results.
+    
+    Parameters
+    ----------
+    results : dict
+        Results dictionary from load_instrument_response_results.
+        
+    Returns
+    -------
+    dict
+        Dictionary containing DEM data with keys:
+        - 'dem_map': DEM(T) map (numpy array, shape nx, ny, nT)
+        - 'em_tv': EM(T,v) map (numpy array, shape nx, ny, nT, nv)
+        - 'logT_centres': Temperature bin centers (numpy array)
+        - 'v_edges': Velocity bin edges (numpy array)
+        - 'goft': Contribution function data (dict)
+        - 'logT_grid': Temperature grid used for interpolation (numpy array)
+        - 'logN_grid': Density grid used for interpolation (numpy array)
+        
+    Raises
+    ------
+    KeyError
+        If DEM data is not found in the results (older format).
+    """
+    if "dem_data" not in results:
+        raise KeyError(
+            "DEM data not found in results. This appears to be from an older "
+            "simulation that didn't include DEM data. Please re-run the simulation "
+            "with the updated package to include DEM data in the results."
+        )
+    
+    return results["dem_data"]
+
+
 def summary_table(results: Dict[str, Any]) -> None:
     """
     Print a summary table of all parameter combinations and their results.

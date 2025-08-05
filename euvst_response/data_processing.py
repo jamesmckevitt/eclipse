@@ -24,6 +24,35 @@ def load_atmosphere(pkl_file: str) -> NDCube:
     return cube
 
 
+def load_atmosphere_with_dem_data(pkl_file: str) -> dict:
+    """
+    Load synthetic atmosphere cube along with DEM data from pickle file.
+    
+    Parameters
+    ----------
+    pkl_file : str
+        Path to the synthesized spectra pickle file.
+        
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'sim_si': Main simulation cube (NDCube)
+        - 'sim_ii': Integrated intensity map (NDCube)  
+        - 'line_cubes': Per-line intensity cubes (dict)
+        - 'dem_map': DEM(T) map (numpy array, shape nx, ny, nT)
+        - 'em_tv': EM(T,v) map (numpy array, shape nx, ny, nT, nv)
+        - 'logT_centres': Temperature bin centers (numpy array)
+        - 'v_edges': Velocity bin edges (numpy array)
+        - 'goft': Contribution function data (dict)
+        - 'logT_grid': Temperature grid used for interpolation (numpy array)
+        - 'logN_grid': Density grid used for interpolation (numpy array)
+    """
+    with open(pkl_file, "rb") as f:
+        atmosphere_data = dill.load(f)
+    return atmosphere_data
+
+
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
     """
     Resample the spectral axis of an NDCube using FluxConservingResampler.
