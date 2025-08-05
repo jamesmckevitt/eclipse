@@ -21,13 +21,15 @@ from .pinhole_diffraction import apply_euv_pinhole_diffraction, airy_disk_patter
 from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
+from .data_processing import load_atmosphere, load_atmosphere_with_dem_data
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
     analyse_fit_statistics,
     get_results_for_combination,
     summary_table,
-    create_sunpy_maps_from_combo
+    create_sunpy_maps_from_combo,
+    get_dem_data_from_results
 )
 
 __all__ = [
@@ -40,10 +42,12 @@ __all__ = [
     "fit_cube_gauss", "velocity_from_fit", "width_from_fit", "analyse",
     "simulate_once", "monte_carlo",
     "main",
+    "load_atmosphere", "load_atmosphere_with_dem_data",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 
     "get_results_for_combination",
     "summary_table",
-    "create_sunpy_maps_from_combo"
+    "create_sunpy_maps_from_combo",
+    "get_dem_data_from_results"
 ]
