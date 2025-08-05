@@ -206,7 +206,9 @@ class Detector_EIS:
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
         """Calculate dark current based on CCD temperature for EIS."""
-        return calculate_dark_current(temp, Detector_EIS._dark_current_293k)    @classmethod
+        return calculate_dark_current(temp, Detector_EIS._dark_current_293k)
+    
+    @classmethod
     def with_temperature(cls, temp: u.Quantity):
         """
         Create a detector instance with dark current calculated from temperature.
