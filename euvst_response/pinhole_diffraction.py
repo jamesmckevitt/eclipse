@@ -225,7 +225,7 @@ def apply_euv_pinhole_diffraction(
             filtered_signal = photon_counts.data[i, :, :]  # Shape: (n_slit, n_spectral)
             
             # Back-calculate unfiltered signal (before filter attenuation)
-            # filtered_signal = unfiltered_signal × filter_throughput
+            # filtered_signal = unfiltered_signal * filter_throughput
             # So: unfiltered_signal = filtered_signal / filter_throughput
             unfiltered_signal = filtered_signal / filter_throughput_spectrum[np.newaxis, :]
             
@@ -238,10 +238,10 @@ def apply_euv_pinhole_diffraction(
             overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
             
             # Net correction: add unfiltered pinhole signal, subtract overcounted filtered signal
-            # This simplifies to: filtered_signal × area_ratio × pattern × (1/filter_throughput - 1)
+            # This simplifies to: filtered_signal * area_ratio * pattern * (1/filter_throughput - 1)
             # Physical meaning: 
-            # - unfiltered × area_ratio × pattern = total light through pinhole
-            # - filtered × area_ratio × pattern = incorrectly counted filtered light
+            # - unfiltered * area_ratio * pattern = total light through pinhole
+            # - filtered * area_ratio * pattern = incorrectly counted filtered light
             # - difference = net additional light from pinhole
             correction = (pinhole_signal - overcounted_filtered)
             
