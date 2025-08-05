@@ -44,7 +44,7 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # Convert to Kelvin for the calculation
     temp_kelvin = det._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
     
-    # Convert wavelength to photon energy: E = hc/λ
+    # Convert wavelength to photon energy: E = hc/lambda
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
     
     # Calculate temperature-dependent energy per electron-hole pair
@@ -455,7 +455,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         
         # === Visible Light Contribution Through Pinhole ===
         # Calculate total photons incident on the pinhole area (unfiltered)
-        # sim.vis_sl is photon/s/cm², pinhole_area is in cm²
+        # sim.vis_sl is photon/s/cm^2, pinhole_area is in cm^2
         vis_photons_per_sec_through_pinhole = sim.vis_sl * pinhole_area
         vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
         
