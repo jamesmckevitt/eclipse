@@ -104,7 +104,7 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     
     # Check if this is the new format by looking for stripped data keys
     if "results" in data and "all_combinations" in data["results"]:
-        for param_key, combination_results in data["results"]["all_combinations"].items():
+        for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
             # Reconstruct fit statistics for new format
             if "dn_fit_stats" in combination_results:
                 combination_results["dn_fit_stats"] = _reconstruct_fit_stats_with_units(
@@ -233,7 +233,7 @@ def analyse_fit_statistics(
     v_true = centers_to_velocity(fit_truth[..., 1], rest_wavelength)
     v_err = v_true - v_mean
     
-    # Convert center std to velocity std using differential: dv/dλ = c/λ
+    # Convert center std to velocity std using differential: dv/dlambda = c/lambda
     c = const.c.to(u.km / u.s)
     center_std_clean = np.asarray([q.to(rest_wavelength.unit).value if hasattr(q, 'unit') else q for q in center_std.flat]).reshape(center_std.shape)
     v_std = c * center_std_clean * rest_wavelength.unit / rest_wavelength
@@ -319,7 +319,7 @@ def get_results_for_combination(
         print(f"Available oxide thicknesses: {[ot.to_value(u.nm) for ot in param_ranges['oxide_thicknesses']]}")
         print(f"Available carbon thicknesses: {[ct.to_value(u.nm) for ct in param_ranges['c_thicknesses']]}")
         print(f"Available aluminium thicknesses: {[at.to_value(u.AA) for at in param_ranges['aluminium_thicknesses']]}")
-        print(f"Available CCD temperatures: {param_ranges['ccd_temperatures']} °C")
+        print(f"Available CCD temperatures: {param_ranges['ccd_temperatures']} deg C")
         print(f"Available stray light values: {[vs.to_value() if hasattr(vs, 'to_value') else vs for vs in param_ranges['vis_sl_vals']]}")
         print(f"Available exposures: {[ex.to_value(u.s) for ex in param_ranges['exposures']]}")
         print(f"Available PSF settings: {param_ranges.get('psf_settings', [])}")
@@ -389,7 +389,7 @@ def get_results_for_combination(
         for i, combo in enumerate(matching_combinations[:5]):  # Show first 5
             slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val = combo
             print(f"  {i+1}: slit={slit:.2f}arcsec, oxide={oxide:.1f}nm, carbon={carbon:.1f}nm, "
-                  f"Al={aluminium:.0f}Å, CCD={ccd:.1f}°C, stray={vis_sl:.2g}, exp={exp:.1f}s, psf={psf_val}, pinholes={enable_pinholes_val}")
+                  f"Al={aluminium:.0f}A, CCD={ccd:.1f}C, stray={vis_sl:.2g}, exp={exp:.1f}s, psf={psf_val}, pinholes={enable_pinholes_val}")
         if len(matching_combinations) > 5:
             print(f"  ... and {len(matching_combinations) - 5} more")
         raise ValueError(f"Multiple combinations match your parameters. Please specify more parameters to select a unique combination.")
@@ -475,7 +475,7 @@ def summary_table(results: Dict[str, Any]) -> None:
     
     print("Parameter Combination Summary")
     print("=" * 155)
-    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (Å)':<10} {'CCD (°C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}")
+    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (A)':<10} {'CCD (C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}")
     print("-" * 155)
     
     for key, combo_results in all_combinations.items():
@@ -505,7 +505,7 @@ def create_sunpy_maps_from_combo(
     cube_reb : NDCube
         NDCube with helioprojective WCS to use for all maps.
     rest_wavelength : u.Quantity, optional
-        Rest wavelength for velocity conversion (default: 195.119 Å for Fe XII).
+        Rest wavelength for velocity conversion (default: 195.119 A for Fe XII).
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to use for velocity/width maps.
         
