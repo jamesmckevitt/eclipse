@@ -24,6 +24,31 @@ import shutil
 # ---------------------------------------------------------------------------
 ##############################################################################
 
+def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
+    """
+    Convert velocity grid centers to bin edges.
+    
+    Parameters
+    ----------
+    vel_grid : np.ndarray
+        1D array of velocity centers.
+        
+    Returns
+    -------
+    np.ndarray
+        1D array of velocity bin edges (length = len(vel_grid) + 1).
+    """
+    if len(vel_grid) < 2:
+        raise ValueError("vel_grid must have at least 2 elements")
+    
+    dv = vel_grid[1] - vel_grid[0]
+    return np.concatenate([
+        [vel_grid[0] - 0.5 * dv],
+        vel_grid[:-1] + 0.5 * dv,
+        [vel_grid[-1] + 0.5 * dv]
+    ])
+
+
 def load_cube(
     file_path: str | Path,
     shape: Tuple[int, int, int] = (512, 768, 256),
@@ -244,7 +269,7 @@ def build_em_tv(
     logT_cube: np.ndarray,
     vz_cube: np.ndarray,
     logT_grid: np.ndarray,
-    v_edges: np.ndarray,
+    vel_grid: np.ndarray,
     ne_sq_dh: np.ndarray,
 ) -> np.ndarray:
     """
@@ -258,8 +283,8 @@ def build_em_tv(
         3D velocity cube.
     logT_grid : np.ndarray
         Temperature bin centers.
-    v_edges : np.ndarray
-        Velocity bin edges.
+    vel_grid : np.ndarray
+        Velocity bin centers.
     ne_sq_dh : np.ndarray
         n_e^2 * dh for each voxel.
         
@@ -277,6 +302,9 @@ def build_em_tv(
         logT_grid[:-1] + dlogT/2,
         [logT_grid[-1] + dlogT/2]
     ])
+    
+    # Compute velocity bin edges from centers
+    v_edges = velocity_centers_to_edges(vel_grid.value)
     
     mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
              (logT_cube[..., None] <  logT_edges[1:])
@@ -298,9 +326,8 @@ def build_em_tv(
 def synthesise_spectra(
     goft: Dict[str, dict],
     em_tv: np.ndarray,
-    v_edges: np.ndarray,
-    logT_grid: np.ndarray,
     vel_grid: np.ndarray,
+    logT_grid: np.ndarray,
 ) -> None:
     """
     Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
@@ -312,16 +339,13 @@ def synthesise_spectra(
         Dictionary of line data, modified in place with 'si' and 'wl_grid'.
     em_tv : np.ndarray
         4D emission measure cube (nx, ny, nT, nv).
-    v_edges : np.ndarray
-        Velocity bin edges.
+    vel_grid : np.ndarray
+        Velocity grid centers for wavelength calculation.
     logT_grid : np.ndarray
         Temperature bin centers.
-    vel_grid : np.ndarray
-        Velocity grid for wavelength calculation.
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
-    v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])  # (nv,)
 
     for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
         wl0 = data["wl0"].cgs.value  # cm
@@ -337,7 +361,7 @@ def synthesise_spectra(
         sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
 
         # Doppler-shifted center for each v-bin: (nv,)
-        lam_cent = wl0 * (1 + v_centres / c_cm_s)
+        lam_cent = wl0 * (1 + vel_grid.value / c_cm_s)
 
         # Build phi(T,v,lambda) as (nT,nv,n_lambda)
         delta = wl_grid[None, None, :] - lam_cent[None, :, None]
@@ -540,12 +564,6 @@ def main(args=None) -> None:
         vel_lim.to(u.cm / u.s).value + vel_res.to(u.cm / u.s).value,
         vel_res.to(u.cm / u.s).value
     ) * (u.cm / u.s)
-    
-    dv_cm_s = vel_grid[1].cgs.value - vel_grid[0].cgs.value
-    v_edges = np.concatenate([
-        vel_grid.value - 0.5 * dv_cm_s,
-        [vel_grid.value[-1] + 0.5 * dv_cm_s]
-    ])
 
     # ---------------- Load simulation data -----------------
     print(f"Loading cubes ({print_mem()})")
@@ -582,11 +600,11 @@ def main(args=None) -> None:
     # ---------------- Build EM(T,v) cube -----------------
     ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
     print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
-    em_tv = build_em_tv(logT_cube, vz_cube, logT_grid, v_edges, ne_sq_dh)
+    em_tv = build_em_tv(logT_cube, vz_cube, logT_grid, vel_grid, ne_sq_dh)
 
     # ---------------- Synthesize spectra -----------------
     print(f"Synthesising spectra ({print_mem()})")
-    synthesise_spectra(goft, em_tv, v_edges, logT_grid, vel_grid)
+    synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
@@ -607,7 +625,6 @@ def main(args=None) -> None:
         "dem_map": dem_map,
         "em_tv": em_tv,
         "logT_grid": logT_grid,
-        "v_edges": v_edges,
         "vel_grid": vel_grid,
         "goft": goft,
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},

@@ -75,34 +75,6 @@ from euvst_response import (
 )
 ```
 
-### DEM Analysis (Advanced)
-
-If you ran simulations with the `--save_dem` flag, you can access DEM (Differential Emission Measure) data for advanced plotting:
-
-```python
-from euvst_response import (
-    load_instrument_response_results,
-    get_dem_data_from_results,
-    check_dem_data_availability,
-    load_atmosphere_with_dem_data
-)
-
-# Load results
-results = load_instrument_response_results("run/result/your_results.pkl")
-
-# Check if DEM data is available
-if check_dem_data_availability(results):
-    # Extract DEM data
-    dem_data = get_dem_data_from_results(results)
-    
-    # Access DEM plotting data
-    dem_map = dem_data['dem_map']           # Shape: (nx, ny, nT)
-    em_tv = dem_data['em_tv']               # Shape: (nx, ny, nT, nv)
-    logT_centres = dem_data['logT_centres'] # Temperature bin centers
-    v_edges = dem_data['v_edges']           # Velocity bin edges
-    goft = dem_data['goft']                 # Contribution functions
-```
-
 ### 1. Generate contribution functions for the desired emission lines
 
 Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
@@ -176,14 +148,8 @@ synthesise-spectra --help
 
 The synthesis produces a pickle file containing:
 - `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
-- `dem_map`: Differential Emission Measure maps (nx, ny, nT)
-- `em_tv`: 4D emission measure cube (nx, ny, nT, nv)
-- `logT_grid`: Temperature grid used for DEM calculation
-- `v_edges`: Velocity bin edges
-- `vel_grid`: Velocity grid for wavelength calculation
-- `goft`: Contribution functions and line metadata
-- `voxel_sizes`: Physical scales {"dx", "dy", "dz"}
 - `config`: Runtime configuration for reproducibility
+- Additional technical data for internal use
 
 #### Performance Tips
 
@@ -197,10 +163,14 @@ The synthesis produces a pickle file containing:
 The synthesis results can be loaded and analyzed using the package API:
 
 ```python
-import pickle
 import euvst_response
 
-# Load synthesis results
+# Load synthesis results - this sums all line cubes into a single cube
+cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
+print(f"Combined cube shape: {cube.data.shape}")
+
+# Access individual line cubes if needed
+import pickle
 with open("./run/input/synthesised_spectra.pkl", "rb") as f:
     data = pickle.load(f)
 
@@ -208,18 +178,6 @@ with open("./run/input/synthesised_spectra.pkl", "rb") as f:
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]
 print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
 print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
-
-# Access DEM data
-dem_map = data["dem_map"]  # Shape: (nx, ny, nT)
-logT_grid = data["logT_grid"]  # Temperature bins
-print(f"DEM map shape: {dem_map.shape}")
-print(f"Temperature range: {10**logT_grid.min():.0f} - {10**logT_grid.max():.0f} K")
-
-# Access EM(T,v) data
-em_tv = data["em_tv"]  # Shape: (nx, ny, nT, nv)
-v_edges = data["v_edges"]  # Velocity bin edges
-print(f"EM(T,v) cube shape: {em_tv.shape}")
-print(f"Velocity range: {v_edges.min():.1f} - {v_edges.max():.1f} cm/s")
 ```
 
 #### Pre-computed Atmospheres
@@ -296,22 +254,14 @@ Run the instrument response function using:
 m-eclipses --config ./run/input/config.yaml
 ```
 
-For advanced analysis including DEM plotting capabilities, add the `--save_dem` flag:
-```bash
-m-eclipses --config ./run/input/config.yaml --save_dem
-```
-
-This will include DEM (Differential Emission Measure) data in the saved results, enabling advanced plotting functions but massively increasing file size and memory requirements.
-
 **Command-line options:**
 - `--config`: Path to YAML configuration file (required)
-- `--save_dem`: Include DEM data in results for advanced plotting (optional)
 - `--debug`: Enable debug mode with IPython breakpoints on errors (optional)
 
 This can be looped in bash using:
 ```bash
 for config in ./run/input/*.yaml; do
-  m-eclipses --config "$config"
+    m-eclipses --config "$config"
 done
 ```
 
@@ -322,7 +272,6 @@ Results are saved as pickle files in the `scratch/` directory with descriptive f
 - Fitted spectral line parameters (intensity, velocity, width)
 - Statistical analysis of velocity precision vs. exposure time
 - Ground truth comparisons
-- **DEM data (if `--save_dem` flag was used)**: Differential Emission Measure maps, EM(T,v) cubes, contribution functions, and temperature/velocity grids for advanced plotting
 
 ## Acknowledgements
 

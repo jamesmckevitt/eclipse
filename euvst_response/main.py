@@ -99,7 +99,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, help="YAML config file", required=True)
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--save_dem", action="store_true", help="Include DEM data in saved results for advanced plotting")
     args = parser.parse_args()
     
     # Set debug mode globally
@@ -217,12 +216,10 @@ def main() -> None:
     print("Loading atmosphere...")
     cube_sim = load_atmosphere("./run/input/synthesised_spectra.pkl")
     
-    # Load DEM data for inclusion in results (only if requested)
-    atmosphere_data = None
-    if args.save_dem:
-        print("Loading DEM data for inclusion in results...")
-        from .data_processing import load_atmosphere_with_dem_data
-        atmosphere_data = load_atmosphere_with_dem_data("./run/input/synthesised_spectra.pkl")
+    # Load atmosphere data for processing (always load the main cube)
+    print("Loading atmosphere data...")
+    from .data_processing import load_atmosphere
+    cube_sim = load_atmosphere("./run/input/synthesised_spectra.pkl")
 
     # Set up base detector configuration (doesn't change with parameters)
     if instrument == "SWC":
@@ -461,19 +458,6 @@ def main() -> None:
         "cube_sim": cube_sim,
         "cube_reb": cube_reb,
     }
-    
-    # Add DEM data only if requested
-    if args.save_dem and atmosphere_data is not None:
-        save_data["dem_data"] = {
-            "dem_map": atmosphere_data.get("dem_map"),
-            "em_tv": atmosphere_data.get("em_tv"),
-            "logT_centres": atmosphere_data.get("logT_centres"),
-            "v_edges": atmosphere_data.get("v_edges"),
-            "goft": atmosphere_data.get("goft"),
-            "logT_grid": atmosphere_data.get("logT_grid"),
-            "logN_grid": atmosphere_data.get("logN_grid"),
-        }
-        print("Including DEM data in saved results")
     
     with open(output_file, "wb") as f:
         dill.dump(save_data, f)

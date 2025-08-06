@@ -16,41 +16,73 @@ from tqdm import tqdm
 from .utils import tqdm_joblib, distance_to_angle
 
 
-def load_atmosphere(pkl_file: str) -> NDCube:
-    """Load synthetic atmosphere cube from pickle file."""
-    with open(pkl_file, "rb") as f:
-        tmp = dill.load(f)
-    cube = tmp["sim_si"]
-    return cube
-
-
-def load_atmosphere_with_dem_data(pkl_file: str) -> dict:
+def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
     """
-    Load synthetic atmosphere cube along with DEM data from pickle file.
+    Load synthetic atmosphere cube from pickle file.
+    
+    Creates a summed cube from all line cubes in the synthesis results.
     
     Parameters
     ----------
     pkl_file : str
         Path to the synthesized spectra pickle file.
+    metadata_line : str, optional
+        Name of the line to use for metadata. If None, uses the first line.
         
     Returns
     -------
-    dict
-        Dictionary containing:
-        - 'sim_si': Main simulation cube (NDCube)
-        - 'sim_ii': Integrated intensity map (NDCube)  
-        - 'line_cubes': Per-line intensity cubes (dict)
-        - 'dem_map': DEM(T) map (numpy array, shape nx, ny, nT)
-        - 'em_tv': EM(T,v) map (numpy array, shape nx, ny, nT, nv)
-        - 'logT_centres': Temperature bin centers (numpy array)
-        - 'v_edges': Velocity bin edges (numpy array)
-        - 'goft': Contribution function data (dict)
-        - 'logT_grid': Temperature grid used for interpolation (numpy array)
-        - 'logN_grid': Density grid used for interpolation (numpy array)
+    NDCube
+        Summed cube of all line intensities with proper WCS and metadata.
     """
     with open(pkl_file, "rb") as f:
-        atmosphere_data = dill.load(f)
-    return atmosphere_data
+        tmp = dill.load(f)
+    
+    # Handle new synthesis format
+    if "line_cubes" not in tmp:
+        raise ValueError("File does not contain synthesis results with line_cubes")
+        
+    line_cubes = tmp["line_cubes"]
+    if not line_cubes:
+        raise ValueError("No line cubes found in synthesis results")
+    
+    # Get the line names
+    line_names = list(line_cubes.keys())
+    
+    # Choose metadata source line
+    if metadata_line is None:
+        metadata_line = line_names[0]
+    elif metadata_line not in line_names:
+        raise ValueError(f"Metadata line '{metadata_line}' not found. Available lines: {line_names}")
+    
+    # Get reference cube for shape and WCS
+    ref_cube = line_cubes[metadata_line]
+    
+    # Sum all line cubes
+    summed_data = None
+    for line_name, cube in line_cubes.items():
+        if summed_data is None:
+            summed_data = cube.data.copy()
+        else:
+            summed_data += cube.data
+    
+    # Create new metadata combining info from all lines
+    combined_meta = ref_cube.meta.copy()
+    combined_meta.update({
+        "combined_lines": line_names,
+        "n_lines": len(line_names),
+        "metadata_source": metadata_line,
+        "summed_intensity": True
+    })
+    
+    # Create the summed cube
+    summed_cube = NDCube(
+        summed_data,
+        wcs=ref_cube.wcs.deepcopy(),
+        unit=ref_cube.unit,
+        meta=combined_meta
+    )
+    
+    return summed_cube
 
 
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
