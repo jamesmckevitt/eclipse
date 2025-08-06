@@ -37,6 +37,12 @@ m-eclipses --config ./run/input/config.yaml
 
 # Alternative short command
 meclipses --config ./run/input/config.yaml
+
+# Run synthesis script (convert 3D MHD data to synthetic spectra)
+synthesise-spectra --data-dir ./data/atmosphere --goft-file ./data/gofnt.sav --output-dir ./run/input
+
+# Alternative synthesis command (underscore version)
+synthesise_spectra --help
 ```
 
 ### Python API
@@ -108,12 +114,115 @@ idl -e "make_goft"
 
 ### 2. Run the line synthesis
 
-Run the line synthesis using:
+The synthesis script converts 3D MHD simulation data into synthetic solar spectra. It can be run directly from the command line with extensive configuration options.
+
+#### Basic Usage
+
 ```bash
-python synthesise_spectra.py
+# Example using all available command line options
+synthesise-spectra \
+  --data-dir ./data/atmosphere \
+  --goft-file ./data/gofnt.sav \
+  --output-dir ./run/input \
+  --output-name synthesised_spectra.pkl \
+  --temp-file temp/eosT.0270000 \
+  --rho-file rho/result_prim_0.0270000 \
+  --vz-file vz/result_prim_2.0270000 \
+  --cube-shape 512 768 256 \
+  --voxel-dx 0.192 \
+  --voxel-dy 0.192 \
+  --voxel-dz 0.064 \
+  --vel-res 5.0 \
+  --vel-lim 300.0 \
+  --downsample 1 \
+  --precision float64 \
+  --mean-mol-wt 1.29 \
+  --limit-lines Fe12_195.1190
+
+# Show all available options
+synthesise-spectra --help
 ```
 
-**Important:** This script automatically saves the synthesized atmosphere to `./run/input/synthesised_spectra.pkl`, which is the exact location where the instrument response simulation expects to find it. Do not move or rename this file unless you also modify the hardcoded path in `euvst_response/main.py`.
+#### Command Line Options
+
+**Input/Output Paths:**
+- `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
+- `--goft-file`: Path to CHIANTI G(T,N) save file (default: `./data/gofnt.sav`)
+- `--output-dir`: Output directory for results (default: `./run/input`)
+- `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+
+**Simulation Files:**
+- `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
+- `--rho-file`: Density file relative to data-dir (default: `rho/result_prim_0.0270000`)
+- `--vz-file`: Velocity file relative to data-dir (default: `vz/result_prim_2.0270000`)
+
+**Grid Parameters:**
+- `--cube-shape`: Cube dimensions as three integers (default: `512 768 256`)
+- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes in Mm (default: `0.192 0.192 0.064`)
+
+**Velocity Grid:**
+- `--vel-res`: Velocity resolution in km/s (default: `5.0`)
+- `--vel-lim`: Velocity limit ±km/s (default: `300.0`)
+
+**Processing Options:**
+- `--downsample`: Downsampling factor (default: `1` = no downsampling)
+- `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
+- `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
+
+**Line Selection:**
+- `--limit-lines`: Limit to specific lines, e.g., `--limit-lines Fe12_195.1190 Fe12_195.1790`
+
+#### Output
+
+The synthesis produces a pickle file containing:
+- `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
+- `dem_map`: Differential Emission Measure maps (nx, ny, nT)
+- `em_tv`: 4D emission measure cube (nx, ny, nT, nv)
+- `logT_grid`: Temperature grid used for DEM calculation
+- `v_edges`: Velocity bin edges
+- `vel_grid`: Velocity grid for wavelength calculation
+- `goft`: Contribution functions and line metadata
+- `voxel_sizes`: Physical scales {"dx", "dy", "dz"}
+- `config`: Runtime configuration for reproducibility
+
+#### Performance Tips
+
+- Use `--downsample 2` or `--downsample 4` for initial testing
+- Use `--precision float32` to reduce memory usage (may affect accuracy)
+- Use `--limit-lines` to synthesize only specific lines for development
+- Monitor memory usage - full resolution synthesis can require 50+ GB RAM
+
+#### Working with Synthesis Results
+
+The synthesis results can be loaded and analyzed using the package API:
+
+```python
+import pickle
+import euvst_response
+
+# Load synthesis results
+with open("./run/input/synthesised_spectra.pkl", "rb") as f:
+    data = pickle.load(f)
+
+# Access individual line cubes
+fe12_195 = data["line_cubes"]["Fe12_195.1190"]
+print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
+print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
+
+# Access DEM data
+dem_map = data["dem_map"]  # Shape: (nx, ny, nT)
+logT_grid = data["logT_grid"]  # Temperature bins
+print(f"DEM map shape: {dem_map.shape}")
+print(f"Temperature range: {10**logT_grid.min():.0f} - {10**logT_grid.max():.0f} K")
+
+# Access EM(T,v) data
+em_tv = data["em_tv"]  # Shape: (nx, ny, nT, nv)
+v_edges = data["v_edges"]  # Velocity bin edges
+print(f"EM(T,v) cube shape: {em_tv.shape}")
+print(f"Velocity range: {v_edges.min():.1f} - {v_edges.max():.1f} cm/s")
+```
+
+#### Pre-computed Atmospheres
 
 This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
 

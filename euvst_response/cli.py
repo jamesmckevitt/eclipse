@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .main import main as run_simulation
+from .synthesis import main as run_synthesis
 
 
 ASCII_LOGO = """
@@ -105,3 +106,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def synthesis_main():
+    """Entry point for the synthesis command line script."""
+    run_synthesis()
