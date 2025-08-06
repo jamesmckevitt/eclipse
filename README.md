@@ -184,7 +184,7 @@ print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
 
 This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
 
-If you download a pre-synthesized atmosphere file, ensure it is placed at `./run/input/synthesised_spectra.pkl` before running the instrument response simulation.
+**Important:** You can place the synthesised atmosphere file anywhere and specify its location using the `synthesis_file` parameter in your YAML configuration file. The default location is `./run/input/synthesised_spectra.pkl`.
 
 ### 3. Simulate the instrument response
 
@@ -192,11 +192,23 @@ If you download a pre-synthesized atmosphere file, ensure it is placed at `./run
 
 M-ECLIPSES uses YAML configuration files to specify simulation parameters. You can specify single values or lists of values for parameter sweeps.
 
+**Key configuration options:**
+- `instrument`: Choose between SWC (EUVST) or EIS (Hinode)
+- `synthesis_file`: Path to the synthesised spectra pickle file (default: `./run/input/synthesised_spectra.pkl`)
+- `expos`: Exposure time(s) for simulations
+- `n_iter`: Number of Monte Carlo iterations
+- Parameter sweeps for filters, detector settings, etc.
+
 Here's a complete example configuration file:
 
 ```yaml
 # Instrument selection
 instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
+
+# Synthesis file path - location of the synthesised spectra pickle file
+synthesis_file: ./run/input/synthesised_spectra.pkl  # Default location
+# Or specify a custom path:
+# synthesis_file: /path/to/your/custom/synthesised_spectra.pkl
 
 # Point Spread Function
 psf: False  # Enable PSF convolution (currently only planned for SWC)

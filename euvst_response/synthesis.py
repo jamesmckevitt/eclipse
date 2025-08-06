@@ -626,6 +626,7 @@ def main(args=None) -> None:
         "em_tv": em_tv,
         "logT_grid": logT_grid,
         "vel_grid": vel_grid,
+        "logN_grid": logN_grid,
         "goft": goft,
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "config": {

@@ -22,7 +22,6 @@ from .fitting import fit_cube_gauss
 from .monte_carlo import monte_carlo
 from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error
 import numpy as np
-import numpy as np
 
 
 def deduplicate_list(param_list, param_name):
@@ -118,6 +117,15 @@ def main() -> None:
     # Set up instrument, detector, telescope, simulation from config
     instrument = config.get("instrument", "SWC").upper()
     psf_settings = ensure_list(config.get("psf", [False]))  # Handle PSF as a list
+    
+    # Synthesis file path - allow user to specify where the synthesised_spectra.pkl file is located
+    synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
+    
+    # Check if synthesis file exists
+    synthesis_path = Path(synthesis_file)
+    if not synthesis_path.is_file():
+        raise FileNotFoundError(f"Synthesis file not found: {synthesis_file}. "
+                              f"Please check the 'synthesis_file' path in your config file.")
     psf_settings = deduplicate_list(psf_settings, "psf")  # Remove duplicates
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
@@ -214,13 +222,8 @@ def main() -> None:
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
-    cube_sim = load_atmosphere("./run/input/synthesised_spectra.pkl")
+    cube_sim = load_atmosphere(synthesis_file, "Fe12_195.1190")
     
-    # Load atmosphere data for processing (always load the main cube)
-    print("Loading atmosphere data...")
-    from .data_processing import load_atmosphere
-    cube_sim = load_atmosphere("./run/input/synthesised_spectra.pkl")
-
     # Set up base detector configuration (doesn't change with parameters)
     if instrument == "SWC":
         DET = Detector_SWC()

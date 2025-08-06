@@ -5,7 +5,7 @@ This package provides tools for modeling the performance of the ESA/MSSL short w
 part of the EUV spectrograph EUVST, on SOLAR-C.
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
