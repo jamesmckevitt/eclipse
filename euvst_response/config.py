@@ -235,18 +235,105 @@ class Detector_EIS:
 class Telescope_EUVST:
     """Solar-C/EUVST telescope configuration."""
     D_ap: u.Quantity = 0.28 * u.m
-    pm_eff: float = 0.161
-    grat_eff: float = 0.0623
+    microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [0.343 * u.pixel])  # FWHM of 0.805 pix from 0.128 arcsec from optical design RSC-2022021B in sigma
+    
+    # Wavelength-dependent efficiency tables
+    pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
+    grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
 
     @property
     def collecting_area(self) -> u.Quantity:
         return 0.5 * np.pi * (self.D_ap / 2) ** 2
 
+    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float:
+        """
+        Calculate wavelength-dependent primary mirror efficiency.
+        
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            Wavelength
+            
+        Returns
+        -------
+        float
+            Primary mirror efficiency (dimensionless)
+        """
+        wl_nm = wl0.to_value(u.nm)
+        wl_pm, eff_pm = _load_throughput_table(self.pm_table)
+        return _interp_tr(wl_nm, wl_pm, eff_pm)
+
+    def grating_efficiency(self, wl0: u.Quantity) -> float:
+        """
+        Calculate wavelength-dependent grating efficiency.
+        
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            Wavelength
+            
+        Returns
+        -------
+        float
+            Grating efficiency (dimensionless)
+        """
+        wl_nm = wl0.to_value(u.nm)
+        wl_grat, eff_grat = _load_throughput_table(self.grating_table)
+        return _interp_tr(wl_nm, wl_grat, eff_grat)
+
+    def microroughness_efficiency(self, wl0: u.Quantity) -> float:
+        """
+        Calculate the efficiency reduction due to primary mirror microroughness.
+        
+        Formula: 1 - (4*pi*sigma/lambda)^2
+        where sigma is the RMS microroughness and lambda is the wavelength.
+        
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            Wavelength
+            
+        Returns
+        -------
+        float
+            Microroughness efficiency factor (dimensionless)
+        """
+        # Convert both wavelength and sigma to the same units (nm for convenience)
+        wl_nm = wl0.to(u.nm)
+        sigma_nm = self.microroughness_sigma.to(u.nm)
+        
+        # Calculate (4*pi*sigma/lambda)^2
+        roughness_term = (4 * np.pi * sigma_nm / wl_nm) ** 2
+        
+        # Return 1 - (4*pi*sigma/lambda)^2
+        return 1.0 - roughness_term.value
+
     def throughput(self, wl0: u.Quantity) -> float:
-        return self.pm_eff * self.grat_eff * self.filter.total_throughput(wl0)
+        """
+        Calculate total telescope throughput including wavelength-dependent efficiencies.
+        
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            Wavelength
+            
+        Returns
+        -------
+        float
+            Total telescope throughput (dimensionless)
+        """
+        # Get wavelength-dependent efficiencies
+        pm_eff_wl = self.primary_mirror_efficiency(wl0)
+        grat_eff_wl = self.grating_efficiency(wl0)
+        
+        # Apply microroughness efficiency to primary mirror efficiency
+        pm_eff_with_roughness = pm_eff_wl * self.microroughness_efficiency(wl0)
+        
+        # Calculate total throughput
+        return pm_eff_with_roughness * grat_eff_wl * self.filter.total_throughput(wl0)
 
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
         return self.collecting_area * self.throughput(wl0)
