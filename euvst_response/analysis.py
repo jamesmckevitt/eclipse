@@ -11,6 +11,8 @@ import astropy.units as u
 import astropy.constants as const
 import sunpy.map
 import h5py
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
@@ -529,7 +531,9 @@ def create_sunpy_maps_from_combo(
     combination_results: Dict[str, Any],
     cube_reb,
     rest_wavelength: u.Quantity = 195.119 * u.AA,
-    data_type: str = "dn"
+    data_type: str = "dn",
+    precision_requirement: u.Quantity = 2.0 * u.km / u.s,
+    exposure_time_results: List[Dict[str, Any]] | None = None
 ) -> Dict[str, Any]:
     """
     Create SunPy maps from combination results using the new fit statistics structure.
@@ -544,6 +548,11 @@ def create_sunpy_maps_from_combo(
         Rest wavelength for velocity conversion (default: 195.119 A for Fe XII).
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to use for velocity/width maps.
+    precision_requirement : u.Quantity, optional
+        Velocity precision requirement for exposure time map (default: 2.0 km/s).
+    exposure_time_results : list of dict, optional
+        List of results from get_results_for_combination() for different exposure times.
+        If provided, will create an exposure time map showing minimum exposure needed.
         
     Returns
     -------
@@ -558,7 +567,21 @@ def create_sunpy_maps_from_combo(
         - 'line_width_from_fit': Line width from first fit of first MC iteration  
         - 'line_width_mean': Mean line width across all MC iterations
         - 'line_width_std': Line width uncertainty (standard deviation)
+        - 'exposure_time': Minimum exposure time required to reach precision (if exposure_time_results provided)
     """
+    
+    # Handle optional exposure time analysis
+    if exposure_time_results is not None:
+        # Create analysis_per_exp from the list
+        analysis_per_exp = {}
+        for result in exposure_time_results:
+            # Extract exposure time from parameters
+            exposure_time = result["parameters"]["exposure"].to_value(u.s)
+            # Create analysis for this exposure
+            analysis = analyse_fit_statistics(result, rest_wavelength, data_type)
+            analysis_per_exp[exposure_time] = analysis
+    else:
+        analysis_per_exp = None
     
     # Extract 2D helioprojective WCS from the cube
     wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
@@ -645,6 +668,39 @@ def create_sunpy_maps_from_combo(
     maps['line_width_std'] = sunpy.map.Map(w_std_data_clean.T, wcs_2d)
     maps['line_width_std'].meta['bunit'] = str(u.AA)
     
+    # --- Exposure time map (minimum required for precision) ---
+    if analysis_per_exp is not None:
+        exp_times = sorted(analysis_per_exp.keys())
+        nlevels = len(exp_times)
+        shape = next(iter(analysis_per_exp.values()))["v_std"].shape
+        best_exp = np.full(shape, np.nan)
+        
+        # Find minimum exposure time that meets precision requirement for each pixel
+        for i, s in enumerate(exp_times):
+            vstd = analysis_per_exp[s]["v_std"].to_value(u.km / u.s)
+            msk = (vstd <= precision_requirement.to_value(u.km / u.s)) & np.isnan(best_exp)
+            best_exp[msk] = i  # Use index instead of actual exposure time
+        
+        # For pixels that don't meet the precision requirement even at max exposure,
+        # assign them a value above the valid range so they show as "over" values
+        still_nan = np.isnan(best_exp)
+        best_exp[still_nan] = nlevels  # This will be above the valid range (0 to nlevels-1)
+        
+        # Create discrete colormap for exposure times
+        cmap = ListedColormap(plt.get_cmap("viridis")(np.linspace(0, 1, nlevels)))
+        cmap.set_over("white")
+        cmap.set_bad("gray")  # Change bad color so we can distinguish from over
+        # Create normalization with proper boundaries to handle values 0 to nlevels-1, with nlevels as "over"
+        norm = BoundaryNorm(np.arange(-0.5, nlevels + 0.5, 1), nlevels)
+
+        maps['exposure_time'] = sunpy.map.Map(best_exp.T, wcs_2d)
+        maps['exposure_time'].meta['bunit'] = 's'
+        maps['exposure_time'].plot_settings.update(dict(cmap=cmap, norm=norm))
+        
+        # Store exposure time information for custom colorbar formatting
+        maps['exposure_time']._exposure_times = exp_times
+        maps['exposure_time']._exposure_indices = list(range(nlevels))
+    
     # Set appropriate visualization settings for common map types
     # Also ensure correct aspect ratio for all maps
     map_names = list(maps.keys())
@@ -667,5 +723,33 @@ def create_sunpy_maps_from_combo(
     maps['line_width_from_fit'].plot_settings.update(dict(cmap="Purples"))
     maps['line_width_mean'].plot_settings.update(dict(cmap="Purples"))
     maps['line_width_std'].plot_settings.update(dict(cmap="Purples"))
+    if 'exposure_time' in maps:
+        maps['exposure_time'].plot_settings.update(dict(origin="lower"))
 
     return maps
+
+
+def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Quantity = 2.0 * u.km / u.s):
+    """
+    Format the colorbar for an exposure time map with proper tick labels.
+    
+    Parameters
+    ----------
+    map_obj : sunpy.map.Map
+        The exposure time map object (should have _exposure_times attribute).
+    colorbar : matplotlib.colorbar.Colorbar
+        The colorbar object to format.
+    precision_requirement : u.Quantity, optional
+        Velocity precision requirement for the title (default: 2.0 km/s).
+    """
+    # Set tick positions at the center of each color segment
+    tick_positions = map_obj._exposure_indices
+    tick_labels = [f"{int(exp_time)}" for exp_time in map_obj._exposure_times]
+    
+    colorbar.set_ticks(tick_positions)
+    colorbar.set_ticklabels(tick_labels)
+    
+    # Create title with precision requirement
+    precision_val = precision_requirement.to_value(u.km / u.s)
+    title = f"Minimum exposure time to reach $\\sigma_v \\leq {precision_val:.1f}$ km/s"
+    colorbar.set_label(title)
