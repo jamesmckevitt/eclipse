@@ -751,5 +751,5 @@ def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Qu
     
     # Create title with precision requirement
     precision_val = precision_requirement.to_value(u.km / u.s)
-    title = f"Minimum exposure time to reach $\\sigma_v \\leq {precision_val:.1f}$ km/s"
+    title = f"Minimum exposure time to reach $\\sigma_v \\leq {precision_val:.1f}$ km/s [s]"
     colorbar.set_label(title)
