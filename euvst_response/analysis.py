@@ -744,7 +744,7 @@ def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Qu
     """
     # Set tick positions at the center of each color segment
     tick_positions = map_obj._exposure_indices
-    tick_labels = [f"{int(exp_time)}" for exp_time in map_obj._exposure_times]
+    tick_labels = [f"{exp_time:.1f}" for exp_time in map_obj._exposure_times]
     
     colorbar.set_ticks(tick_positions)
     colorbar.set_ticklabels(tick_labels)
