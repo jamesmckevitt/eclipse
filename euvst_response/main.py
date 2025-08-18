@@ -322,7 +322,7 @@ def main() -> None:
                                         # debug_break("Before Monte Carlo simulation", locals(), globals())
 
                                         # Run Monte Carlo for this single parameter combination
-                                        dn_signals, dn_fits, photon_signals, photon_fits = monte_carlo(
+                                        first_dn_signal, dn_fits, first_photon_signal, photon_fits = monte_carlo(
                                             cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
                                         )
 
@@ -381,10 +381,6 @@ def main() -> None:
                                             enable_pinholes
                                         )
                                         
-                                        # Extract data and units from signals for faster saving
-                                        first_dn_signal = dn_signals[0]
-                                        first_photon_signal = photon_signals[0]
-                                        
                                         # Strip units from fit_truth
                                         fit_truth_data = np.empty(fit_truth.shape, dtype=float)
                                         fit_truth_units = []
@@ -425,7 +421,7 @@ def main() -> None:
                                         }
                                         
                                         # Clean up memory
-                                        del dn_signals, dn_fits, photon_signals, photon_fits, dn_fit_stats, photon_fit_stats
+                                        del dn_fits, photon_fits, dn_fit_stats, photon_fit_stats
 
     # Prepare final results structure
     results = {

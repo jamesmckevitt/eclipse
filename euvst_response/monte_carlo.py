@@ -87,7 +87,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
             electrons_pinholes, dn)
 
 
-def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[np.ndarray, ...]:
+def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[NDCube, np.ndarray, NDCube, np.ndarray]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -108,23 +108,26 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         
     Returns
     -------
-    tuple of arrays
-        (dn_signals, dn_fits, photon_signals, photon_fits)
-        - dn_signals: Digital number signals
-        - dn_fits: Gaussian fits to DN signals  
-        - photon_signals: Total photon counts at pixels (after PSF)
-        - photon_fits: Gaussian fits to photon count signals
+    tuple
+        (first_dn_signal, dn_fits, first_photon_signal, photon_fits)
+        - first_dn_signal: First iteration DN signal (NDCube)
+        - dn_fits: Gaussian fits to DN signals for all iterations (np.ndarray)
+        - first_photon_signal: First iteration photon signal (NDCube)  
+        - photon_fits: Gaussian fits to photon signals for all iterations (np.ndarray)
     """
-    dn_signals, dn_fits, photon_signals, photon_fits = [], [], [], []
-    for _ in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
+    dn_fits, photon_fits = [], []
+    first_dn_signal, first_photon_signal = None, None
+    
+    for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
         # Simulate one run
         (intensity_exp, photons_total, photons_throughput, photons_pixels, 
          photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
          electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
         
-        # Store final signals: dn is digital numbers, photons_euv_pinholes is photon-counts at the pixels after EUV pinholes
-        dn_signals.append(dn)
-        photon_signals.append(photons_euv_pinholes)
+        # Store first iteration signals only
+        if i == 0:
+            first_dn_signal = dn
+            first_photon_signal = photons_euv_pinholes
         
         # Fit DN signal
         dn_fit = fit_cube_gauss(dn, n_jobs=sim.ncpu)
@@ -134,9 +137,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         photon_fit = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
         photon_fits.append(photon_fit)
         
-    # Stack results
-    dn_signals = np.stack([d for d in dn_signals])
+    # Stack fit results only
     dn_fits = np.stack(dn_fits)
-    photon_signals = np.stack([p for p in photon_signals])
     photon_fits = np.stack(photon_fits)
-    return dn_signals, dn_fits, photon_signals, photon_fits
+    return first_dn_signal, dn_fits, first_photon_signal, photon_fits
