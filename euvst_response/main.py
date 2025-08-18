@@ -254,7 +254,7 @@ def main() -> None:
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
         print("Fitting ground truth cube...")
-        fit_truth = fit_cube_gauss(cube_reb, n_jobs=ncpu)
+        fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu)
         
         for oxide_thickness in oxide_thicknesses:
             for c_thickness in c_thicknesses:
@@ -322,50 +322,9 @@ def main() -> None:
                                         # debug_break("Before Monte Carlo simulation", locals(), globals())
 
                                         # Run Monte Carlo for this single parameter combination
-                                        first_dn_signal, dn_fits, first_photon_signal, photon_fits = monte_carlo(
+                                        first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
                                             cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
                                         )
-
-                                        def process_fit_results(fits):
-                                            """
-                                            Process fit results from Monte Carlo simulations.
-                                            Returns a dict with stripped data and units stored separately for faster saving.
-                                            """
-                                            import astropy.units as u
-
-                                            # Check if fits have units (astropy Quantity)
-                                            has_units = hasattr(fits[0, 0, 0, 0], "unit")
-                                            fits_shape = fits.shape
-
-                                            # Extract units for each parameter
-                                            fits_units = []
-                                            for i in range(fits_shape[-1]):
-                                                fits_units.append(str(fits[0, 0, 0, i].unit))
-                                            
-                                            # Strip units for computation and storage
-                                            fits_values = np.empty(fits_shape, dtype=float)
-                                            for i in tqdm(range(fits_shape[0]), desc="Processing fits", leave=False):
-                                                for j in range(fits_shape[1]):
-                                                    for k in range(fits_shape[2]):
-                                                        for l in range(fits_shape[3]):
-                                                            fits_values[i, j, k, l] = fits[i, j, k, l].value
-                                            
-                                            # Compute stats on stripped data
-                                            mean = fits_values.mean(axis=0)
-                                            std = fits_values.std(axis=0)
-                                            
-                                            # Strip units from first fit too
-                                            first_fit_values = fits_values[0]
-                                            
-                                            return {
-                                                "first_fit_data": first_fit_values,
-                                                "mean_data": mean,
-                                                "std_data": std,
-                                                "units": fits_units,  # List of unit strings
-                                            }
-                                        
-                                        dn_fit_stats = process_fit_results(dn_fits)
-                                        photon_fit_stats = process_fit_results(photon_fits)
 
                                         # Store results for this parameter combination
                                         sec = exposure.to_value(u.s)
@@ -381,16 +340,7 @@ def main() -> None:
                                             enable_pinholes
                                         )
                                         
-                                        # Strip units from fit_truth
-                                        fit_truth_data = np.empty(fit_truth.shape, dtype=float)
-                                        fit_truth_units = []
-                                        for i in range(fit_truth.shape[-1]):
-                                            fit_truth_units.append(str(fit_truth[0, 0, i].unit))
-                                        for j in range(fit_truth.shape[0]):
-                                            for k in range(fit_truth.shape[1]):
-                                                for l in range(fit_truth.shape[2]):
-                                                    fit_truth_data[j, k, l] = fit_truth[j, k, l].value
-                                        
+                                        # Store fit_truth data and units separately
                                         all_results[param_key] = {
                                             "parameters": {
                                                 "slit_width": slit_width,
@@ -407,11 +357,10 @@ def main() -> None:
                                             },
                                             # Store signal data and units separately
                                             "first_dn_signal_data": first_dn_signal.data,
-                                            "first_dn_signal_unit": str(first_dn_signal.unit),
-                                            "first_dn_signal_wcs": first_dn_signal.wcs,
+                                            "first_dn_signal_unit": first_dn_signal.unit,
                                             "first_photon_signal_data": first_photon_signal.data,
-                                            "first_photon_signal_unit": str(first_photon_signal.unit),
-                                            "first_photon_signal_wcs": first_photon_signal.wcs,
+                                            "first_photon_signal_unit": first_photon_signal.unit,
+                                            "first_signal_wcs": first_dn_signal.wcs,
                                             "dn_fit_stats": dn_fit_stats,
                                             "photon_fit_stats": photon_fit_stats,
                                             "ground_truth": {
@@ -421,7 +370,7 @@ def main() -> None:
                                         }
                                         
                                         # Clean up memory
-                                        del dn_fits, photon_fits, dn_fit_stats, photon_fit_stats
+                                        del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
 
     # Prepare final results structure
     results = {

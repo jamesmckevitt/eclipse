@@ -87,7 +87,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
             electrons_pinholes, dn)
 
 
-def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[NDCube, np.ndarray, NDCube, np.ndarray]:
+def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[NDCube, dict, NDCube, dict]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -109,14 +109,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     Returns
     -------
     tuple
-        (first_dn_signal, dn_fits, first_photon_signal, photon_fits)
+        (first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results)
         - first_dn_signal: First iteration DN signal (NDCube)
-        - dn_fits: Gaussian fits to DN signals for all iterations (np.ndarray)
+        - dn_fit_results: Dict with fit data and units stored separately
         - first_photon_signal: First iteration photon signal (NDCube)  
-        - photon_fits: Gaussian fits to photon signals for all iterations (np.ndarray)
+        - photon_fit_results: Dict with fit data and units stored separately
     """
-    dn_fits, photon_fits = [], []
     first_dn_signal, first_photon_signal = None, None
+    dn_fit_values_list, photon_fit_values_list = [], []
     
     for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
         # Simulate one run
@@ -130,14 +130,30 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             first_photon_signal = photons_euv_pinholes
         
         # Fit DN signal
-        dn_fit = fit_cube_gauss(dn, n_jobs=sim.ncpu)
-        dn_fits.append(dn_fit)
+        dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
+        dn_fit_values_list.append(dn_fit_values)
         
         # Fit photon signal
-        photon_fit = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
-        photon_fits.append(photon_fit)
+        photon_fit_values, photon_fit_units = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
+        photon_fit_values_list.append(photon_fit_values)
         
-    # Stack fit results only
-    dn_fits = np.stack(dn_fits)
-    photon_fits = np.stack(photon_fits)
-    return first_dn_signal, dn_fits, first_photon_signal, photon_fits
+    # Stack fit results
+    dn_fits_values = np.stack(dn_fit_values_list)
+    photon_fits_values = np.stack(photon_fit_values_list)
+    
+    # Compute statistics on stripped data
+    dn_fit_results = {
+        "first_fit_data": dn_fits_values[0],
+        "mean_data": dn_fits_values.mean(axis=0),
+        "std_data": dn_fits_values.std(axis=0),
+        "units": dn_fit_units,
+    }
+    
+    photon_fit_results = {
+        "first_fit_data": photon_fits_values[0],
+        "mean_data": photon_fits_values.mean(axis=0),
+        "std_data": photon_fits_values.std(axis=0),
+        "units": photon_fit_units,
+    }
+    
+    return first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results

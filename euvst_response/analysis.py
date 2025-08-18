@@ -20,50 +20,10 @@ from .fitting import velocity_from_fit, width_from_fit
 from tqdm import tqdm
 
 
-def _reconstruct_fit_stats_with_units(fit_stats_stripped: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Reconstruct fit statistics with units from stripped data.
-    
-    Parameters
-    ----------
-    fit_stats_stripped : dict
-        Dictionary with keys: first_fit_data, mean_data, std_data, units
-        
-    Returns
-    -------
-    dict
-        Dictionary with reconstructed astropy quantities: first_fit, mean, std
-    """
-    # Get the stripped data and units
-    first_fit_data = fit_stats_stripped["first_fit_data"]
-    mean_data = fit_stats_stripped["mean_data"]
-    std_data = fit_stats_stripped["std_data"]
-    unit_strings = fit_stats_stripped["units"]
-    
-    # Convert unit strings back to astropy units
-    fits_units = [u.Unit(unit_str) for unit_str in unit_strings]
-    
-    # Reconstruct object arrays with units
-    first_fit_with_units = np.empty(first_fit_data.shape, dtype=object)
-    mean_with_units = np.empty(mean_data.shape, dtype=object)
-    std_with_units = np.empty(std_data.shape, dtype=object)
-    
-    # Attach units to each element
-    for j in tqdm(range(first_fit_data.shape[0]), desc="Reconstructing fit stats", leave=False):
-        for k in range(first_fit_data.shape[1]):
-            for l in range(first_fit_data.shape[2]):
-                first_fit_with_units[j, k, l] = first_fit_data[j, k, l] * fits_units[l]
-                mean_with_units[j, k, l] = mean_data[j, k, l] * fits_units[l]
-                std_with_units[j, k, l] = std_data[j, k, l] * fits_units[l]
-    
-    return {
-        "first_fit": first_fit_with_units,
-        "mean": mean_with_units,
-        "std": std_with_units,
-    }
 
 
-def _reconstruct_signal_with_units(signal_data, signal_unit_str, signal_wcs) -> NDCube:
+
+def _reconstruct_signal_with_units(signal_data, signal_unit, signal_wcs) -> NDCube:
     """
     Reconstruct NDCube signal with units from stripped data.
     
@@ -71,8 +31,8 @@ def _reconstruct_signal_with_units(signal_data, signal_unit_str, signal_wcs) -> 
     ----------
     signal_data : numpy.ndarray
         Signal data array
-    signal_unit_str : str
-        Unit string
+    signal_unit : astropy.units.Unit
+        Unit (astropy unit object)
     signal_wcs : WCS
         World coordinate system
         
@@ -81,15 +41,14 @@ def _reconstruct_signal_with_units(signal_data, signal_unit_str, signal_wcs) -> 
     NDCube
         Reconstructed NDCube with units
     """
-    signal_unit = u.Unit(signal_unit_str)
     signal_quantity = signal_data * signal_unit
     return NDCube(signal_quantity, wcs=signal_wcs)
 
 
 def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     """
-    Load instrument response results and reconstruct units for compatibility.
-    Handles both old format (with embedded units) and new format (stripped units).
+    Load instrument response results and reconstruct signals for compatibility.
+    Fit statistics are kept with units separated.
     
     Parameters
     ----------
@@ -99,55 +58,24 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     Returns
     -------
     dict
-        Dictionary containing all results and metadata with reconstructed units.
+        Dictionary containing all results and metadata with reconstructed signals.
     """
     with open(filepath, "rb") as f:
         data = dill.load(f)
     
-    # Check if this is the new format by looking for stripped data keys
-    if "results" in data and "all_combinations" in data["results"]:
-        for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
-            # Reconstruct fit statistics for new format
-            if "dn_fit_stats" in combination_results:
-                combination_results["dn_fit_stats"] = _reconstruct_fit_stats_with_units(
-                    combination_results["dn_fit_stats"]
-                )
-            if "photon_fit_stats" in combination_results:
-                combination_results["photon_fit_stats"] = _reconstruct_fit_stats_with_units(
-                    combination_results["photon_fit_stats"]
-                )
-            
-            # Reconstruct signal NDCubes for new format
-            if all(key in combination_results for key in ["first_dn_signal_data", "first_dn_signal_unit", "first_dn_signal_wcs"]):
-                combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
-                    combination_results["first_dn_signal_data"],
-                    combination_results["first_dn_signal_unit"],
-                    combination_results["first_dn_signal_wcs"]
-                )
-            if all(key in combination_results for key in ["first_photon_signal_data", "first_photon_signal_unit", "first_photon_signal_wcs"]):
-                combination_results["first_photon_signal"] = _reconstruct_signal_with_units(
-                    combination_results["first_photon_signal_data"],
-                    combination_results["first_photon_signal_unit"],
-                    combination_results["first_photon_signal_wcs"]
-                )
-            
-            # Reconstruct fit_truth for new format
-            if "ground_truth" in combination_results and "fit_truth_data" in combination_results["ground_truth"]:
-                fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
-                fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
-                
-                # Convert unit strings back to astropy units  
-                fits_units = [u.Unit(unit_str) for unit_str in fit_truth_units]
-                
-                # Reconstruct object array with units
-                fit_truth_with_units = np.empty(fit_truth_data.shape, dtype=object)
-                for j in tqdm(range(fit_truth_data.shape[0]), desc="Reconstructing fit truth", leave=False):
-                    for k in range(fit_truth_data.shape[1]):
-                        for l in range(fit_truth_data.shape[2]):
-                            fit_truth_with_units[j, k, l] = fit_truth_data[j, k, l] * fits_units[l]
-                
-                combination_results["ground_truth"]["fit_truth"] = fit_truth_with_units
-    
+    for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
+        # Reconstruct signal NDCubes
+        combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
+            combination_results["first_dn_signal_data"],
+            combination_results["first_dn_signal_unit"],
+            combination_results["first_signal_wcs"]
+        )
+        combination_results["first_photon_signal"] = _reconstruct_signal_with_units(
+            combination_results["first_photon_signal_data"],
+            combination_results["first_photon_signal_unit"],
+            combination_results["first_signal_wcs"]
+        )
+        
     return data
 
 
@@ -213,54 +141,56 @@ def analyse_fit_statistics(
         raise ValueError(f"No {fit_stats_key} found in combination results")
     
     fit_stats = combination_results[fit_stats_key]
-    fit_truth = combination_results["ground_truth"]["fit_truth"]
+    fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
+    fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
     
-    # Calculate velocity statistics from mean and std of fit centers (parameter 1)
-    center_mean = fit_stats["mean"][..., 1]  # (nx, ny)
-    center_std = fit_stats["std"][..., 1]    # (nx, ny)
+    # Extract data and units
+    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, 4)
+    std_data = fit_stats["std_data"]        # Shape: (nx, ny, 4)
+    units = fit_stats["units"]              # List of 4 astropy units
+    
+    # Get center statistics (parameter index 1)
+    center_mean_data = mean_data[..., 1]    # (nx, ny) - values only
+    center_std_data = std_data[..., 1]      # (nx, ny) - values only
+    center_unit = units[1]                  # wavelength unit
+    
+    # Get width statistics (parameter index 2)
+    width_mean_data = mean_data[..., 2]     # (nx, ny) - values only
+    width_std_data = std_data[..., 2]       # (nx, ny) - values only
+    width_unit = units[2]                   # wavelength unit
+    
+    # Create quantities
+    center_mean_q = center_mean_data * center_unit
+    center_std_q = center_std_data * center_unit
+    width_mean_q = width_mean_data * width_unit
+    width_std_q = width_std_data * width_unit
     
     # Convert centers to velocities using simple formula
     # v = (lambda - lambda0) / lambda0 * c
-    def centers_to_velocity(centers, lambda0):
+    def centers_to_velocity(centers_q, lambda0):
         """Convert wavelength centers to velocities"""
-        # Extract values and units from Quantity objects
-        center_values = np.array([q.to_value(lambda0.unit) for q in centers.flat]).reshape(centers.shape)
-        centers_quantity = center_values * lambda0.unit
-        
-        velocity = ((centers_quantity - lambda0) / lambda0 * const.c).to(u.km / u.s)
+        velocity = ((centers_q - lambda0) / lambda0 * const.c).to(u.km / u.s)
         return velocity
     
     # Convert to velocities
-    v_mean = centers_to_velocity(center_mean, rest_wavelength)
-    v_true = centers_to_velocity(fit_truth[..., 1], rest_wavelength)
+    v_mean = centers_to_velocity(center_mean_q, rest_wavelength)
+    v_true = centers_to_velocity(fit_truth_data[..., 1] * fit_truth_units[1], rest_wavelength)
     v_err = v_true - v_mean
     
     # Convert center std to velocity std using differential: dv/dlambda = c/lambda
     c = const.c.to(u.km / u.s)
-    center_std_clean = np.asarray([q.to(rest_wavelength.unit).value if hasattr(q, 'unit') else q for q in center_std.flat]).reshape(center_std.shape)
-    v_std = c * center_std_clean * rest_wavelength.unit / rest_wavelength
-    
-    # Calculate width statistics from mean and std of fit widths (parameter 2)
-    width_mean = fit_stats["mean"][..., 2]   # (nx, ny)
-    width_std = fit_stats["std"][..., 2]     # (nx, ny)
-    
-    # Apply the unit to the whole array, not each value
-    width_unit = width_mean.flat[0].unit
-    width_mean_values = np.array([q.to_value(width_unit) for q in width_mean.flat]).reshape(width_mean.shape)
-    w_mean = width_mean_values * width_unit
-
-    width_std_unit = width_std.flat[0].unit
-    width_std_values = np.array([q.to_value(width_std_unit) for q in width_std.flat]).reshape(width_std.shape)
-    w_std = width_std_values * width_std_unit
+    v_std = (c * center_std_q / rest_wavelength).to(u.km / u.s)
     
     return {
         "v_mean": v_mean,
         "v_std": v_std,
         "v_err": v_err,
         "v_true": v_true,
-        "w_mean": w_mean,
-        "w_std": w_std,
-        "fit_stats": fit_stats,  # Include original fit stats for reference
+        "w_mean": width_mean_q,
+        "w_std": width_std_q,
+        "fit_stats": fit_stats,
+        "fit_truth_data": fit_truth_data,
+        "fit_truth_units": fit_truth_units,
     }
 
 
@@ -590,7 +520,7 @@ def create_sunpy_maps_from_combo(
     first_photon_signal = combination_results["first_photon_signal"]  # Shape: (nx, ny, nwave)
     first_dn_signal = combination_results["first_dn_signal"]         # Shape: (nx, ny, nwave)
     fit_stats_key = f"{data_type}_fit_stats"
-    fit_stats = combination_results[fit_stats_key]          # Contains first_fit, mean, std
+    fit_stats = combination_results[fit_stats_key]          # Contains first_fit_data, mean_data, std_data, units
     
     maps = {}
 
@@ -614,19 +544,18 @@ def create_sunpy_maps_from_combo(
 
     # --- Velocity maps ---
     # Velocity from first fit (parameter 1 = center)
-    first_fit = fit_stats["first_fit"]  # Shape: (nx, ny, 4)
-    center_first = first_fit[..., 1]    # Extract center parameter
+    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, 4)
+    center_first_data = first_fit_data[..., 1]    # Extract center parameter
+    center_first_unit = fit_stats["units"][1]     # Get units for center parameter
 
-    def centers_to_velocity(centers, lambda0):
+    def centers_to_velocity(centers_data, centers_unit, lambda0):
         """Convert wavelength centers to velocities"""
-        # take the units out of the array and apply to the whole array
-        center_values = np.array([q.to_value(lambda0.unit) for q in centers.flat]).reshape(centers.shape)
-        centers_quantity = center_values * lambda0.unit
+        centers_quantity = centers_data * centers_unit
         
         velocity = ((centers_quantity - lambda0) / lambda0 * const.c).to(u.km / u.s)
         return velocity
 
-    v_first = centers_to_velocity(center_first, rest_wavelength)
+    v_first = centers_to_velocity(center_first_data, center_first_unit, rest_wavelength)
 
     maps['velocity_from_fit'] = sunpy.map.Map(v_first.value.T, wcs_2d)
     maps['velocity_from_fit'].meta['bunit'] = str(v_first.unit)
@@ -643,11 +572,11 @@ def create_sunpy_maps_from_combo(
 
     # --- Line width maps ---
     # Line width from first fit (parameter 2 = width)
-    width_first = first_fit[..., 2]     # Extract width parameter
+    width_first_data = first_fit_data[..., 2]     # Extract width parameter data
+    width_first_unit = fit_stats["units"][2]      # Get units for width parameter
 
-    # Take units out of the array and apply to the whole array
-    values = np.array([q.value for q in width_first.flat]).reshape(width_first.shape)
-    width_quantity = values * width_first.flat[0].unit
+    # Create quantity with proper units
+    width_quantity = width_first_data * width_first_unit
     # Convert to Angstroms and extract value for SunPy Map
     width_data_clean = width_quantity.to(u.AA).value
     
