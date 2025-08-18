@@ -16,11 +16,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
-from .fitting import velocity_from_fit, width_from_fit
 from tqdm import tqdm
-
-
-
 
 
 def _reconstruct_signal_with_units(signal_data, signal_unit, signal_wcs) -> NDCube:
