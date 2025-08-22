@@ -18,25 +18,25 @@ pip install m-eclipses
 
 ```bash
 git clone https://github.com/jamesmckevitt/solc_euvst_sw_response.git
-cd solc_euvst_sw_response
-pip install -e .
+pip install solc_euvst_sw_response
 ```
 
-## Usage Instructions
+## Quick Start
 
 ### Command Line Interface
 
 After installation, you can run M-ECLIPSES from the command line:
 
 ```bash
-# Show logo and basic usage
-m-eclipses
+# Run synthesis script (convert 3D MHD data to synthetic spectra)
+synthesise-spectra --data-dir ./data/atmosphere --goft-file ./data/gofnt.sav --output-dir ./run/input
 
 # Run instrument response simulation
 m-eclipses --config ./run/input/config.yaml
 
-# Alternative short command
-meclipses --config ./run/input/config.yaml
+# Help can be accessed with
+synthesise-spectra --help
+m-eclipses --help
 ```
 
 ### Python API
@@ -46,6 +46,22 @@ You can also use M-ECLIPSES as a Python library:
 ```python
 import euvst_response
 from euvst_response import AluminiumFilter, Detector_SWC, Telescope_EUVST
+
+telescope = Telescope_EUVST()
+detector = Detector_SWC()
+
+print(f"Telescope collecting area: {telescope.collecting_area:.4f}")
+print(f"Detector QE (EUV): {detector.qe_euv:.2f}")
+
+# Calculate effective area at Fe XII 195.119 Å
+fe12_wl = 195.119 * u.AA
+effective_area = telescope.collecting_area * telescope.throughput(fe12_wl) * detector.qe_euv
+
+# Get breakdown of throughput by component
+pm_eff = telescope.primary_mirror_efficiency(fe12_wl)
+grating_eff = telescope.grating_efficiency(fe12_wl)
+micro_eff = telescope.microroughness_efficiency(fe12_wl)
+filter_eff = telescope.filter.total_throughput(fe12_wl)
 ```
 
 ### Analysis Tutorial
@@ -69,6 +85,8 @@ from euvst_response import (
 )
 ```
 
+## Detailed instructions
+
 ### 1. Generate contribution functions for the desired emission lines
 
 Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
@@ -80,16 +98,105 @@ idl -e "make_goft"
 
 ### 2. Run the line synthesis
 
-Run the line synthesis using:
+The synthesis script converts 3D MHD simulation data into synthetic solar spectra. It can be run directly from the command line with extensive configuration options.
+
+#### Basic Usage
+
 ```bash
-python synthesise_spectra.py
+# Example using all available command line options
+synthesise-spectra \
+  --data-dir ./data/atmosphere \
+  --goft-file ./data/gofnt.sav \
+  --output-dir ./run/input \
+  --output-name synthesised_spectra.pkl \
+  --temp-file temp/eosT.0270000 \
+  --rho-file rho/result_prim_0.0270000 \
+  --vz-file vz/result_prim_2.0270000 \
+  --cube-shape 512 768 256 \
+  --voxel-dx 0.192 \
+  --voxel-dy 0.192 \
+  --voxel-dz 0.064 \
+  --vel-res 5.0 \
+  --vel-lim 300.0 \
+  --downsample 1 \
+  --precision float64 \
+  --mean-mol-wt 1.29 \
+  --limit-lines Fe12_195.1190
+
+# Show all available options
+synthesise-spectra --help
 ```
 
-**Important:** This script automatically saves the synthesized atmosphere to `./run/input/synthesised_spectra.pkl`, which is the exact location where the instrument response simulation expects to find it. Do not move or rename this file unless you also modify the hardcoded path in `euvst_response/main.py`.
+#### Command Line Options
+
+**Input/Output Paths:**
+- `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
+- `--goft-file`: Path to CHIANTI G(T,N) save file (default: `./data/gofnt.sav`)
+- `--output-dir`: Output directory for results (default: `./run/input`)
+- `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+
+**Simulation Files:**
+- `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
+- `--rho-file`: Density file relative to data-dir (default: `rho/result_prim_0.0270000`)
+- `--vz-file`: Velocity file relative to data-dir (default: `vz/result_prim_2.0270000`)
+
+**Grid Parameters:**
+- `--cube-shape`: Cube dimensions as three integers (default: `512 768 256`)
+- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes in Mm (default: `0.192 0.192 0.064`)
+
+**Velocity Grid:**
+- `--vel-res`: Velocity resolution in km/s (default: `5.0`)
+- `--vel-lim`: Velocity limit ±km/s (default: `300.0`)
+
+**Processing Options:**
+- `--downsample`: Downsampling factor (default: `1` = no downsampling)
+- `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
+- `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
+
+**Line Selection:**
+- `--limit-lines`: Limit to specific lines, e.g., `--limit-lines Fe12_195.1190 Fe12_195.1790`
+
+#### Output
+
+The synthesis produces a pickle file containing:
+- `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
+- `config`: Runtime configuration for reproducibility
+- Additional technical data for internal use
+
+#### Performance Tips
+
+- Use `--downsample 2` or `--downsample 4` for initial testing
+- Use `--precision float32` to reduce memory usage (may affect accuracy)
+- Use `--limit-lines` to synthesize only specific lines for development
+- Monitor memory usage - full resolution synthesis can require 50+ GB RAM
+
+#### Working with Synthesis Results
+
+The synthesis results can be loaded and analyzed using the package API:
+
+```python
+import euvst_response
+
+# Load synthesis results - this sums all line cubes into a single cube
+cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
+print(f"Combined cube shape: {cube.data.shape}")
+
+# Access individual line cubes if needed
+import pickle
+with open("./run/input/synthesised_spectra.pkl", "rb") as f:
+    data = pickle.load(f)
+
+# Access individual line cubes
+fe12_195 = data["line_cubes"]["Fe12_195.1190"]
+print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
+print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
+```
+
+#### Pre-computed Atmospheres
 
 This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
 
-If you download a pre-synthesized atmosphere file, ensure it is placed at `./run/input/synthesised_spectra.pkl` before running the instrument response simulation.
+**Important:** You can place the synthesised atmosphere file anywhere and specify its location using the `synthesis_file` parameter in your YAML configuration file. The default location is `./run/input/synthesised_spectra.pkl`.
 
 ### 3. Simulate the instrument response
 
@@ -97,14 +204,24 @@ If you download a pre-synthesized atmosphere file, ensure it is placed at `./run
 
 M-ECLIPSES uses YAML configuration files to specify simulation parameters. You can specify single values or lists of values for parameter sweeps.
 
+**Key configuration options:**
+- `instrument`: Choose between SWC (EUVST) or EIS (Hinode)
+- `synthesis_file`: Path to the synthesised spectra pickle file (default: `./run/input/synthesised_spectra.pkl`)
+- `expos`: Exposure time(s) for simulations
+- `n_iter`: Number of Monte Carlo iterations
+- Parameter sweeps for filters, detector settings, etc.
+
 Here's a complete example configuration file:
 
 ```yaml
 # Instrument selection
 instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
 
+# Synthesis file path - location of the synthesised spectra pickle file
+synthesis_file: ./run/input/synthesised_spectra.pkl  # Default location
+
 # Point Spread Function
-psf: False  # Enable PSF convolution (currently only planned for SWC)
+psf: False  # Enable PSF convolution
 # Or test with and without PSF:
 # psf: [True, False]  # Run simulations both with and without PSF
 
@@ -112,42 +229,30 @@ psf: False  # Enable PSF convolution (currently only planned for SWC)
 expos: [0.5 s, 1 s, 2 s, 5 s, 10 s, 20 s, 40 s, 80 s]
 
 # Monte Carlo simulation parameters
-n_iter: 25      # Number of Monte Carlo iterations (more = better statistics)
+n_iter: 1000      # Number of Monte Carlo iterations
 ncpu: -1        # Number of CPU cores (-1 = use all available)
 
 # Parameter sweeps - you can specify single values or lists for any parameter
 # The simulation will run all combinations of parameters
 
-# Slit width - affects spatial resolution
+# Slit width
 slit_width: 0.2 arcsec  # Narrowest slit on EUVST
-# Or sweep multiple values:
-# slit_width: [0.1 arcsec, 0.2 arcsec, 0.5 arcsec]
 
 # Filter parameters (SWC only)
 # Thickness of aluminum oxide layer on entrance filter
-oxide_thickness: 95 angstrom  # Default
-# Or sweep multiple values:
-# oxide_thickness: [50 angstrom, 95 angstrom, 150 angstrom]
+oxide_thickness: 95 angstrom  # Default (expected value)
 
 # Carbon contamination thickness on filter
-c_thickness: 0 angstrom  # Start with no contamination
-# Or model contamination buildup:
-# c_thickness: [0 angstrom, 25 angstrom, 50 angstrom, 100 angstrom]
+c_thickness: 0 angstrom  # Default (ideal case, no contamination)
 
 # Aluminum filter thickness
-aluminium_thickness: 1485 angstrom  # Default thickness
-# Or test different thicknesses:
-# aluminium_thickness: [1000 angstrom, 1485 angstrom, 2000 angstrom]
+aluminium_thickness: 1485 angstrom  # Default (expected value)
 
 # CCD temperature for dark current calculation
-ccd_temperature: -60  # Temperature in Celsius (typical operating temperature)
-# Or test different temperatures:
-# ccd_temperature: [-60, -40, -20]  # Range of possible CCD temperatures
+ccd_temperature: -60 Celsius  # Default (expected operating temperature)
 
 # Visible stray light level
-vis_sl: 0 photon / (s * pixel)  # Ideal case (no stray light)
-# Or model stray light:
-# vis_sl: [0, 1e3, 1e4] photon / (s * pixel)
+vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
 ```
 
 For guidence on recommended values, see McKevitt et al. (2025) (in prep.).
@@ -159,16 +264,13 @@ Run the instrument response function using:
 m-eclipses --config ./run/input/config.yaml
 ```
 
-This can be looped in bash using:
-```bash
-for config in ./run/input/*.yaml; do
-  m-eclipses --config "$config"
-done
-```
+**Command-line options:**
+- `--config`: Path to YAML configuration file (required)
+- `--debug`: Enable debug mode with IPython breakpoints on errors (optional)
 
 #### Output
 
-Results are saved as pickle files in the `scratch/` directory with descriptive filenames based on the parameter ranges, and copied to `run/result/`. The output includes:
+Results are saved as pickle files in the `scratch/` directory with the same base name as the configuration file. The output includes:
 - Simulated detector signals (DN and photon counts)
 - Fitted spectral line parameters (intensity, velocity, width)
 - Statistical analysis of velocity precision vs. exposure time
@@ -176,4 +278,4 @@ Results are saved as pickle files in the `scratch/` directory with descriptive f
 
 ## Acknowledgements
 
-The SOLAR-C/EUVST-SW instrument is an ESA-funded contribution to the JAXA-led SOLAR-C mission. The EUVST-LW (long wavelength) instrument is contributed by NASA. The M-ECLIPSES code is developed and maintained at Mullard Space Science Laboratory (UCL).
+The SOLAR-C/EUVST-SW instrument is an ESA-funded contribution to the JAXA-led SOLAR-C mission. The EUVST-LW (long wavelength) instrument is contributed by NASA. The M-ECLIPSES code is developed and maintained at Mullard Space Science Laboratory (UCL), and was made using Austrian Super Computing (ASC) instrastructure in collaboration with the University of Vienna.

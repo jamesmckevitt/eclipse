@@ -48,6 +48,8 @@ dev = [
 [project.scripts]
 m-eclipses = "euvst_response.cli:main"
 meclipses = "euvst_response.cli:main"
+synthesise-spectra = "euvst_response.synthesis_cli:main"
+synthesise_spectra = "euvst_response.synthesis_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/jamesmckevitt/solc_euvst_sw_response"

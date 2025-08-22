@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .main import main as run_simulation
+from .synthesis import main as run_synthesis
 
 
 ASCII_LOGO = """
@@ -56,6 +57,12 @@ def main():
         action="store_true",
         help="Just print the logo and exit"
     )
+    
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode - drops to IPython on errors"
+    )
 
     args = parser.parse_args()
 
@@ -82,7 +89,10 @@ def main():
     print("-" * 60)
     
     # Set up sys.argv for the main function (it expects argparse format)
-    sys.argv = ["m-eclipses", "--config", args.config]
+    if args.debug:
+        sys.argv = ["m-eclipses", "--config", args.config, "--debug"]
+    else:
+        sys.argv = ["m-eclipses", "--config", args.config]
     
     try:
         run_simulation()
@@ -96,3 +106,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def synthesis_main():
+    """Entry point for the synthesis command line script."""
+    run_synthesis()

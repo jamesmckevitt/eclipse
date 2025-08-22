@@ -16,12 +16,98 @@ from tqdm import tqdm
 from .utils import tqdm_joblib, distance_to_angle
 
 
-def load_atmosphere(pkl_file: str) -> NDCube:
-    """Load synthetic atmosphere cube from pickle file."""
+def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
+    """
+    Load synthetic atmosphere cube from pickle file.
+    
+    Creates a summed cube from all line cubes in the synthesis results.
+    All line cubes are interpolated onto the wavelength grid of the metadata_line
+    before summing to handle different wavelength grids for different lines.
+    
+    Parameters
+    ----------
+    pkl_file : str
+        Path to the synthesized spectra pickle file.
+    metadata_line : str, optional
+        Name of the line to use for metadata and wavelength grid reference. 
+        If None, uses the first line.
+        
+    Returns
+    -------
+    NDCube
+        Summed cube of all line intensities with proper WCS and metadata.
+        Uses the wavelength grid from the metadata_line.
+    """
     with open(pkl_file, "rb") as f:
         tmp = dill.load(f)
-    cube = tmp["sim_si"]
-    return cube
+    
+    # Handle new synthesis format
+    if "line_cubes" not in tmp:
+        raise ValueError("File does not contain synthesis results with line_cubes")
+        
+    line_cubes = tmp["line_cubes"]
+    if not line_cubes:
+        raise ValueError("No line cubes found in synthesis results")
+    
+    # Get the line names
+    line_names = list(line_cubes.keys())
+    
+    # Choose metadata source line
+    if metadata_line is None:
+        metadata_line = line_names[0]
+    elif metadata_line not in line_names:
+        raise ValueError(f"Metadata line '{metadata_line}' not found. Available lines: {line_names}")
+    
+    # Use the metadata line's wavelength grid as the reference
+    ref_cube = line_cubes[metadata_line]
+    ref_wavelengths = ref_cube.axis_world_coords(-1)[0]
+    
+    # Get spatial dimensions from reference cube
+    ny, nx, nw = ref_cube.data.shape
+    
+    # Initialize summed data with the reference wavelength grid
+    summed_data = np.zeros((ny, nx, nw))
+    
+    for line_name, cube in tqdm(line_cubes.items(), desc="Summing line cubes", unit="line", leave=False):
+        # Get wavelength grid for this cube
+        cube_wavelengths = cube.axis_world_coords(-1)[0]
+        
+        # Check spatial dimensions match
+        ny_cube, nx_cube, _ = cube.data.shape
+        if ny_cube != ny or nx_cube != nx:
+            raise ValueError(f"Spatial dimensions mismatch for {line_name}: expected ({ny}, {nx}), got ({ny_cube}, {nx_cube})")
+        
+        # Vectorized interpolation for the entire cube
+        # Reshape data to (n_pixels, n_wavelengths) for batch interpolation
+        cube_data_reshaped = cube.data.reshape(-1, len(cube_wavelengths))
+        
+        # Batch interpolation using numpy.interp
+        interpolated = np.array([
+            np.interp(ref_wavelengths.value, cube_wavelengths.value, spectrum, left=0.0, right=0.0)
+            for spectrum in cube_data_reshaped
+        ])
+        
+        # Add to summed data
+        summed_data += interpolated.reshape(ny, nx, len(ref_wavelengths))
+    
+    # Create new metadata combining info from all lines
+    combined_meta = ref_cube.meta.copy()
+    combined_meta.update({
+        "combined_lines": line_names,
+        "n_lines": len(line_names),
+        "metadata_source": metadata_line,
+        "summed_intensity": True
+    })
+    
+    # Create the summed cube using the reference cube's WCS
+    summed_cube = NDCube(
+        summed_data,
+        wcs=ref_cube.wcs,
+        unit=ref_cube.unit,
+        meta=combined_meta
+    )
+    
+    return summed_cube
 
 
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):

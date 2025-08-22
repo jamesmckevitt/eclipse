@@ -8,7 +8,7 @@ import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
 from scipy.signal import convolve2d
-from .utils import wl_to_vel, vel_to_wl
+from .utils import wl_to_vel, vel_to_wl, debug_break
 from scipy.special import voigt_profile
 
 
@@ -44,7 +44,7 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # Convert to Kelvin for the calculation
     temp_kelvin = det._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
     
-    # Convert wavelength to photon energy: E = hc/λ
+    # Convert wavelength to photon energy: E = hc/lambda
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
     
     # Calculate temperature-dependent energy per electron-hole pair
@@ -97,13 +97,13 @@ def intensity_to_photons(I: NDCube) -> NDCube:
     )
 
 
-def add_effective_area(ph_flux: NDCube, tel) -> NDCube:
-    """Add telescope effective area to photon flux."""
+def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
+    """Add telescope optical throughput (collecting area x optical efficiencies) to photon flux."""
     wl0 = ph_flux.meta['rest_wav']
     wl_axis = ph_flux.axis_world_coords(2)[0]
-    A_eff = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
+    throughput = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
     
-    out_data = (ph_flux.data * ph_flux.unit * A_eff)
+    out_data = (ph_flux.data * ph_flux.unit * throughput)
     
     return NDCube(
         data=out_data.value,
@@ -127,9 +127,10 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     )
 
 
-def apply_psf(signal: NDCube, tel) -> NDCube:
+def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     """
-    Convolve each detector row (first axis) of an NDCube with a parameterized PSF.
+    Convolve each detector row (first axis) of an NDCube with a parameterized PSF
+    from the focusing optics (primary mirror and diffraction grating).
 
     Parameters
     ----------
@@ -346,7 +347,7 @@ def apply_exposure_and_poisson(I: NDCube, t_exp: u.Quantity) -> NDCube:
     )
 
 
-def add_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim) -> NDCube:
+def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=None) -> NDCube:
     """
     Add visible-light stray-light to a cube of electron counts.
 
@@ -359,16 +360,27 @@ def add_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim) -> NDCube:
     det : Detector_SWC or Detector_EIS
         Detector description.
     sim : Simulation
-        Simulation parameters (contains vis_sl - photon/s/pix).
+        Simulation parameters (contains vis_sl - photon/s/cm2).
+    tel : Telescope_EUVST or Telescope_EIS, optional
+        Telescope configuration for filter throughput calculation.
 
     Returns
     -------
     NDCube
         New cube with stray-light signal added.
     """
+    # Convert vis_sl from photon/s/cm2 to photon/s/pixel using detector pixel area
+    pixel_area = ((det.pix_size*1*u.pix)**2)/u.pix  # cm/pix -> cm2/pixel
+    vis_sl_per_pixel = (sim.vis_sl * pixel_area).to(u.photon / (u.s * u.pixel))
+    
+    # Apply filter throughput if telescope with filter is available
+    if tel is not None and hasattr(tel, 'filter'):
+        filter_throughput = tel.filter.visible_light_throughput()
+        vis_sl_per_pixel *= filter_throughput
+    
     # Draw Poisson realisation of stray-light photons
     n_vis_ph = np.random.poisson(
-        (sim.vis_sl * t_exp).to_value(u.photon / u.pixel),
+        (vis_sl_per_pixel * t_exp).to_value(u.photon / u.pixel),
         size=electrons.data.shape
     ) * (u.photon / u.pixel)
 
@@ -387,6 +399,109 @@ def add_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim) -> NDCube:
 
     # Add to original signal
     out_q = electrons.data * electrons.unit + stray_electrons
+    out_q = out_q.to(electrons.unit)
+
+    return NDCube(
+        data=out_q.value,
+        wcs=electrons.wcs.deepcopy(),
+        unit=out_q.unit,
+        meta=electrons.meta,
+    )
+
+
+def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel) -> NDCube:
+    """
+    Add visible light contributions from pinholes to electron counts.
+    
+    This function adds the visible light that bypasses the aluminum filter
+    through pinholes and creates diffraction patterns on the detector.
+
+    Parameters
+    ----------
+    electrons : NDCube
+        Electron counts per pixel (unit: u.electron / u.pixel).
+    t_exp : u.Quantity
+        Exposure time.
+    det : Detector_SWC
+        Detector configuration (must be SWC for pinhole support).
+    sim : Simulation
+        Simulation parameters containing pinhole configuration.
+    tel : Telescope_EUVST
+        Telescope configuration with aluminum filter.
+
+    Returns
+    -------
+    NDCube
+        New cube with pinhole visible light contributions added.
+    """
+    if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
+        return electrons  # No pinholes enabled
+    
+    # Import here to avoid circular imports
+    from .pinhole_diffraction import calculate_pinhole_diffraction_pattern
+    
+    # Get detector and data properties
+    data_shape = electrons.data.shape  # Should be (n_scan, n_slit, n_spectral)
+    
+    # Visible light wavelength (typical)
+    visible_wavelength = 600 * u.nm
+    
+    # Initialize additional electron contributions
+    additional_electrons = np.zeros_like(electrons.data)
+
+    for pinhole_diameter, pinhole_position in zip(sim.pinhole_sizes, sim.pinhole_positions):
+        # Calculate pinhole area
+        pinhole_area = np.pi * (pinhole_diameter / 2)**2
+        
+        # === Visible Light Contribution Through Pinhole ===
+        # Calculate total photons incident on the pinhole area (unfiltered)
+        # sim.vis_sl is photon/s/cm^2, pinhole_area is in cm^2
+        vis_photons_per_sec_through_pinhole = sim.vis_sl * pinhole_area
+        vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
+        
+        # Calculate visible diffraction pattern - this shows how the pinhole photons spread
+        n_scan, n_slit, n_spectral = data_shape
+        vis_pattern = calculate_pinhole_diffraction_pattern(
+            detector_shape=(n_slit, n_spectral),
+            pixel_size=det.pix_size*u.pix,
+            pinhole_diameter=pinhole_diameter,
+            pinhole_position_slit=pinhole_position,
+            slit_width=sim.slit_width,
+            plate_scale=det.plate_scale_angle,
+            distance=det.filter_distance,
+            wavelength=visible_wavelength
+        )
+        
+        # Distribute the total pinhole photons according to diffraction pattern
+        # vis_pattern is normalized (peak = 1), so we need to ensure photon conservation
+        # Normalize the pattern so the total integrated intensity equals 1.0
+        pattern_total = np.sum(vis_pattern)
+        if pattern_total > 0:
+            vis_pattern_normalized = vis_pattern / pattern_total
+        else:
+            vis_pattern_normalized = vis_pattern
+
+        vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
+        
+        # Sample Poisson photons for this pinhole contribution
+        vis_photons_poisson = np.random.poisson(vis_photons_distributed)
+        
+        # Apply quantum efficiency
+        vis_photons_detected = np.random.binomial(
+            vis_photons_poisson.astype(int),
+            det.qe_vis
+        )
+
+        # Apply Fano noise to detected visible photons
+        vis_electrons_values = _vectorized_fano_noise(vis_photons_detected.astype(float), visible_wavelength, det)
+
+        # Add to all scan positions (visible light affects all equally)
+        for scan_idx in range(n_scan):
+            additional_electrons[scan_idx] += vis_electrons_values
+
+    # Add pinhole contributions to original signal
+    additional_electrons_quantity = additional_electrons * (u.electron / u.pixel)
+    out_q = electrons.data * electrons.unit + additional_electrons_quantity
     out_q = out_q.to(electrons.unit)
 
     return NDCube(

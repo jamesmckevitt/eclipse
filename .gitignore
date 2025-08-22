@@ -5,13 +5,10 @@
 *.sav
 *.h5
 *.npz
-data/**
-run/**
 *.pkl
 *.out
 *.sh
 **/__pycache__/
-scratch/**
 *.egg-info/
 build/
 dist/

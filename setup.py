@@ -53,6 +53,9 @@ setup(
         "dill",
         "pyyaml",
         "reproject",
+        "dask",
+        "psutil",
+        "mendeleev",
     ],
     extras_require={
         "dev": [
@@ -66,6 +69,8 @@ setup(
         "console_scripts": [
             "m-eclipses=euvst_response.cli:main",
             "meclipses=euvst_response.cli:main",
+            "synthesise-spectra=euvst_response.synthesis_cli:main",
+            "synthesise_spectra=euvst_response.synthesis_cli:main",
         ],
     },
     include_package_data=True,

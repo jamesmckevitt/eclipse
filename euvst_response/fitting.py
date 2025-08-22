@@ -47,12 +47,14 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
             return np.array(p0)
 
 
-def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> u.Quantity:
+def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> tuple[np.ndarray, list[u.Unit]]:
     """
     Fit a Gaussian to every (slit x wavelength) spectrum.
 
-    Returns an array of shape (n_scan, n_slit, 4) with the parameters
-    [peak, centre, sigma, background] for each spatial pixel.
+    Returns a tuple of (data_array, units_list) where:
+    - data_array: shape (n_scan, n_slit, 4) with the parameters
+      [peak, centre, sigma, background] for each spatial pixel (values only)
+    - units_list: list of 4 astropy Unit objects corresponding to the parameters
     """
 
     n_scan, n_slit, _ = signal_cube.shape
@@ -69,10 +71,13 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1) -> u.Quantity:
             delayed(_fit_block)(signal_cube.data[i]) for i in range(n_scan)
         )
 
-    # Stack to (n_scan, n_slit, 4) with units
-    arr = (np.stack(results, axis=0) * np.array([signal_cube.unit, wv.unit, wv.unit, signal_cube.unit], dtype=object))
+    # Stack to (n_scan, n_slit, 4) - values only
+    data_array = np.stack(results, axis=0)
+    
+    # Units for [peak, centre, sigma, background]
+    units_list = [signal_cube.unit, wv.unit, wv.unit, signal_cube.unit]
 
-    return arr
+    return data_array, units_list
 
 
 def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity, n_jobs: int = -1) -> u.Quantity:
