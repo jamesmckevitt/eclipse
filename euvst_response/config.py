@@ -24,11 +24,9 @@ DETECTOR_MATERIALS = {
     }
 }
 
-def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity) -> u.Quantity:
+def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: str = "NIMO") -> u.Quantity:
     """
-    Calculate dark current based on CCD temperature.
-    
-    Uses the formula: Q_d = Q_d0 * 122 * T^3 * e^(-6400/T)
+    Calculate dark current based on CCD temperature and type.
     
     Parameters
     ----------
@@ -36,6 +34,8 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity) -> u.Quantit
         CCD temperature with units (e.g., -60 * u.deg_C)
     q_d0_293k : u.Quantity
         Dark current at 293K in electrons per pixel per second
+    ccd_type : str
+        "NIMO" (non-inverted mode), "AIMO" (advanced inverted mode)
         
     Returns
     -------
@@ -45,14 +45,12 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity) -> u.Quantit
     Raises
     ------
     ValueError
-        If temperature is above 300K (27 deg C)
+        If temperature is above 300K (27 deg C) or unknown CCD type
     """
-    
     temp_kelvin = temp.to(u.Kelvin, equivalencies=u.temperature())
-
     max_temp = 300 * u.K
     min_temp = 230 * u.K
-
+    
     # Check temperature limits
     if temp_kelvin > max_temp:
         raise ValueError(f"Cannot calculate dark current at {temp_kelvin}. "
@@ -61,11 +59,18 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity) -> u.Quantit
     # Apply minimum temperature limit (clamp to 230K)
     if temp_kelvin < min_temp:
         temp_kelvin = min_temp
-        
-    # Calculate dark current using the provided formula
-    # Q_d = Q_d0 * 122 * T^3 * e^(-6400/T)
+    
     Q_d0 = q_d0_293k.to_value(u.electron / (u.pixel * u.s))
-    dark_current = Q_d0 * 122 * (temp_kelvin.value**3) * np.exp(-6400/temp_kelvin.value)
+    T = temp_kelvin.value
+    
+    if ccd_type.upper() == "NIMO":
+        # Q_d = Q_d0 * 122 * T^3 * exp(-6400/T)
+        dark_current = Q_d0 * 122 * T**3 * np.exp(-6400/T)
+    elif ccd_type.upper() == "AIMO":
+        # Q_d = Qd0 * 1.14e6 * T^3 * exp(-9080/T)
+        dark_current = Q_d0 * 1.14e6 * T**3 * np.exp(-9080/T)
+    else:
+        raise ValueError(f"Unknown CCD type: {ccd_type}. Must be 'NIMO' or 'AIMO'.")
 
     return dark_current * u.electron / (u.pixel * u.s)
 
@@ -149,8 +154,8 @@ class Detector_SWC:
 
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
-        """Calculate dark current based on CCD temperature."""
-        return calculate_dark_current(temp, Detector_SWC._dark_current_293k)
+        """Calculate dark current for SWC (NIMO) CCD."""
+        return calculate_dark_current(temp, Detector_SWC._dark_current_293k, ccd_type="NIMO")
 
     @classmethod
     def with_temperature(cls, temp: u.Quantity):
@@ -205,8 +210,8 @@ class Detector_EIS:
     
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
-        """Calculate dark current based on CCD temperature for EIS."""
-        return calculate_dark_current(temp, Detector_EIS._dark_current_293k)
+        """Calculate dark current for EIS (AIMO) CCD."""
+        return calculate_dark_current(temp, Detector_EIS._dark_current_293k, ccd_type="AIMO")
     
     @classmethod
     def with_temperature(cls, temp: u.Quantity):
