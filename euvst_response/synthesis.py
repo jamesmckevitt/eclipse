@@ -738,16 +738,22 @@ def main(args=None) -> None:
     # Apply cropping if requested
     if args.crop_x or args.crop_y or args.crop_z:
         print(f"Applying cropping ({print_mem()})")
-        crop_params = {
-            'crop_x': args.crop_x,
-            'crop_y': args.crop_y, 
-            'crop_z': args.crop_z
+        cubes_dict = {
+            'temp': temp_cube,
+            'rho': rho_cube,
+            'vel': vel_cube
         }
-        temp_cube, rho_cube, vel_cube = crop_cubes(
-            [temp_cube, rho_cube, vel_cube], 
-            voxel_dx, voxel_dy, voxel_dz,
-            **crop_params
+        voxel_sizes = (voxel_dx, voxel_dy, voxel_dz)
+        cropped_cubes, new_voxel_sizes, new_shape = crop_cubes(
+            cubes_dict, 
+            voxel_sizes,
+            crop_x=args.crop_x,
+            crop_y=args.crop_y, 
+            crop_z=args.crop_z
         )
+        temp_cube = cropped_cubes['temp']
+        rho_cube = cropped_cubes['rho']
+        vel_cube = cropped_cubes['vel']
 
     # Convert to log10 temperature and density
     ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
