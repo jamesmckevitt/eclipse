@@ -111,6 +111,8 @@ synthesise-spectra \
   --output-name synthesised_spectra.pkl \
   --temp-file temp/eosT.0270000 \
   --rho-file rho/result_prim_0.0270000 \
+  --vx-file vx/result_prim_1.0270000 \
+  --vy-file vy/result_prim_3.0270000 \
   --vz-file vz/result_prim_2.0270000 \
   --cube-shape 512 768 256 \
   --voxel-dx 0.192 \
@@ -118,6 +120,10 @@ synthesise-spectra \
   --voxel-dz 0.064 \
   --vel-res 5.0 \
   --vel-lim 300.0 \
+  --integration-axis z \
+  --crop-x -50 50 \
+  --crop-y -50 50 \
+  --crop-z 0 20 \
   --downsample 1 \
   --precision float64 \
   --mean-mol-wt 1.29 \
@@ -138,7 +144,9 @@ synthesise-spectra --help
 **Simulation Files:**
 - `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
 - `--rho-file`: Density file relative to data-dir (default: `rho/result_prim_0.0270000`)
-- `--vz-file`: Velocity file relative to data-dir (default: `vz/result_prim_2.0270000`)
+- `--vx-file`: X-velocity file (required if `--integration-axis x`)
+- `--vy-file`: Y-velocity file (required if `--integration-axis y`)
+- `--vz-file`: Z-velocity file (required if `--integration-axis z`)
 
 **Grid Parameters:**
 - `--cube-shape`: Cube dimensions as three integers (default: `512 768 256`)
@@ -147,6 +155,18 @@ synthesise-spectra --help
 **Velocity Grid:**
 - `--vel-res`: Velocity resolution in km/s (default: `5.0`)
 - `--vel-lim`: Velocity limit ±km/s (default: `300.0`)
+
+**Integration and Viewing:**
+- `--integration-axis`: Integration axis: `x`, `y`, or `z` (default: `z`)
+  - `z`: Standard top-down view (integrates through height)
+  - `x`: Side view from the left (integrates left-to-right)
+  - `y`: Side view from the front (integrates front-to-back)
+
+**Spatial Cropping (Heliocentric coordinates in Mm):**
+- `--crop-x`: X-range to crop, e.g., `--crop-x -50 50` (optional)
+- `--crop-y`: Y-range to crop, e.g., `--crop-y -50 50` (optional)  
+- `--crop-z`: Z-range to crop, e.g., `--crop-z 0 20` (optional)
+- Omit any crop option to use the full range in that dimension
 
 **Processing Options:**
 - `--downsample`: Downsampling factor (default: `1` = no downsampling)
@@ -168,7 +188,9 @@ The synthesis produces a pickle file containing:
 - Use `--downsample 2` or `--downsample 4` for initial testing
 - Use `--precision float32` to reduce memory usage (may affect accuracy)
 - Use `--limit-lines` to synthesize only specific lines for development
+- Use spatial cropping to focus on regions of interest and reduce computation time
 - Monitor memory usage - full resolution synthesis can require 50+ GB RAM
+- Side views (`--integration-axis x` or `y`) may require different velocity files
 
 #### Working with Synthesis Results
 

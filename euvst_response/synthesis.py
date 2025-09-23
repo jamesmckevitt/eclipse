@@ -49,6 +49,95 @@ def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
     ])
 
 
+def crop_cubes(
+    cubes: Dict[str, np.ndarray],
+    voxel_sizes: Tuple[u.Quantity, u.Quantity, u.Quantity],
+    crop_x: Optional[Tuple[float, float]] = None,
+    crop_y: Optional[Tuple[float, float]] = None, 
+    crop_z: Optional[Tuple[float, float]] = None,
+) -> Tuple[Dict[str, np.ndarray], Tuple[u.Quantity, u.Quantity, u.Quantity], Tuple[int, int, int]]:
+    """
+    Crop 3D cubes based on Heliocentric coordinate ranges.
+    
+    Parameters
+    ----------
+    cubes : Dict[str, np.ndarray]
+        Dictionary of 3D cubes to crop (each with shape nx, ny, nz).
+    voxel_sizes : Tuple[u.Quantity, u.Quantity, u.Quantity]
+        Voxel sizes (dx, dy, dz) in Mm.
+    crop_x, crop_y, crop_z : Optional[Tuple[float, float]]
+        Cropping ranges in Mm. None means no cropping in that direction.
+        
+    Returns
+    -------
+    cropped_cubes : Dict[str, np.ndarray]
+        Cropped cubes.
+    new_voxel_sizes : Tuple[u.Quantity, u.Quantity, u.Quantity]
+        Updated voxel sizes (unchanged).
+    new_shape : Tuple[int, int, int]
+        New cube shape after cropping.
+    """
+    # Get original shape and create coordinate grids
+    sample_cube = next(iter(cubes.values()))
+    nx, ny, nz = sample_cube.shape
+    voxel_dx, voxel_dy, voxel_dz = voxel_sizes
+    
+    # Create coordinate grids (Heliocentric coordinates, centered at origin)
+    x_coords = (np.arange(nx) - nx//2) * voxel_dx.to(u.Mm).value  # Mm
+    y_coords = (np.arange(ny) - ny//2) * voxel_dy.to(u.Mm).value  # Mm
+    z_coords = (np.arange(nz) - nz//2) * voxel_dz.to(u.Mm).value  # Mm
+    
+    # Determine cropping indices
+    if crop_x is not None:
+        x_min, x_max = crop_x
+        x_mask = (x_coords >= x_min) & (x_coords <= x_max)
+        x_indices = np.where(x_mask)[0]
+        if len(x_indices) == 0:
+            raise ValueError(f"No x indices found in range [{x_min}, {x_max}] Mm")
+        x_slice = slice(x_indices[0], x_indices[-1] + 1)
+    else:
+        x_slice = slice(None)
+    
+    if crop_y is not None:
+        y_min, y_max = crop_y
+        y_mask = (y_coords >= y_min) & (y_coords <= y_max)
+        y_indices = np.where(y_mask)[0]
+        if len(y_indices) == 0:
+            raise ValueError(f"No y indices found in range [{y_min}, {y_max}] Mm")
+        y_slice = slice(y_indices[0], y_indices[-1] + 1)
+    else:
+        y_slice = slice(None)
+    
+    if crop_z is not None:
+        z_min, z_max = crop_z
+        z_mask = (z_coords >= z_min) & (z_coords <= z_max)
+        z_indices = np.where(z_mask)[0]
+        if len(z_indices) == 0:
+            raise ValueError(f"No z indices found in range [{z_min}, {z_max}] Mm")
+        z_slice = slice(z_indices[0], z_indices[-1] + 1)
+    else:
+        z_slice = slice(None)
+    
+    # Apply cropping to all cubes
+    cropped_cubes = {}
+    for name, cube in cubes.items():
+        cropped_cubes[name] = cube[x_slice, y_slice, z_slice]
+    
+    # Get new shape
+    sample_cropped = next(iter(cropped_cubes.values()))
+    new_shape = sample_cropped.shape
+    
+    print(f"Cropped from {sample_cube.shape} to {new_shape}")
+    if crop_x is not None:
+        print(f"  X: {crop_x[0]:.1f} to {crop_x[1]:.1f} Mm")
+    if crop_y is not None:
+        print(f"  Y: {crop_y[0]:.1f} to {crop_y[1]:.1f} Mm")
+    if crop_z is not None:
+        print(f"  Z: {crop_z[0]:.1f} to {crop_z[1]:.1f} Mm")
+    
+    return cropped_cubes, voxel_sizes, new_shape
+
+
 def load_cube(
     file_path: str | Path,
     shape: Tuple[int, int, int] = (512, 768, 256),
@@ -159,8 +248,9 @@ def read_goft(
 def compute_dem(
     logT_cube: np.ndarray,
     logN_cube: np.ndarray,
-    voxel_dz_cm: float,
+    voxel_dh_cm: float,
     logT_grid: np.ndarray,
+    integration_axis: str = "z",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Build the differential emission measure DEM(T) and the emission-measure
@@ -172,20 +262,39 @@ def compute_dem(
         3D array of log10(T/K) values.
     logN_cube : np.ndarray  
         3D array of log10(n_e/cm^3) values.
-    voxel_dz_cm : float
-        Voxel depth in cm.
+    voxel_dh_cm : float
+        Voxel depth in cm along integration axis.
     logT_grid : np.ndarray
         1D array of temperature bin centers for DEM calculation.
+    integration_axis : str
+        Axis along which to integrate ("x", "y", or "z").
 
     Returns
     -------
     dem_map : np.ndarray
-        DEM array with shape (nx, ny, nT) [cm^-5 per dex].
+        DEM array [cm^-5 per dex]. Shape depends on integration_axis:
+        - "x": (ny, nz, nT) 
+        - "y": (nx, nz, nT)
+        - "z": (nx, ny, nT)
     avg_ne : np.ndarray
-        Mean electron density per T-bin with shape (nx, ny, nT) [cm^-3].
+        Mean electron density per T-bin [cm^-3]. Same shape as dem_map.
     """
-    nx, ny, _ = logT_cube.shape
     nT = len(logT_grid)
+    
+    # Determine integration axis and output shape
+    axis_map = {"x": 0, "y": 1, "z": 2}
+    if integration_axis not in axis_map:
+        raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
+    
+    integration_axis_idx = axis_map[integration_axis]
+    
+    # Output shape depends on which axis we integrate over
+    if integration_axis == "x":
+        output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nz, nT)
+    elif integration_axis == "y":
+        output_shape = (logT_cube.shape[0], logT_cube.shape[2], nT)  # (nx, nz, nT)
+    else:  # "z"
+        output_shape = (logT_cube.shape[0], logT_cube.shape[1], nT)  # (nx, ny, nT)
     
     # Create temperature bin edges from centers
     dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
@@ -199,15 +308,16 @@ def compute_dem(
     w2 = ne**2  # weights for EM
     w3 = ne**3  # weights for EM*n_e
 
-    dem = np.zeros((nx, ny, nT))
+    dem = np.zeros(output_shape)
     avg_ne = np.zeros_like(dem)
 
     for idx in tqdm(range(nT), desc="DEM bins", unit="bin", leave=False):
         lo, hi = logT_edges[idx], logT_edges[idx + 1]
         mask = (logT_cube >= lo) & (logT_cube < hi)  # (nx,ny,nz)
 
-        em = np.sum(w2 * mask, axis=2) * voxel_dz_cm    # cm^-5
-        em_n = np.sum(w3 * mask, axis=2) * voxel_dz_cm  # cm^-5 * n_e
+        # Integrate along the specified axis
+        em = np.sum(w2 * mask, axis=integration_axis_idx) * voxel_dh_cm    # cm^-5
+        em_n = np.sum(w3 * mask, axis=integration_axis_idx) * voxel_dh_cm  # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
         avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
@@ -267,10 +377,11 @@ def interpolate_g_on_dem(
 
 def build_em_tv(
     logT_cube: np.ndarray,
-    vz_cube: np.ndarray,
+    vel_cube: np.ndarray,
     logT_grid: np.ndarray,
     vel_grid: np.ndarray,
     ne_sq_dh: np.ndarray,
+    integration_axis: str = "z",
 ) -> np.ndarray:
     """
     Construct 4-D emission-measure cube EM(x,y,T,v) [cm^-5].
@@ -279,21 +390,33 @@ def build_em_tv(
     ----------
     logT_cube : np.ndarray
         3D temperature cube.
-    vz_cube : np.ndarray
-        3D velocity cube.
+    vel_cube : np.ndarray
+        3D velocity cube along the integration axis.
     logT_grid : np.ndarray
         Temperature bin centers.
     vel_grid : np.ndarray
         Velocity bin centers.
     ne_sq_dh : np.ndarray
         n_e^2 * dh for each voxel.
+    integration_axis : str
+        Axis along which to integrate ("x", "y", or "z").
         
     Returns
     -------
     em_tv : np.ndarray
-        4D emission measure cube (nx, ny, nT, nv).
+        4D emission measure cube. Shape depends on integration_axis:
+        - "x": (ny, nz, nT, nv)
+        - "y": (nx, nz, nT, nv)
+        - "z": (nx, ny, nT, nv)
     """
-    print("  Building 4-D emission-measure cube...")
+    print(f"  Building 4-D emission-measure cube along {integration_axis}-axis...")
+    
+    # Determine integration axis and output shape
+    axis_map = {"x": 0, "y": 1, "z": 2}
+    if integration_axis not in axis_map:
+        raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
+    
+    integration_axis_idx = axis_map[integration_axis]
     
     # Create temperature bin edges from centers
     dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
@@ -308,15 +431,22 @@ def build_em_tv(
     
     mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
              (logT_cube[..., None] <  logT_edges[1:])
-    mask_V = (vz_cube.value[..., None] >= v_edges[:-1]) & \
-             (vz_cube.value[..., None] <  v_edges[1:])
+    mask_V = (vel_cube.value[..., None] >= v_edges[:-1]) & \
+             (vel_cube.value[..., None] <  v_edges[1:])
 
-    # Build the 4-D emission-measure cube EM(x,y,T,v) by summing over the z-axis
+    # Build the 4-D emission-measure cube EM(spatial,T,v) by summing over the integration axis
     ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
     mask_T_d   = da.from_array(mask_T,   chunks='auto')
     mask_V_d   = da.from_array(mask_V,   chunks='auto')
-    em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm",
-                        ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+    
+    # Sum along the specified integration axis
+    if integration_axis == "x":
+        em_tv_d = da.einsum("ijk,ijkl,ijkm->jklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+    elif integration_axis == "y":
+        em_tv_d = da.einsum("ijk,ijkl,ijkm->iklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+    else:  # "z"
+        em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+        
     with ProgressBar():
         em_tv = em_tv_d.compute()
 
@@ -459,8 +589,12 @@ def parse_arguments():
                        help="Temperature file relative to data-dir")
     parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
                        help="Density file relative to data-dir")
+    parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
+                       help="Velocity x file relative to data-dir")
+    parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
+                       help="Velocity y file relative to data-dir")
     parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
-                       help="Velocity file relative to data-dir")
+                       help="Velocity z file relative to data-dir")
     
     # Grid parameters
     parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
@@ -471,6 +605,18 @@ def parse_arguments():
                        help="Voxel size in y (Mm)")
     parser.add_argument("--voxel-dz", type=float, default=0.064,
                        help="Voxel size in z (Mm)")
+    
+    # Integration direction
+    parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
+                       help="Axis along which to integrate (x, y, or z)")
+    
+    # Cropping parameters (in Heliocentric coordinates, Mm)
+    parser.add_argument("--crop-x", nargs=2, type=float, default=None,
+                       help="Crop in x direction: x_min x_max (Mm, None for no cropping)")
+    parser.add_argument("--crop-y", nargs=2, type=float, default=None,
+                       help="Crop in y direction: y_min y_max (Mm, None for no cropping)")
+    parser.add_argument("--crop-z", nargs=2, type=float, default=None,
+                       help="Crop in z direction: z_min z_max (Mm, None for no cropping)")
     
     # Velocity grid
     parser.add_argument("--vel-res", type=float, default=5.0,
@@ -531,8 +677,20 @@ def main(args=None) -> None:
     files = {
         "T": args.temp_file,
         "rho": args.rho_file,
-        "vz": args.vz_file,
     }
+    
+    # Determine velocity file based on integration axis
+    integration_axis = args.integration_axis.lower()
+    if integration_axis == "x":
+        files["vel"] = args.vx_file
+        voxel_dh = voxel_dx
+    elif integration_axis == "y":
+        files["vel"] = args.vy_file
+        voxel_dh = voxel_dy
+    else:  # "z"
+        files["vel"] = args.vz_file
+        voxel_dh = voxel_dz
+    
     paths = {k: base_dir / fname for k, fname in files.items()}
     
     # Validate input files exist
@@ -549,12 +707,15 @@ def main(args=None) -> None:
     print(f"  GOFT file: {goft_path}")
     print(f"  Cube shape: {args.cube_shape}")
     print(f"  Voxel sizes: {voxel_dx:.3f} x {voxel_dy:.3f} x {voxel_dz:.3f}")
+    print(f"  Integration axis: {integration_axis}")
     print(f"  Velocity grid: ±{vel_lim:.1f} at {vel_res:.1f} resolution")
     print(f"  Precision: {precision}")
     if downsample:
         print(f"  Downsampling: {downsample}x")
     if limit_lines:
         print(f"  Limited to lines: {limit_lines}")
+    if args.crop_x or args.crop_y or args.crop_z:
+        print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
     print()
 
     # ---------------- Build grids -----------------
@@ -571,8 +732,22 @@ def main(args=None) -> None:
                          downsample=downsample, precision=precision)
     rho_cube = load_cube(paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
                         downsample=downsample, precision=precision)
-    vz_cube = load_cube(paths["vz"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
-                       downsample=downsample, precision=precision)
+    vel_cube = load_cube(paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
+                        downsample=downsample, precision=precision)
+
+    # Apply cropping if requested
+    if args.crop_x or args.crop_y or args.crop_z:
+        print(f"Applying cropping ({print_mem()})")
+        crop_params = {
+            'crop_x': args.crop_x,
+            'crop_y': args.crop_y, 
+            'crop_z': args.crop_z
+        }
+        temp_cube, rho_cube, vel_cube = crop_cubes(
+            [temp_cube, rho_cube, vel_cube], 
+            voxel_dx, voxel_dy, voxel_dz,
+            **crop_params
+        )
 
     # Convert to log10 temperature and density
     ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
@@ -588,11 +763,11 @@ def main(args=None) -> None:
 
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
-    dh_cm = voxel_dz.to(u.cm).value
+    dh_cm = voxel_dh.to(u.cm).value
 
     # ---------------- Calculate DEM -----------------
     print(f"Calculating DEM and average density per bin ({print_mem()})")
-    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid)
+    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
 
     print(f"Interpolating contribution function on the DEM ({print_mem()})")
     interpolate_g_on_dem(goft, avg_ne_map, logT_grid, logN_grid, logT_goft, precision)
@@ -600,7 +775,7 @@ def main(args=None) -> None:
     # ---------------- Build EM(T,v) cube -----------------
     ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
     print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
-    em_tv = build_em_tv(logT_cube, vz_cube, logT_grid, vel_grid, ne_sq_dh)
+    em_tv = build_em_tv(logT_cube, vel_cube, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
     # ---------------- Synthesize spectra -----------------
     print(f"Synthesising spectra ({print_mem()})")
@@ -639,6 +814,12 @@ def main(args=None) -> None:
             "cube_shape": args.cube_shape,
             "data_dir": str(base_dir),
             "goft_file": str(goft_path),
+            "integration_axis": integration_axis,
+            "crop_params": {
+                "crop_x": args.crop_x,
+                "crop_y": args.crop_y,
+                "crop_z": args.crop_z
+            }
         }
     }
     
