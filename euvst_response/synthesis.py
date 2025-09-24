@@ -48,106 +48,19 @@ def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
         [vel_grid[-1] + 0.5 * dv]
     ])
 
-
-def crop_cubes(
-    cubes: Dict[str, np.ndarray],
-    voxel_sizes: Tuple[u.Quantity, u.Quantity, u.Quantity],
-    crop_x: Optional[Tuple[float, float]] = None,
-    crop_y: Optional[Tuple[float, float]] = None, 
-    crop_z: Optional[Tuple[float, float]] = None,
-) -> Tuple[Dict[str, np.ndarray], Tuple[u.Quantity, u.Quantity, u.Quantity], Tuple[int, int, int]]:
-    """
-    Crop 3D cubes based on Heliocentric coordinate ranges.
-    
-    Parameters
-    ----------
-    cubes : Dict[str, np.ndarray]
-        Dictionary of 3D cubes to crop (each with shape nx, ny, nz).
-    voxel_sizes : Tuple[u.Quantity, u.Quantity, u.Quantity]
-        Voxel sizes (dx, dy, dz) in Mm.
-    crop_x, crop_y, crop_z : Optional[Tuple[float, float]]
-        Cropping ranges in Mm. None means no cropping in that direction.
-        
-    Returns
-    -------
-    cropped_cubes : Dict[str, np.ndarray]
-        Cropped cubes.
-    new_voxel_sizes : Tuple[u.Quantity, u.Quantity, u.Quantity]
-        Updated voxel sizes (unchanged).
-    new_shape : Tuple[int, int, int]
-        New cube shape after cropping.
-    """
-    # Get original shape and create coordinate grids
-    sample_cube = next(iter(cubes.values()))
-    nx, ny, nz = sample_cube.shape
-    voxel_dx, voxel_dy, voxel_dz = voxel_sizes
-    
-    # Create coordinate grids (Heliocentric coordinates, centered at origin)
-    x_coords = (np.arange(nx) - nx//2) * voxel_dx.to(u.Mm).value  # Mm
-    y_coords = (np.arange(ny) - ny//2) * voxel_dy.to(u.Mm).value  # Mm
-    z_coords = (np.arange(nz) - nz//2) * voxel_dz.to(u.Mm).value  # Mm
-    
-    # Determine cropping indices
-    if crop_x is not None:
-        x_min, x_max = crop_x
-        x_mask = (x_coords >= x_min) & (x_coords <= x_max)
-        x_indices = np.where(x_mask)[0]
-        if len(x_indices) == 0:
-            raise ValueError(f"No x indices found in range [{x_min}, {x_max}] Mm")
-        x_slice = slice(x_indices[0], x_indices[-1] + 1)
-    else:
-        x_slice = slice(None)
-    
-    if crop_y is not None:
-        y_min, y_max = crop_y
-        y_mask = (y_coords >= y_min) & (y_coords <= y_max)
-        y_indices = np.where(y_mask)[0]
-        if len(y_indices) == 0:
-            raise ValueError(f"No y indices found in range [{y_min}, {y_max}] Mm")
-        y_slice = slice(y_indices[0], y_indices[-1] + 1)
-    else:
-        y_slice = slice(None)
-    
-    if crop_z is not None:
-        z_min, z_max = crop_z
-        z_mask = (z_coords >= z_min) & (z_coords <= z_max)
-        z_indices = np.where(z_mask)[0]
-        if len(z_indices) == 0:
-            raise ValueError(f"No z indices found in range [{z_min}, {z_max}] Mm")
-        z_slice = slice(z_indices[0], z_indices[-1] + 1)
-    else:
-        z_slice = slice(None)
-    
-    # Apply cropping to all cubes
-    cropped_cubes = {}
-    for name, cube in cubes.items():
-        cropped_cubes[name] = cube[x_slice, y_slice, z_slice]
-    
-    # Get new shape
-    sample_cropped = next(iter(cropped_cubes.values()))
-    new_shape = sample_cropped.shape
-    
-    print(f"Cropped from {sample_cube.shape} to {new_shape}")
-    if crop_x is not None:
-        print(f"  X: {crop_x[0]:.1f} to {crop_x[1]:.1f} Mm")
-    if crop_y is not None:
-        print(f"  Y: {crop_y[0]:.1f} to {crop_y[1]:.1f} Mm")
-    if crop_z is not None:
-        print(f"  Z: {crop_z[0]:.1f} to {crop_z[1]:.1f} Mm")
-    
-    return cropped_cubes, voxel_sizes, new_shape
-
-
 def load_cube(
     file_path: str | Path,
     shape: Tuple[int, int, int] = (512, 768, 256),
     unit: Optional[u.Unit] = None,
     downsample: int | bool = False,
     precision: type = np.float32,
-) -> np.ndarray | u.Quantity:
+    voxel_dx: Optional[u.Quantity] = None,
+    voxel_dy: Optional[u.Quantity] = None,
+    voxel_dz: Optional[u.Quantity] = None,
+    create_ndcube: bool = False,
+) -> np.ndarray | u.Quantity | NDCube:
     """
-    Read a Fortran-ordered binary cube (single precision) and return as a
-    NumPy array (or Quantity if *unit* is given).
+    Read a Fortran-ordered binary cube (single precision) and optionally return as NDCube.
 
     The cube is stored (x, z, y) in the file and transposed to (x, y, z)
     upon loading.
@@ -166,21 +79,81 @@ def load_cube(
         each axis (simple stride).
     precision : type
         np.float32 or np.float64 for returned dtype.
+    voxel_dx, voxel_dy, voxel_dz : u.Quantity, optional
+        Voxel sizes for creating proper WCS coordinates. Required if create_ndcube=True.
+    create_ndcube : bool, optional
+        If True, return an NDCube with proper WCS coordinates.
 
     Returns
     -------
-    ndarray or Quantity
-        Array with shape (nx', ny', nz').
+    ndarray, Quantity, or NDCube
+        Array with shape (nx', ny', nz') or NDCube with proper coordinates.
     """
     data = np.fromfile(file_path, dtype=np.float32).reshape(shape, order="F")
     data = data.transpose(0, 2, 1)  # (x,y,z)
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
+        voxel_dx *= downsample
+        voxel_dy *= downsample
+        voxel_dz *= downsample
 
     data = data.astype(precision, copy=False)
-    return data * unit if unit is not None else data
+    
+    if unit is not None:
+        data = data * unit
+        
+    if create_ndcube:
+        return create_atmosphere_ndcube(data, voxel_dx, voxel_dy, voxel_dz)
+    else:
+        return data
 
+
+def create_atmosphere_ndcube(
+    data: np.ndarray | u.Quantity,
+    voxel_dx: u.Quantity,
+    voxel_dy: u.Quantity, 
+    voxel_dz: u.Quantity,
+) -> NDCube:
+    """
+    Create an NDCube for atmospheric data with proper heliocentric coordinates.
+    
+    Parameters
+    ----------
+    data : np.ndarray or u.Quantity
+        3D data array with shape (nx, ny, nz).
+    voxel_dx, voxel_dy, voxel_dz : u.Quantity
+        Voxel sizes in Mm.
+        
+    Returns
+    -------
+    NDCube
+        Cube with proper WCS coordinates.
+        X,Y centered at origin, Z starting at 0.
+    """
+    nx, ny, nz = data.shape
+    
+    # Create WCS for heliocentric coordinates
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ['SOLZ', 'SOLY', 'SOLX']
+    wcs.wcs.cunit = ['Mm', 'Mm', 'Mm']
+    
+    # Reference pixels (1-indexed for WCS)
+    wcs.wcs.crpix = [1, (ny + 1) / 2, (nx + 1) / 2]  # Z starts at first pixel
+    
+    # Reference values
+    wcs.wcs.crval = [0, 0, 0]  # X,Y centered at origin, Z starts at 0
+    
+    # Pixel scales
+    wcs.wcs.cdelt = [
+        voxel_dz.to(u.Mm).value,
+        voxel_dy.to(u.Mm).value,  
+        voxel_dx.to(u.Mm).value
+    ]
+    
+    return NDCube(data.data,
+                  wcs=wcs,
+                  unit=data.unit)
 
 def read_goft(
     sav_file: str | Path,
@@ -431,8 +404,8 @@ def build_em_tv(
     
     mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
              (logT_cube[..., None] <  logT_edges[1:])
-    mask_V = (vel_cube.value[..., None] >= v_edges[:-1]) & \
-             (vel_cube.value[..., None] <  v_edges[1:])
+    mask_V = (vel_cube[..., None] >= v_edges[:-1]) & \
+             (vel_cube[..., None] <  v_edges[1:])
 
     # Build the 4-D emission-measure cube EM(spatial,T,v) by summing over the integration axis
     ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
@@ -510,12 +483,12 @@ def synthesise_spectra(
 def create_line_cube(
     line_name: str,
     line_data: dict,
-    voxel_dx: u.Quantity,
-    voxel_dy: u.Quantity,
+    spatial_cube: NDCube,
     intensity_unit: u.Unit,
+    integration_axis: str = "z",
 ) -> NDCube:
     """
-    Create an NDCube for a single spectral line.
+    Create an NDCube for a single spectral line using spatial coordinates from existing cube.
     
     Parameters
     ----------
@@ -523,29 +496,87 @@ def create_line_cube(
         Name of the spectral line.
     line_data : dict
         Dictionary containing line data with 'si', 'wl_grid', 'wl0'.
-    voxel_dx, voxel_dy : u.Quantity
-        Spatial pixel sizes.
+    spatial_cube : NDCube
+        Reference cube for spatial coordinates.
     intensity_unit : u.Unit
         Unit for the intensity data.
+    integration_axis : str
+        Axis along which integration was performed ("x", "y", or "z").
         
     Returns
     -------
     NDCube
         Cube with proper WCS and metadata.
     """
-    cube_data = line_data["si"]  # (nx,ny,n_lambda)
-    nx, ny, nl = cube_data.shape
+    cube_data = line_data["si"]  # Shape depends on integration_axis
+    
+    # Get spatial coordinate information from the reference cube
+    if integration_axis == "x":
+        # Integration along X -> data shape (ny, nz, n_lambda), spatial axes: Y, Z
+        ny, nz, nl = cube_data.shape
+        y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates  
+        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+        
+        spatial_axes = ['WAVE', 'SOLZ', 'SOLY']  # Wavelength, Z, Y
+        spatial_units = ['cm', 'Mm', 'Mm']
+        spatial_cdelt = [
+            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value,
+            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
+        ]
+        spatial_crpix = [(nl + 1) / 2, 1, (ny + 1) / 2]  # Wavelength centered, Z at first pixel, Y centered
+        spatial_crval = [
+            line_data["wl0"].to(u.cm).value, 
+            z_coords[0].to(u.Mm).value,  # Z starts where original cube starts
+            y_coords[ny//2].to(u.Mm).value  # Y centered
+        ]
+            
+    elif integration_axis == "y":
+        # Integration along Y -> data shape (nx, nz, n_lambda), spatial axes: X, Z
+        nx, nz, nl = cube_data.shape
+        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+        
+        spatial_axes = ['WAVE', 'SOLZ', 'SOLX']  # Wavelength, Z, X
+        spatial_units = ['cm', 'Mm', 'Mm']
+        spatial_cdelt = [
+            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value,
+            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value
+        ]
+        spatial_crpix = [(nl + 1) / 2, 1, (nx + 1) / 2]  # Wavelength centered, Z at first pixel, X centered
+        spatial_crval = [
+            line_data["wl0"].to(u.cm).value,
+            z_coords[0].to(u.Mm).value,  # Z starts where original cube starts  
+            x_coords[nx//2].to(u.Mm).value  # X centered
+        ]
+            
+    else:  # integration_axis == "z"
+        # Integration along Z -> data shape (nx, ny, n_lambda), spatial axes: X, Y
+        nx, ny, nl = cube_data.shape
+        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
+        
+        spatial_axes = ['WAVE', 'SOLY', 'SOLX']  # Wavelength, Y, X
+        spatial_units = ['cm', 'Mm', 'Mm']
+        spatial_cdelt = [
+            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value,
+            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value
+        ]
+        spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]  # All centered
+        spatial_crval = [
+            line_data["wl0"].to(u.cm).value,
+            y_coords[ny//2].to(u.Mm).value,  # Y centered
+            x_coords[nx//2].to(u.Mm).value   # X centered
+        ]
 
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ['WAVE', 'SOLY', 'SOLX']
-    wcs.wcs.cunit = ['cm', 'Mm', 'Mm']
-    wcs.wcs.crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]
-    wcs.wcs.crval = [line_data["wl0"].to(u.cm).value, 0, 0]
-    wcs.wcs.cdelt = [
-        np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-        voxel_dy.to(u.Mm).value,
-        voxel_dx.to(u.Mm).value
-    ]
+    wcs.wcs.ctype = spatial_axes
+    wcs.wcs.cunit = spatial_units
+    wcs.wcs.crpix = spatial_crpix
+    wcs.wcs.crval = spatial_crval
+    wcs.wcs.cdelt = spatial_cdelt
 
     return NDCube(
         cube_data,
@@ -555,7 +586,9 @@ def create_line_cube(
             "line_name": line_name,
             "rest_wav": line_data["wl0"],
             "atom": line_data["atom"],
-            "ion": line_data["ion"]
+            "ion": line_data["ion"],
+            "integration_axis": integration_axis,
+            "spatial_reference": spatial_cube.meta if hasattr(spatial_cube, 'meta') else None
         }
     )
 
@@ -726,42 +759,79 @@ def main(args=None) -> None:
         vel_res.to(u.cm / u.s).value
     ) * (u.cm / u.s)
 
-    # ---------------- Load simulation data -----------------
+    # ---------------- Load simulation data as NDCubes -----------------
     print(f"Loading cubes ({print_mem()})")
-    temp_cube = load_cube(paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
-                         downsample=downsample, precision=precision)
-    rho_cube = load_cube(paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
-                        downsample=downsample, precision=precision)
-    vel_cube = load_cube(paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
-                        downsample=downsample, precision=precision)
+    temp_cube = load_cube(
+        paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
+        downsample=downsample, precision=precision,
+        voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
+        create_ndcube=True
+    )
+    rho_cube = load_cube(
+        paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
+        downsample=downsample, precision=precision,
+        voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
+        create_ndcube=True
+    )
+    vel_cube = load_cube(
+        paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
+        downsample=downsample, precision=precision,
+        voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
+        create_ndcube=True
+    )
 
     # Apply cropping if requested
     if args.crop_x or args.crop_y or args.crop_z:
         print(f"Applying cropping ({print_mem()})")
-        cubes_dict = {
-            'temp': temp_cube,
-            'rho': rho_cube,
-            'vel': vel_cube
-        }
-        voxel_sizes = (voxel_dx, voxel_dy, voxel_dz)
-        cropped_cubes, new_voxel_sizes, new_shape = crop_cubes(
-            cubes_dict, 
-            voxel_sizes,
-            crop_x=args.crop_x,
-            crop_y=args.crop_y, 
-            crop_z=args.crop_z
-        )
-        temp_cube = cropped_cubes['temp']
-        rho_cube = cropped_cubes['rho']
-        vel_cube = cropped_cubes['vel']
+        
+        # Create coordinate points for cropping
+        # NDCube expects coordinates as [point1, point2] where each point is [coord1, coord2, coord3]
+        point1 = []
+        point2 = []
+        
+        # Z coordinate (first axis)
+        if args.crop_z:
+            point1.append(args.crop_z[0] * u.Mm)
+            point2.append(args.crop_z[1] * u.Mm)
+        else:
+            point1.append(None)
+            point2.append(None)
+            
+        # Y coordinate (second axis)  
+        if args.crop_y:
+            point1.append(args.crop_y[0] * u.Mm)
+            point2.append(args.crop_y[1] * u.Mm)
+        else:
+            point1.append(None)
+            point2.append(None)
+            
+        # X coordinate (third axis)
+        if args.crop_x:
+            point1.append(args.crop_x[0] * u.Mm)
+            point2.append(args.crop_x[1] * u.Mm)
+        else:
+            point1.append(None)
+            point2.append(None)
+        
+        # Crop all cubes
+        temp_cube = temp_cube.crop(point1, point2)
+        rho_cube = rho_cube.crop(point1, point2)
+        vel_cube = vel_cube.crop(point1, point2)
+        
+        print(f"Cropped cubes to shape: {temp_cube.data.shape}")
 
     # Convert to log10 temperature and density
     ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
-    logN_cube = np.log10(ne_arr.value, where=ne_arr.value > 0.0, 
-                        out=np.zeros_like(ne_arr.value)).astype(precision)
-    logT_cube = np.log10(temp_cube.value, where=temp_cube.value > 0.0, 
-                        out=np.zeros_like(temp_cube.value)).astype(precision)
-    del rho_cube, temp_cube, ne_arr
+    logN_cube = np.log10(ne_arr.data, where=ne_arr.data > 0.0, 
+                        out=np.zeros_like(ne_arr.data)).astype(precision)
+    logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0, 
+                        out=np.zeros_like(temp_cube.data)).astype(precision)
+    
+    # Extract data arrays for calculations but keep reference cube for coordinates
+    temp_data = temp_cube.data
+    rho_data = rho_cube.data  
+    vel_data = vel_cube.data
+    reference_cube = temp_cube  # Keep this for coordinate reference
 
     # ---------------- Load contribution functions -----------------
     print(f"Loading contribution functions ({print_mem()})")
@@ -781,7 +851,7 @@ def main(args=None) -> None:
     # ---------------- Build EM(T,v) cube -----------------
     ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
     print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
-    em_tv = build_em_tv(logT_cube, vel_cube, logT_grid, vel_grid, ne_sq_dh, integration_axis)
+    em_tv = build_em_tv(logT_cube, vel_data, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
     # ---------------- Synthesize spectra -----------------
     print(f"Synthesising spectra ({print_mem()})")
@@ -791,7 +861,9 @@ def main(args=None) -> None:
     print(f"Creating output cubes ({print_mem()})")
     line_cubes = {}
     for name, info in goft.items():
-        line_cubes[name] = create_line_cube(name, info, voxel_dx, voxel_dy, intensity_unit)
+        line_cubes[name] = create_line_cube(
+            name, info, reference_cube, intensity_unit, integration_axis
+        )
     
     print(f"Built {len(line_cubes)} line cubes")
 
