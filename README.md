@@ -200,6 +200,7 @@ The synthesis results can be loaded and analyzed using the package API:
 import euvst_response
 
 # Load synthesis results - this sums all line cubes into a single cube
+# By default uses Fe XII 195.119 Å as reference for wavelength grid
 cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
 print(f"Combined cube shape: {cube.data.shape}")
 
@@ -212,6 +213,9 @@ with open("./run/input/synthesised_spectra.pkl", "rb") as f:
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]
 print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
 print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
+
+# List all available lines
+print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 ```
 
 #### Pre-computed Atmospheres
@@ -229,6 +233,7 @@ M-ECLIPSES uses YAML configuration files to specify simulation parameters. You c
 **Key configuration options:**
 - `instrument`: Choose between SWC (EUVST) or EIS (Hinode)
 - `synthesis_file`: Path to the synthesised spectra pickle file (default: `./run/input/synthesised_spectra.pkl`)
+- `reference_line`: Spectral line to use as reference for wavelength grid when combining all lines (default: `Fe12_195.1190`)
 - `expos`: Exposure time(s) for simulations
 - `n_iter`: Number of Monte Carlo iterations
 - Parameter sweeps for filters, detector settings, etc.
@@ -241,6 +246,9 @@ instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
 
 # Synthesis file path - location of the synthesised spectra pickle file
 synthesis_file: ./run/input/synthesised_spectra.pkl  # Default location
+
+# Reference line for wavelength grid and metadata when combining all spectral lines
+reference_line: Fe12_195.1190  # Default reference line (Fe XII 195.119 Å)
 
 # Point Spread Function
 psf: False  # Enable PSF convolution

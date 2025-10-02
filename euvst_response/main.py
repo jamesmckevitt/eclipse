@@ -121,6 +121,9 @@ def main() -> None:
     # Synthesis file path - allow user to specify where the synthesised_spectra.pkl file is located
     synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
     
+    # Reference line for wavelength grid and metadata
+    reference_line = config.get("reference_line", "Fe12_195.1190")
+    
     # Check if synthesis file exists
     synthesis_path = Path(synthesis_file)
     if not synthesis_path.is_file():
@@ -222,7 +225,8 @@ def main() -> None:
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
-    cube_sim = load_atmosphere(synthesis_file, "Fe12_195.1190")
+    print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
+    cube_sim = load_atmosphere(synthesis_file, reference_line)
     
     # Set up base detector configuration (doesn't change with parameters)
     if instrument == "SWC":
