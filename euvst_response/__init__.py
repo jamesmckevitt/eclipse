@@ -1,11 +1,10 @@
 """
-M-ECLIPSES: MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW
+ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST
 
-This package provides tools for modeling the performance of the ESA/MSSL short wavelength camera,
-part of the EUV spectrograph EUVST, on SOLAR-C.
+This package provides tools for modeling the performance of the EUV spectrograph EUVST, on SOLAR-C.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 

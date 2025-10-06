@@ -3,12 +3,12 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "m-eclipses"
+name = "solarc-eclipse"
 dynamic = ["version"]
 authors = [
     {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
 ]
-description = "MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW"
+description = "ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST"
 readme = "README.md"
 license = {text = "Contact for permission"}
 requires-python = ">=3.8"
@@ -46,14 +46,14 @@ dev = [
 ]
 
 [project.scripts]
-m-eclipses = "euvst_response.cli:main"
-meclipses = "euvst_response.cli:main"
+eclipse = "euvst_response.cli:main"
+solarc-eclipse = "euvst_response.cli:main"
 synthesise-spectra = "euvst_response.synthesis_cli:main"
 synthesise_spectra = "euvst_response.synthesis_cli:main"
 
 [project.urls]
-Homepage = "https://github.com/jamesmckevitt/solc_euvst_sw_response"
-Repository = "https://github.com/jamesmckevitt/solc_euvst_sw_response"
+Homepage = "https://github.com/jamesmckevitt/eclipse"
+Repository = "https://github.com/jamesmckevitt/eclipse"
 
 [tool.setuptools.packages.find]
 include = ["euvst_response*"]

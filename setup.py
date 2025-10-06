@@ -1,5 +1,5 @@
 """
-Setup script for M-ECLIPSES package.
+Setup script for ECLIPSE package.
 """
 
 from setuptools import setup, find_packages
@@ -21,14 +21,14 @@ def get_version():
     raise RuntimeError("Unable to find version string.")
 
 setup(
-    name="m-eclipses",
+    name="solarc-eclipse",
     version=get_version(),
     author="James McKevitt",
     author_email="jm2@mssl.ucl.ac.uk",
-    description="MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW",
+    description="ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/jamesmckevitt/solc_euvst_sw_response",
+    url="https://github.com/jamesmckevitt/eclipse",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -67,8 +67,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "m-eclipses=euvst_response.cli:main",
-            "meclipses=euvst_response.cli:main",
+            "eclipse=euvst_response.cli:main",
+            "solarc-eclipse=euvst_response.cli:main",
             "synthesise-spectra=euvst_response.synthesis_cli:main",
             "synthesise_spectra=euvst_response.synthesis_cli:main",
         ],

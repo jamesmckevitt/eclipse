@@ -1,5 +1,5 @@
 """
-Command line interface for M-ECLIPSES.
+Command line interface for ECLIPSE.
 """
 
 from __future__ import annotations
@@ -13,36 +13,36 @@ from .synthesis import main as run_synthesis
 
 
 ASCII_LOGO = """
-   __  __        ______ _____ _      _____ _____   _____ ______  _____ 
-  |  \/  |      |  ____/ ____| |    |_   _|  __ \ / ____|  ____|/ ____|
-  | \  / |______| |__ | |    | |      | | | |__) | (___ | |__  | (___  
-  | |\/| |______|  __|| |    | |      | | |  ___/ \___ \|  __|  \___ \ 
-  | |  | |      | |___| |____| |____ _| |_| |     ____) | |____ ____) |
-  |_|  |_|      |______\_____|______|_____|_|    |_____/|______|_____/ 
+  ______ _____ _      _____ _____   _____ ______ 
+ |  ____/ ____| |    |_   _|  __ \ / ____|  ____|
+ | |__ | |    | |      | | | |__) | (___ | |__   
+ |  __|| |    | |      | | |  ___/ \___ \|  __|  
+ | |___| |____| |____ _| |_| |     ____) | |____ 
+ |______\_____|______|_____|_|    |_____/|______|
 
-M-ECLIPSES: MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW
+ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST
 
 Contact: James McKevitt (jm2@mssl.ucl.ac.uk). License: Contact for permission to use.
 """
 
 
 def print_logo():
-    """Print the M-ECLIPSES ASCII logo and info."""
+    """Print the ECLIPSE ASCII logo and info."""
     print(ASCII_LOGO)
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        prog="m-eclipses",
-        description="M-ECLIPSES: MSSL Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST-SW",
+        prog="eclipse",
+        description="ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
     parser.add_argument(
         "--version", 
         action="version", 
-        version=f"M-ECLIPSES {__version__}"
+        version=f"ECLIPSE {__version__}"
     )
     
     parser.add_argument(
@@ -73,10 +73,10 @@ def main():
         return
 
     if not args.config:
-        print("Usage: m-eclipses --config <config.yaml>")
+        print("Usage: eclipse --config <config.yaml>")
         print("\nTo run instrument response simulation, provide a YAML config file.")
         print("Example config files can be found in the run/input/ directory.")
-        print("\nFor more help: m-eclipses --help")
+        print("\nFor more help: eclipse --help")
         return
 
     # Validate config file exists
@@ -90,9 +90,9 @@ def main():
     
     # Set up sys.argv for the main function (it expects argparse format)
     if args.debug:
-        sys.argv = ["m-eclipses", "--config", args.config, "--debug"]
+        sys.argv = ["eclipse", "--config", args.config, "--debug"]
     else:
-        sys.argv = ["m-eclipses", "--config", args.config]
+        sys.argv = ["eclipse", "--config", args.config]
     
     try:
         run_simulation()

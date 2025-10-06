@@ -1,5 +1,5 @@
 """
-Result analysis functions for M-ECLIPSES instrument response simulations.
+Result analysis functions for ECLIPSE instrument response simulations.
 
 This module provides functions for loading, analyzing, and visualizing
 instrument response simulation results.
