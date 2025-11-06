@@ -283,7 +283,7 @@ def to_dn(electrons: NDCube, det) -> NDCube:
     dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
     dn_q = dn_q.to(det.max_dn.unit)
 
-    dn_val = dn_q.value
+    dn_val = np.round(dn_q.value)                                         # round to nearest whole number
     dn_val[dn_val > det.max_dn.value] = det.max_dn.value                  # clip
 
     return NDCube(
