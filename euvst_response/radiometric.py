@@ -243,8 +243,12 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
 
     e = electron_counts * (u.electron / u.pixel)
 
-    # Add dark current and read noise (these still depend on exposure time)
-    e += det.dark_current * t_exp                                     # dark current
+    # Add dark current with Poisson noise
+    dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
+    dark_current_poisson = np.random.poisson(dark_current_mean) * (u.electron / u.pixel)
+    e += dark_current_poisson
+    
+    # Add read noise
     e += np.random.normal(0, det.read_noise_rms.value,
                           photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
 
@@ -279,7 +283,7 @@ def to_dn(electrons: NDCube, det) -> NDCube:
     dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
     dn_q = dn_q.to(det.max_dn.unit)
 
-    dn_val = dn_q.value
+    dn_val = np.round(dn_q.value)                                         # round to nearest whole number
     dn_val[dn_val > det.max_dn.value] = det.max_dn.value                  # clip
 
     return NDCube(
