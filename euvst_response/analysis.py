@@ -561,6 +561,9 @@ def create_sunpy_maps_from_combo(
 
     maps['velocity_std'] = sunpy.map.Map(analysis["v_std"].value.T, wcs_2d)
     maps['velocity_std'].meta['bunit'] = str(analysis["v_std"].unit)
+
+    maps['velocity_true'] = sunpy.map.Map(analysis["v_true"].value.T, wcs_2d)
+    maps['velocity_true'].meta['bunit'] = str(analysis["v_true"].unit)
     
     # Velocity error (truth - mean)
     maps['velocity_err'] = sunpy.map.Map(analysis["v_err"].value.T, wcs_2d)
