@@ -301,8 +301,18 @@ def compute_slice_timestep_mapping_mhd(
     suffixes = [s for s, t in sorted_timesteps]
     times = np.array([t for s, t in sorted_timesteps])
     
-    # Reference time is the first available timestep
+    # Check if observation time range extends beyond available MHD time range
     t0 = times[0]
+    t_final = times[-1]
+    mhd_duration = t_final - t0
+    
+    # Calculate observation time range
+    n_slit_positions = int(np.ceil((nx_mhd * voxel_physical / slit_physical).decompose().value))
+    observation_duration = n_slit_positions * rest_time_sec
+    
+    if observation_duration > mhd_duration:
+        print(f"  WARNING: Observation duration ({observation_duration:.1f} s) exceeds MHD time range ({mhd_duration:.1f} s)")
+        print(f"  Slices observed after t={t_final:.1f} s will use the last available timestep")
     
     # Total physical extent of the domain
     total_extent = nx_mhd * voxel_physical
@@ -325,8 +335,11 @@ def compute_slice_timestep_mapping_mhd(
         # Observation time for this slit position
         observation_time = t0 + slit_position * rest_time_sec
         
-        # Find nearest timestep
-        idx = np.argmin(np.abs(times - observation_time))
+        # Find the latest timestep that doesn't exceed observation_time
+        # Subtract 1 to get the latest timestep <= observation_time
+        idx = np.searchsorted(times, observation_time, side='right') - 1
+        # Clamp to valid range (0 to len(times)-1)
+        idx = max(0, min(idx, len(times) - 1))
         slice_mapping.append(suffixes[idx])
     
     # Group slices by timestep for efficient processing
