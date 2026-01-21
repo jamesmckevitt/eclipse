@@ -178,6 +178,40 @@ synthesise-spectra --help
 **Line Selection:**
 - `--limit-lines`: Limit to specific lines, e.g., `--limit-lines Fe12_195.1190 Fe12_195.1790`
 
+#### Dynamic Mode (Time-varying Atmospheres)
+
+For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
+
+```bash
+synthesise-spectra \
+  --data-dir ./data/atmosphere \
+  --goft-file ./data/gofnt.sav \
+  --output-dir ./run/input \
+  --slit-rest-time "40 s" \
+  --slit-width "0.2 arcsec" \
+  --temp-dir temp \
+  --temp-filename eosT \
+  --rho-dir rho \
+  --rho-filename result_prim_0 \
+  --vz-dir vz \
+  --vz-filename result_prim_2 \
+  --time-dir time_all \
+  --time-filename tau_slice_0.100 \
+  --cube-shape 512 768 256 \
+  --voxel-dx 0.192 \
+  --voxel-dy 0.192 \
+  --voxel-dz 0.064 \
+  --vel-res 5.0 \
+  --vel-lim 300.0 \
+  --integration-axis z
+```
+
+**Dynamic Mode Options:**
+- `--slit-rest-time`: Slit rest time per position- enables dynamic mode
+- `--slit-width`: Slit width
+- `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
+- `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
+
 #### Output
 
 The synthesis produces a pickle file containing:
@@ -288,6 +322,11 @@ vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
 ```
 
 For guidence on recommended values, see McKevitt et al. (2025) (in prep.).
+
+If you synthesized data in dynamic mode, your configuration must specify:
+- Exactly **one slit width** matching the synthesis slit width
+- Exactly **one exposure time** matching the synthesis exposure time
+- These constraints ensure consistency with the scanning simulation used during synthesis
 
 #### Running Simulations
 
