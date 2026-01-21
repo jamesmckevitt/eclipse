@@ -233,7 +233,7 @@ def main() -> None:
     if is_dynamic_mode:
         print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
         print(f"  Slit width: {dynamic_mode_info['slit_width']}")
-        print(f"  Exposure time: {dynamic_mode_info['exposure_time']}")
+        print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
         print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
         
         # Check that only one slit width is provided for dynamic mode
@@ -254,20 +254,20 @@ def main() -> None:
             )
         
         # Check that only one exposure time is provided for dynamic mode
-        synth_exposure = dynamic_mode_info["exposure_time"]
+        synth_rest_time = dynamic_mode_info["slit_rest_time"]
         if len(exposures) > 1:
             raise ValueError(
                 f"Dynamic mode synthesis requires exactly one exposure time. "
                 f"Config specifies {len(exposures)} exposure times: {exposures}. "
-                f"Please provide only the synthesis exposure time: {synth_exposure}"
+                f"Please provide only the synthesis slit rest time: {synth_rest_time}"
             )
         
         # Validate that the single exposure time matches synthesis
-        if not np.isclose(exposures[0].to_value(u.s), synth_exposure.to_value(u.s), rtol=1e-6):
+        if not np.isclose(exposures[0].to_value(u.s), synth_rest_time.to_value(u.s), rtol=1e-6):
             raise ValueError(
-                f"Exposure time mismatch: synthesis was done with {synth_exposure}, "
+                f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
                 f"but config specifies {exposures[0]}. "
-                f"For dynamic mode synthesis, the exposure time must match exactly: {synth_exposure}"
+                f"For dynamic mode synthesis, the exposure time must match exactly: {synth_rest_time}"
             )
         
         print("  Dynamic mode parameters validated successfully!")
@@ -299,8 +299,6 @@ def main() -> None:
             instrument=instrument,
             psf=False,  # Use False for rebinning
         )
-        # Note: Even in dynamic mode, synthesis outputs MHD resolution,
-        # so spatial rebinning is still needed here
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
         print("Fitting ground truth cube...")
