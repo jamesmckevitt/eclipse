@@ -226,7 +226,51 @@ def main() -> None:
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
     print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
-    cube_sim = load_atmosphere(synthesis_file, reference_line)
+    cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
+    
+    # Check for dynamic mode and validate parameters
+    is_dynamic_mode = dynamic_mode_info.get("enabled", False)
+    if is_dynamic_mode:
+        print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
+        print(f"  Slit width: {dynamic_mode_info['slit_width']}")
+        print(f"  Exposure time: {dynamic_mode_info['exposure_time']}")
+        print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
+        
+        # Check that only one slit width is provided for dynamic mode
+        synth_slit_width = dynamic_mode_info["slit_width"]
+        if len(slit_widths) > 1:
+            raise ValueError(
+                f"Dynamic mode synthesis requires exactly one slit width. "
+                f"Config specifies {len(slit_widths)} slit widths: {slit_widths}. "
+                f"Please provide only the synthesis slit width: {synth_slit_width}"
+            )
+        
+        # Validate that the single slit width matches synthesis
+        if not np.isclose(slit_widths[0].to_value(u.arcsec), synth_slit_width.to_value(u.arcsec), rtol=1e-6):
+            raise ValueError(
+                f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
+                f"but config specifies {slit_widths[0]}. "
+                f"For dynamic mode synthesis, the slit width must match exactly: {synth_slit_width}"
+            )
+        
+        # Check that only one exposure time is provided for dynamic mode
+        synth_exposure = dynamic_mode_info["exposure_time"]
+        if len(exposures) > 1:
+            raise ValueError(
+                f"Dynamic mode synthesis requires exactly one exposure time. "
+                f"Config specifies {len(exposures)} exposure times: {exposures}. "
+                f"Please provide only the synthesis exposure time: {synth_exposure}"
+            )
+        
+        # Validate that the single exposure time matches synthesis
+        if not np.isclose(exposures[0].to_value(u.s), synth_exposure.to_value(u.s), rtol=1e-6):
+            raise ValueError(
+                f"Exposure time mismatch: synthesis was done with {synth_exposure}, "
+                f"but config specifies {exposures[0]}. "
+                f"For dynamic mode synthesis, the exposure time must match exactly: {synth_exposure}"
+            )
+        
+        print("  Dynamic mode parameters validated successfully!")
     
     # Set up base detector configuration (doesn't change with parameters)
     if instrument == "SWC":
@@ -255,6 +299,8 @@ def main() -> None:
             instrument=instrument,
             psf=False,  # Use False for rebinning
         )
+        # Note: Even in dynamic mode, synthesis outputs MHD resolution,
+        # so spatial rebinning is still needed here
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
         print("Fitting ground truth cube...")
