@@ -18,7 +18,7 @@ from ndcube import NDCube
 from astropy.wcs import WCS
 from datetime import datetime
 import shutil
-from .utils import distance_to_angle, angle_to_distance
+from .utils import angle_to_distance
 
 ##############################################################################
 # ---------------------------------------------------------------------------
