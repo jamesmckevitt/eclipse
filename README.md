@@ -117,15 +117,15 @@ synthesise-spectra \
   --vy-file vy/result_prim_3.0270000 \
   --vz-file vz/result_prim_2.0270000 \
   --cube-shape 512 768 256 \
-  --voxel-dx 0.192 \
-  --voxel-dy 0.192 \
-  --voxel-dz 0.064 \
-  --vel-res 5.0 \
-  --vel-lim 300.0 \
+  --voxel-dx "0.192 Mm" \
+  --voxel-dy "0.192 Mm" \
+  --voxel-dz "0.064 Mm" \
+  --vel-res "5.0 km/s" \
+  --vel-lim "300.0 km/s" \
   --integration-axis z \
-  --crop-x -50 50 \
-  --crop-y -50 50 \
-  --crop-z 0 20 \
+  --crop-x "-50 Mm" "50 Mm" \
+  --crop-y "-50 Mm" "50 Mm" \
+  --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
   --mean-mol-wt 1.29 \
@@ -152,11 +152,11 @@ synthesise-spectra --help
 
 **Grid Parameters:**
 - `--cube-shape`: Cube dimensions as three integers (default: `512 768 256`)
-- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes in Mm (default: `0.192 0.192 0.064`)
+- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes with units (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
 
 **Velocity Grid:**
-- `--vel-res`: Velocity resolution in km/s (default: `5.0`)
-- `--vel-lim`: Velocity limit ±km/s (default: `300.0`)
+- `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`)
+- `--vel-lim`: Velocity limit +-km/s with units (default: `"300.0 km/s"`)
 
 **Integration and Viewing:**
 - `--integration-axis`: Integration axis: `x`, `y`, or `z` (default: `z`)
@@ -164,10 +164,10 @@ synthesise-spectra --help
   - `x`: Side view from the left (integrates left-to-right)
   - `y`: Side view from the front (integrates front-to-back)
 
-**Spatial Cropping (Heliocentric coordinates in Mm):**
-- `--crop-x`: X-range to crop, e.g., `--crop-x -50 50` (optional)
-- `--crop-y`: Y-range to crop, e.g., `--crop-y -50 50` (optional)  
-- `--crop-z`: Z-range to crop, e.g., `--crop-z 0 20` (optional)
+**Spatial Cropping (Heliocentric coordinates with units):**
+- `--crop-x`: X-range to crop with units, e.g., `--crop-x "-50 Mm" "50 Mm"` (optional)
+- `--crop-y`: Y-range to crop with units, e.g., `--crop-y "-50 Mm" "50 Mm"` (optional)
+- `--crop-z`: Z-range to crop with units, e.g., `--crop-z "0 Mm" "20 Mm"` (optional)
 - Omit any crop option to use the full range in that dimension
 
 **Processing Options:**
@@ -198,11 +198,11 @@ synthesise-spectra \
   --time-dir time_all \
   --time-filename tau_slice_0.100 \
   --cube-shape 512 768 256 \
-  --voxel-dx 0.192 \
-  --voxel-dy 0.192 \
-  --voxel-dz 0.064 \
-  --vel-res 5.0 \
-  --vel-lim 300.0 \
+  --voxel-dx "0.192 Mm" \
+  --voxel-dy "0.192 Mm" \
+  --voxel-dz "0.064 Mm" \
+  --vel-res "5.0 km/s" \
+  --vel-lim "300.0 km/s" \
   --integration-axis z
 ```
 
