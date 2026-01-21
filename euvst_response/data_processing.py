@@ -16,7 +16,7 @@ from tqdm import tqdm
 from .utils import tqdm_joblib, distance_to_angle
 
 
-def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
+def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
     Load synthetic atmosphere cube from pickle file.
     
@@ -34,9 +34,10 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
         
     Returns
     -------
-    NDCube
-        Summed cube of all line intensities with proper WCS and metadata.
-        Uses the wavelength grid from the metadata_line.
+    tuple
+        (summed_cube, dynamic_mode_info) where:
+        - summed_cube: NDCube with summed line intensities
+        - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
     """
     with open(pkl_file, "rb") as f:
         tmp = dill.load(f)
@@ -48,6 +49,9 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
     line_cubes = tmp["line_cubes"]
     if not line_cubes:
         raise ValueError("No line cubes found in synthesis results")
+    
+    # Get dynamic mode info if present
+    dynamic_mode_info = tmp.get("dynamic_mode", {"enabled": False})
     
     # Get the line names
     line_names = list(line_cubes.keys())
@@ -96,7 +100,8 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
         "combined_lines": line_names,
         "n_lines": len(line_names),
         "metadata_source": metadata_line,
-        "summed_intensity": True
+        "summed_intensity": True,
+        "dynamic_mode": dynamic_mode_info,
     })
     
     # Create the summed cube using the reference cube's WCS
@@ -107,7 +112,7 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> NDCube:
         meta=combined_meta
     )
     
-    return summed_cube
+    return summed_cube, dynamic_mode_info
 
 
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
@@ -248,7 +253,7 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     sim : Simulation
         Simulation configuration
     use_dask : bool, optional
-        Whether to use Dask for automatic parallelization (default: True)
+        Whether to use Dask for automatic parallelization (default: False)
         
     Returns
     -------
