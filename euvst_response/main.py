@@ -236,9 +236,9 @@ def main() -> None:
         print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
         print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
         
-        # Check that only one slit width is provided for dynamic mode
+        # Check that exactly one slit width is provided for dynamic mode
         synth_slit_width = dynamic_mode_info["slit_width"]
-        if len(slit_widths) > 1:
+        if len(slit_widths) != 1:
             raise ValueError(
                 f"Dynamic mode synthesis requires exactly one slit width. "
                 f"Config specifies {len(slit_widths)} slit widths: {slit_widths}. "
@@ -253,9 +253,9 @@ def main() -> None:
                 f"For dynamic mode synthesis, the slit width must match exactly: {synth_slit_width}"
             )
         
-        # Check that only one exposure time is provided for dynamic mode
+        # Check that exactly one exposure time is provided for dynamic mode
         synth_rest_time = dynamic_mode_info["slit_rest_time"]
-        if len(exposures) > 1:
+        if len(exposures) != 1:
             raise ValueError(
                 f"Dynamic mode synthesis requires exactly one exposure time. "
                 f"Config specifies {len(exposures)} exposure times: {exposures}. "
