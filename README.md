@@ -223,7 +223,7 @@ The synthesis produces a pickle file containing:
 
 - Use `--downsample 2` or `--downsample 4` for initial testing
 - Use `--precision float32` to reduce memory usage (may affect accuracy)
-- Use `--limit-lines` to synthesize only specific lines for development
+- Use `--limit-lines` to synthesise only specific lines for development
 - Use spatial cropping to focus on regions of interest and reduce computation time
 - Monitor memory usage - full resolution synthesis can require 50+ GB RAM
 - Side views (`--integration-axis x` or `y`) may require different velocity files
@@ -323,10 +323,9 @@ vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
 
 For guidence on recommended values, see McKevitt et al. (2025) (in prep.).
 
-If you synthesized data in dynamic mode, your configuration must specify:
-- Exactly **one slit width** matching the synthesis slit width
-- Exactly **one exposure time** matching the synthesis exposure time
-- These constraints ensure consistency with the scanning simulation used during synthesis
+If you synthesised data in dynamic mode, your configuration must specify:
+- Exactly one slit width matching the synthesis slit width
+- Exactly one exposure time matching the synthesis exposure time
 
 #### Running Simulations
 
