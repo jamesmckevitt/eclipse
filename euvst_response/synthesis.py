@@ -418,7 +418,7 @@ def build_composite_cubes_mhd(
     if nx != nx_mhd:
         raise ValueError(f"Cube X dimension ({nx}) doesn't match slice mapping ({nx_mhd})")
     
-    # Initialize composite arrays
+    # Initialise composite arrays
     temp_composite = np.zeros((nx, ny, nz), dtype=precision)
     rho_composite = np.zeros((nx, ny, nz), dtype=precision)
     vel_composite = np.zeros((nx, ny, nz), dtype=precision)
@@ -487,7 +487,7 @@ def read_goft(
             'wl0'      - rest wavelength (Quantity, cm)
             'g_tn'     - 2-D array G(logT, logN)  [erg cm^3 s^-1]
             'atom'     - atomic number
-            'ion'      - ionization stage
+            'ion'      - ionisation stage
     logT_grid : np.ndarray
         1-D array of log10(T/K) values.
     logN_grid : np.ndarray
@@ -911,7 +911,7 @@ def create_line_cube(
 def parse_arguments():
     """Parse command line arguments for spectrum synthesis."""
     parser = argparse.ArgumentParser(
-        description="Synthesize solar spectra from 3D MHD simulation data",
+        description="Synthesise solar spectra from 3D MHD simulation data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -979,7 +979,7 @@ def parse_arguments():
     
     # Dynamic atmosphere mode (time-varying synthesis)
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
-        "Options for synthesizing with time-varying atmosphere (raster scanning)")
+        "Options for synthesising with time-varying atmosphere (raster scanning)")
     dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
                        help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
@@ -1017,7 +1017,7 @@ def parse_arguments():
 
 def main(args=None) -> None:
     """
-    Main workflow for synthesizing solar spectra from 3D MHD simulations.
+    Main workflow for synthesising solar spectra from 3D MHD simulations.
     
     Supports two modes:
     - Static mode: Single timestep synthesis
@@ -1299,7 +1299,7 @@ def main(args=None) -> None:
     print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
     em_tv = build_em_tv(logT_cube, vel_data, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
-    # ---------------- Synthesize spectra -----------------
+    # ---------------- Synthesise spectra -----------------
     print(f"Synthesising spectra ({print_mem()})")
     synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
 
