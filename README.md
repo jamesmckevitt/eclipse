@@ -195,7 +195,7 @@ synthesise-spectra \
   --rho-filename result_prim_0 \
   --vz-dir vz \
   --vz-filename result_prim_2 \
-  --time-dir time_all \
+  --time-dir time \
   --time-filename tau_slice_0.100 \
   --cube-shape 512 768 256 \
   --voxel-dx "0.192 Mm" \
