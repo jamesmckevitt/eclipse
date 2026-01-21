@@ -321,7 +321,7 @@ ccd_temperature: -60 Celsius  # Default (expected operating temperature)
 vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
 ```
 
-For guidence on recommended values, see McKevitt et al. (2025) (in prep.).
+For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
 
 If you synthesised data in dynamic mode, your configuration must specify:
 - Exactly one slit width matching the synthesis slit width
