@@ -258,7 +258,7 @@ def compute_slice_timestep_mapping_mhd(
     nx_mhd: int,
     voxel_dx: u.Quantity,
     slit_width: u.Quantity,
-    exposure_time: u.Quantity,
+    slit_rest_time: u.Quantity,
     timestep_times: Dict[str, float],
 ) -> Tuple[List[str], Dict[str, List[int]]]:
     """
@@ -280,8 +280,8 @@ def compute_slice_timestep_mapping_mhd(
         MHD voxel size in X direction (physical units, e.g., Mm).
     slit_width : u.Quantity
         Slit width in angular units (e.g., arcsec).
-    exposure_time : u.Quantity
-        Exposure time per slit position.
+    slit_rest_time : u.Quantity
+        Slit rest time per position.
     timestep_times : dict
         Mapping of timestep suffix to simulation time in seconds.
         
@@ -292,7 +292,7 @@ def compute_slice_timestep_mapping_mhd(
     grouped : dict
         Dictionary mapping each unique timestep suffix to list of MHD slice indices.
     """
-    exposure_sec = exposure_time.to_value(u.s)
+    rest_time_sec = slit_rest_time.to_value(u.s)
     
     # Convert slit width from angular to physical distance
     slit_physical = angle_to_distance(slit_width).to(u.Mm)
@@ -325,7 +325,7 @@ def compute_slice_timestep_mapping_mhd(
         slit_position = int(np.floor((distance_from_right / slit_physical).decompose().value))
         
         # Observation time for this slit position
-        observation_time = t0 + slit_position * exposure_sec
+        observation_time = t0 + slit_position * rest_time_sec
         
         # Find nearest timestep
         idx = np.argmin(np.abs(times - observation_time))
@@ -343,7 +343,7 @@ def compute_slice_timestep_mapping_mhd(
     print(f"  Physical domain extent: {total_extent:.3f}")
     print(f"  Slit physical width: {slit_physical:.3f}")
     print(f"  Number of slit positions: {n_slit_positions}")
-    print(f"  Total raster time: {n_slit_positions * exposure_sec:.1f} s")
+    print(f"  Total raster time: {n_slit_positions * rest_time_sec:.1f} s")
     
     return slice_mapping, grouped
 
@@ -980,8 +980,8 @@ def parse_arguments():
     # Dynamic atmosphere mode (time-varying synthesis)
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
         "Options for synthesizing with time-varying atmosphere (raster scanning)")
-    dynamic_group.add_argument("--exposure-time", type=str, default=None,
-                       help="Exposure time per slit position (e.g. '40 s'). "
+    dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
+                       help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
     dynamic_group.add_argument("--slit-width", type=str, default=None,
                        help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
@@ -1056,15 +1056,15 @@ def main(args=None) -> None:
     integration_axis = args.integration_axis.lower()
     
     # Determine if we're in dynamic mode
-    dynamic_mode = args.exposure_time is not None
+    dynamic_mode = args.slit_rest_time is not None
     
     if dynamic_mode:
         # Validate dynamic mode requirements
         if args.slit_width is None:
-            raise ValueError("--slit-width is required for dynamic mode (when --exposure-time is specified)")
+            raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
         
-        # Parse exposure time and slit width
-        exposure_time = u.Quantity(args.exposure_time)
+        # Parse slit rest time and slit width
+        slit_rest_time = u.Quantity(args.slit_rest_time)
         slit_width = u.Quantity(args.slit_width)
         
         # Determine which velocity direction to use
@@ -1087,7 +1087,7 @@ def main(args=None) -> None:
         
         print(f"DYNAMIC MODE - Time-varying synthesis at MHD resolution")
         print(f"  Slit width: {slit_width}")
-        print(f"  Exposure time: {exposure_time}")
+        print(f"  Slit rest time: {slit_rest_time}")
         print(f"  Voxel dx: {voxel_dx}")
         print()
         
@@ -1109,7 +1109,7 @@ def main(args=None) -> None:
         # Compute slice-to-timestep mapping at MHD resolution
         print(f"Computing slice-to-timestep mapping at MHD resolution...")
         slice_mapping, grouped_slices = compute_slice_timestep_mapping_mhd(
-            nx_mhd, voxel_dx, slit_width, exposure_time, timestep_times
+            nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times
         )
         print(f"  MHD slices per timestep:")
         for suffix, indices in sorted(grouped_slices.items(), key=lambda x: min(x[1])):
@@ -1143,7 +1143,7 @@ def main(args=None) -> None:
         dynamic_mode_metadata = {
             "enabled": True,
             "slit_width": slit_width,
-            "exposure_time": exposure_time,
+            "slit_rest_time": slit_rest_time,
             "scan_direction": "right_to_left",
             "slice_timesteps": slice_mapping,
             "available_timesteps": timestep_times,
