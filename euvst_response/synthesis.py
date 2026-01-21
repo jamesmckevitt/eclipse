@@ -940,30 +940,30 @@ def parse_arguments():
     # Grid parameters
     parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
                        help="Cube dimensions (nx ny nz)")
-    parser.add_argument("--voxel-dx", type=float, default=0.192,
-                       help="Voxel size in x (Mm)")
-    parser.add_argument("--voxel-dy", type=float, default=0.192,
-                       help="Voxel size in y (Mm)")
-    parser.add_argument("--voxel-dz", type=float, default=0.064,
-                       help="Voxel size in z (Mm)")
+    parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       help="Voxel size in x (e.g. '0.192 Mm')")
+    parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       help="Voxel size in y (e.g. '0.192 Mm')")
+    parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       help="Voxel size in z (e.g. '0.064 Mm')")
     
     # Integration direction
     parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
                        help="Axis along which to integrate (x, y, or z)")
     
-    # Cropping parameters (in Heliocentric coordinates, Mm)
-    parser.add_argument("--crop-x", nargs=2, type=float, default=None,
-                       help="Crop in x direction: x_min x_max (Mm, None for no cropping)")
-    parser.add_argument("--crop-y", nargs=2, type=float, default=None,
-                       help="Crop in y direction: y_min y_max (Mm, None for no cropping)")
-    parser.add_argument("--crop-z", nargs=2, type=float, default=None,
-                       help="Crop in z direction: z_min z_max (Mm, None for no cropping)")
+    # Cropping parameters (in Heliocentric coordinates)
+    parser.add_argument("--crop-x", nargs=2, type=str, default=None,
+                       help="Crop in x direction: x_min x_max (e.g. '-50 Mm' '50 Mm')")
+    parser.add_argument("--crop-y", nargs=2, type=str, default=None,
+                       help="Crop in y direction: y_min y_max (e.g. '-50 Mm' '50 Mm')")
+    parser.add_argument("--crop-z", nargs=2, type=str, default=None,
+                       help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
     
     # Velocity grid
-    parser.add_argument("--vel-res", type=float, default=5.0,
-                       help="Velocity resolution (km/s)")
-    parser.add_argument("--vel-lim", type=float, default=300.0,
-                       help="Velocity limit +/- (km/s)")
+    parser.add_argument("--vel-res", type=str, default="5.0 km/s",
+                       help="Velocity resolution (e.g. '5.0 km/s')")
+    parser.add_argument("--vel-lim", type=str, default="300.0 km/s",
+                       help="Velocity limit +/- (e.g. '300.0 km/s')")
     
     # Processing options
     parser.add_argument("--downsample", type=int, default=1,
@@ -1035,11 +1035,11 @@ def main(args=None) -> None:
     precision = np.float32 if args.precision == "float32" else np.float64
     downsample = args.downsample if args.downsample > 1 else False
     limit_lines = args.limit_lines
-    vel_res = args.vel_res * u.km / u.s
-    vel_lim = args.vel_lim * u.km / u.s
-    voxel_dz = args.voxel_dz * u.Mm
-    voxel_dx = args.voxel_dx * u.Mm
-    voxel_dy = args.voxel_dy * u.Mm
+    vel_res = u.Quantity(args.vel_res)
+    vel_lim = u.Quantity(args.vel_lim)
+    voxel_dz = u.Quantity(args.voxel_dz)
+    voxel_dx = u.Quantity(args.voxel_dx)
+    voxel_dy = u.Quantity(args.voxel_dy)
     
     if downsample:
         voxel_dz *= downsample
@@ -1221,22 +1221,22 @@ def main(args=None) -> None:
             point2 = []
             
             if args.crop_z:
-                point1.append(args.crop_z[0] * u.Mm)
-                point2.append(args.crop_z[1] * u.Mm)
+                point1.append(u.Quantity(args.crop_z[0]))
+                point2.append(u.Quantity(args.crop_z[1]))
             else:
                 point1.append(None)
                 point2.append(None)
                 
             if args.crop_y:
-                point1.append(args.crop_y[0] * u.Mm)
-                point2.append(args.crop_y[1] * u.Mm)
+                point1.append(u.Quantity(args.crop_y[0]))
+                point2.append(u.Quantity(args.crop_y[1]))
             else:
                 point1.append(None)
                 point2.append(None)
                 
             if args.crop_x:
-                point1.append(args.crop_x[0] * u.Mm)
-                point2.append(args.crop_x[1] * u.Mm)
+                point1.append(u.Quantity(args.crop_x[0]))
+                point2.append(u.Quantity(args.crop_x[1]))
             else:
                 point1.append(None)
                 point2.append(None)
