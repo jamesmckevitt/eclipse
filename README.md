@@ -207,7 +207,7 @@ synthesise-spectra \
 ```
 
 **Dynamic Mode Options:**
-- `--slit-rest-time`: Slit rest time per position- enables dynamic mode
+- `--slit-rest-time`: Slit rest time per position - enables dynamic mode
 - `--slit-width`: Slit width
 - `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
 - `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
