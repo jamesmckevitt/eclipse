@@ -1,6 +1,6 @@
-# ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST
+# ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 
-The ECLIPSE code (Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST) is used to forward model the performance of the EUV spectrograph EUVST, on SOLAR-C.
+The ECLIPSE code (Emission Calculation and Line Prediction for SOLAR-C EUVST) is used to forward model the performance of the EUV spectrograph EUVST onboard the SOLAR-C spacecraft.
 
 Contact: James McKevitt (jm2@mssl.ucl.ac.uk). License: Contact for permission to use.
 
@@ -19,8 +19,7 @@ pip install solarc-eclipse
 ### From source
 
 ```bash
-git clone https://github.com/jamesmckevitt/eclipse.git
-pip install eclipse
+pip install git+https://github.com/jamesmckevitt/eclipse.git
 ```
 
 ## Quick Start
