@@ -158,26 +158,29 @@ def create_atmosphere_ndcube(
 
 def read_timestep_time(file_path: Path) -> float:
     """
-    Read simulation time from MHD time file header.
+    Read simulation time from MHD header file.
     
-    The time is stored in the 4th element (index 3) of the file header 
-    as a float32 value in seconds.
+    The header file contains a single line with 9 space-separated values:
+    nx ny nz dx dy dz time dt va_max
+    
+    The time is the 7th value (index 6) in seconds.
     
     Parameters
     ----------
     file_path : Path
-        Path to the time file.
+        Path to the header file.
         
     Returns
     -------
     float
         Simulation time in seconds.
     """
-    with open(file_path, 'rb') as f:
-        header = np.fromfile(f, dtype=np.float32, count=10)
-        if header.size < 4:
-            raise ValueError(f"Time file header too short: {file_path}")
-        return float(header[3])
+    with open(file_path, 'r') as f:
+        line = f.read().strip()
+        values = line.split()
+        if len(values) < 7:
+            raise ValueError(f"Header file has insufficient values: {file_path} ({len(values)} values)")
+        return float(values[6])
 
 
 def discover_timesteps(
@@ -190,9 +193,9 @@ def discover_timesteps(
     Parameters
     ----------
     time_dir : Path
-        Directory containing time files.
+        Directory containing header files.
     time_filename : str
-        Filename prefix before the timestep suffix (e.g., "tau_slice_0.100").
+        Filename prefix before the timestep suffix (e.g., "Header").
         
     Returns
     -------
@@ -1018,10 +1021,10 @@ def parse_arguments():
                        help="Directory containing vz files (for dynamic mode)")
     dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
                        help="Vz filename prefix before timestep suffix")
-    dynamic_group.add_argument("--time-dir", type=str, default="time",
-                       help="Directory containing time files (for dynamic mode)")
-    dynamic_group.add_argument("--time-filename", type=str, default="tau_slice_0.100",
-                       help="Time filename prefix before timestep suffix")
+    dynamic_group.add_argument("--time-dir", type=str, default="header",
+                       help="Directory containing header files (for dynamic mode)")
+    dynamic_group.add_argument("--time-filename", type=str, default="Header",
+                       help="Header filename prefix before timestep suffix")
     
     return parser.parse_args()
 
