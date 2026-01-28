@@ -400,6 +400,60 @@ def compute_slice_timestep_mapping_mhd(
     return slice_mapping, grouped
 
 
+def apply_cube_cropping(
+    temp_cube: NDCube,
+    rho_cube: NDCube,
+    vel_cube: NDCube,
+    crop_x: Optional[List[str]],
+    crop_y: Optional[List[str]],
+    crop_z: Optional[List[str]],
+) -> Tuple[NDCube, NDCube, NDCube]:
+    """
+    Apply cropping to temperature, density, and velocity cubes.
+    
+    Parameters
+    ----------
+    temp_cube, rho_cube, vel_cube : NDCube
+        Input cubes to crop.
+    crop_x, crop_y, crop_z : list of str or None
+        Crop boundaries for each axis as [min, max] strings with units.
+        
+    Returns
+    -------
+    tuple of NDCube
+        Cropped (temp_cube, rho_cube, vel_cube).
+    """
+    point1 = []
+    point2 = []
+    
+    if crop_z:
+        point1.append(u.Quantity(crop_z[0]))
+        point2.append(u.Quantity(crop_z[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+        
+    if crop_y:
+        point1.append(u.Quantity(crop_y[0]))
+        point2.append(u.Quantity(crop_y[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+        
+    if crop_x:
+        point1.append(u.Quantity(crop_x[0]))
+        point2.append(u.Quantity(crop_x[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+    
+    temp_cube = temp_cube.crop(point1, point2)
+    rho_cube = rho_cube.crop(point1, point2)
+    vel_cube = vel_cube.crop(point1, point2)
+    
+    return temp_cube, rho_cube, vel_cube
+
+
 def build_composite_cubes_mhd(
     base_dir: Path,
     temp_dir: str,
@@ -1198,35 +1252,10 @@ def main(args=None) -> None:
         # Apply cropping if requested in dynamic mode
         if args.crop_x or args.crop_y or args.crop_z:
             print(f"Applying cropping ({print_mem()})")
-            
-            point1 = []
-            point2 = []
-            
-            if args.crop_z:
-                point1.append(u.Quantity(args.crop_z[0]))
-                point2.append(u.Quantity(args.crop_z[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_y:
-                point1.append(u.Quantity(args.crop_y[0]))
-                point2.append(u.Quantity(args.crop_y[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_x:
-                point1.append(u.Quantity(args.crop_x[0]))
-                point2.append(u.Quantity(args.crop_x[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-            
-            temp_cube = temp_cube.crop(point1, point2)
-            rho_cube = rho_cube.crop(point1, point2)
-            vel_cube = vel_cube.crop(point1, point2)
-            
+            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
+                temp_cube, rho_cube, vel_cube,
+                args.crop_x, args.crop_y, args.crop_z
+            )
             print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
         
         reference_cube = temp_cube
@@ -1308,35 +1337,10 @@ def main(args=None) -> None:
         # Apply cropping if requested
         if args.crop_x or args.crop_y or args.crop_z:
             print(f"Applying cropping ({print_mem()})")
-            
-            point1 = []
-            point2 = []
-            
-            if args.crop_z:
-                point1.append(u.Quantity(args.crop_z[0]))
-                point2.append(u.Quantity(args.crop_z[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_y:
-                point1.append(u.Quantity(args.crop_y[0]))
-                point2.append(u.Quantity(args.crop_y[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_x:
-                point1.append(u.Quantity(args.crop_x[0]))
-                point2.append(u.Quantity(args.crop_x[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-            
-            temp_cube = temp_cube.crop(point1, point2)
-            rho_cube = rho_cube.crop(point1, point2)
-            vel_cube = vel_cube.crop(point1, point2)
-            
+            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
+                temp_cube, rho_cube, vel_cube,
+                args.crop_x, args.crop_y, args.crop_z
+            )
             print(f"Cropped cubes to shape: {temp_cube.data.shape}")
 
         reference_cube = temp_cube
