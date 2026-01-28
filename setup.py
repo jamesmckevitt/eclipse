@@ -25,7 +25,7 @@ setup(
     version=get_version(),
     author="James McKevitt",
     author_email="jm2@mssl.ucl.ac.uk",
-    description="ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST",
+    description="ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/jamesmckevitt/eclipse",

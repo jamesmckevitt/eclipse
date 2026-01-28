@@ -20,7 +20,7 @@ ASCII_LOGO = """
  | |___| |____| |____ _| |_| |     ____) | |____ 
  |______\_____|______|_____|_|    |_____/|______|
 
-ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST
+ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 
 Contact: James McKevitt (jm2@mssl.ucl.ac.uk). License: Contact for permission to use.
 """
@@ -35,7 +35,7 @@ def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="eclipse",
-        description="ECLIPSE: Emission Calculation and Line Intensity Prediction for SOLAR-C EUVST",
+        description="ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
