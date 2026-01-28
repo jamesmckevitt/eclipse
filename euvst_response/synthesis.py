@@ -158,26 +158,29 @@ def create_atmosphere_ndcube(
 
 def read_timestep_time(file_path: Path) -> float:
     """
-    Read simulation time from MHD time file header.
+    Read simulation time from MHD header file.
     
-    The time is stored in the 4th element (index 3) of the file header 
-    as a float32 value in seconds.
+    The header file contains a single line with 9 space-separated values:
+    nx ny nz dx dy dz time dt va_max
+    
+    The time is the 7th value (index 6) in seconds.
     
     Parameters
     ----------
     file_path : Path
-        Path to the time file.
+        Path to the header file.
         
     Returns
     -------
     float
         Simulation time in seconds.
     """
-    with open(file_path, 'rb') as f:
-        header = np.fromfile(f, dtype=np.float32, count=10)
-        if header.size < 4:
-            raise ValueError(f"Time file header too short: {file_path}")
-        return float(header[3])
+    with open(file_path, 'r') as f:
+        line = f.read().strip()
+        values = line.split()
+        if len(values) < 7:
+            raise ValueError(f"Header file has insufficient values: {file_path} ({len(values)} values)")
+        return float(values[6])
 
 
 def discover_timesteps(
@@ -190,9 +193,9 @@ def discover_timesteps(
     Parameters
     ----------
     time_dir : Path
-        Directory containing time files.
+        Directory containing header files.
     time_filename : str
-        Filename prefix before the timestep suffix (e.g., "tau_slice_0.100").
+        Filename prefix before the timestep suffix (e.g., "Header").
         
     Returns
     -------
@@ -258,6 +261,7 @@ def compute_slice_timestep_mapping_mhd(
     slit_width: u.Quantity,
     slit_rest_time: u.Quantity,
     timestep_times: Dict[str, float],
+    crop_x: Optional[Tuple[u.Quantity, u.Quantity]] = None,
 ) -> Tuple[List[str], Dict[str, List[int]]]:
     """
     Compute which timestep suffix to use for each MHD X-slice.
@@ -266,6 +270,10 @@ def compute_slice_timestep_mapping_mhd(
     Each slit position covers a physical width (slit_width converted to Mm).
     Determine which slit position each MHD slice belongs to, then find
     the appropriate timestep based on observation time.
+    
+    If crop_x is specified, the observation timing is calculated as if the
+    scan starts at the right edge of the crop region. Slices to the right
+    of the crop region are filled with the first timestep.
     
     To avoid error accumulation, calculate the observation time for each
     MHD slice based on its absolute physical position.
@@ -282,6 +290,10 @@ def compute_slice_timestep_mapping_mhd(
         Slit rest time per position.
     timestep_times : dict
         Mapping of timestep suffix to simulation time in seconds.
+    crop_x : tuple of u.Quantity, optional
+        If provided, (x_min, x_max) crop boundaries. Observation timing starts
+        at x_max (right edge of crop). Slices outside crop on the right use
+        the first timestep.
         
     Returns
     -------
@@ -300,33 +312,73 @@ def compute_slice_timestep_mapping_mhd(
     sorted_timesteps = sorted(timestep_times.items(), key=lambda x: x[1])
     suffixes = [s for s, t in sorted_timesteps]
     times = np.array([t for s, t in sorted_timesteps])
+    first_suffix = suffixes[0]
     
-    # Reference time is the first available timestep
+    # Check if observation time range extends beyond available MHD time range
     t0 = times[0]
+    t_final = times[-1]
+    mhd_duration = t_final - t0
     
-    # Total physical extent of the domain
+    # Total physical extent of the full domain
     total_extent = nx_mhd * voxel_physical
+    
+    # Determine the effective scan start position (right edge)
+    # If crop_x is specified, scan starts at the crop boundary
+    if crop_x is not None:
+        x_min_crop = crop_x[0].to(u.Mm)
+        x_max_crop = crop_x[1].to(u.Mm)
+        
+        # The domain is centered at 0, so convert to absolute position
+        # WCS has X centered, so x=0 is at nx/2
+        domain_center = total_extent / 2
+        scan_start_position = domain_center + x_max_crop  # Right edge of crop in absolute coords
+        scan_end_position = domain_center + x_min_crop    # Left edge of crop in absolute coords
+        
+        # Calculate observation duration for just the cropped region
+        crop_extent = x_max_crop - x_min_crop
+        n_slit_positions_crop = int(np.ceil((crop_extent / slit_physical).decompose().value))
+        observation_duration = n_slit_positions_crop * rest_time_sec
+        
+        print(f"  Crop region: X = [{x_min_crop:.3f}, {x_max_crop:.3f}]")
+        print(f"  Observation starts at X = {x_max_crop:.3f} (right edge of crop)")
+    else:
+        scan_start_position = total_extent  # Right edge of full domain
+        scan_end_position = 0 * u.Mm
+        n_slit_positions_crop = int(np.ceil((total_extent / slit_physical).decompose().value))
+        observation_duration = n_slit_positions_crop * rest_time_sec
+    
+    if observation_duration > mhd_duration:
+        print(f"  WARNING: Observation duration ({observation_duration:.1f} s) exceeds MHD time range ({mhd_duration:.1f} s)")
+        print(f"  Slices observed after t={t_final:.1f} s will use the last available timestep")
     
     slice_mapping = []
     
     # For each MHD X-slice, calculate which slit position it belongs to
-    # Scanning right to left: rightmost (x = nx_mhd-1) is observed first
+    # Scanning right to left: scan_start_position is observed first (at t=t0)
     for mhd_slice_idx in range(nx_mhd):
-        # Physical position of this slice (center of voxel)
+        # Physical position of this slice (center of voxel) in absolute coords
         x_physical = (mhd_slice_idx + 0.5) * voxel_physical
         
-        # Distance from the right edge (scanning starts from right)
-        distance_from_right = total_extent - x_physical
+        # Distance from the scan start position (right edge of observation region)
+        distance_from_scan_start = scan_start_position - x_physical
+        
+        if distance_from_scan_start < 0:
+            # This slice is to the right of the scan start (outside crop on right)
+            # Use the first timestep for these slices
+            slice_mapping.append(first_suffix)
+            continue
         
         # Which slit position does this belong to?
-        # slit_position = 0 is the rightmost, slit_position = N is leftmost
-        slit_position = int(np.floor((distance_from_right / slit_physical).decompose().value))
+        # slit_position = 0 is at scan_start_position
+        slit_position = int(np.floor((distance_from_scan_start / slit_physical).decompose().value))
         
         # Observation time for this slit position
         observation_time = t0 + slit_position * rest_time_sec
         
-        # Find nearest timestep
-        idx = np.argmin(np.abs(times - observation_time))
+        # Find the latest timestep that doesn't exceed observation_time
+        idx = np.searchsorted(times, observation_time, side='right') - 1
+        # Clamp to valid range (0 to len(times)-1)
+        idx = max(0, min(idx, len(times) - 1))
         slice_mapping.append(suffixes[idx])
     
     # Group slices by timestep for efficient processing
@@ -337,13 +389,69 @@ def compute_slice_timestep_mapping_mhd(
         grouped[suffix].append(slice_idx)
     
     # Print statistics
-    n_slit_positions = int(np.ceil((total_extent / slit_physical).decompose().value))
-    print(f"  Physical domain extent: {total_extent:.3f}")
+    if crop_x is not None:
+        print(f"  Cropped region extent: {crop_extent:.3f}")
+    else:
+        print(f"  Physical domain extent: {total_extent:.3f}")
     print(f"  Slit physical width: {slit_physical:.3f}")
-    print(f"  Number of slit positions: {n_slit_positions}")
-    print(f"  Total raster time: {n_slit_positions * rest_time_sec:.1f} s")
+    print(f"  Number of slit positions: {n_slit_positions_crop}")
+    print(f"  Total raster time: {observation_duration:.1f} s")
     
     return slice_mapping, grouped
+
+
+def apply_cube_cropping(
+    temp_cube: NDCube,
+    rho_cube: NDCube,
+    vel_cube: NDCube,
+    crop_x: Optional[List[str]],
+    crop_y: Optional[List[str]],
+    crop_z: Optional[List[str]],
+) -> Tuple[NDCube, NDCube, NDCube]:
+    """
+    Apply cropping to temperature, density, and velocity cubes.
+    
+    Parameters
+    ----------
+    temp_cube, rho_cube, vel_cube : NDCube
+        Input cubes to crop.
+    crop_x, crop_y, crop_z : list of str or None
+        Crop boundaries for each axis as [min, max] strings with units.
+        
+    Returns
+    -------
+    tuple of NDCube
+        Cropped (temp_cube, rho_cube, vel_cube).
+    """
+    point1 = []
+    point2 = []
+    
+    if crop_z:
+        point1.append(u.Quantity(crop_z[0]))
+        point2.append(u.Quantity(crop_z[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+        
+    if crop_y:
+        point1.append(u.Quantity(crop_y[0]))
+        point2.append(u.Quantity(crop_y[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+        
+    if crop_x:
+        point1.append(u.Quantity(crop_x[0]))
+        point2.append(u.Quantity(crop_x[1]))
+    else:
+        point1.append(None)
+        point2.append(None)
+    
+    temp_cube = temp_cube.crop(point1, point2)
+    rho_cube = rho_cube.crop(point1, point2)
+    vel_cube = vel_cube.crop(point1, point2)
+    
+    return temp_cube, rho_cube, vel_cube
 
 
 def build_composite_cubes_mhd(
@@ -1005,10 +1113,10 @@ def parse_arguments():
                        help="Directory containing vz files (for dynamic mode)")
     dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
                        help="Vz filename prefix before timestep suffix")
-    dynamic_group.add_argument("--time-dir", type=str, default="time",
-                       help="Directory containing time files (for dynamic mode)")
-    dynamic_group.add_argument("--time-filename", type=str, default="tau_slice_0.100",
-                       help="Time filename prefix before timestep suffix")
+    dynamic_group.add_argument("--time-dir", type=str, default="header",
+                       help="Directory containing header files (for dynamic mode)")
+    dynamic_group.add_argument("--time-filename", type=str, default="Header",
+                       help="Header filename prefix before timestep suffix")
     
     return parser.parse_args()
 
@@ -1104,10 +1212,16 @@ def main(args=None) -> None:
         if downsample:
             nx_mhd = nx_mhd // downsample
         
+        # Prepare crop_x for slice mapping if specified
+        crop_x_for_mapping = None
+        if args.crop_x:
+            crop_x_for_mapping = (u.Quantity(args.crop_x[0]), u.Quantity(args.crop_x[1]))
+        
         # Compute slice-to-timestep mapping at MHD resolution
         print(f"Computing slice-to-timestep mapping at MHD resolution...")
         slice_mapping, grouped_slices = compute_slice_timestep_mapping_mhd(
-            nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times
+            nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times,
+            crop_x=crop_x_for_mapping
         )
         print(f"  MHD slices per timestep:")
         for suffix, indices in sorted(grouped_slices.items(), key=lambda x: min(x[1])):
@@ -1134,6 +1248,15 @@ def main(args=None) -> None:
             precision=precision,
         )
         print(f"  Composite cube shape: {temp_cube.data.shape}")
+        
+        # Apply cropping if requested in dynamic mode
+        if args.crop_x or args.crop_y or args.crop_z:
+            print(f"Applying cropping ({print_mem()})")
+            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
+                temp_cube, rho_cube, vel_cube,
+                args.crop_x, args.crop_y, args.crop_z
+            )
+            print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
         
         reference_cube = temp_cube
         
@@ -1214,35 +1337,10 @@ def main(args=None) -> None:
         # Apply cropping if requested
         if args.crop_x or args.crop_y or args.crop_z:
             print(f"Applying cropping ({print_mem()})")
-            
-            point1 = []
-            point2 = []
-            
-            if args.crop_z:
-                point1.append(u.Quantity(args.crop_z[0]))
-                point2.append(u.Quantity(args.crop_z[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_y:
-                point1.append(u.Quantity(args.crop_y[0]))
-                point2.append(u.Quantity(args.crop_y[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-                
-            if args.crop_x:
-                point1.append(u.Quantity(args.crop_x[0]))
-                point2.append(u.Quantity(args.crop_x[1]))
-            else:
-                point1.append(None)
-                point2.append(None)
-            
-            temp_cube = temp_cube.crop(point1, point2)
-            rho_cube = rho_cube.crop(point1, point2)
-            vel_cube = vel_cube.crop(point1, point2)
-            
+            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
+                temp_cube, rho_cube, vel_cube,
+                args.crop_x, args.crop_y, args.crop_z
+            )
             print(f"Cropped cubes to shape: {temp_cube.data.shape}")
 
         reference_cube = temp_cube

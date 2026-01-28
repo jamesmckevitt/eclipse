@@ -49,14 +49,14 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: st
     """
     temp_kelvin = temp.to(u.Kelvin, equivalencies=u.temperature())
     max_temp = 300 * u.K
-    min_temp = 230 * u.K
+    min_temp = 198 * u.K
     
     # Check temperature limits
     if temp_kelvin > max_temp:
         raise ValueError(f"Cannot calculate dark current at {temp_kelvin}. "
                        f"Maximum temperature is {max_temp}")
     
-    # Apply minimum temperature limit (clamp to 230K)
+    # Apply minimum temperature limit (clamp to 198K; based on MSSL test results)
     if temp_kelvin < min_temp:
         temp_kelvin = min_temp
     
@@ -138,7 +138,7 @@ class Detector_SWC:
     qe_euv: float = 0.76
     read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
     dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
-    _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293K
+    _dark_current_293k: u.Quantity = 10000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K (based on MSSL test results)
     gain_e_per_dn: u.Quantity = 2.0 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel

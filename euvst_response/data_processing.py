@@ -196,6 +196,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
     dy = wcs_hc.wcs.cdelt[1] * wcs_hc.wcs.cunit[1]
     x_angle = distance_to_angle(dx)
     y_angle = distance_to_angle(dy)
+    
+    crval_x_hc = wcs_hc.wcs.crval[2] * u.Unit(wcs_hc.wcs.cunit[2])
+    crval_y_hc = wcs_hc.wcs.crval[1] * u.Unit(wcs_hc.wcs.cunit[1])
+    crval_x_hp = distance_to_angle(crval_x_hc).to_value(u.arcsec)
+    crval_y_hp = distance_to_angle(crval_y_hc).to_value(u.arcsec)
 
     wcs_hp = WCS(naxis=3)
     wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
@@ -203,7 +208,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
     wcs_hp.wcs.crpix = [wcs_hc.wcs.crpix[0],
                         (ny + 1) / 2,
                         (nx + 1) / 2]
-    wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
+    wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], crval_y_hp, crval_x_hp]
     wcs_hp.wcs.cdelt = [wcs_hc.wcs.cdelt[0], y_angle.to_value(u.arcsec), x_angle.to_value(u.arcsec)]
     new_cube_spec_hp = NDCube(new_cube_spec.data, wcs=wcs_hp, unit=new_cube_spec.unit, meta=new_cube_spec.meta)
 
@@ -224,7 +229,7 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
     wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
     wcs_tgt.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
     wcs_tgt.wcs.crpix = [crpix_spec, crpix_y, crpix_x]
-    wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], 0, 0]
+    wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], crval_y_hp, crval_x_hp]
     wcs_tgt.wcs.cdelt = [wcs_hc.wcs.cdelt[0],
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec),
                         (sim.slit_width).to_value(u.arcsec)]
