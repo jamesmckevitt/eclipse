@@ -152,18 +152,37 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     data = np.moveaxis(ndcube.data, spectral_axis, -1)
     shape = data.shape
     flat_data = data.reshape(-1, shape[-1])
+    n_pixels = flat_data.shape[0]
 
-    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
-    resampled = np.zeros((flat_data.shape[0], n_spec))
+    # Determine number of workers
+    import os
+    if ncpu == -1:
+        n_workers = os.cpu_count() or 1
+    else:
+        n_workers = ncpu
+    
+    # Calculate batch size: aim for ~4 batches per worker to balance load
+    # but ensure each batch has enough work to justify overhead
+    min_pixels_per_batch = 100
+    n_batches = max(1, min(n_pixels // min_pixels_per_batch, n_workers * 4))
+    batch_size = (n_pixels + n_batches - 1) // n_batches  # ceiling division
+    
+    # Create batch indices
+    batch_indices = [(i, min(i + batch_size, n_pixels)) for i in range(0, n_pixels, batch_size)]
 
-    def _resample_pixel(i):
-        spec = Spectrum(flux=flat_data[i] * ndcube.unit, spectral_axis=spectral_world)
-        res = resampler(spec, new_spec_grid)
-        return res.flux.value
+    def _resample_batch(start_idx, end_idx):
+        """Resample a batch of pixels."""
+        resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
+        batch_results = np.empty((end_idx - start_idx, n_spec))
+        for i, pixel_idx in enumerate(range(start_idx, end_idx)):
+            spec = Spectrum(flux=flat_data[pixel_idx] * ndcube.unit, spectral_axis=spectral_world)
+            res = resampler(spec, new_spec_grid)
+            batch_results[i] = res.flux.value
+        return batch_results
 
-    with tqdm_joblib(tqdm(total=flat_data.shape[0], desc="Resampling spectral axis", unit="pixel", leave=False)):
+    with tqdm_joblib(tqdm(total=len(batch_indices), desc="Resampling spectral axis", unit="batch", leave=False)):
         results = Parallel(n_jobs=ncpu)(
-            delayed(_resample_pixel)(i) for i in range(flat_data.shape[0])
+            delayed(_resample_batch)(start, end) for start, end in batch_indices
         )
     resampled = np.vstack(results)
 
