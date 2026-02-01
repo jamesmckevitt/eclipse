@@ -186,8 +186,21 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
 
 
-def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
-    """ Reproject an NDCube from heliocentric to helioprojective coordinates. """
+def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1):
+    """ Reproject an NDCube from heliocentric to helioprojective coordinates.
+    
+    Parameters
+    ----------
+    new_cube_spec : NDCube
+        Input NDCube in heliocentric coordinates
+    sim : Simulation
+        Simulation configuration object
+    det : Detector
+        Detector configuration object
+    ncpu : int, optional
+        Number of CPU cores for parallel reprojection. -1 uses all cores,
+        positive integers specify exact count. Default is -1.
+    """
 
     nx, ny, _ = new_cube_spec.shape
     wcs_hc = new_cube_spec.wcs
@@ -234,11 +247,16 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec),
                         (sim.slit_width).to_value(u.arcsec)]
 
+    # Determine parallelization setting:
+    # - If ncpu=-1, use True (all available cores)
+    # - If ncpu is a positive integer, pass it directly to control thread count
+    parallel_setting = True if ncpu == -1 else ncpu
+    
     new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
         wcs_tgt,
         shape_out=shape_out,
         algorithm='interpolation',
-        parallel=True,
+        parallel=parallel_setting,
         order='bilinear',
     ) * new_cube_spec_hp.unit
 
@@ -273,7 +291,8 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     cube_det = reproject_ndcube_heliocentric_to_helioprojective(
         cube_spec,
         sim,
-        det
+        det,
+        ncpu=sim.ncpu
     )
 
     return cube_det
