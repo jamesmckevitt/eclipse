@@ -282,6 +282,9 @@ def main() -> None:
 
     # Create results structure for all parameter combinations
     all_results = {}
+    
+    # Dictionary to store rebinned cubes for each slit width
+    cube_reb_dict = {}
 
     # Loop over all parameter combinations
     total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures) * len(psf_settings) * len(enable_pinholes_vals)
@@ -300,6 +303,10 @@ def main() -> None:
             psf=False,  # Use False for rebinning
         )
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
+        
+        # Store rebinned cube for this slit width
+        slit_width_key = slit_width.to_value(u.arcsec)
+        cube_reb_dict[slit_width_key] = cube_reb
         
         print("Fitting ground truth cube...")
         fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu)
@@ -452,7 +459,7 @@ def main() -> None:
         "config": config,
         "instrument": instrument,
         "cube_sim": cube_sim,
-        "cube_reb": cube_reb,
+        "cube_reb_dict": cube_reb_dict,
     }
     
     with open(output_file, "wb") as f:
