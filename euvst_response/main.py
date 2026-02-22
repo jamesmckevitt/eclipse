@@ -160,6 +160,7 @@ def main() -> None:
         c_thicknesses = deduplicate_list(c_thicknesses, "c_thickness")
         aluminium_thicknesses = ensure_list(parse_yaml_input(config.get("aluminium_thickness", ['1485 angstrom'])))
         aluminium_thicknesses = deduplicate_list(aluminium_thicknesses, "aluminium_thickness")
+        microroughness_sigma = parse_yaml_input(config.get("microroughness_sigma", "0.3 nm"))
     elif instrument == "EIS":
         # EIS doesn't use these parameters - check they weren't specified
         if "oxide_thickness" in config:
@@ -168,6 +169,8 @@ def main() -> None:
             raise ValueError("EIS does not support carbon thickness parameter. Remove 'c_thickness' from configuration.")
         if "aluminium_thickness" in config:
             raise ValueError("EIS does not support custom aluminium thickness parameter. Remove 'aluminium_thickness' from configuration.")
+        if "microroughness_sigma" in config:
+            raise ValueError("EIS does not support microroughness_sigma parameter. Remove 'microroughness_sigma' from configuration.")
         
         # Set defaults for EIS (these won't be used but are needed for parameter combination logic)
         oxide_thicknesses = [0 * u.nm]
@@ -341,7 +344,8 @@ def main() -> None:
                                                 c_thickness=c_thickness,
                                                 al_thickness=aluminium_thickness,
                                             )
-                                            TEL = Telescope_EUVST(filter=filter_obj)
+                                            print(f"Microroughness sigma: {microroughness_sigma}")
+                                            TEL = Telescope_EUVST(filter=filter_obj, microroughness_sigma=microroughness_sigma)
                                         elif instrument == "EIS":
                                             TEL = Telescope_EIS()
                                             # EIS uses fixed filter configuration - no custom parameters needed
