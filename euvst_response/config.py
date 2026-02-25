@@ -243,7 +243,7 @@ class Telescope_EUVST:
     microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [0.343 * u.pixel])  # FWHM of 0.805 pix from 0.128 arcsec from optical design RSC-2022021B in sigma
+    psf_params: list = field(default_factory=lambda: [0.534 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec and 33 mA in RSC-2022021B.
     
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -348,7 +348,7 @@ class Telescope_EUVST:
 class Telescope_EIS:
     """Hinode/EIS telescope configuration for comparison."""
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [1.28 * u.pixel])  # FWHM of 3 in sigma
+    psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
     
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
         # Effective area including detector QE is 0.23 cm2
