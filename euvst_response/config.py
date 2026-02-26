@@ -243,7 +243,7 @@ class Telescope_EUVST:
     microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [0.534 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec and 33 mA in RSC-2022021B.
+    psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec and 43 mA in RSC-2022021C.
     
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
