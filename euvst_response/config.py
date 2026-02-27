@@ -243,7 +243,8 @@ class Telescope_EUVST:
     microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec and 43 mA in RSC-2022021C.
+    # psf_params: list = field(default_factory=lambda: [1.26 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec (w/ slit-scan; FOV2) and 33.00 mA in RSC-2022021 (Oct 2023) and RSC-2022021B (Feb 2024).
+    psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec (w/ slit-scan; FOV2) and 43.00 mA in RSC-2022021C (Mar 2025).
     
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -251,7 +252,7 @@ class Telescope_EUVST:
 
     @property
     def collecting_area(self) -> u.Quantity:
-        return 0.5 * np.pi * (self.D_ap / 2) ** 2
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
 
     def primary_mirror_efficiency(self, wl0: u.Quantity) -> float:
         """
