@@ -294,7 +294,10 @@ class Telescope_EUVST:
         """
         Calculate the efficiency reduction due to primary mirror microroughness.
         
-        Formula: 1 - (4*pi*sigma/lambda)^2
+        Uses the Debye-Waller factor for specular reflectance:
+        
+            efficiency = exp(-(4*pi*sigma/lambda)^2)
+        
         where sigma is the RMS microroughness and lambda is the wavelength.
         
         Parameters
@@ -314,8 +317,8 @@ class Telescope_EUVST:
         # Calculate (4*pi*sigma/lambda)^2
         roughness_term = (4 * np.pi * sigma_nm / wl_nm) ** 2
         
-        # Return 1 - (4*pi*sigma/lambda)^2
-        return 1.0 - roughness_term.value
+        # Return exp(-(4*pi*sigma/lambda)^2)  [Debye-Waller specular efficiency]
+        return np.exp(-roughness_term.value)
 
     def throughput(self, wl0: u.Quantity) -> float:
         """
