@@ -17,7 +17,7 @@ import gzip
 import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
-from .data_processing import load_atmosphere, rebin_atmosphere
+from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
 from .fitting import fit_cube_gauss
 from .monte_carlo import monte_carlo
 from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error
@@ -118,17 +118,34 @@ def main() -> None:
     instrument = config.get("instrument", "SWC").upper()
     psf_settings = ensure_list(config.get("psf", [False]))  # Handle PSF as a list
     
-    # Synthesis file path - allow user to specify where the synthesised_spectra.pkl file is located
-    synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
+    # Determine whether we are in "uniform intensity" mode or normal synthesis mode
+    uniform_intensity_mode = "uniform_intensity" in config
     
-    # Reference line for wavelength grid and metadata
-    reference_line = config.get("reference_line", "Fe12_195.1190")
-    
-    # Check if synthesis file exists
-    synthesis_path = Path(synthesis_file)
-    if not synthesis_path.is_file():
-        raise FileNotFoundError(f"Synthesis file not found: {synthesis_file}. "
-                              f"Please check the 'synthesis_file' path in your config file.")
+    if uniform_intensity_mode:
+        # --- Uniform-intensity mode: single Gaussian line, no synthesis file ---
+        uniform_intensity = parse_yaml_input(config["uniform_intensity"])
+        if not hasattr(uniform_intensity, 'unit'):
+            raise ValueError("uniform_intensity must include units, e.g. '5000 erg / (s cm2 sr)'")
+        uniform_rest_wavelength = parse_yaml_input(config.get("rest_wavelength", "195.119 AA"))
+        uniform_thermal_width = parse_yaml_input(config.get("thermal_width", "20 km/s"))
+        print(f"UNIFORM INTENSITY MODE")
+        print(f"  Intensity: {uniform_intensity}")
+        print(f"  Rest wavelength: {uniform_rest_wavelength}")
+        print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
+    else:
+        # --- Normal synthesis mode ---
+        # Synthesis file path - allow user to specify where the synthesised_spectra.pkl file is located
+        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
+        
+        # Reference line for wavelength grid and metadata
+        reference_line = config.get("reference_line", "Fe12_195.1190")
+        
+        # Check if synthesis file exists
+        synthesis_path = Path(synthesis_file)
+        if not synthesis_path.is_file():
+            raise FileNotFoundError(f"Synthesis file not found: {synthesis_file}. "
+                                  f"Please check the 'synthesis_file' path in your config file.")
+
     psf_settings = deduplicate_list(psf_settings, "psf")  # Remove duplicates
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
@@ -226,54 +243,9 @@ def main() -> None:
         warnings.warn("enable_pinholes is True but no pinhole_sizes specified. Pinhole effects will be disabled.")
         enable_pinholes_vals = [False]
 
-    # Load synthetic atmosphere cube
-    print("Loading atmosphere...")
-    print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
-    cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
-    
-    # Check for dynamic mode and validate parameters
-    is_dynamic_mode = dynamic_mode_info.get("enabled", False)
-    if is_dynamic_mode:
-        print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
-        print(f"  Slit width: {dynamic_mode_info['slit_width']}")
-        print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
-        print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
-        
-        # Check that exactly one slit width is provided for dynamic mode
-        synth_slit_width = dynamic_mode_info["slit_width"]
-        if len(slit_widths) != 1:
-            raise ValueError(
-                f"Dynamic mode synthesis requires exactly one slit width. "
-                f"Config specifies {len(slit_widths)} slit widths: {slit_widths}. "
-                f"Please provide only the synthesis slit width: {synth_slit_width}"
-            )
-        
-        # Validate that the single slit width matches synthesis
-        if not np.isclose(slit_widths[0].to_value(u.arcsec), synth_slit_width.to_value(u.arcsec), rtol=1e-6):
-            raise ValueError(
-                f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
-                f"but config specifies {slit_widths[0]}. "
-                f"For dynamic mode synthesis, the slit width must match exactly: {synth_slit_width}"
-            )
-        
-        # Check that exactly one exposure time is provided for dynamic mode
-        synth_rest_time = dynamic_mode_info["slit_rest_time"]
-        if len(exposures) != 1:
-            raise ValueError(
-                f"Dynamic mode synthesis requires exactly one exposure time. "
-                f"Config specifies {len(exposures)} exposure times: {exposures}. "
-                f"Please provide only the synthesis slit rest time: {synth_rest_time}"
-            )
-        
-        # Validate that the single exposure time matches synthesis
-        if not np.isclose(exposures[0].to_value(u.s), synth_rest_time.to_value(u.s), rtol=1e-6):
-            raise ValueError(
-                f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
-                f"but config specifies {exposures[0]}. "
-                f"For dynamic mode synthesis, the exposure time must match exactly: {synth_rest_time}"
-            )
-        
-        print("  Dynamic mode parameters validated successfully!")
+    # =====================================================================
+    # LOAD OR CREATE THE INPUT CUBE
+    # =====================================================================
     
     # Set up base detector configuration (doesn't change with parameters)
     if instrument == "SWC":
@@ -282,6 +254,60 @@ def main() -> None:
         DET = Detector_EIS()
     else:
         raise ValueError(f"Unknown instrument: {instrument}")
+
+    if uniform_intensity_mode:
+        cube_sim = None
+        is_dynamic_mode = False
+        print("Skipping atmosphere loading (uniform intensity mode).")
+    else:
+        # Load synthetic atmosphere cube
+        print("Loading atmosphere...")
+        print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
+        cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
+        
+        # Check for dynamic mode and validate parameters
+        is_dynamic_mode = dynamic_mode_info.get("enabled", False)
+        if is_dynamic_mode:
+            print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
+            print(f"  Slit width: {dynamic_mode_info['slit_width']}")
+            print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
+            print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
+            
+            # Check that exactly one slit width is provided for dynamic mode
+            synth_slit_width = dynamic_mode_info["slit_width"]
+            if len(slit_widths) != 1:
+                raise ValueError(
+                    f"Dynamic mode synthesis requires exactly one slit width. "
+                    f"Config specifies {len(slit_widths)} slit widths: {slit_widths}. "
+                    f"Please provide only the synthesis slit width: {synth_slit_width}"
+                )
+            
+            # Validate that the single slit width matches synthesis
+            if not np.isclose(slit_widths[0].to_value(u.arcsec), synth_slit_width.to_value(u.arcsec), rtol=1e-6):
+                raise ValueError(
+                    f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
+                    f"but config specifies {slit_widths[0]}. "
+                    f"For dynamic mode synthesis, the slit width must match exactly: {synth_slit_width}"
+                )
+            
+            # Check that exactly one exposure time is provided for dynamic mode
+            synth_rest_time = dynamic_mode_info["slit_rest_time"]
+            if len(exposures) != 1:
+                raise ValueError(
+                    f"Dynamic mode synthesis requires exactly one exposure time. "
+                    f"Config specifies {len(exposures)} exposure times: {exposures}. "
+                    f"Please provide only the synthesis slit rest time: {synth_rest_time}"
+                )
+            
+            # Validate that the single exposure time matches synthesis
+            if not np.isclose(exposures[0].to_value(u.s), synth_rest_time.to_value(u.s), rtol=1e-6):
+                raise ValueError(
+                    f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
+                    f"but config specifies {exposures[0]}. "
+                    f"For dynamic mode synthesis, the exposure time must match exactly: {synth_rest_time}"
+                )
+            
+            print("  Dynamic mode parameters validated successfully!")
 
     # Create results structure for all parameter combinations
     all_results = {}
@@ -295,20 +321,40 @@ def main() -> None:
     
     combination_idx = 0
     for slit_width in slit_widths:
-        # Rebin atmosphere only when slit width changes (expensive operation)
-        print(f"\nRebinning atmosphere cube for slit width {slit_width}...")
-        SIM_temp = Simulation(
-            expos=1.0 * u.s,  # Temporary value for rebinning
-            n_iter=n_iter,
-            slit_width=slit_width,
-            ncpu=ncpu,
-            instrument=instrument,
-            psf=False,  # Use False for rebinning
-        )
-        cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
+        slit_width_key = slit_width.to_value(u.arcsec)
+
+        if uniform_intensity_mode:
+            # Build a 1x1 Gaussian cube directly at instrument resolution
+            SIM_temp = Simulation(
+                expos=1.0 * u.s,
+                n_iter=n_iter,
+                slit_width=slit_width,
+                ncpu=ncpu,
+                instrument=instrument,
+                psf=False,
+            )
+            print(f"\nCreating uniform intensity cube for slit width {slit_width}...")
+            cube_reb = create_uniform_intensity_cube(
+                total_intensity=uniform_intensity,
+                rest_wavelength=uniform_rest_wavelength,
+                thermal_width=uniform_thermal_width,
+                det=DET,
+                sim=SIM_temp,
+            )
+        else:
+            # Rebin atmosphere only when slit width changes (expensive operation)
+            print(f"\nRebinning atmosphere cube for slit width {slit_width}...")
+            SIM_temp = Simulation(
+                expos=1.0 * u.s,  # Temporary value for rebinning
+                n_iter=n_iter,
+                slit_width=slit_width,
+                ncpu=ncpu,
+                instrument=instrument,
+                psf=False,  # Use False for rebinning
+            )
+            cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
         # Store rebinned cube for this slit width
-        slit_width_key = slit_width.to_value(u.arcsec)
         cube_reb_dict[slit_width_key] = cube_reb
         
         print("Fitting ground truth cube...")
@@ -382,7 +428,8 @@ def main() -> None:
 
                                         # Run Monte Carlo for this single parameter combination
                                         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
+                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter,
+                                            uniform_mode=uniform_intensity_mode
                                         )
 
                                         # Store results for this parameter combination
