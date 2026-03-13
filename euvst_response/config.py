@@ -134,10 +134,11 @@ class AluminiumFilter:
 @dataclass
 class Detector_SWC:
     """Solar-C/EUVST SWC detector configuration."""
+    ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
     qe_euv: float = 0.76
     read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
-    dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
+    dark_current: u.Quantity = field(init=False)
     _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K
     gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
@@ -146,6 +147,9 @@ class Detector_SWC:
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     material: str = "silicon"
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
+
+    def __post_init__(self):
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
 
     @property
     def si_fano(self) -> float:
@@ -157,28 +161,6 @@ class Detector_SWC:
         """Calculate dark current for SWC (NIMO) CCD."""
         return calculate_dark_current(temp, Detector_SWC._dark_current_293k, ccd_type="NIMO")
 
-    @classmethod
-    def with_temperature(cls, temp: u.Quantity):
-        """
-        Create a detector instance with dark current calculated from temperature.
-        
-        Parameters
-        ----------
-        temp : u.Quantity
-            CCD temperature with units (e.g., -60 * u.deg_C)
-            
-        Returns
-        -------
-        detector : Detector_SWC
-            Detector instance with calculated dark current and stored temperature
-        """
-        from dataclasses import replace
-        dark_current = cls.calculate_dark_current(temp)
-        
-        detector = replace(cls(), dark_current=dark_current)
-        detector._ccd_temperature = temp  # Store original temperature with units
-        return detector
-
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
@@ -187,10 +169,11 @@ class Detector_SWC:
 @dataclass
 class Detector_EIS:
     """Hinode/EIS detector configuration for comparison."""
+    ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_euv: float = 0.64  # EIS SW Note 2
     qe_vis: float = 0.65  # MSSL engineering test report
     read_noise_rms: u.Quantity = 5.0 * u.electron / u.pixel
-    dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
+    dark_current: u.Quantity = field(init=False)
     _dark_current_293k: u.Quantity = 250.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293K for EIS
     gain_e_per_dn: u.Quantity = 6.3 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
@@ -204,36 +187,17 @@ class Detector_EIS:
         """Get Fano factor for the detector material."""
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
+    def __post_init__(self):
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
+
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
-    
+
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
         """Calculate dark current for EIS (AIMO) CCD."""
         return calculate_dark_current(temp, Detector_EIS._dark_current_293k, ccd_type="AIMO")
-    
-    @classmethod
-    def with_temperature(cls, temp: u.Quantity):
-        """
-        Create a detector instance with dark current calculated from temperature.
-        
-        Parameters
-        ----------
-        temp : u.Quantity
-            CCD temperature with units (e.g., -60 * u.deg_C)
-            
-        Returns
-        -------
-        detector : Detector_EIS
-            Detector instance with calculated dark current and stored temperature
-        """
-        from dataclasses import replace
-        dark_current = cls.calculate_dark_current(temp)
-        
-        detector = replace(cls(), dark_current=dark_current)
-        detector._ccd_temperature = temp  # Store original temperature with units
-        return detector
 
 
 @dataclass

@@ -19,6 +19,26 @@ from ndcube import NDCube
 from tqdm import tqdm
 
 
+
+def _to_canonical_scalar(val):
+    """
+    Convert a value to a canonical scalar for parameter comparison.
+
+    Quantities are reduced to their SI value so comparisons are unit-agnostic
+    (e.g. ``40 * u.s`` and ``40000 * u.ms`` both give ``40.0``).
+    Offset-unit quantities (e.g. Celsius) are converted to Kelvin first.
+    """
+    if not hasattr(val, "unit"):
+        return val
+    try:
+        return float(val.si.value)
+    except Exception:
+        try:
+            return float(val.to(u.K, equivalencies=u.temperature()).value)
+        except Exception:
+            return float(val.value)
+
+
 def _reconstruct_signal_with_units(signal_data, signal_unit, signal_wcs) -> NDCube:
     """
     Reconstruct NDCube signal with units from stripped data.
@@ -75,38 +95,25 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     return data
 
 
-def get_parameter_combinations(results: Dict[str, Any]) -> List[Tuple]:
+def get_parameter_combinations(results: Dict[str, Any]) -> List[Dict]:
     """
     Get all parameter combinations that were simulated.
-    
+
+    Returns a list of the ``parameters`` dicts (one per combination), each
+    using ``section.attribute`` key names.  This is more useful than the raw
+    hash keys stored internally.
+
     Parameters
     ----------
     results : dict
         Results dictionary from load_instrument_response_results.
-        
+
     Returns
     -------
-    list of tuples
-        List of parameter combination keys.
+    list of dict
+        One parameters dict per simulated combination.
     """
-    return list(results["results"]["all_combinations"].keys())
-
-
-def get_parameter_combinations(results: Dict[str, Any]) -> List[Tuple]:
-    """
-    Get all parameter combinations that were simulated.
-    
-    Parameters
-    ----------
-    results : dict
-        Results dictionary from load_instrument_response_results.
-        
-    Returns
-    -------
-    list of tuples
-        List of parameter combination keys.
-    """
-    return list(results["results"]["all_combinations"].keys())
+    return [combo["parameters"] for combo in results["results"]["all_combinations"].values()]
 
 
 def analyse_fit_statistics(
@@ -190,203 +197,87 @@ def analyse_fit_statistics(
     }
 
 
-def get_results_for_combination(
-    results: Dict[str, Any], 
-    slit_width: u.Quantity = None,
-    oxide_thickness: u.Quantity = None, 
-    c_thickness: u.Quantity = None,
-    aluminium_thickness: u.Quantity = None,
-    ccd_temperature: u.Quantity = None,
-    vis_sl: u.Quantity = None,
-    exposure: u.Quantity = None,
-    psf: bool = None,
-    enable_pinholes: bool = None,
-    debug: bool = False
-) -> Dict[str, Any]:
+def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     """
     Get results for a specific parameter combination.
-    
+
+    Parameters are specified as keyword arguments using the full
+    ``section.attribute`` names stored in the results, e.g.::
+
+        get_results_for_combination(results, **{"simulation.expos": 40*u.s, "simulation.slit_width": 0.2*u.arcsec})
+        get_results_for_combination(results, **{"detector.qe_euv": 0.76})
+
+    Use ``summary_table(results)`` to see all available parameter names and
+    their values across combinations.
+
     Parameters
     ----------
     results : dict
-        Results dictionary from load_instrument_response_results.
-    slit_width : u.Quantity, optional
-        Slit width with units (e.g., 0.2 * u.arcsec). If None, uses first available.
-    oxide_thickness : u.Quantity, optional
-        Oxide thickness with units (e.g., 95 * u.nm). If None, uses first available.
-    c_thickness : u.Quantity, optional
-        Carbon thickness with units (e.g., 20 * u.nm). If None, uses first available.
-    aluminium_thickness : u.Quantity, optional
-        Aluminium thickness with units (e.g., 1485 * u.AA). If None, uses first available.
-    ccd_temperature : u.Quantity, optional
-        CCD temperature with units (e.g., -40.0 * u.deg_C). If None, uses first available.
-    vis_sl : u.Quantity, optional
-        Stray light level with units (e.g., 0 * u.photon / (u.s * u.pixel)). If None, uses first available.
-    exposure : u.Quantity, optional
-        Exposure time with units (e.g., 80 * u.s). If None, uses first available.
-    psf : bool, optional
-        PSF setting (True or False). If None, uses first available.
-    enable_pinholes : bool, optional
-        Pinhole effects setting (True or False). If None, uses first available.
-    debug : bool, optional
-        If True, print debugging information about available keys.
-        
+        Results dictionary from :func:`load_instrument_response_results`.
+    **kwargs
+        Parameter name-value pairs to match, using ``section.attribute`` names.
+        Values should be astropy Quantities where the stored value has units.
+
     Returns
     -------
     dict
-        Results for the specified parameter combination.
+        Results for the matched parameter combination.
+
+    Raises
+    ------
+    ValueError
+        If zero or more than one combination matches.
     """
     all_combinations = results["results"]["all_combinations"]
-    param_ranges = results["results"]["parameter_ranges"]
-    
-    if debug:
-        print(f"Available param_ranges keys: {list(param_ranges.keys())}")
-        print(f"Sample combination keys: {list(all_combinations.keys())[:3]}")
-        print(f"Key lengths: {[len(k) for k in list(all_combinations.keys())[:3]]}")
-        print(f"Available slit widths: {[sw.to_value(u.arcsec) for sw in param_ranges['slit_widths']]}")
-        print(f"Available oxide thicknesses: {[ot.to_value(u.nm) for ot in param_ranges['oxide_thicknesses']]}")
-        print(f"Available carbon thicknesses: {[ct.to_value(u.nm) for ct in param_ranges['c_thicknesses']]}")
-        print(f"Available aluminium thicknesses: {[at.to_value(u.AA) for at in param_ranges['aluminium_thicknesses']]}")
-        print(f"Available CCD temperatures: {param_ranges['ccd_temperatures']} deg C")
-        print(f"Available stray light values: {[vs.to_value() if hasattr(vs, 'to_value') else vs for vs in param_ranges['vis_sl_vals']]}")
-        print(f"Available exposures: {[ex.to_value(u.s) for ex in param_ranges['exposures']]}")
-        print(f"Available PSF settings: {param_ranges.get('psf_settings', [])}")
-        print(f"Available pinhole settings: {param_ranges.get('enable_pinholes_vals', [])}")
-    
-    # Check if no parameters were specified at all
-    no_params_specified = all(param is None for param in [slit_width, oxide_thickness, c_thickness, 
-                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf, enable_pinholes])
-    
-    if no_params_specified and len(all_combinations) > 1:
-        print(f"Error: No parameters specified, but {len(all_combinations)} combinations are available!")
-        print(f"Please specify at least one parameter to select a unique combination.")
-        print(f"Use summary_table(results) to see all available parameter combinations.")
-        raise ValueError("No parameters specified but multiple combinations exist. Please specify parameters to select a unique combination.")
-    
-    # Store original None values before filling defaults
-    original_params = {
-        'slit_width': slit_width,
-        'oxide_thickness': oxide_thickness,
-        'c_thickness': c_thickness,
-        'aluminium_thickness': aluminium_thickness,
-        'ccd_temperature': ccd_temperature,
-        'vis_sl': vis_sl,
-        'exposure': exposure,
-        'psf': psf,
-        'enable_pinholes': enable_pinholes
-    }
-    
-    # FIRST: Check if the specified parameters match multiple combinations
-    # before filling in any defaults
-    matching_combinations = []
-    
-    for key in all_combinations.keys():
-        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf, key_enable_pinholes = key
-        
-        # Check if this combination matches all specified (non-None) parameters
-        matches = True
-        if slit_width is not None and abs(key_slit - slit_width.to_value(u.arcsec)) > 1e-10:
-            matches = False
-        if oxide_thickness is not None and abs(key_oxide - oxide_thickness.to_value(u.nm)) > 1e-10:
-            matches = False
-        if c_thickness is not None and abs(key_carbon - c_thickness.to_value(u.nm)) > 1e-10:
-            matches = False
-        if aluminium_thickness is not None and abs(key_aluminium - aluminium_thickness.to_value(u.AA)) > 1e-10:
-            matches = False
-        if ccd_temperature is not None and abs(key_ccd - ccd_temperature.to_value(u.deg_C, equivalencies=u.temperature())) > 1e-10:
-            matches = False
-        if vis_sl is not None:
-            vis_sl_val = vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl
-            if abs(key_vis_sl - vis_sl_val) > 1e-10:
-                matches = False
-        if exposure is not None and abs(key_exposure - exposure.to_value(u.s)) > 1e-10:
-            matches = False
-        if psf is not None and key_psf != psf:
-            matches = False
-        if enable_pinholes is not None and key_enable_pinholes != enable_pinholes:
-            matches = False
-            
-        if matches:
-            matching_combinations.append(key)
-    
-    if len(matching_combinations) > 1:
-        print(f"Error: Your parameters match {len(matching_combinations)} different combinations!")
-        print(f"Please be more specific to select only one combination.")
-        print(f"Use summary_table(results) to see all available parameter combinations.")
-        print(f"Matching combinations found:")
-        for i, combo in enumerate(matching_combinations[:5]):  # Show first 5
-            slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val = combo
-            print(f"  {i+1}: slit={slit:.2f}arcsec, oxide={oxide:.1f}nm, carbon={carbon:.1f}nm, "
-                  f"Al={aluminium:.0f}A, CCD={ccd:.1f}C, stray={vis_sl:.2g}, exp={exp:.1f}s, psf={psf_val}, pinholes={enable_pinholes_val}")
-        if len(matching_combinations) > 5:
-            print(f"  ... and {len(matching_combinations) - 5} more")
-        raise ValueError(f"Multiple combinations match your parameters. Please specify more parameters to select a unique combination.")
-    elif len(matching_combinations) == 1:
-        return all_combinations[matching_combinations[0]]
-    
-    # If we get here, either no matches or need to use defaults and try exact match
-    # Use defaults if not specified, keeping units throughout
-    if slit_width is None:
-        slit_width = param_ranges["slit_widths"][0]
-    if oxide_thickness is None:
-        oxide_thickness = param_ranges["oxide_thicknesses"][0]
-    if c_thickness is None:
-        c_thickness = param_ranges["c_thicknesses"][0]
-    if aluminium_thickness is None:
-        aluminium_thickness = param_ranges["aluminium_thicknesses"][0]
-    if ccd_temperature is None:
-        ccd_temperature = param_ranges["ccd_temperatures"][0]  # This should already have units
-    if vis_sl is None:
-        vis_sl = param_ranges["vis_sl_vals"][0]
-    if exposure is None:
-        exposure = param_ranges["exposures"][0]
-    if psf is None:
-        psf = param_ranges["psf_settings"][0]
-    if enable_pinholes is None:
-        enable_pinholes = param_ranges["enable_pinholes_vals"][0]
-    
-    # Convert units to the same format as stored in keys (without units)
-    slit_width_val = slit_width.to_value(u.arcsec)
-    oxide_thickness_val = oxide_thickness.to_value(u.nm)
-    c_thickness_val = c_thickness.to_value(u.nm)
-    aluminium_thickness_val = aluminium_thickness.to_value(u.AA)
-    ccd_temperature_val = ccd_temperature.to_value(u.deg_C, equivalencies=u.temperature())  # Convert to Celsius value
-    vis_sl_val = vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl
-    exposure_val = exposure.to_value(u.s)
-    
-    # Find matching combination (9-element key format)
-    target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
-                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val, psf, enable_pinholes)
-    
-    if debug:
-        print(f"Target key: {target_key}")
-    
-    # Check for exact matches - if multiple exist, warn user
-    exact_matches = [key for key in all_combinations.keys() if key == target_key]
-    
-    if len(exact_matches) > 1:
-        print(f"Warning: Found {len(exact_matches)} exact matches for the same parameter combination!")
-        print(f"This suggests duplicate entries in the results. Using the first match.")
-        return all_combinations[exact_matches[0]]
-    elif len(exact_matches) == 1:
-        return all_combinations[exact_matches[0]]
-    
-    # If no exact match, find closest
-    closest_key = None
-    min_distance = float('inf')
-    
-    for key in all_combinations.keys():
-        distance = sum((a - b)**2 for a, b in zip(key, target_key))
-        if distance < min_distance:
-            min_distance = distance
-            closest_key = key
-    
-    if closest_key is not None:
-        print(f"No exact match found. Using closest combination: {closest_key}")
-        print(f"Target was: {target_key}")
-        return all_combinations[closest_key]
+
+    if not kwargs:
+        if len(all_combinations) == 1:
+            return next(iter(all_combinations.values()))
+        raise ValueError(
+            f"No parameters specified but {len(all_combinations)} combinations exist. "
+            "Use summary_table(results) to list all combinations, then specify "
+            "enough parameters to select a unique one."
+        )
+
+    query = dict(kwargs)
+
+    # Convert query values to canonical scalars (unit-agnostic comparison)
+    query_canonical = {k: _to_canonical_scalar(v) for k, v in query.items()}
+
+    matches = []
+    for combo_results in all_combinations.values():
+        params = combo_results["parameters"]
+        is_match = True
+        for qk, qv in query_canonical.items():
+            if qk not in params:
+                is_match = False
+                break
+            pv = _to_canonical_scalar(params[qk])
+            if isinstance(qv, float) and isinstance(pv, float):
+                scale = max(abs(qv), abs(pv), 1.0)
+                if abs(qv - pv) > 1e-8 * scale:
+                    is_match = False
+                    break
+            elif qv != pv:
+                is_match = False
+                break
+        if is_match:
+            matches.append(combo_results)
+
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) == 0:
+        raise ValueError(
+            f"No combination matches: {kwargs}\n"
+            "Use summary_table(results) to see all available combinations."
+        )
     else:
-        raise ValueError("No matching parameter combination found")
+        print(f"Error: {len(matches)} combinations match your parameters — please be more specific.")
+        print("Use summary_table(results) to see all available combinations.")
+        raise ValueError(
+            f"{len(matches)} combinations match the specified parameters. "
+            "Add more parameters to narrow the selection."
+        )
 
 
 def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -427,30 +318,62 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 def summary_table(results: Dict[str, Any]) -> None:
     """
-    Print a summary table of all parameter combinations and their results.
-    
+    Print a summary table of all parameter combinations.
+
+    Column headers are discovered dynamically from the stored parameters, so
+    the table automatically reflects whatever was swept or overridden — no
+    code changes needed when new parameters are added.
+
     Parameters
     ----------
     results : dict
-        Results dictionary from load_instrument_response_results.
+        Results dictionary from :func:`load_instrument_response_results`.
     """
     all_combinations = results["results"]["all_combinations"]
-    param_ranges = results["results"]["parameter_ranges"]
-    
-    print("Parameter Combination Summary")
-    print("=" * 155)
-    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (A)':<10} {'CCD (C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}")
-    print("-" * 155)
-    
-    for key, combo_results in all_combinations.items():
-        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf, enable_pinholes = key
-        params = combo_results["parameters"]
-        
-        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5} {str(enable_pinholes):<8}")
-    
-    print("-" * 155)
+
+    if not all_combinations:
+        print("No parameter combinations found.")
+        return
+
+    # Print run metadata if available
+    if "software_version" in results:
+        print(f"Software version : {results['software_version']}")
+    if "git_commit_id" in results:
+        print(f"Git commit       : {results['git_commit_id']}")
+    if "software_version" in results or "git_commit_id" in results:
+        print()
+
+    # Discover all parameter names (excluding non-display fields)
+    _skip = {"simulation.pinhole_sizes", "simulation.pinhole_positions"}
+    param_names: List[str] = []
+    for combo in all_combinations.values():
+        for k in combo["parameters"]:
+            if k not in param_names and k not in _skip:
+                param_names.append(k)
+    param_names.sort()
+
+    def _fmt(val) -> str:
+        if hasattr(val, "unit"):
+            return f"{val.value:.4g} {val.unit}"
+        return str(val)
+
+    col_w = 24
+    header = " | ".join(f"{n:<{col_w}}" for n in param_names)
+    sep = "-" * len(header)
+    print(header)
+    print(sep)
+    for combo in all_combinations.values():
+        params = combo["parameters"]
+        row = [f"{_fmt(params.get(n, 'N/A')):<{col_w}}" for n in param_names]
+        print(" | ".join(row))
+    print(sep)
     print(f"Total combinations: {len(all_combinations)}")
-    print(f"Exposure times: {[exp.to_value(u.s) for exp in param_ranges['exposures']]}")
+
+    sweep_dims = results.get("results", {}).get("sweep_dimensions", {})
+    if sweep_dims:
+        print("\nSwept dimensions:")
+        for dim, vals in sweep_dims.items():
+            print(f"  {dim}: {vals}")
 
 
 def create_sunpy_maps_from_combo(
@@ -502,7 +425,7 @@ def create_sunpy_maps_from_combo(
         analysis_per_exp = {}
         for result in exposure_time_results:
             # Extract exposure time from parameters
-            exposure_time = result["parameters"]["exposure"].to_value(u.s)
+            exposure_time = result["parameters"]["simulation.expos"].to_value(u.s)
             # Create analysis for this exposure
             analysis = analyse_fit_statistics(result, rest_wavelength, data_type)
             analysis_per_exp[exposure_time] = analysis
