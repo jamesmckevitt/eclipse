@@ -20,7 +20,7 @@ from .pinhole_diffraction import apply_euv_pinhole_diffraction, airy_disk_patter
 from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
-from .data_processing import load_atmosphere
+from .data_processing import load_atmosphere, create_uniform_intensity_cube
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -42,6 +42,7 @@ __all__ = [
     "simulate_once", "monte_carlo",
     "main",
     "load_atmosphere",
+    "create_uniform_intensity_cube",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 

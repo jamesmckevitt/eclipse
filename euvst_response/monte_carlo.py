@@ -87,7 +87,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
             electrons_pinholes, dn)
 
 
-def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[NDCube, dict, NDCube, dict]:
+def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5, uniform_mode: bool = False) -> Tuple[NDCube, dict, NDCube, dict]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -105,6 +105,12 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         Simulation configuration
     n_iter : int
         Number of Monte Carlo iterations
+    uniform_mode : bool, optional
+        If True the input cube is assumed to be a single 1x1 spatial pixel
+        (uniform-intensity mode).  All MC simulations are run first and
+        the resulting spectra are stacked so that fitting is parallelised
+        over the n_iter iterations rather than over the spatial dimension.
+        Default: False.
         
     Returns
     -------
@@ -115,31 +121,73 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         - first_photon_signal: First iteration photon signal (NDCube)  
         - photon_fit_results: Dict with fit data and units stored separately
     """
-    first_dn_signal, first_photon_signal = None, None
-    dn_fit_values_list, photon_fit_values_list = [], []
-    
-    for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
-        # Simulate one run
-        (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-         photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
-         electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
-        
-        # Store first iteration signals only
-        if i == 0:
-            first_dn_signal = dn
-            first_photon_signal = photons_euv_pinholes
-        
-        # Fit DN signal
-        dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
-        dn_fit_values_list.append(dn_fit_values)
-        
-        # Fit photon signal
-        photon_fit_values, photon_fit_units = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
-        photon_fit_values_list.append(photon_fit_values)
-        
-    # Stack fit results
-    dn_fits_values = np.stack(dn_fit_values_list)
-    photon_fits_values = np.stack(photon_fit_values_list)
+    if uniform_mode:
+        first_dn_signal, first_photon_signal = None, None
+        dn_data_list, photon_data_list = [], []
+
+        for i in tqdm(range(n_iter), desc="Monte-Carlo (simulate)", unit="iter", leave=False):
+            (intensity_exp, photons_total, photons_throughput, photons_pixels,
+             photons_focused, photons_euv_pinholes, electrons, electrons_stray,
+             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+
+            if i == 0:
+                first_dn_signal = dn
+                first_photon_signal = photons_euv_pinholes
+
+            # .data shape is (1, 1, n_lam); take first scan row -> (1, n_lam)
+            dn_data_list.append(dn.data[0])
+            photon_data_list.append(photons_euv_pinholes.data[0])
+
+        # Stack: each element is (1, n_lam), result is (n_iter, 1, n_lam).
+        # n_iter now sits in the "scan" axis so fit_cube_gauss parallelises
+        # over the MC iterations.
+        dn_stacked = np.stack(dn_data_list, axis=0)
+        photon_stacked = np.stack(photon_data_list, axis=0)
+
+        # Build batch NDCubes -- reuse the WCS from the first cube (only
+        # the wavelength axis matters for fitting; spatial axes are ignored).
+        dn_batch = NDCube(data=dn_stacked, wcs=first_dn_signal.wcs,
+                          unit=first_dn_signal.unit)
+        photon_batch = NDCube(data=photon_stacked, wcs=first_photon_signal.wcs,
+                              unit=first_photon_signal.unit)
+
+        # Single parallel fit call -- parallelised over n_iter
+        print(f"  Fitting {n_iter} MC spectra in parallel...")
+        dn_fit_values, dn_fit_units = fit_cube_gauss(dn_batch, n_jobs=sim.ncpu)
+        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_batch, n_jobs=sim.ncpu)
+
+        # fit_cube_gauss returns (n_iter, 1, 4); reshape to (n_iter, 1, 1, 4)
+        # to match the expected (n_mc, n_scan, n_slit, 4) layout.
+        dn_fits_values = dn_fit_values[:, np.newaxis, :, :]
+        photon_fits_values = photon_fit_values[:, np.newaxis, :, :]
+
+    else:
+        # -- Normal mode ---------------------------------------------------
+        first_dn_signal, first_photon_signal = None, None
+        dn_fit_values_list, photon_fit_values_list = [], []
+
+        for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
+            # Simulate one run
+            (intensity_exp, photons_total, photons_throughput, photons_pixels,
+             photons_focused, photons_euv_pinholes, electrons, electrons_stray,
+             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+
+            # Store first iteration signals only
+            if i == 0:
+                first_dn_signal = dn
+                first_photon_signal = photons_euv_pinholes
+
+            # Fit DN signal
+            dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
+            dn_fit_values_list.append(dn_fit_values)
+
+            # Fit photon signal
+            photon_fit_values, photon_fit_units = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
+            photon_fit_values_list.append(photon_fit_values)
+
+        # Stack fit results
+        dn_fits_values = np.stack(dn_fit_values_list)
+        photon_fits_values = np.stack(photon_fit_values_list)
     
     # Compute statistics on stripped data
     dn_fit_results = {
