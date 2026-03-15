@@ -45,6 +45,7 @@ eclipse --help
 You can also use ECLIPSE as a Python library:
 
 ```python
+import astropy.units as u
 import euvst_response
 from euvst_response import AluminiumFilter, Detector_SWC, Telescope_EUVST
 
