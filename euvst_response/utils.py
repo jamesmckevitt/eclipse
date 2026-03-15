@@ -206,7 +206,13 @@ def deduplicate_list(param_list, param_name):
 
     for item in param_list:
         if hasattr(item, "unit"):
-            key = (item.value, str(item.unit))
+            try:
+                key = float(item.si.value)
+            except Exception:
+                try:
+                    key = float(item.to(u.K, equivalencies=u.temperature()).value)
+                except Exception:
+                    key = float(item.value)
         else:
             key = item
 
