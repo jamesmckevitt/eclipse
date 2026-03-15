@@ -242,6 +242,49 @@ _SECTION_LIST_FIELDS = {
 }
 
 
+def _validate_yaml_keys(config: dict, section_classes: dict,
+                        top_level_class) -> None:
+    """
+    Warn about unrecognized keys in a YAML config.
+
+    Parameters
+    ----------
+    config : dict
+        The full parsed YAML config.
+    section_classes : dict
+        Mapping of section name to the dataclass class used for that section,
+        e.g. ``{"detector": Detector_SWC, "telescope": Telescope_EUVST, ...}``.
+    top_level_class : dataclass class
+        A dataclass whose field names define the valid non-section top-level
+        keys (e.g. ``TopLevelConfig``).  Section names from *section_classes*
+        are added automatically.
+    """
+    import warnings
+
+    top_level_fields = {f.name for f in dataclasses.fields(top_level_class)}
+    all_valid_top = top_level_fields | set(section_classes.keys())
+    unknown_top = set(config.keys()) - all_valid_top
+    if unknown_top:
+        warnings.warn(
+            f"Unrecognized top-level config key(s): {sorted(unknown_top)}. "
+            "These will be ignored. Check for typos.",
+            UserWarning,
+        )
+
+    for section_name, cls in section_classes.items():
+        section = config.get(section_name, {})
+        if not section:
+            continue
+        valid_fields = {f.name for f in dataclasses.fields(cls) if not f.name.startswith("_")}
+        unknown = set(section.keys()) - valid_fields
+        if unknown:
+            warnings.warn(
+                f"Unrecognized key(s) in '{section_name}' section: {sorted(unknown)}. "
+                f"Valid keys are: {sorted(valid_fields)}. Check for typos.",
+                UserWarning,
+            )
+
+
 def _parse_section(section_dict: dict, class_name: str) -> tuple:
     """
     Parse a YAML config section into fixed and sweep parameters.

@@ -14,7 +14,7 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
+from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, TopLevelConfig
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
 from .fitting import fit_cube_gauss
 from .monte_carlo import monte_carlo
@@ -22,6 +22,7 @@ from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
     _parse_section, _params_to_key, _extract_config_params, _SECTION_LIST_FIELDS,
+    _validate_yaml_keys,
 )
 import numpy as np
 
@@ -59,6 +60,19 @@ def main() -> None:
     instrument = config.get("instrument", "SWC").upper()
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
+
+    # Validate YAML keys against dataclass fields (no hardcoded key lists).
+    if instrument == "SWC":
+        _section_classes = {
+            "simulation": Simulation, "detector": Detector_SWC,
+            "telescope": Telescope_EUVST, "filter": AluminiumFilter,
+        }
+    else:
+        _section_classes = {
+            "simulation": Simulation, "detector": Detector_EIS,
+            "telescope": Telescope_EIS,
+        }
+    _validate_yaml_keys(config, _section_classes, TopLevelConfig)
 
     # Simulation mode
     uniform_intensity_mode = "uniform_intensity" in config
@@ -188,6 +202,7 @@ def main() -> None:
     dim_values = [sweep_dims[n] for n in dim_names]
     total_combinations = 1
     for v in dim_values:
+
         total_combinations *= len(v)
 
     print(f"\nRunning {total_combinations} parameter combination(s).")

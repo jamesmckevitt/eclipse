@@ -328,6 +328,25 @@ class Telescope_EIS:
 
 
 @dataclass
+class TopLevelConfig:
+    """Valid top-level (non-section) YAML keys.
+
+    This dataclass exists solely so that YAML key validation can be derived
+    automatically from field names.  It is never instantiated at runtime.
+    """
+    instrument: str = "SWC"
+    synthesis_file: str = ""
+    reference_line: str = ""
+    n_iter: int = 25
+    ncpu: int = -1
+    uniform_intensity: str = ""
+    rest_wavelength: str = ""
+    thermal_width: str = ""
+    pinhole_sizes: List = field(default_factory=list)
+    pinhole_positions: List = field(default_factory=list)
+
+
+@dataclass
 class Simulation:
     """
     Simulation configuration and parameters.
