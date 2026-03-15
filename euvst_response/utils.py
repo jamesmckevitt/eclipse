@@ -255,9 +255,9 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
     Returns
     -------
     fixed_params : dict
-        ``{attr: value}`` — single values used for every combination.
+        ``{attr: value}`` -single values used for every combination.
     sweep_params : dict
-        ``{attr: [values]}`` — lists of values to sweep over.
+        ``{attr: [values]}`` -lists of values to sweep over.
     """
     list_fields = _SECTION_LIST_FIELDS.get(class_name, [])
     fixed = {}

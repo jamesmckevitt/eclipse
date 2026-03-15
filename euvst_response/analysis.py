@@ -320,7 +320,7 @@ def summary_table(results: Dict[str, Any]) -> None:
     Print a summary table of all parameter combinations.
 
     Column headers are discovered dynamically from the stored parameters, so
-    the table automatically reflects whatever was swept or overridden — no
+    the table automatically reflects whatever was swept or overridden - no
     code changes needed when new parameters are added.
 
     Parameters

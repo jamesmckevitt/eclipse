@@ -368,7 +368,7 @@ def main() -> None:
         for k, v in combo.items():
             print(f"  {k}: {v}")
         if not combo:
-            print("  (single combination — all parameters fixed)")
+            print("  (single combination - all parameters fixed)")
         print(f"  Calculated dark current: {DET.dark_current:.2e}")
         if instrument == "SWC":
             print(f"  Microroughness sigma: {TEL.microroughness_sigma}")
