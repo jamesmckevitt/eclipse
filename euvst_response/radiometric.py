@@ -9,7 +9,6 @@ import astropy.constants as const
 from ndcube import NDCube
 from scipy.signal import convolve2d
 from .utils import wl_to_vel, vel_to_wl, debug_break
-from scipy.special import voigt_profile
 
 
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det) -> np.ndarray:
@@ -37,12 +36,12 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     if not np.any(mask_positive):
         return electron_counts
     
-    # Get CCD temperature - must be set via with_temperature()
-    if not hasattr(det, '_ccd_temperature'):
-        raise ValueError("CCD temperature not set. Use Detector_SWC.with_temperature() to create detector instance.")
-    
+    # Get CCD temperature from the detector dataclass
+    if not hasattr(det, 'ccd_temperature'):
+        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
+
     # Convert to Kelvin for the calculation
-    temp_kelvin = det._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
     
     # Convert wavelength to photon energy: E = hc/lambda
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
@@ -127,10 +126,18 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     )
 
 
+def _fwhm_to_sigma(fwhm: float) -> float:
+    """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
+    return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+
+
 def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     """
-    Convolve each detector row (first axis) of an NDCube with a parameterized PSF
-    from the focusing optics (primary mirror and diffraction grating).
+    Convolve each detector frame (n_slit, n_lambda) of an NDCube with an
+    anisotropic 2-D PSF from the focusing optics.
+
+    The PSF is specified separately in the spatial (slit) and spectral
+    (wavelength) directions via ``tel.psf_params``.
 
     Parameters
     ----------
@@ -139,64 +146,59 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
         The first axis is stepped by the raster scan.
     tel : Telescope_EUVST or Telescope_EIS
         Telescope configuration containing PSF parameters.
-        For Gaussian: psf_params = [width]
-        For Voigt: psf_params = [width, gamma]
+        psf_params = [spatial_fwhm, spectral_fwhm] in pixel units.
 
     Returns
     -------
     NDCube
         New cube with identical WCS / unit / meta but PSF-blurred data.
     """
-    
-    # Extract data and units
-    data_in = signal.data  # ndarray view (no units)
+    data_in = signal.data
     unit = signal.unit
     n_scan, n_slit, n_lambda = data_in.shape
 
-    # Get PSF parameters from telescope
     psf_type = tel.psf_type.lower()
     psf_params = tel.psf_params
-    
-    # Extract width parameter (first parameter for both Gaussian and Voigt)
-    width_pixels = psf_params[0].to(u.pixel).value
-    
-    # Create 2D PSF kernel
-    # Make kernel size based on width (use 6*width to capture most of the profile)
-    kernel_size = max(7, int(6 * width_pixels))
-    if kernel_size % 2 == 0:  # Ensure odd size for symmetric kernel
-        kernel_size += 1
-    
-    # Create coordinate grids centered at 0
-    center = kernel_size // 2
-    y, x = np.mgrid[:kernel_size, :kernel_size]
-    y = y - center
-    x = x - center
-    
-    # Create radial distance from center
-    r = np.sqrt(x**2 + y**2)
-    
-    # Create PSF based on type
-    if psf_type == "gaussian":
-        sigma = width_pixels
-        psf = np.exp(-0.5 * (r / sigma)**2)
-        
-    elif psf_type == "voigt":
-        # For Voigt: need both width and gamma parameters
-        if len(psf_params) < 2:
-            raise ValueError("Voigt PSF requires two parameters: [width, gamma]")
 
-        sigma_gauss = width_pixels
-        # Get gamma parameter for Lorentzian component
-        gamma_lorentz = psf_params[1].to(u.pixel).value
-        
-        # Create 2D Voigt PSF (approximate as radially symmetric)
-        psf = voigt_profile(r, sigma_gauss, gamma_lorentz)
-        
+    if len(psf_params) < 2:
+        raise ValueError(
+            "psf_params must contain two elements: "
+            "[spatial_fwhm, spectral_fwhm] in pixel units."
+        )
+
+    # FWHM in pixels for each axis
+    spatial_fwhm = psf_params[0].to(u.pixel).value   # along slit (axis 0 of each frame)
+    spectral_fwhm = psf_params[1].to(u.pixel).value  # along lambda (axis 1 of each frame)
+
+    # Convert FWHM -> sigma
+    sigma_spatial = _fwhm_to_sigma(spatial_fwhm)
+    sigma_spectral = _fwhm_to_sigma(spectral_fwhm)
+
+    # Kernel size: 6*sigma rounded up to next odd integer, minimum 7
+    ky = max(7, int(np.ceil(6 * sigma_spatial)))
+    kx = max(7, int(np.ceil(6 * sigma_spectral)))
+    if ky % 2 == 0:
+        ky += 1
+    if kx % 2 == 0:
+        kx += 1
+
+    # Coordinate grids centred at zero
+    cy, cx = ky // 2, kx // 2
+    y, x = np.mgrid[:ky, :kx]
+    y = (y - cy).astype(float)
+    x = (x - cx).astype(float)
+
+    # Build PSF
+    if psf_type == "gaussian":
+        psf = np.exp(-0.5 * ((y / sigma_spatial) ** 2
+                             + (x / sigma_spectral) ** 2))
     else:
-        raise ValueError(f"Unsupported PSF type: {psf_type}. Supported types: 'gaussian', 'voigt'")
-    
-    # Normalize PSF
-    psf = psf / np.sum(psf)
+        raise ValueError(
+            f"Unsupported PSF type: {psf_type}. Supported: 'gaussian'."
+        )
+
+    # Normalise
+    psf /= psf.sum()
 
     # Convolve each scan position
     blurred = np.empty_like(data_in)

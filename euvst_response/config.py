@@ -134,10 +134,11 @@ class AluminiumFilter:
 @dataclass
 class Detector_SWC:
     """Solar-C/EUVST SWC detector configuration."""
+    ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
     qe_euv: float = 0.76
     read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
-    dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
+    dark_current: u.Quantity = field(init=False)
     _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K
     gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
@@ -146,6 +147,9 @@ class Detector_SWC:
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     material: str = "silicon"
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
+
+    def __post_init__(self):
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
 
     @property
     def si_fano(self) -> float:
@@ -157,28 +161,6 @@ class Detector_SWC:
         """Calculate dark current for SWC (NIMO) CCD."""
         return calculate_dark_current(temp, Detector_SWC._dark_current_293k, ccd_type="NIMO")
 
-    @classmethod
-    def with_temperature(cls, temp: u.Quantity):
-        """
-        Create a detector instance with dark current calculated from temperature.
-        
-        Parameters
-        ----------
-        temp : u.Quantity
-            CCD temperature with units (e.g., -60 * u.deg_C)
-            
-        Returns
-        -------
-        detector : Detector_SWC
-            Detector instance with calculated dark current and stored temperature
-        """
-        from dataclasses import replace
-        dark_current = cls.calculate_dark_current(temp)
-        
-        detector = replace(cls(), dark_current=dark_current)
-        detector._ccd_temperature = temp  # Store original temperature with units
-        return detector
-
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
@@ -187,10 +169,11 @@ class Detector_SWC:
 @dataclass
 class Detector_EIS:
     """Hinode/EIS detector configuration for comparison."""
+    ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_euv: float = 0.64  # EIS SW Note 2
     qe_vis: float = 0.65  # MSSL engineering test report
     read_noise_rms: u.Quantity = 5.0 * u.electron / u.pixel
-    dark_current: u.Quantity = 21.0 * u.electron / (u.pixel * u.s)  # Default value, will be overridden
+    dark_current: u.Quantity = field(init=False)
     _dark_current_293k: u.Quantity = 250.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293K for EIS
     gain_e_per_dn: u.Quantity = 6.3 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
@@ -204,36 +187,17 @@ class Detector_EIS:
         """Get Fano factor for the detector material."""
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
+    def __post_init__(self):
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
+
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
-    
+
     @staticmethod
     def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
         """Calculate dark current for EIS (AIMO) CCD."""
         return calculate_dark_current(temp, Detector_EIS._dark_current_293k, ccd_type="AIMO")
-    
-    @classmethod
-    def with_temperature(cls, temp: u.Quantity):
-        """
-        Create a detector instance with dark current calculated from temperature.
-        
-        Parameters
-        ----------
-        temp : u.Quantity
-            CCD temperature with units (e.g., -60 * u.deg_C)
-            
-        Returns
-        -------
-        detector : Detector_EIS
-            Detector instance with calculated dark current and stored temperature
-        """
-        from dataclasses import replace
-        dark_current = cls.calculate_dark_current(temp)
-        
-        detector = replace(cls(), dark_current=dark_current)
-        detector._ccd_temperature = temp  # Store original temperature with units
-        return detector
 
 
 @dataclass
@@ -243,7 +207,8 @@ class Telescope_EUVST:
     microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [0.343 * u.pixel])  # FWHM of 0.805 pix from 0.128 arcsec from optical design RSC-2022021B in sigma
+    # psf_params: list = field(default_factory=lambda: [1.26 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec (w/ slit-scan; FOV2) and 33.00 mA in RSC-2022021 (Oct 2023) and RSC-2022021B (Feb 2024).
+    psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec (w/ slit-scan; FOV2) and 43.00 mA in RSC-2022021C (Mar 2025).
     
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -251,7 +216,7 @@ class Telescope_EUVST:
 
     @property
     def collecting_area(self) -> u.Quantity:
-        return 0.5 * np.pi * (self.D_ap / 2) ** 2
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
 
     def primary_mirror_efficiency(self, wl0: u.Quantity) -> float:
         """
@@ -293,7 +258,10 @@ class Telescope_EUVST:
         """
         Calculate the efficiency reduction due to primary mirror microroughness.
         
-        Formula: 1 - (4*pi*sigma/lambda)^2
+        Uses the Debye-Waller factor for specular reflectance:
+        
+            efficiency = exp(-(4*pi*sigma/lambda)^2)
+        
         where sigma is the RMS microroughness and lambda is the wavelength.
         
         Parameters
@@ -313,8 +281,8 @@ class Telescope_EUVST:
         # Calculate (4*pi*sigma/lambda)^2
         roughness_term = (4 * np.pi * sigma_nm / wl_nm) ** 2
         
-        # Return 1 - (4*pi*sigma/lambda)^2
-        return 1.0 - roughness_term.value
+        # Return exp(-(4*pi*sigma/lambda)^2)  [Debye-Waller specular efficiency]
+        return np.exp(-roughness_term.value)
 
     def throughput(self, wl0: u.Quantity) -> float:
         """
@@ -348,7 +316,7 @@ class Telescope_EUVST:
 class Telescope_EIS:
     """Hinode/EIS telescope configuration for comparison."""
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [1.28 * u.pixel])  # FWHM of 3 in sigma
+    psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
     
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
         # Effective area including detector QE is 0.23 cm2

@@ -45,6 +45,7 @@ eclipse --help
 You can also use ECLIPSE as a Python library:
 
 ```python
+import astropy.units as u
 import euvst_response
 from euvst_response import AluminiumFilter, Detector_SWC, Telescope_EUVST
 
@@ -74,7 +75,7 @@ For analyzing simulation results, see the included Jupyter notebook `analysis_tu
 - Analyze fit statistics and compute velocity/line width errors
 - Create SunPy maps for visualization
 
-The analysis functions are now available directly from the package:
+The analysis functions are available directly from the package:
 
 ```python
 from euvst_response import (
@@ -84,6 +85,15 @@ from euvst_response import (
     create_sunpy_maps_from_combo,
     summary_table
 )
+
+# Load results
+results = load_instrument_response_results("run/result/my_run.pkl")
+
+# Print a summary table (auto-discovers all parameters and shows git commit)
+summary_table(results)
+
+# Retrieve a specific combination using full section.attribute names
+combo = get_results_for_combination(results, **{"simulation.expos": 40*u.s, "simulation.psf": True})
 ```
 
 ## Detailed instructions
@@ -263,61 +273,66 @@ This step can require a lot of memory at full resolution. A fully synthesised at
 
 #### Configuration File
 
-ECLIPSE uses YAML configuration files to specify simulation parameters. You can specify single values or lists of values for parameter sweeps.
+ECLIPSE uses YAML configuration files to specify simulation parameters.
+Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`.
+Any field of those classes can be set here.
+**Any parameter that is given as a list is automatically swept over** and the
+simulation runs every combination (cartesian product).
 
-**Key configuration options:**
-- `instrument`: Choose between SWC (EUVST-SW) or EIS (Hinode)
-- `synthesis_file`: Path to the synthesised spectra pickle file (default: `./run/input/synthesised_spectra.pkl`)
-- `reference_line`: Spectral line to use as reference for wavelength grid when combining all lines (default: `Fe12_195.1190`)
-- `expos`: Exposure time(s) for simulations
-- `n_iter`: Number of Monte Carlo iterations
-- Parameter sweeps for filters, detector settings, etc.
+**Top-level keys** (not sections):
+- `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
+- `synthesis_file`: path to the synthesised spectra pickle file
+- `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`)
+- `n_iter`: number of Monte Carlo iterations
+- `ncpu`: CPU cores to use (`-1` = all available)
+- `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
+- `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
 Here's a complete example configuration file:
 
 ```yaml
-# Instrument selection
-instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
+# Input
+instrument: SWC
+synthesis_file: ./run/input/synthesised_spectra.pkl
+reference_line: Fe12_195.1190
 
-# Synthesis file path - location of the synthesised spectra pickle file
-synthesis_file: ./run/input/synthesised_spectra.pkl  # Default location
+# Global settings (apply to all combinations)
+n_iter: 500
+ncpu: -1
 
-# Reference line for wavelength grid and metadata when combining all spectral lines
-reference_line: Fe12_195.1190  # Default reference line (Fe XII 195.119 Å)
+# Simulation parameters
+# Any field listed as a list is swept over; all combinations are run.
+simulation:
+  slit_width: [0.2 arcsec, 0.4 arcsec]  # sweep over two slit widths
+  expos: [5 s, 10 s, 20 s, 40 s, 80 s]  # sweep over five exposure times
+  psf: True
+  vis_sl: 0 photon / (s * cm^2)
+  enable_pinholes: False
 
-# Point Spread Function
-psf: False  # Enable PSF convolution
-# Or test with and without PSF:
-# psf: [True, False]  # Run simulations both with and without PSF
+# Detector parameters
+detector:
+  ccd_temperature: -60 Celsius  # used to compute dark current via the CCD model
 
-# Exposure times - can be single value or list
-expos: [0.5 s, 1 s, 2 s, 5 s, 10 s, 20 s, 40 s, 80 s]
+# Telescope parameters
+telescope:
+  microroughness_sigma: 0.3 nm  # RMS surface roughness
 
-# Monte Carlo simulation parameters
-n_iter: 1000      # Number of Monte Carlo iterations
-ncpu: -1        # Number of CPU cores (-1 = use all available)
+# Aluminium filter parameters (SWC only)
+filter:
+  al_thickness: 1485 angstrom
+  oxide_thickness: 95 angstrom
+  c_thickness: 40 angstrom
+  mesh_throughput: 0.8
+```
 
-# Parameter sweeps - you can specify single values or lists for any parameter
-# The simulation will run all combinations of parameters
+Any parameter from the `Detector_SWC`, `Telescope_EUVST`, or `AluminiumFilter`
+dataclasses in `config.py` can be added to the corresponding section. For
+example, to sweep over detector quantum efficiency:
 
-# Slit width
-slit_width: 0.2 arcsec  # Narrowest slit on EUVST
-
-# Filter parameters (SWC only)
-# Thickness of aluminum oxide layer on entrance filter
-oxide_thickness: 95 angstrom  # Default (expected value)
-
-# Carbon contamination thickness on filter
-c_thickness: 0 angstrom  # Default (ideal case, no contamination)
-
-# Aluminum filter thickness
-aluminium_thickness: 1485 angstrom  # Default (expected value)
-
-# CCD temperature for dark current calculation
-ccd_temperature: -60 Celsius  # Default (expected operating temperature)
-
-# Visible stray light level
-vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
+```yaml
+detector:
+  ccd_temperature: -60 Celsius
+  qe_euv: [0.5, 0.65, 0.76]   # sweep over three QE values
 ```
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
@@ -344,6 +359,10 @@ Results are saved as pickle files in the `run/result/` directory with the same b
 - Fitted spectral line parameters (intensity, velocity, width)
 - Statistical analysis of velocity precision vs. exposure time
 - Ground truth comparisons
+- Full config objects (`Detector`, `Telescope`, `Simulation`) for each parameter combination
+- The git commit ID and software version used to produce the results
+
+Use `summary_table(results)` after loading to see all parameter combinations and the run metadata.
 
 ## Acknowledgements
 

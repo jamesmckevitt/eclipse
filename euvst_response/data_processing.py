@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import astropy.units as u
+import astropy.constants as const
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
@@ -152,18 +153,37 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     data = np.moveaxis(ndcube.data, spectral_axis, -1)
     shape = data.shape
     flat_data = data.reshape(-1, shape[-1])
+    n_pixels = flat_data.shape[0]
 
-    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
-    resampled = np.zeros((flat_data.shape[0], n_spec))
+    # Determine number of workers
+    import os
+    if ncpu == -1:
+        n_workers = os.cpu_count() or 1
+    else:
+        n_workers = ncpu
+    
+    # Calculate batch size: aim for ~4 batches per worker to balance load
+    # but ensure each batch has enough work to justify overhead
+    min_pixels_per_batch = 100
+    n_batches = max(1, min(n_pixels // min_pixels_per_batch, n_workers * 4))
+    batch_size = (n_pixels + n_batches - 1) // n_batches  # ceiling division
+    
+    # Create batch indices
+    batch_indices = [(i, min(i + batch_size, n_pixels)) for i in range(0, n_pixels, batch_size)]
 
-    def _resample_pixel(i):
-        spec = Spectrum(flux=flat_data[i] * ndcube.unit, spectral_axis=spectral_world)
-        res = resampler(spec, new_spec_grid)
-        return res.flux.value
+    def _resample_batch(start_idx, end_idx):
+        """Resample a batch of pixels."""
+        resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
+        batch_results = np.empty((end_idx - start_idx, n_spec))
+        for i, pixel_idx in enumerate(range(start_idx, end_idx)):
+            spec = Spectrum(flux=flat_data[pixel_idx] * ndcube.unit, spectral_axis=spectral_world)
+            res = resampler(spec, new_spec_grid)
+            batch_results[i] = res.flux.value
+        return batch_results
 
-    with tqdm_joblib(tqdm(total=flat_data.shape[0], desc="Resampling spectral axis", unit="pixel", leave=False)):
+    with tqdm_joblib(tqdm(total=len(batch_indices), desc="Resampling spectral axis", unit="batch", leave=False)):
         results = Parallel(n_jobs=ncpu)(
-            delayed(_resample_pixel)(i) for i in range(flat_data.shape[0])
+            delayed(_resample_batch)(start, end) for start, end in batch_indices
         )
     resampled = np.vstack(results)
 
@@ -186,8 +206,21 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
 
 
-def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
-    """ Reproject an NDCube from heliocentric to helioprojective coordinates. """
+def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1):
+    """ Reproject an NDCube from heliocentric to helioprojective coordinates.
+    
+    Parameters
+    ----------
+    new_cube_spec : NDCube
+        Input NDCube in heliocentric coordinates
+    sim : Simulation
+        Simulation configuration object
+    det : Detector
+        Detector configuration object
+    ncpu : int, optional
+        Number of CPU cores for parallel reprojection. -1 uses all cores,
+        positive integers specify exact count. Default is -1.
+    """
 
     nx, ny, _ = new_cube_spec.shape
     wcs_hc = new_cube_spec.wcs
@@ -234,11 +267,16 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det):
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec),
                         (sim.slit_width).to_value(u.arcsec)]
 
+    # Determine parallelization setting:
+    # - If ncpu=-1, use True (all available cores)
+    # - If ncpu is a positive integer, pass it directly to control thread count
+    parallel_setting = True if ncpu == -1 else ncpu
+    
     new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
         wcs_tgt,
         shape_out=shape_out,
         algorithm='interpolation',
-        parallel=True,
+        parallel=parallel_setting,
         order='bilinear',
     ) * new_cube_spec_hp.unit
 
@@ -273,7 +311,98 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     cube_det = reproject_ndcube_heliocentric_to_helioprojective(
         cube_spec,
         sim,
-        det
+        det,
+        ncpu=sim.ncpu
     )
 
     return cube_det
+
+def create_uniform_intensity_cube(
+    total_intensity: u.Quantity,
+    rest_wavelength: u.Quantity,
+    thermal_width: u.Quantity,
+    det,
+    sim,
+    n_sigma_extent: float = 8.0,
+) -> NDCube:
+    """
+    Create a 1x1 pixel NDCube containing a Gaussian emission line.
+
+    The cube is built directly at the detector's spectral resolution and
+    assigned a helioprojective WCS consistent with the output of
+    ``rebin_atmosphere``, so it can be fed straight into ``monte_carlo``.
+
+    Parameters
+    ----------
+    total_intensity : u.Quantity
+        Spectrally-integrated line intensity, e.g. in ``erg / (s cm2 sr)``.
+    rest_wavelength : u.Quantity
+        Rest wavelength of the line, e.g. ``195.119 * u.AA``.
+    thermal_width : u.Quantity
+        Thermal / non-thermal line width expressed as a velocity
+        (1-sigma Gaussian width), e.g. ``20 * u.km / u.s``.
+    det : Detector_SWC or Detector_EIS
+        Detector configuration (provides ``wvl_res``, ``plate_scale_angle``).
+    sim : Simulation
+        Simulation configuration (provides ``slit_width``).
+    n_sigma_extent : float, optional
+        Number of sigma either side of line centre to include in the
+        wavelength grid (default: 8).
+
+    Returns
+    -------
+    NDCube
+        Shape ``(1, 1, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
+        helioprojective + wavelength WCS.
+    """
+    # --- Spectral grid --------------------------------------------------
+    lam0 = rest_wavelength.to(u.cm)
+
+    # Convert velocity width to wavelength width: sigma_lam = lam0 * v / c
+    sigma_lam = (lam0 * thermal_width / const.c).to(u.cm)
+
+    # Detector pixel pitch in cm
+    dlam = det.wvl_res.to(u.cm / u.pix) * u.pix  # strip per-pixel to cm
+
+    half_range = n_sigma_extent * sigma_lam
+    n_pix_half = int(np.ceil((half_range / dlam).decompose().value))
+    n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
+
+    lam_grid = lam0 + (np.arange(n_lam) - n_pix_half) * dlam  # shape (n_lam,)
+
+    # --- Gaussian profile -----------------------------------------------
+    # I(lam) = A * exp[-(lam - lam0)^2 / (2 sigma_lam^2)]
+    # with A = I_total / (sigma_lam * sqrt(2*pi))  so integral of I dlam = I_total
+    A = (total_intensity / (sigma_lam * np.sqrt(2 * np.pi))).to(
+        u.erg / (u.s * u.cm**2 * u.sr * u.cm)
+    )
+    profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
+    data = profile.value[np.newaxis, np.newaxis, :]  # shape (1, 1, n_lam)
+
+    # --- WCS (matches reproject_ndcube output format) --------------------
+    # Axes: WAVE (cm), HPLT-TAN (arcsec), HPLN-TAN (arcsec)
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
+    wcs.wcs.crpix = [(n_lam + 1) / 2, 1.0, 1.0]
+    wcs.wcs.crval = [lam0.value, 0.0, 0.0]
+    wcs.wcs.cdelt = [
+        dlam.to_value(u.cm),
+        (det.plate_scale_angle * u.pix).to_value(u.arcsec),
+        sim.slit_width.to_value(u.arcsec),
+    ]
+
+    unit = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
+
+    return NDCube(
+        data=data,
+        wcs=wcs,
+        unit=unit,
+        meta={
+            "rest_wav": rest_wavelength,
+            "uniform_intensity": total_intensity,
+            "thermal_width": thermal_width,
+            "line_name": "uniform",
+            "uniform_mode": True,
+        },
+    )
