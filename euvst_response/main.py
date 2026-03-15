@@ -148,7 +148,7 @@ def main() -> None:
             )
         elif instrument == "EIS":
             warnings.warn(
-                "The EIS PSF is not well understood. We use a symmetrical Voigt profile with "
+                "The EIS PSF is not well understood. We use a symmetrical Gaissian kernel with "
                 "a FWHM of 3 pixels from Ugarte-Urra (2016) EIS Software Note 2.",
                 UserWarning,
             )
