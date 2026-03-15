@@ -313,7 +313,7 @@ def main() -> None:
         rebin_cache_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
-            DET.wvl_res.value,
+            DET.wvl_res.to_value(u.cm / u.pixel),
         )
 
         if rebin_cache_key not in rebin_cache:
