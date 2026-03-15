@@ -186,13 +186,9 @@ def main() -> None:
 
     dim_names = list(sweep_dims.keys())
     dim_values = [sweep_dims[n] for n in dim_names]
-    total_combinations = max(1, *(len(v) for v in dim_values)) if dim_values else 1
-    # Correct total: product of all dimension lengths
     total_combinations = 1
     for v in dim_values:
         total_combinations *= len(v)
-    if not dim_names:
-        total_combinations = 1
 
     print(f"\nRunning {total_combinations} parameter combination(s).")
     if sweep_dims:
