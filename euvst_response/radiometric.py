@@ -36,12 +36,12 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     if not np.any(mask_positive):
         return electron_counts
     
-    # Get CCD temperature - must be set via with_temperature()
-    if not hasattr(det, '_ccd_temperature'):
-        raise ValueError("CCD temperature not set. Use Detector_SWC.with_temperature() to create detector instance.")
-    
+    # Get CCD temperature from the detector dataclass
+    if not hasattr(det, 'ccd_temperature'):
+        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
+
     # Convert to Kelvin for the calculation
-    temp_kelvin = det._ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
     
     # Convert wavelength to photon energy: E = hc/lambda
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
