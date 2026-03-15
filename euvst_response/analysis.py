@@ -272,11 +272,10 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "Use summary_table(results) to see all available combinations."
         )
     else:
-        print(f"Error: {len(matches)} combinations match your parameters — please be more specific.")
-        print("Use summary_table(results) to see all available combinations.")
         raise ValueError(
-            f"{len(matches)} combinations match the specified parameters. "
-            "Add more parameters to narrow the selection."
+            f"{len(matches)} combinations match the specified parameters {kwargs}. "
+            "Add more parameters to narrow the selection. "
+            "Use summary_table(results) to see all available combinations."
         )
 
 
