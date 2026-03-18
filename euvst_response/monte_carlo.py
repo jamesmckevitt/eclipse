@@ -9,8 +9,9 @@ import astropy.units as u
 from ndcube import NDCube
 from tqdm import tqdm
 from .radiometric import (
-    apply_exposure_and_poisson, intensity_to_photons, add_telescope_throughput, 
-    photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
+    apply_exposure, intensity_to_photons, add_telescope_throughput, 
+    photons_to_pixel_counts, apply_focusing_optics_psf, add_poisson,
+    to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
@@ -40,11 +41,12 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     tuple of NDCube
         Signal cubes at each step of the radiometric pipeline:
         (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-         photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
-         electrons_pinholes, dn)
+         photons_focused, photons_euv_pinholes, photons_noisy, electrons,
+         electrons_stray, electrons_pinholes, dn)
     """
-    # Apply exposure time and Poisson noise
-    intensity_exp = apply_exposure_and_poisson(I_cube, t_exp)
+    # Apply exposure time (no noise yet — Poisson is applied later
+    # once we have photon counts per detector pixel)
+    intensity_exp = apply_exposure(I_cube, t_exp)
     
     # Convert to total photons
     photons_total = intensity_to_photons(intensity_exp)
@@ -67,8 +69,13 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     else:
         photons_euv_pinholes = photons_focused
     
+    # Apply Poisson shot noise — this is the physically correct stage:
+    # the expected photon counts per pixel have been determined by the
+    # optics, so we now sample the stochastic photon arrivals.
+    photons_noisy = add_poisson(photons_euv_pinholes)
+
     # Convert to electrons
-    electrons = to_electrons(photons_euv_pinholes, t_exp, det)
+    electrons = to_electrons(photons_noisy, t_exp, det)
     
     # Add visible stray light (with filter throughput)
     electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel)
@@ -83,8 +90,8 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     dn = to_dn(electrons_pinholes, det)
 
     return (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-            photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
-            electrons_pinholes, dn)
+            photons_focused, photons_euv_pinholes, photons_noisy, electrons,
+            electrons_stray, electrons_pinholes, dn)
 
 
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5, uniform_mode: bool = False) -> Tuple[NDCube, dict, NDCube, dict]:
@@ -127,16 +134,16 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
 
         for i in tqdm(range(n_iter), desc="Monte-Carlo (simulate)", unit="iter", leave=False):
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
-             photons_focused, photons_euv_pinholes, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+             photons_focused, photons_euv_pinholes, photons_noisy, electrons,
+             electrons_stray, electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
 
             if i == 0:
                 first_dn_signal = dn
-                first_photon_signal = photons_euv_pinholes
+                first_photon_signal = photons_noisy
 
             # .data shape is (1, 1, n_lam); take first scan row -> (1, n_lam)
             dn_data_list.append(dn.data[0])
-            photon_data_list.append(photons_euv_pinholes.data[0])
+            photon_data_list.append(photons_noisy.data[0])
 
         # Stack: each element is (1, n_lam), result is (n_iter, 1, n_lam).
         # n_iter now sits in the "scan" axis so fit_cube_gauss parallelises
@@ -169,20 +176,20 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
             # Simulate one run
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
-             photons_focused, photons_euv_pinholes, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+             photons_focused, photons_euv_pinholes, photons_noisy, electrons,
+             electrons_stray, electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
 
             # Store first iteration signals only
             if i == 0:
                 first_dn_signal = dn
-                first_photon_signal = photons_euv_pinholes
+                first_photon_signal = photons_noisy
 
             # Fit DN signal
             dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
             dn_fit_values_list.append(dn_fit_values)
 
-            # Fit photon signal
-            photon_fit_values, photon_fit_units = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
+            # Fit photon signal (noisy — includes shot noise)
+            photon_fit_values, photon_fit_units = fit_cube_gauss(photons_noisy, n_jobs=sim.ncpu)
             photon_fit_values_list.append(photon_fit_values)
 
         # Stack fit results

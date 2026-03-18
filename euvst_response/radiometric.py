@@ -245,9 +245,9 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
 
     e = electron_counts * (u.electron / u.pixel)
 
-    # Add dark current with Poisson noise
+    # Add dark current with Poisson noise (independent per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    dark_current_poisson = np.random.poisson(dark_current_mean) * (u.electron / u.pixel)
+    dark_current_poisson = np.random.poisson(dark_current_mean, size=photon_counts.data.shape) * (u.electron / u.pixel)
     e += dark_current_poisson
     
     # Add read noise
@@ -301,17 +301,22 @@ def add_poisson(cube: NDCube) -> NDCube:
     Apply Poisson noise to an input NDCube and return a new NDCube
     with the same WCS, unit, and metadata.
 
+    Negative values (which can arise from floating-point arithmetic or
+    PSF boundary effects) are clipped to zero before sampling.
+
     Parameters
     ----------
     cube : NDCube
-        Input data cube.
+        Input data cube whose values are treated as Poisson rate
+        parameters (expected counts).
 
     Returns
     -------
     NDCube
-        New cube containing Poisson-noised data.
+        New cube containing Poisson-sampled data.
     """
-    noisy = np.random.poisson(cube.data) * cube.unit
+    data_clipped = np.maximum(cube.data, 0)
+    noisy = np.random.poisson(data_clipped) * cube.unit
     return NDCube(
         data=noisy.value,
         wcs=cube.wcs.deepcopy(),
@@ -320,12 +325,14 @@ def add_poisson(cube: NDCube) -> NDCube:
     )
 
 
-def apply_exposure_and_poisson(I: NDCube, t_exp: u.Quantity) -> NDCube:
+def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
     """
-    Apply exposure time to intensity and add Poisson noise.
-    
-    This converts intensity (per second) to total counts over the exposure
-    and applies appropriate Poisson noise.
+    Multiply a per-second intensity cube by the exposure time.
+
+    Poisson (photon shot) noise is **not** applied here.  It is applied
+    later in the pipeline, after the intensity has been converted to
+    photon counts per detector pixel — the physically correct stage for
+    sampling photon-counting statistics.
 
     Parameters
     ----------
@@ -337,20 +344,20 @@ def apply_exposure_and_poisson(I: NDCube, t_exp: u.Quantity) -> NDCube:
     Returns
     -------
     NDCube
-        New cube with exposure applied and Poisson noise added.
+        New cube with exposure applied (no stochastic noise).
     """
-    # Convert intensity rate to total intensity over exposure
     total_intensity = (I.data * I.unit * t_exp)
-    
-    # Apply Poisson noise
-    noisy = np.random.poisson(total_intensity.value) * total_intensity.unit
-    
+
     return NDCube(
-        data=noisy.value,
+        data=total_intensity.value,
         wcs=I.wcs.deepcopy(),
-        unit=noisy.unit,
+        unit=total_intensity.unit,
         meta=I.meta,
     )
+
+
+# Keep old name as an alias for backward compatibility
+apply_exposure_and_poisson = apply_exposure
 
 
 def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=None) -> NDCube:
