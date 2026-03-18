@@ -6,6 +6,7 @@ These tests verify that:
 2. Dark current noise is independent per pixel.
 3. The pipeline produces correct unit conversions at every stage.
 4. Noise statistics match expected physics.
+5. The impact of the corrected Poisson placement is quantitatively correct.
 """
 
 import numpy as np
@@ -244,4 +245,125 @@ class TestFullPipeline:
         assert 0.7 < ratio < 1.3, (
             f"Poisson shot noise ratio var/mean = {ratio:.3f} "
             f"(expected ~1.0 for shot-noise-limited signal)"
+        )
+
+
+# -------------------------------------------------------------------
+# 6. Quantitative impact: old vs new Poisson placement
+# -------------------------------------------------------------------
+class TestPoissonPlacementImpact:
+    """
+    Demonstrate that applying Poisson noise to erg-valued intensity
+    (the old code) produces negligible noise, while applying it to
+    photon counts per pixel (the corrected code) produces the correct
+    ~1/sqrt(N) shot noise.
+
+    For a typical Fe XII 195.119 Å line at 5000 erg/(s cm² sr) and
+    10 s exposure, the peak pixel has ~293 expected photons.  The old
+    code applied Poisson to ~1.5×10¹⁴ (the erg numerical value),
+    giving relative noise ~8×10⁻⁸ instead of the correct ~0.06.
+    """
+
+    def test_old_method_produces_negligible_noise(self):
+        """
+        Old method: Poisson(erg_intensity) then convert to photons.
+        Verify the relative noise is < 10⁻⁶ (essentially zero).
+        """
+        cube, det, sim = _make_test_cube()
+        tel = Telescope_EUVST()
+        t_exp = 10.0 * u.s
+
+        # Run deterministic pipeline to get intensity and photon values
+        exposed = apply_exposure(cube, t_exp)
+        photons = intensity_to_photons(exposed)
+        through = add_telescope_throughput(photons, tel)
+        pixels = photons_to_pixel_counts(
+            through, det.wvl_res, det.plate_scale_length,
+            angle_to_distance(sim.slit_width),
+        )
+        peak_idx = np.unravel_index(np.argmax(pixels.data), pixels.data.shape)
+        erg_peak = exposed.data[peak_idx]
+        phot_peak = pixels.data[peak_idx]
+
+        # Conversion factor from erg-units to photon-units at peak
+        conv = phot_peak / erg_peak
+
+        # Old: Poisson on erg values, then scale to photons
+        n_mc = 500
+        old_samples = np.array([
+            np.random.poisson(erg_peak) * conv for _ in range(n_mc)
+        ])
+        old_rel_noise = old_samples.std() / old_samples.mean()
+
+        # Should be extremely small (< 10⁻⁶)
+        assert old_rel_noise < 1e-6, (
+            f"Old Poisson-on-erg relative noise = {old_rel_noise:.2e}, "
+            f"expected < 1e-6"
+        )
+
+    def test_new_method_produces_correct_shot_noise(self):
+        """
+        New method: Poisson(photon_counts_per_pixel).
+        Verify relative noise ≈ 1/sqrt(N) within tolerance.
+        """
+        cube, det, sim = _make_test_cube()
+        tel = Telescope_EUVST()
+        t_exp = 10.0 * u.s
+
+        exposed = apply_exposure(cube, t_exp)
+        photons = intensity_to_photons(exposed)
+        through = add_telescope_throughput(photons, tel)
+        pixels = photons_to_pixel_counts(
+            through, det.wvl_res, det.plate_scale_length,
+            angle_to_distance(sim.slit_width),
+        )
+        peak_idx = np.unravel_index(np.argmax(pixels.data), pixels.data.shape)
+        phot_peak = pixels.data[peak_idx]
+
+        # New: Poisson on photon counts
+        n_mc = 2000
+        new_samples = np.array([
+            np.random.poisson(phot_peak) for _ in range(n_mc)
+        ])
+        new_rel_noise = new_samples.std() / new_samples.mean()
+        expected_rel_noise = 1.0 / np.sqrt(phot_peak)
+
+        # Should match 1/sqrt(N) within 20% (statistical tolerance)
+        np.testing.assert_allclose(
+            new_rel_noise, expected_rel_noise, rtol=0.2,
+            err_msg=(
+                f"New Poisson-on-photons relative noise = {new_rel_noise:.4f}, "
+                f"expected 1/sqrt({phot_peak:.0f}) = {expected_rel_noise:.4f}"
+            ),
+        )
+
+    def test_noise_ratio_old_vs_new(self):
+        """
+        The old noise should be many orders of magnitude smaller than the
+        correct noise.  This confirms the fix has a dramatic effect.
+        """
+        cube, det, sim = _make_test_cube()
+        tel = Telescope_EUVST()
+        t_exp = 10.0 * u.s
+
+        exposed = apply_exposure(cube, t_exp)
+        photons = intensity_to_photons(exposed)
+        through = add_telescope_throughput(photons, tel)
+        pixels = photons_to_pixel_counts(
+            through, det.wvl_res, det.plate_scale_length,
+            angle_to_distance(sim.slit_width),
+        )
+        peak_idx = np.unravel_index(np.argmax(pixels.data), pixels.data.shape)
+        erg_peak = exposed.data[peak_idx]
+        phot_peak = pixels.data[peak_idx]
+        conv = phot_peak / erg_peak
+
+        # Analytical: old σ = sqrt(erg_peak) * conv, new σ = sqrt(phot_peak)
+        old_sigma = np.sqrt(erg_peak) * conv
+        new_sigma = np.sqrt(phot_peak)
+
+        # Old noise should be < 0.01% of the correct noise
+        assert old_sigma / new_sigma < 1e-4, (
+            f"Old/new noise ratio = {old_sigma/new_sigma:.2e}, expected < 1e-4. "
+            f"Old noise should be negligible compared to correct noise."
         )

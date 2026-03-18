@@ -1,5 +1,32 @@
 """
 Radiometric pipeline functions for converting intensities to detector signals.
+
+Pipeline order
+--------------
+The correct ordering of operations is critical for physical correctness.
+The pipeline proceeds as:
+
+1. :func:`apply_exposure` — multiply intensity by exposure time (deterministic).
+2. :func:`intensity_to_photons` — convert erg intensity to photon flux.
+3. :func:`add_telescope_throughput` — multiply by collecting area × optical
+   efficiencies (mirror, grating, filter, microroughness).
+4. :func:`photons_to_pixel_counts` — project onto the detector pixel solid
+   angle and wavelength bin, producing **expected photon counts per pixel**.
+5. :func:`apply_focusing_optics_psf` — convolve with the optical PSF (optional).
+6. :func:`add_poisson` — **Poisson shot noise**, sampled here because the
+   values are now actual photon counts per pixel.
+7. :func:`to_electrons` — quantum efficiency (binomial), Fano noise, dark
+   current (Poisson, per pixel), and read noise (Gaussian).
+8. :func:`add_visible_stray_light` / :func:`add_pinhole_visible_light` —
+   stray light added in electron space.
+9. :func:`to_dn` — gain conversion to digital numbers, with saturation clip.
+
+.. important::
+   Poisson noise must be applied to **photon counts per pixel** (step 6),
+   not to the erg-valued intensity (step 1).  The previous implementation
+   applied ``np.random.poisson`` to the erg numerical values (~10¹⁴),
+   which produced effectively zero noise (relative σ ~ 10⁻⁸) instead of
+   the correct ~1/√N ~ 5–6 % for a typical ~300 photon/pixel signal.
 """
 
 from __future__ import annotations
@@ -245,7 +272,12 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
 
     e = electron_counts * (u.electron / u.pixel)
 
-    # Add dark current with Poisson noise (independent per pixel)
+    # Add dark current with Poisson noise (independent per pixel).
+    # Each pixel gets its own Poisson realisation so that the noise is
+    # spatially uncorrelated, as it is on a real CCD.  A previous version
+    # drew a single scalar and broadcast it identically to every pixel,
+    # which would bias spectral fits by correlating the noise across the
+    # line profile (the noise wouldn't average down with more pixels).
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
     dark_current_poisson = np.random.poisson(dark_current_mean, size=photon_counts.data.shape) * (u.electron / u.pixel)
     e += dark_current_poisson
@@ -297,9 +329,18 @@ def to_dn(electrons: NDCube, det) -> NDCube:
 
 
 def add_poisson(cube: NDCube) -> NDCube:
-    """
-    Apply Poisson noise to an input NDCube and return a new NDCube
-    with the same WCS, unit, and metadata.
+    r"""
+    Apply Poisson photon shot noise to photon counts per pixel.
+
+    This function must be called **after** the signal has been converted
+    to photon counts per detector pixel (i.e. after
+    ``photons_to_pixel_counts`` and any PSF / pinhole effects).  Applying
+    Poisson sampling earlier — e.g. to intensity values in erg units —
+    would produce dramatically incorrect noise because ``np.random.poisson``
+    treats its argument as the expected count, and erg-valued intensities
+    are many orders of magnitude larger than the actual photon count
+    (~10\ :sup:`14` vs ~10\ :sup:`2`), making the relative shot noise
+    negligibly small instead of the correct ~1/√N level.
 
     Negative values (which can arise from floating-point arithmetic or
     PSF boundary effects) are clipped to zero before sampling.
@@ -307,13 +348,17 @@ def add_poisson(cube: NDCube) -> NDCube:
     Parameters
     ----------
     cube : NDCube
-        Input data cube whose values are treated as Poisson rate
-        parameters (expected counts).
+        Input data cube whose values are expected photon counts per
+        pixel (unit ``photon / pix``).
 
     Returns
     -------
     NDCube
-        New cube containing Poisson-sampled data.
+        New cube containing Poisson-sampled integer photon counts.
+
+    See Also
+    --------
+    apply_exposure : Multiplies intensity by exposure time (no noise).
     """
     data_clipped = np.maximum(cube.data, 0)
     noisy = np.random.poisson(data_clipped) * cube.unit
@@ -326,13 +371,22 @@ def add_poisson(cube: NDCube) -> NDCube:
 
 
 def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
-    """
+    r"""
     Multiply a per-second intensity cube by the exposure time.
 
     Poisson (photon shot) noise is **not** applied here.  It is applied
-    later in the pipeline, after the intensity has been converted to
-    photon counts per detector pixel — the physically correct stage for
-    sampling photon-counting statistics.
+    later in the pipeline by :func:`add_poisson`, after the intensity has
+    been converted to photon counts per detector pixel — the only stage
+    where the numerical values represent actual expected photon counts
+    and Poisson sampling is physically meaningful.
+
+    .. note::
+       A previous version of this function (``apply_exposure_and_poisson``)
+       applied ``np.random.poisson`` directly to the erg-valued intensity
+       numbers (~10\ :sup:`14`).  Because Poisson noise scales as √λ, the
+       relative noise was ~10\ :sup:`-8` — effectively zero — rather than
+       the correct ~1/√N ≈ 5–6 % for the ~300 photon/pixel signal.  The
+       corrected pipeline now produces realistic shot noise.
 
     Parameters
     ----------
@@ -344,7 +398,7 @@ def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
     Returns
     -------
     NDCube
-        New cube with exposure applied (no stochastic noise).
+        New cube with exposure applied (deterministic, no stochastic noise).
     """
     total_intensity = (I.data * I.unit * t_exp)
 
