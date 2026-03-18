@@ -339,8 +339,8 @@ def add_poisson(cube: NDCube) -> NDCube:
     would produce dramatically incorrect noise because ``np.random.poisson``
     treats its argument as the expected count, and erg-valued intensities
     are many orders of magnitude larger than the actual photon count
-    (~10\ :sup:`14` vs ~10\ :sup:`2`), making the relative shot noise
-    negligibly small instead of the correct ~1/√N level.
+    (~1e14 vs ~1e2), making the relative shot noise negligibly small
+    instead of the correct ~1/sqrt(N) level.
 
     Negative values (which can arise from floating-point arithmetic or
     PSF boundary effects) are clipped to zero before sampling.
@@ -383,9 +383,9 @@ def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
     .. note::
        A previous version of this function (``apply_exposure_and_poisson``)
        applied ``np.random.poisson`` directly to the erg-valued intensity
-       numbers (~10\ :sup:`14`).  Because Poisson noise scales as √λ, the
-       relative noise was ~10\ :sup:`-8` — effectively zero — rather than
-       the correct ~1/√N ≈ 5–6 % for the ~300 photon/pixel signal.  The
+       numbers (~1e14).  Because Poisson noise scales as sqrt(lambda), the
+       relative noise was ~1e-8 — effectively zero — rather than the
+       correct ~1/sqrt(N) = 5-6 % for the ~300 photon/pixel signal.  The
        corrected pipeline now produces realistic shot noise.
 
     Parameters

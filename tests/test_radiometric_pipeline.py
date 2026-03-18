@@ -198,14 +198,19 @@ class TestPipelineUnits:
 # 5. Full pipeline integration test
 # -------------------------------------------------------------------
 class TestFullPipeline:
+    # simulate_once returns one NDCube for each pipeline stage:
+    # (intensity_exp, photons_total, photons_throughput, photons_pixels,
+    #  photons_focused, photons_euv_pinholes, photons_noisy, electrons,
+    #  electrons_stray, electrons_pinholes, dn)
+    EXPECTED_PIPELINE_STAGES = 11
+
     def test_simulate_once_runs(self):
         """Smoke test: simulate_once should run without error."""
         cube, det, sim = _make_test_cube()
         tel = Telescope_EUVST()
         t_exp = 10.0 * u.s
         result = simulate_once(cube, t_exp, det, tel, sim)
-        # Should return 11 elements
-        assert len(result) == 11
+        assert len(result) == self.EXPECTED_PIPELINE_STAGES
         # DN output should be non-negative
         dn = result[-1]
         assert np.all(dn.data >= 0)
