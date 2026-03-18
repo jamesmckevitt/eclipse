@@ -9,7 +9,7 @@ import astropy.units as u
 from ndcube import NDCube
 from tqdm import tqdm
 from .radiometric import (
-    apply_exposure_and_poisson, intensity_to_photons, add_telescope_throughput, 
+    apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput, 
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light
 )
@@ -43,8 +43,8 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
          photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
          electrons_pinholes, dn)
     """
-    # Apply exposure time and Poisson noise
-    intensity_exp = apply_exposure_and_poisson(I_cube, t_exp)
+    # Apply exposure time
+    intensity_exp = apply_exposure(I_cube, t_exp)
     
     # Convert to total photons
     photons_total = intensity_to_photons(intensity_exp)
@@ -66,9 +66,12 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
         photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
     else:
         photons_euv_pinholes = photons_focused
-    
-    # Convert to electrons
-    electrons = to_electrons(photons_euv_pinholes, t_exp, det)
+
+    # Sample discrete photon arrivals (photon shot noise)
+    photons_detected = sample_photon_arrivals(photons_euv_pinholes)
+
+    # Convert to electrons (detector response: QE, Fano noise, dark current, read noise)
+    electrons = to_electrons(photons_detected, t_exp, det)
     
     # Add visible stray light (with filter throughput)
     electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel)

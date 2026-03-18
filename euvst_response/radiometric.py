@@ -220,7 +220,7 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
     Parameters
     ----------
     photon_counts : NDCube
-        Cube of total photon counts per pixel (over exposure).
+        Discrete (Poisson-sampled) photon counts per pixel.  Values must be non-negative integers.
     t_exp : Quantity
         Exposure time (used for dark current and read noise).
     det : Detector_SWC or Detector_EIS
@@ -234,20 +234,17 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
     # Get rest wavelength from metadata (keep as Quantity with units)
     rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
 
-    # Apply quantum efficiency first using binomial distribution (proper physics)
-    photons_detected = np.random.binomial(
-        photon_counts.to(u.photon/u.pix).data.astype(int),  # Extract unitless data
-        det.qe_euv
-    )
+    # Apply quantum efficiency via binomial distribution
+    photons_detected = np.random.binomial(photon_counts.to(u.photon/u.pix).data.astype(int), det.qe_euv)
 
     # Apply proper Fano noise per pixel using a vectorized approach
     electron_counts = _vectorized_fano_noise(photons_detected.astype(float), rest_wavelength, det)
 
     e = electron_counts * (u.electron / u.pixel)
 
-    # Add dark current with Poisson noise
+    # Add dark current with Poisson noise (per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    dark_current_poisson = np.random.poisson(dark_current_mean) * (u.electron / u.pixel)
+    dark_current_poisson = np.random.poisson(dark_current_mean, size=photon_counts.data.shape) * (u.electron / u.pixel)
     e += dark_current_poisson
     
     # Add read noise
@@ -320,12 +317,41 @@ def add_poisson(cube: NDCube) -> NDCube:
     )
 
 
-def apply_exposure_and_poisson(I: NDCube, t_exp: u.Quantity) -> NDCube:
+def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     """
-    Apply exposure time to intensity and add Poisson noise.
-    
-    This converts intensity (per second) to total counts over the exposure
-    and applies appropriate Poisson noise.
+    Sample a discrete Poisson realisation of photon arrivals per pixel.
+
+    This represents the fundamental quantum nature of light: even for a
+    perfectly stable source, the number of photons arriving at any pixel
+    in a finite time is a Poisson-distributed integer.  This step is
+    purely physical (a property of the photon field) and is independent
+    of the detector technology.
+
+    Parameters
+    ----------
+    photon_counts : NDCube
+        Expected (mean) photon counts per pixel.
+
+    Returns
+    -------
+    NDCube
+        Poisson-sampled integer photon counts per pixel, same unit as input.
+    """
+    sampled = np.random.poisson(np.maximum(photon_counts.data, 0))
+    return NDCube(
+        data=sampled.astype(float),
+        wcs=photon_counts.wcs.deepcopy(),
+        unit=photon_counts.unit,
+        meta=photon_counts.meta,
+    )
+
+
+def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
+    """
+    Apply exposure time to intensity.
+
+    Multiplies the intensity rate by the exposure time to give the total
+    accumulated intensity.
 
     Parameters
     ----------
@@ -337,18 +363,15 @@ def apply_exposure_and_poisson(I: NDCube, t_exp: u.Quantity) -> NDCube:
     Returns
     -------
     NDCube
-        New cube with exposure applied and Poisson noise added.
+        New cube with exposure time applied.
     """
     # Convert intensity rate to total intensity over exposure
     total_intensity = (I.data * I.unit * t_exp)
-    
-    # Apply Poisson noise
-    noisy = np.random.poisson(total_intensity.value) * total_intensity.unit
-    
+
     return NDCube(
-        data=noisy.value,
+        data=total_intensity.value,
         wcs=I.wcs.deepcopy(),
-        unit=noisy.unit,
+        unit=total_intensity.unit,
         meta=I.meta,
     )
 
