@@ -213,14 +213,46 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     )
 
 
-def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
+def apply_qe(photon_counts: NDCube, qe: float) -> NDCube:
     """
-    Convert a photon-count NDCube to an electron-count NDCube.
+    Apply quantum efficiency as a mean reduction to photon counts.
+
+    Multiplies the expected photon counts by the QE to obtain the mean number
+    of detected photons per pixel.  This is a deterministic scaling step; the
+    statistical scatter introduced by the detection process is modelled
+    separately by :func:`sample_photon_arrivals`.
 
     Parameters
     ----------
     photon_counts : NDCube
-        Discrete (Poisson-sampled) photon counts per pixel.  Values must be non-negative integers.
+        Expected (mean) photon counts per pixel.
+    qe : float
+        Quantum efficiency (0 – 1).
+
+    Returns
+    -------
+    NDCube
+        Mean detected photon counts per pixel (same unit as input).
+    """
+    detected = (photon_counts.data * photon_counts.unit) * qe
+    return NDCube(
+        data=detected.value,
+        wcs=photon_counts.wcs.deepcopy(),
+        unit=detected.unit,
+        meta=photon_counts.meta,
+    )
+
+
+def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
+    """
+    Convert a detected-photon-count NDCube to an electron-count NDCube.
+
+    Parameters
+    ----------
+    photon_counts : NDCube
+        Discrete (Poisson-sampled) *detected* photon counts per pixel — i.e.
+        counts after QE has already been applied via :func:`apply_qe` and
+        :func:`sample_photon_arrivals`.  Values must be non-negative integers.
     t_exp : Quantity
         Exposure time (used for dark current and read noise).
     det : Detector_SWC or Detector_EIS
@@ -234,11 +266,8 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
     # Get rest wavelength from metadata (keep as Quantity with units)
     rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
 
-    # Apply quantum efficiency via binomial distribution
-    photons_detected = np.random.binomial(photon_counts.to(u.photon/u.pix).data.astype(int), det.qe_euv)
-
     # Apply proper Fano noise per pixel using a vectorized approach
-    electron_counts = _vectorized_fano_noise(photons_detected.astype(float), rest_wavelength, det)
+    electron_counts = _vectorized_fano_noise(photon_counts.data.astype(float), rest_wavelength, det)
 
     e = electron_counts * (u.electron / u.pixel)
 
@@ -335,11 +364,13 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     Returns
     -------
     NDCube
-        Poisson-sampled integer photon counts per pixel, same unit as input.
+        Poisson-sampled integer photon counts per pixel (numpy integer dtype),
+        same unit as input.  Downstream functions that require floating-point
+        arithmetic should cast with ``.data.astype(float)`` at the point of use.
     """
     sampled = np.random.poisson(np.maximum(photon_counts.data, 0))
     return NDCube(
-        data=sampled.astype(float),
+        data=sampled,
         wcs=photon_counts.wcs.deepcopy(),
         unit=photon_counts.unit,
         meta=photon_counts.meta,
