@@ -68,10 +68,10 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
         photons_euv_pinholes = photons_focused
 
     # Sample discrete photon arrivals (photon shot noise)
-    photons_detected = sample_photon_arrivals(photons_euv_pinholes)
+    photon_arrivals = sample_photon_arrivals(photons_euv_pinholes)
 
     # Convert to electrons (detector response: QE, Fano noise, dark current, read noise)
-    electrons = to_electrons(photons_detected, t_exp, det)
+    electrons = to_electrons(photon_arrivals, t_exp, det)
     
     # Add visible stray light (with filter throughput)
     electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel)
@@ -86,7 +86,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     dn = to_dn(electrons_pinholes, det)
 
     return (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-            photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
+            photons_focused, photon_arrivals, electrons, electrons_stray, 
             electrons_pinholes, dn)
 
 
@@ -124,20 +124,20 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
         # Simulate one run
         (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-         photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
+         photons_focused, photon_arrivals, electrons, electrons_stray, 
          electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
         
         # Store first iteration signals only
         if i == 0:
             first_dn_signal = dn
-            first_photon_signal = photons_euv_pinholes
+            first_photon_signal = photon_arrivals
         
         # Fit DN signal
         dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
         dn_fit_values_list.append(dn_fit_values)
         
         # Fit photon signal
-        photon_fit_values, photon_fit_units = fit_cube_gauss(photons_euv_pinholes, n_jobs=sim.ncpu)
+        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_arrivals, n_jobs=sim.ncpu)
         photon_fit_values_list.append(photon_fit_values)
         
     # Stack fit results
