@@ -342,7 +342,7 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     if not q.unit.is_equivalent(u.photon / u.pix):
         raise ValueError(
             f"photon_counts.unit={photon_counts.unit!r} is not a photon-count unit "
-            f"(expected something equivalent to u.photon or u.photon/u.pix)."
+            f"(expected something equivalent to u.photon/u.pix)."
         )
 
     sampled = np.random.poisson(np.maximum(q.to(photon_counts.unit).value, 0))
