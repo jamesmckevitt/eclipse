@@ -345,12 +345,12 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
             f"(expected something equivalent to u.photon/u.pix)."
         )
 
-    sampled = np.random.poisson(np.maximum(q.to(photon_counts.unit).value, 0))
+    sampled = np.maximum(np.random.poisson(q.to(u.photon/u.pix).value, 0))
 
     return NDCube(
         data=sampled.astype(np.int64),
         wcs=photon_counts.wcs.deepcopy(),
-        unit=photon_counts.unit,
+        unit=u.photon/u.pix,
         meta=photon_counts.meta,
     )
 
