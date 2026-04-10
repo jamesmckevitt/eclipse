@@ -52,7 +52,7 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # Mean number of electrons per photon
     mean_electrons_per_photon = photon_energy_ev / w_T
     
-    # Fano noise variance per photon
+    # Fano noise standard deviation per photon
     sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)
     
     # Work only with positive photon counts
@@ -116,7 +116,7 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     """Convert photon flux to pixel counts (total over exposure)."""
     pixel_solid_angle = ((plate_scale * u.pixel * slit_width).cgs / const.au.cgs ** 2) * u.sr
     
-    out_data = (ph_flux.data * ph_flux.unit * pixel_solid_angle * wl_pitch)
+    out_data = (ph_flux.data * ph_flux.unit * pixel_solid_angle * wl_pitch.to(u.cm/u.pix))
     
     return NDCube(
         data=out_data.value,
