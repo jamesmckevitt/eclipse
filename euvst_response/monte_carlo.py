@@ -40,7 +40,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
     tuple of NDCube
         Signal cubes at each step of the radiometric pipeline:
         (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-         photons_focused, photons_euv_pinholes, electrons, electrons_stray, 
+         photons_focused, photon_arrivals, electrons, electrons_stray, 
          electrons_pinholes, dn)
     """
     # Apply exposure time
