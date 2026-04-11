@@ -98,6 +98,25 @@ def gaussian(wave, peak, centre, sigma, back):
     return peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2) + back
 
 
+def multi_gaussian(wave, *params, n_components=1):
+    """Multi-component Gaussian plus constant background.
+
+    Parameters are ordered as::
+
+        [peak_0, centre_0, sigma_0, peak_1, centre_1, sigma_1, ..., background]
+
+    Total number of parameters = 3 * n_components + 1.
+    """
+    result = np.zeros_like(wave, dtype=float)
+    for i in range(n_components):
+        peak = params[3 * i]
+        centre = params[3 * i + 1]
+        sigma = params[3 * i + 2]
+        result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
+    result += params[-1]  # background
+    return result
+
+
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     """Convert angular size to linear distance at 1 AU."""
     if angle.unit.physical_type != "angle":

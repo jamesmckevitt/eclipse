@@ -17,7 +17,7 @@ from .radiometric import (
     to_dn, add_visible_stray_light, add_pinhole_visible_light
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction, airy_disk_pattern
-from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse
+from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse, FitConfig, FitComponent
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
 from .data_processing import load_atmosphere
@@ -39,6 +39,7 @@ __all__ = [
     "apply_exposure", "sample_photon_arrivals", "add_poisson", "apply_focusing_optics_psf", "to_electrons", 
     "to_dn", "add_visible_stray_light", "add_pinhole_visible_light",
     "fit_cube_gauss", "velocity_from_fit", "width_from_fit", "analyse",
+    "FitConfig", "FitComponent",
     "simulate_once", "monte_carlo",
     "main",
     "load_atmosphere",

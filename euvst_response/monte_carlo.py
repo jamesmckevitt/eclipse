@@ -90,7 +90,8 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
             electrons_pinholes, dn)
 
 
-def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5) -> Tuple[NDCube, dict, NDCube, dict]:
+def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
+                fit_config=None) -> Tuple[NDCube, dict, NDCube, dict]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -108,6 +109,8 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         Simulation configuration
     n_iter : int
         Number of Monte Carlo iterations
+    fit_config : FitConfig, optional
+        Multi-component Gaussian fit configuration.
         
     Returns
     -------
@@ -133,11 +136,11 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             first_photon_signal = photon_arrivals
         
         # Fit DN signal
-        dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu)
+        dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu, fit_config=fit_config)
         dn_fit_values_list.append(dn_fit_values)
         
         # Fit photon signal
-        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_arrivals, n_jobs=sim.ncpu)
+        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_arrivals, n_jobs=sim.ncpu, fit_config=fit_config)
         photon_fit_values_list.append(photon_fit_values)
         
     # Stack fit results

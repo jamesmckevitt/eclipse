@@ -18,7 +18,7 @@ import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
 from .data_processing import load_atmosphere, rebin_atmosphere
-from .fitting import fit_cube_gauss
+from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
 from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error
 import numpy as np
@@ -226,6 +226,25 @@ def main() -> None:
         warnings.warn("enable_pinholes is True but no pinhole_sizes specified. Pinhole effects will be disabled.")
         enable_pinholes_vals = [False]
 
+    # Parse fitting configuration (multi-component Gaussian)
+    fit_config = None
+    fitting_cfg = config.get("fitting", None)
+    if fitting_cfg is not None:
+        raw_components = fitting_cfg.get("components", [])
+        if len(raw_components) >= 2:
+            components = []
+            for comp_dict in raw_components:
+                wl = parse_yaml_input(comp_dict["wavelength"])
+                tie_center = comp_dict.get("tie_center", None)
+                tie_width = comp_dict.get("tie_width", None)
+                components.append(FitComponent(wavelength=wl,
+                                               tie_center=tie_center,
+                                               tie_width=tie_width))
+            primary = fitting_cfg.get("primary_component", 0)
+            fit_config = FitConfig(components=components, primary_component=primary)
+            print(f"Multi-component fitting enabled: {fit_config.n_components} components "
+                  f"(primary={primary}, {fit_config.n_full_params} params)")
+
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
     print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
@@ -312,7 +331,7 @@ def main() -> None:
         cube_reb_dict[slit_width_key] = cube_reb
         
         print("Fitting ground truth cube...")
-        fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu)
+        fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu, fit_config=fit_config)
         
         for oxide_thickness in oxide_thicknesses:
             for c_thickness in c_thicknesses:
@@ -382,7 +401,8 @@ def main() -> None:
 
                                         # Run Monte Carlo for this single parameter combination
                                         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter
+                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter,
+                                            fit_config=fit_config
                                         )
 
                                         # Store results for this parameter combination
@@ -464,6 +484,7 @@ def main() -> None:
         "instrument": instrument,
         "cube_sim": cube_sim,
         "cube_reb_dict": cube_reb_dict,
+        "fit_config": fit_config,
     }
     
     with open(output_file, "wb") as f:

@@ -112,7 +112,8 @@ def get_parameter_combinations(results: Dict[str, Any]) -> List[Tuple]:
 def analyse_fit_statistics(
     combination_results: Dict[str, Any],
     rest_wavelength: u.Quantity,
-    data_type: str = "dn"
+    data_type: str = "dn",
+    fit_config=None,
 ) -> Dict[str, Any]:
     """
     Analyze fit statistics to compute velocity and line width statistics.
@@ -125,12 +126,24 @@ def analyse_fit_statistics(
         Rest wavelength for velocity conversion.
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to analyze.
+    fit_config : FitConfig, optional
+        Multi-component fitting configuration. When provided the primary-
+        component indices are used; otherwise indices 1 (centre) and
+        2 (sigma) are assumed (single-component default).
         
     Returns
     -------
     dict
         Dictionary containing velocity and width statistics.
     """
+    # Determine parameter indices for the primary component
+    if fit_config is not None and not fit_config.is_single:
+        idx_center = fit_config.idx_center
+        idx_sigma = fit_config.idx_sigma
+    else:
+        idx_center = 1
+        idx_sigma = 2
+
     # Get fit statistics
     fit_stats_key = f"{data_type}_fit_stats"
     if fit_stats_key not in combination_results:
@@ -141,19 +154,19 @@ def analyse_fit_statistics(
     fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
     
     # Extract data and units
-    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, 4)
-    std_data = fit_stats["std_data"]        # Shape: (nx, ny, 4)
-    units = fit_stats["units"]              # List of 4 astropy units
+    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, n_params)
+    std_data = fit_stats["std_data"]        # Shape: (nx, ny, n_params)
+    units = fit_stats["units"]              # List of n_params astropy units
     
-    # Get center statistics (parameter index 1)
-    center_mean_data = mean_data[..., 1]    # (nx, ny) - values only
-    center_std_data = std_data[..., 1]      # (nx, ny) - values only
-    center_unit = units[1]                  # wavelength unit
+    # Get center statistics for the primary component
+    center_mean_data = mean_data[..., idx_center]
+    center_std_data = std_data[..., idx_center]
+    center_unit = units[idx_center]
     
-    # Get width statistics (parameter index 2)
-    width_mean_data = mean_data[..., 2]     # (nx, ny) - values only
-    width_std_data = std_data[..., 2]       # (nx, ny) - values only
-    width_unit = units[2]                   # wavelength unit
+    # Get width statistics for the primary component
+    width_mean_data = mean_data[..., idx_sigma]
+    width_std_data = std_data[..., idx_sigma]
+    width_unit = units[idx_sigma]
     
     # Create quantities
     center_mean_q = center_mean_data * center_unit
@@ -170,7 +183,7 @@ def analyse_fit_statistics(
     
     # Convert to velocities
     v_mean = centers_to_velocity(center_mean_q, rest_wavelength)
-    v_true = centers_to_velocity(fit_truth_data[..., 1] * fit_truth_units[1], rest_wavelength)
+    v_true = centers_to_velocity(fit_truth_data[..., idx_center] * fit_truth_units[idx_center], rest_wavelength)
     v_err = v_true - v_mean
     
     # Convert center std to velocity std using differential: dv/dlambda = c/lambda
