@@ -335,13 +335,16 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     Returns
     -------
     NDCube
-        Poisson-sampled integer photon counts per pixel, same unit as input.
+        Poisson-sampled integer photon counts per pixel.
     """
     q = photon_counts.data * photon_counts.unit
 
     canonical_units = u.photon / u.pix
 
-    sampled = np.maximum(np.random.poisson(q.to(canonical_units).value), 0)
+    mean_counts = q.to(canonical_units).value
+    mean_counts = np.maximum(mean_counts, 0)
+
+    sampled = np.random.poisson(mean_counts)
 
     return NDCube(
         data=sampled.astype(np.int64),
