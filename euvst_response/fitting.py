@@ -183,7 +183,8 @@ def _build_multi_model(fit_config: FitConfig):
     return model_func, free_to_full, n_free, free_indices
 
 
-def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig) -> np.ndarray:
+def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
+                        free_indices: list[int]) -> np.ndarray:
     """Generate an initial guess for the *free* parameters of a multi-component fit."""
     nc = fit_config.n_components
     back = prof.min()
@@ -220,17 +221,17 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig)
     full_guess[-1] = back
 
     # Extract only the free parameters
-    _, _, _, free_indices = _build_multi_model(fit_config)
     return full_guess[free_indices]
 
 
 def _fit_one_multi(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
-                   model_func, free_to_full, n_free: int) -> np.ndarray:
+                   model_func, free_to_full, n_free: int,
+                   free_indices: list[int]) -> np.ndarray:
     """Fit a single spectrum with the tied multi-component model.
 
     Returns the *full* parameter vector (length 3*N+1).
     """
-    p0_free = _guess_multi_params(wv, prof, fit_config)
+    p0_free = _guess_multi_params(wv, prof, fit_config, free_indices)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
@@ -290,14 +291,15 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         return data_array, units_list
 
     # --- multi-component path ---
-    model_func, free_to_full, n_free, _ = _build_multi_model(fit_config)
+    model_func, free_to_full, n_free, free_indices = _build_multi_model(fit_config)
     n_params = fit_config.n_full_params
 
     def _fit_block_multi(spec_block):
         results = np.empty((spec_block.shape[0], n_params))
         for i in range(spec_block.shape[0]):
             results[i] = _fit_one_multi(wv.value, spec_block[i], fit_config,
-                                        model_func, free_to_full, n_free)
+                                        model_func, free_to_full, n_free,
+                                        free_indices)
         return results
 
     with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks (multi)", leave=False)):

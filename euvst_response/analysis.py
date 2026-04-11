@@ -472,7 +472,8 @@ def create_sunpy_maps_from_combo(
     rest_wavelength: u.Quantity = 195.119 * u.AA,
     data_type: str = "dn",
     precision_requirement: u.Quantity = 2.0 * u.km / u.s,
-    exposure_time_results: List[Dict[str, Any]] | None = None
+    exposure_time_results: List[Dict[str, Any]] | None = None,
+    fit_config=None,
 ) -> Dict[str, Any]:
     """
     Create SunPy maps from combination results using the new fit statistics structure.
@@ -492,6 +493,9 @@ def create_sunpy_maps_from_combo(
     exposure_time_results : list of dict, optional
         List of results from get_results_for_combination() for different exposure times.
         If provided, will create an exposure time map showing minimum exposure needed.
+    fit_config : FitConfig, optional
+        Multi-component fitting configuration. When provided, the primary-
+        component indices are used to extract centre and width parameters.
         
     Returns
     -------
@@ -517,7 +521,7 @@ def create_sunpy_maps_from_combo(
             # Extract exposure time from parameters
             exposure_time = result["parameters"]["exposure"].to_value(u.s)
             # Create analysis for this exposure
-            analysis = analyse_fit_statistics(result, rest_wavelength, data_type)
+            analysis = analyse_fit_statistics(result, rest_wavelength, data_type, fit_config=fit_config)
             analysis_per_exp[exposure_time] = analysis
     else:
         analysis_per_exp = None
@@ -548,14 +552,22 @@ def create_sunpy_maps_from_combo(
     maps['total_dn'] = sunpy.map.Map(total_dn_data.T, wcs_2d)
     maps['total_dn'].meta['bunit'] = str(total_dn_unit)
     
+    # Determine parameter indices for the primary component
+    if fit_config is not None and not fit_config.is_single:
+        idx_center = fit_config.idx_center
+        idx_sigma = fit_config.idx_sigma
+    else:
+        idx_center = 1
+        idx_sigma = 2
+
     # --- Get velocity and width analysis for this combination ---
-    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type)
+    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type, fit_config=fit_config)
 
     # --- Velocity maps ---
-    # Velocity from first fit (parameter 1 = center)
-    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, 4)
-    center_first_data = first_fit_data[..., 1]    # Extract center parameter
-    center_first_unit = fit_stats["units"][1]     # Get units for center parameter
+    # Velocity from first fit (primary component center)
+    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, n_params)
+    center_first_data = first_fit_data[..., idx_center]
+    center_first_unit = fit_stats["units"][idx_center]
 
     def centers_to_velocity(centers_data, centers_unit, lambda0):
         """Convert wavelength centers to velocities"""
@@ -583,9 +595,9 @@ def create_sunpy_maps_from_combo(
     maps['velocity_err'].meta['bunit'] = str(analysis["v_err"].unit)
 
     # --- Line width maps ---
-    # Line width from first fit (parameter 2 = width)
-    width_first_data = first_fit_data[..., 2]     # Extract width parameter data
-    width_first_unit = fit_stats["units"][2]      # Get units for width parameter
+    # Line width from first fit (primary component sigma)
+    width_first_data = first_fit_data[..., idx_sigma]
+    width_first_unit = fit_stats["units"][idx_sigma]
 
     # Create quantity with proper units
     width_quantity = width_first_data * width_first_unit
