@@ -318,6 +318,15 @@ ccd_temperature: -60 Celsius  # Default (expected operating temperature)
 
 # Visible stray light level
 vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
+
+# Multi-component Gaussian fitting (optional, omit for single-Gaussian)
+fitting:
+  primary_component: 0
+  components:
+    - wavelength: 195.119 angstrom
+    - wavelength: 195.179 angstrom
+      tie_center: 0  # Centroid offset tied to component 0
+      tie_width: 0  # Same width as component 0
 ```
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
