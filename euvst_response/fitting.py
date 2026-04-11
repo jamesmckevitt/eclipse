@@ -96,10 +96,13 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
 def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
     """Fit single spectrum with Gaussian."""
     p0 = _guess_params(wv, prof)
+    # Bounds: peak >= 0, others unconstrained
+    lower = [0, -np.inf, -np.inf, -np.inf]
+    upper = [np.inf, np.inf, np.inf, np.inf]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(gaussian, wv, prof, p0=p0)
+            popt, _ = curve_fit(gaussian, wv, prof, p0=p0, bounds=(lower, upper))
             return popt
         except:
             return np.array(p0)
@@ -232,10 +235,18 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
     Returns the *full* parameter vector (length 3*N+1).
     """
     p0_free = _guess_multi_params(wv, prof, fit_config, free_indices)
+    # Build bounds: peak parameters >= 0, others unconstrained
+    nc = fit_config.n_components
+    peak_full_indices = set(range(0, 3 * nc, 3))
+    lower = [-np.inf] * n_free
+    for pos, fi in enumerate(free_indices):
+        if fi in peak_full_indices:
+            lower[pos] = 0.0
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt_free, _ = curve_fit(model_func, wv, prof, p0=p0_free, maxfev=5000)
+            popt_free, _ = curve_fit(model_func, wv, prof, p0=p0_free,
+                                     bounds=(lower, np.inf), maxfev=5000)
         except Exception:
             popt_free = p0_free
     return free_to_full(popt_free)
