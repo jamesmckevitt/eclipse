@@ -875,7 +875,7 @@ def synthesise_spectra(
         atom_weight_g = (atom.atomic_weight * u.u).cgs.value
 
         # Thermal width per T-bin: sigma_T (nT,)
-        sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
+        sigma_T = wl0 * np.sqrt(kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
 
         # Doppler-shifted center for each v-bin: (nv,)
         lam_cent = wl0 * (1 + vel_grid.value / c_cm_s)
