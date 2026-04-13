@@ -112,6 +112,8 @@ def multi_gaussian(wave, *params, n_components=1):
         peak = params[3 * i]
         centre = params[3 * i + 1]
         sigma = params[3 * i + 2]
+        if sigma == 0:
+            continue
         result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
     result += params[-1]  # background
     return result
