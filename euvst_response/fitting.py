@@ -14,6 +14,7 @@ from scipy.optimize import curve_fit, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from .utils import gaussian, multi_gaussian, tqdm_joblib
+from .extern.mpfit import mpfit
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,8 @@ class FitConfig:
     """
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
+    constrain_positive_intensity: bool = False
+    backend: str | None = None  # None = auto (scipy unless positive-intensity needed)
 
     @property
     def n_components(self) -> int:
@@ -106,93 +109,203 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-#  Multi-component helpers
+#  Multi-component helpers  (scipy back-end — fast, default)
 # ---------------------------------------------------------------------------
 
-def _build_multi_model(fit_config: FitConfig):
-    """Build a tied multi-Gaussian model suitable for *curve_fit*.
+def _build_scipy_multi(fit_config: FitConfig):
+    """Build a tied multi-Gaussian model for *curve_fit*.
+
+    Internally the model works in **Angstrom** for wavelength-related
+    parameters (centres, sigmas) so that all free parameters are within
+    a few orders of magnitude of each other.  This avoids the severe
+    ill-conditioning that occurs when the fitter operates in CGS.
+
+    The scipy backend always uses the Levenberg-Marquardt (``lm``) method,
+    which does not support bounds but converges reliably.  If
+    ``constrain_positive_intensity`` is set, negative peak values are
+    clipped to zero in post-processing.
 
     Returns
     -------
     model_func : callable
-        ``model_func(x, *free_params) -> y``
-    free_to_full : callable
-        ``free_to_full(free_params) -> full_params`` (length 3*N+1)
+        ``model_func(x_angstrom, *free_params_angstrom) -> y``
+    free_to_full_A : callable
+        ``free_to_full_A(free_params_A) -> full_params_A`` (length 3*N+1)
     n_free : int
-        Number of free (optimised) parameters.
     free_indices : list[int]
-        Mapping from free-parameter position to full-parameter index.
     """
     nc = fit_config.n_components
     n_full = fit_config.n_full_params  # 3*nc + 1
 
-    # Determine which full-parameter indices are free vs tied
     free_indices: list[int] = []
-    # tie_spec[full_idx] = (source_full_idx, offset)  or None
-    tie_spec: dict[int, tuple[int, float] | None] = {}
+    # tie_spec[full_idx] = (source_full_idx, offset_angstrom)
+    tie_spec: dict[int, tuple[int, float]] = {}
 
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
-        # peak is always free
+        # peak — always free
         free_indices.append(base)
-        tie_spec[base] = None
 
         # centre
         if comp.tie_center is not None:
             src = comp.tie_center
-            offset = (comp.wavelength - fit_config.components[src].wavelength).to(u.cm).value
+            offset = float((comp.wavelength
+                            - fit_config.components[src].wavelength).to(u.Angstrom).value)
             tie_spec[base + 1] = (3 * src + 1, offset)
         else:
             free_indices.append(base + 1)
-            tie_spec[base + 1] = None
 
-        # width
+        # sigma
         if comp.tie_width is not None:
             src = comp.tie_width
             tie_spec[base + 2] = (3 * src + 2, 0.0)
         else:
             free_indices.append(base + 2)
-            tie_spec[base + 2] = None
 
-    # background is always free
-    bg_idx = n_full - 1
-    free_indices.append(bg_idx)
-    tie_spec[bg_idx] = None
+    # background — always free
+    free_indices.append(n_full - 1)
 
     n_free = len(free_indices)
-    # Reverse map: full_idx -> position in free array (for tied referencing)
-    full_to_free = {fi: pos for pos, fi in enumerate(free_indices)}
 
-    def free_to_full(free_params):
+    def free_to_full_A(free_params):
         full = np.empty(n_full)
-        # First fill free slots
         for pos, fi in enumerate(free_indices):
             full[fi] = free_params[pos]
-        # Then fill tied slots
-        for fi in range(n_full):
-            spec = tie_spec.get(fi)
-            if spec is not None:
-                src_fi, offset = spec
-                full[fi] = full[src_fi] + offset
+        for fi, (src_fi, offset) in tie_spec.items():
+            full[fi] = full[src_fi] + offset
         return full
 
     def model_func(x, *free_params):
-        full = free_to_full(free_params)
+        full = free_to_full_A(free_params)
         return multi_gaussian(x, *full, n_components=nc)
 
-    return model_func, free_to_full, n_free, free_indices
+    return model_func, free_to_full_A, n_free, free_indices
 
 
-def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
-                        free_indices: list[int]) -> np.ndarray:
-    """Generate an initial guess for the *free* parameters of a multi-component fit."""
+def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
+                         fit_config: FitConfig,
+                         model_func, free_to_full_A,
+                         free_indices: list[int]) -> np.ndarray:
+    """Fit one spectrum with scipy curve_fit (multi-component, Å scaling).
+
+    *wv_cm* is the wavelength axis in **cm** (CGS).  The fit is performed
+    in Ångström internally, then the result is converted back to cm.
+    """
+    CM_TO_A = 1e8
+
+    # Initial guess in cm (from shared helper)
+    p0_full_cm = _guess_multi_params(wv_cm, prof, fit_config)
+
+    # Convert centres & sigmas to Å
+    p0_full_A = p0_full_cm.copy()
+    for i in range(fit_config.n_components):
+        p0_full_A[3 * i + 1] *= CM_TO_A  # centre
+        p0_full_A[3 * i + 2] *= CM_TO_A  # sigma
+
+    p0_free_A = p0_full_A[free_indices]
+    wv_A = wv_cm * CM_TO_A
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", OptimizeWarning)
+        try:
+            popt_free_A, _ = curve_fit(model_func, wv_A, prof, p0=p0_free_A,
+                                       maxfev=5000)
+        except Exception:
+            popt_free_A = p0_free_A
+
+    # Reconstruct full Å vector, then convert centres & sigmas back to cm
+    full_A = free_to_full_A(popt_free_A)
+    full_cm = full_A.copy()
+    for i in range(fit_config.n_components):
+        full_cm[3 * i + 1] /= CM_TO_A  # centre
+        full_cm[3 * i + 2] /= CM_TO_A  # sigma
+
+    return full_cm
+
+
+def _fit_one_scipy_multi_clip(wv_cm: np.ndarray, prof: np.ndarray,
+                              fit_config: FitConfig,
+                              model_func, free_to_full_A,
+                              free_indices: list[int]) -> np.ndarray:
+    """Like ``_fit_one_scipy_multi`` but clips negative peaks to zero."""
+    full_cm = _fit_one_scipy_multi(wv_cm, prof, fit_config,
+                                   model_func, free_to_full_A, free_indices)
+    for i in range(fit_config.n_components):
+        if full_cm[3 * i] < 0:
+            full_cm[3 * i] = 0.0
+    return full_cm
+
+
+# ---------------------------------------------------------------------------
+#  Multi-component helpers  (mpfit back-end)
+# ---------------------------------------------------------------------------
+
+def _build_parinfo(fit_config: FitConfig, p0: np.ndarray) -> list[dict]:
+    """Build mpfit *parinfo* list from a FitConfig and initial guess.
+
+    The full parameter vector has layout
+    ``[peak0, centre0, sigma0, peak1, centre1, sigma1, ..., background]``.
+
+    Parameters
+    ----------
+    fit_config : FitConfig
+        Multi-component configuration (ties, constraints …).
+    p0 : np.ndarray
+        Initial-guess vector (length ``3*N + 1``).
+
+    Returns
+    -------
+    parinfo : list[dict]
+        One dict per parameter, suitable for ``mpfit(…, parinfo=…)``.
+    """
     nc = fit_config.n_components
-    back = prof.min()
+    parinfo: list[dict] = []
+
+    for i, comp in enumerate(fit_config.components):
+        base = 3 * i
+
+        # --- peak (intensity) ---
+        peak_info: dict = {"value": p0[base]}
+        if fit_config.constrain_positive_intensity:
+            peak_info["limited"] = [1, 0]
+            peak_info["limits"] = [0.0, 0.0]
+        parinfo.append(peak_info)
+
+        # --- centre ---
+        centre_info: dict = {"value": p0[base + 1]}
+        if comp.tie_center is not None:
+            src = comp.tie_center
+            offset = float((comp.wavelength
+                            - fit_config.components[src].wavelength).to(u.cm).value)
+            # mpfit tie expression references the parameter array p
+            centre_info["tied"] = f"p[{3 * src + 1}] + {offset!r}"
+        parinfo.append(centre_info)
+
+        # --- sigma (width) ---
+        sigma_info: dict = {"value": p0[base + 2]}
+        # Width must be strictly positive (avoid divide-by-zero in Gaussian)
+        sigma_info["limited"] = [1, 0]
+        sigma_info["limits"] = [1e-30, 0.0]
+        if comp.tie_width is not None:
+            src = comp.tie_width
+            sigma_info["tied"] = f"p[{3 * src + 2}]"
+        parinfo.append(sigma_info)
+
+    # --- background ---
+    bg_info: dict = {"value": p0[-1]}
+    parinfo.append(bg_info)
+
+    return parinfo
+
+
+def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
+                        fit_config: FitConfig) -> np.ndarray:
+    """Generate an initial guess for the *full* parameter vector."""
+    back = float(prof.min())
     prof_c = prof - back
     prof_c[prof_c < 0] = 0
 
-    # Primary component gets the dominant peak guess
-    peak = prof_c.max()
+    peak = float(prof_c.max())
     if peak == 0:
         sigma = (wv.max() - wv.min()) / 10
     else:
@@ -204,7 +317,6 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
         else:
             sigma = (wv.max() - wv.min()) / 10
 
-    # Build full initial guess, then extract free parameters
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
@@ -214,31 +326,49 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
             full_guess[base + 1] = wl_cm
             full_guess[base + 2] = sigma
         else:
-            # Secondary component: fraction of primary peak, same sigma
             full_guess[base] = peak * 0.15
             full_guess[base + 1] = wl_cm
             full_guess[base + 2] = sigma
     full_guess[-1] = back
-
-    # Extract only the free parameters
-    return full_guess[free_indices]
+    return full_guess
 
 
-def _fit_one_multi(wv: np.ndarray, prof: np.ndarray, fit_config: FitConfig,
-                   model_func, free_to_full, n_free: int,
-                   free_indices: list[int]) -> np.ndarray:
-    """Fit a single spectrum with the tied multi-component model.
+def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1):
+    """Residual function in the form mpfit expects.
 
-    Returns the *full* parameter vector (length 3*N+1).
+    Must return ``[status, residuals]`` where *status* is 0 for success.
     """
-    p0_free = _guess_multi_params(wv, prof, fit_config, free_indices)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", OptimizeWarning)
-        try:
-            popt_free, _ = curve_fit(model_func, wv, prof, p0=p0_free, maxfev=5000)
-        except Exception:
-            popt_free = p0_free
-    return free_to_full(popt_free)
+    model = multi_gaussian(x, *p, n_components=n_components)
+    return [0, y - model]
+
+
+def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
+                   fit_config: FitConfig,
+                   parinfo_template: list[dict]) -> np.ndarray:
+    """Fit a single spectrum with mpfit.
+
+    Returns the *full* parameter vector (length ``3*N + 1``).
+    """
+    p0 = _guess_multi_params(wv, prof, fit_config)
+
+    # Stamp current initial guesses into the parinfo dicts
+    parinfo = []
+    for i, pi in enumerate(parinfo_template):
+        d = dict(pi)
+        d["value"] = p0[i]
+        parinfo.append(d)
+
+    functkw = {"x": wv, "y": prof, "n_components": fit_config.n_components}
+
+    try:
+        result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
+                       functkw=functkw, quiet=True, maxiter=200)
+        if result.status > 0:
+            return np.asarray(result.params, dtype=float)
+    except Exception:
+        pass
+
+    return p0  # fall back to initial guess
 
 
 # ---------------------------------------------------------------------------
@@ -291,16 +421,45 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         return data_array, units_list
 
     # --- multi-component path ---
-    model_func, free_to_full, n_free, free_indices = _build_multi_model(fit_config)
     n_params = fit_config.n_full_params
 
-    def _fit_block_multi(spec_block):
-        results = np.empty((spec_block.shape[0], n_params))
-        for i in range(spec_block.shape[0]):
-            results[i] = _fit_one_multi(wv.value, spec_block[i], fit_config,
-                                        model_func, free_to_full, n_free,
-                                        free_indices)
-        return results
+    # Auto-select backend: scipy (fast, LM) when no hard bounds are needed;
+    # mpfit (slower, full MINPACK) when constrain_positive_intensity is set.
+    # If backend is explicitly "scipy", force scipy even with positive
+    # constraint (negative peaks are clipped post-fit).
+    if fit_config.backend == "scipy":
+        use_mpfit = False
+        clip_negative = fit_config.constrain_positive_intensity
+    else:  # None (auto) or "mpfit"
+        use_mpfit = fit_config.constrain_positive_intensity
+        clip_negative = False
+
+    if not use_mpfit:
+        # scipy curve_fit — LM method, Å scaling (fast)
+        (model_func, free_to_full, n_free,
+         free_indices) = _build_scipy_multi(fit_config)
+        _pixel_func = (_fit_one_scipy_multi_clip if clip_negative
+                       else _fit_one_scipy_multi)
+
+        def _fit_block_multi(spec_block):
+            results = np.empty((spec_block.shape[0], n_params))
+            for i in range(spec_block.shape[0]):
+                results[i] = _pixel_func(
+                    wv.value, spec_block[i], fit_config,
+                    model_func, free_to_full, free_indices)
+            return results
+
+    else:
+        # mpfit with full parinfo (slower, supports hard bounds)
+        p0_template = _guess_multi_params(wv.value, signal_cube.data[0, 0], fit_config)
+        parinfo_template = _build_parinfo(fit_config, p0_template)
+
+        def _fit_block_multi(spec_block):
+            results = np.empty((spec_block.shape[0], n_params))
+            for i in range(spec_block.shape[0]):
+                results[i] = _fit_one_multi(wv.value, spec_block[i], fit_config,
+                                            parinfo_template)
+            return results
 
     with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
