@@ -43,7 +43,7 @@ class FitConfig:
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
     constrain_positive_intensity: bool = False
-    backend: str | None = None  # None = auto (scipy unless positive-intensity needed)
+    backend: str | None = None  # None = auto (scipy)
 
     @property
     def n_components(self) -> int:
