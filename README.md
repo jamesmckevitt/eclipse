@@ -367,6 +367,14 @@ slit_bin_pairs:
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
 
+By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
+
+```yaml
+fit_signals: dn       # Fit only the DN signal
+fit_signals: photon   # Fit only the photon signal
+fit_signals: both     # Fit both (default)
+```
+
 If you synthesised data in dynamic mode, your configuration must specify:
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time
