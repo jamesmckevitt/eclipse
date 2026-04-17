@@ -91,7 +91,8 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
 
 
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
-                fit_config=None, offchip_bin_slit: int = 1) -> Tuple[NDCube, dict, NDCube, dict]:
+                fit_config=None, offchip_bin_slit: int = 1,
+                fit_signals: str = "both") -> Tuple[NDCube, dict | None, NDCube, dict | None]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -115,16 +116,26 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         Number of slit pixels to sum (off-chip, ground-based binning).
         Each pixel is read out independently so all noise sources are
         present per pixel before summation.  Default 1 (no binning).
+    fit_signals : str
+        Which signals to fit: ``"both"`` (default), ``"dn"``, or
+        ``"photon"``.  Fitting is the most expensive step, so
+        selecting only the signal of interest roughly halves runtime.
         
     Returns
     -------
     tuple
         (first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results)
         - first_dn_signal: First iteration DN signal (NDCube)
-        - dn_fit_results: Dict with fit data and units stored separately
+        - dn_fit_results: Dict with fit data and units, or None if skipped
         - first_photon_signal: First iteration photon signal (NDCube)  
-        - photon_fit_results: Dict with fit data and units stored separately
+        - photon_fit_results: Dict with fit data and units, or None if skipped
     """
+    if fit_signals not in ("both", "dn", "photon"):
+        raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")
+
+    do_dn = fit_signals in ("both", "dn")
+    do_photon = fit_signals in ("both", "photon")
+
     first_dn_signal, first_photon_signal = None, None
     dn_fit_values_list, photon_fit_values_list = [], []
     
@@ -140,34 +151,35 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             first_photon_signal = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
         
         # Off-chip slit binning (sum already noisy pixels)
-        dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
-        photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
-
-        # Fit DN signal
-        dn_fit_values, dn_fit_units = fit_cube_gauss(dn_binned, n_jobs=sim.ncpu, fit_config=fit_config)
-        dn_fit_values_list.append(dn_fit_values)
+        if do_dn:
+            dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
+            dn_fit_values, dn_fit_units = fit_cube_gauss(dn_binned, n_jobs=sim.ncpu, fit_config=fit_config)
+            dn_fit_values_list.append(dn_fit_values)
         
-        # Fit photon signal
-        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_binned, n_jobs=sim.ncpu, fit_config=fit_config)
-        photon_fit_values_list.append(photon_fit_values)
+        if do_photon:
+            photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
+            photon_fit_values, photon_fit_units = fit_cube_gauss(photon_binned, n_jobs=sim.ncpu, fit_config=fit_config)
+            photon_fit_values_list.append(photon_fit_values)
         
-    # Stack fit results
-    dn_fits_values = np.stack(dn_fit_values_list)
-    photon_fits_values = np.stack(photon_fit_values_list)
+    # Stack fit results and compute statistics
+    dn_fit_results = None
+    if do_dn:
+        dn_fits_values = np.stack(dn_fit_values_list)
+        dn_fit_results = {
+            "first_fit_data": dn_fits_values[0],
+            "mean_data": dn_fits_values.mean(axis=0),
+            "std_data": dn_fits_values.std(axis=0),
+            "units": dn_fit_units,
+        }
     
-    # Compute statistics on stripped data
-    dn_fit_results = {
-        "first_fit_data": dn_fits_values[0],
-        "mean_data": dn_fits_values.mean(axis=0),
-        "std_data": dn_fits_values.std(axis=0),
-        "units": dn_fit_units,
-    }
-    
-    photon_fit_results = {
-        "first_fit_data": photon_fits_values[0],
-        "mean_data": photon_fits_values.mean(axis=0),
-        "std_data": photon_fits_values.std(axis=0),
-        "units": photon_fit_units,
-    }
+    photon_fit_results = None
+    if do_photon:
+        photon_fits_values = np.stack(photon_fit_values_list)
+        photon_fit_results = {
+            "first_fit_data": photon_fits_values[0],
+            "mean_data": photon_fits_values.mean(axis=0),
+            "std_data": photon_fits_values.std(axis=0),
+            "units": photon_fit_units,
+        }
     
     return first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results

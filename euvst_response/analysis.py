@@ -150,6 +150,11 @@ def analyse_fit_statistics(
         raise ValueError(f"No {fit_stats_key} found in combination results")
     
     fit_stats = combination_results[fit_stats_key]
+    if fit_stats is None:
+        raise ValueError(
+            f"'{data_type}' signal was not fitted for this combination. "
+            f"Check the 'fit_signals' setting in your YAML config."
+        )
     fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
     fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
     
@@ -579,6 +584,11 @@ def create_sunpy_maps_from_combo(
     first_dn_signal = combination_results["first_dn_signal"]         # Shape: (nx, ny, nwave)
     fit_stats_key = f"{data_type}_fit_stats"
     fit_stats = combination_results[fit_stats_key]          # Contains first_fit_data, mean_data, std_data, units
+    if fit_stats is None:
+        raise ValueError(
+            f"'{data_type}' signal was not fitted for this combination. "
+            f"Check the 'fit_signals' setting in your YAML config."
+        )
     
     maps = {}
 

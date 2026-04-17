@@ -266,6 +266,17 @@ def main() -> None:
 
     # Parse off-chip slit binning (ground-based spatial binning along the slit)
     offchip_bin_slits = ensure_list(config.get("offchip_bin_slit", [1]))
+
+    # Parse which signals to fit (default: both DN and photon)
+    fit_signals = config.get("fit_signals", "both")
+    if fit_signals not in ("both", "dn", "photon"):
+        raise ValueError(
+            f"Unknown fit_signals value '{fit_signals}'. "
+            f"Supported values: 'both', 'dn', 'photon'."
+        )
+    if fit_signals != "both":
+        skipped = "photon" if fit_signals == "dn" else "dn"
+        print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
     # ensure_list wraps scalars in a list; values are plain ints (no units)
     offchip_bin_slits = [int(v) for v in offchip_bin_slits]
     offchip_bin_slits = deduplicate_list(offchip_bin_slits, "offchip_bin_slit")
@@ -449,7 +460,8 @@ def main() -> None:
                                             first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
                                                 cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter,
                                                 fit_config=fit_config,
-                                                offchip_bin_slit=offchip_bin_slit
+                                                offchip_bin_slit=offchip_bin_slit,
+                                                fit_signals=fit_signals
                                             )
 
                                             # Store results for this parameter combination
@@ -491,6 +503,7 @@ def main() -> None:
                                                 "first_signal_wcs": first_dn_signal.wcs,
                                                 "dn_fit_stats": dn_fit_stats,
                                                 "photon_fit_stats": photon_fit_stats,
+                                                "fit_signals": fit_signals,
                                                 "ground_truth": {
                                                     "fit_truth_data": fit_truth_data,
                                                     "fit_truth_units": fit_truth_units,
@@ -535,6 +548,7 @@ def main() -> None:
         "cube_sim": cube_sim,
         "cube_reb_dict": cube_reb_dict,
         "fit_config": fit_config,
+        "fit_signals": fit_signals,
     }
     
     with open(output_file, "wb") as f:
