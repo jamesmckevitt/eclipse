@@ -150,7 +150,9 @@ def rebin_slit_offchip(cube, n_bin: int):
     """
     from ndcube import NDCube
 
-    if n_bin <= 1:
+    if n_bin < 1:
+        raise ValueError(f"n_bin must be >= 1, got {n_bin}")
+    if n_bin == 1:
         return cube
 
     data = cube.data
@@ -165,13 +167,15 @@ def rebin_slit_offchip(cube, n_bin: int):
     new_wcs = cube.wcs.deepcopy()
     slit_wcs_axis = 1  # HPLT-TAN
     new_wcs.wcs.cdelt[slit_wcs_axis] *= n_bin
-    # Map the original reference pixel to the new grid:
-    # original 1-based pixel p maps to binned pixel (p + n_bin - 1) / n_bin
+    # Map the original reference pixel to the new grid.
+    # FITS crpix is 1-based; the center-preserving mapping for binning
+    # anchored at pixel 1 is:  crpix_new = (crpix_old - 0.5) / n_bin + 0.5
     new_wcs.wcs.crpix[slit_wcs_axis] = (
-        new_wcs.wcs.crpix[slit_wcs_axis] + n_bin - 1
-    ) / n_bin
+        new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
+    ) / n_bin + 0.5
 
-    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit)
+    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit,
+                  meta=cube.meta)
 
 
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:
