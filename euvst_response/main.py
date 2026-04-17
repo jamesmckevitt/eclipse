@@ -245,16 +245,19 @@ def main() -> None:
             primary = fitting_cfg.get("primary_component", 0)
             constrain_pos = fitting_cfg.get("constrain_positive_intensity", False)
             backend_override = fitting_cfg.get("backend", None)
+            if backend_override is not None and backend_override not in ("scipy", "mpfit"):
+                raise ValueError(
+                    f"Unknown fitting backend '{backend_override}'. "
+                    f"Supported values: 'scipy', 'mpfit', or omit for auto."
+                )
             fit_config = FitConfig(components=components,
                                    primary_component=primary,
                                    constrain_positive_intensity=constrain_pos,
                                    backend=backend_override)
-            if backend_override == "scipy" and constrain_pos:
-                backend_label = "scipy (forced, clip negative peaks)"
+            if backend_override == "mpfit":
+                backend_label = "mpfit (forced)"
             elif backend_override == "scipy":
                 backend_label = "scipy (forced)"
-            elif constrain_pos:
-                backend_label = "mpfit (auto, positive-intensity constraint)"
             else:
                 backend_label = "scipy (auto)"
             print(f"Multi-component fitting enabled: {fit_config.n_components} components "
