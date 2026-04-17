@@ -328,7 +328,7 @@ aluminium_thickness: 1485 angstrom  # Default (expected value)
 ccd_temperature: -60 Celsius  # Default (expected operating temperature)
 
 # Visible stray light level
-vis_sl: 0 photon / (s * pixel)  # Default, (ideal case, no stray light)
+vis_sl: 0 photon / (s * cm**2)  # Default, (ideal case, no stray light)
 
 # Multi-component Gaussian fitting (optional, omit for single-Gaussian)
 fitting:
