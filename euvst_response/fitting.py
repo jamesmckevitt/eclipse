@@ -218,14 +218,15 @@ def _build_scipy_multi(fit_config: FitConfig):
         full = free_to_full_A(free_params)
         return multi_gaussian(x, *full, n_components=nc)
 
-    return model_func, free_to_full_A, n_free, free_indices, ratio_spec, bounds
+    return model_func, free_to_full_A, n_free, free_indices, ratio_spec, bounds, has_bounds
 
 
 def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
                          fit_config: FitConfig,
                          model_func, free_to_full_A,
                          free_indices: list[int],
-                         ratio_spec: dict, bounds) -> np.ndarray:
+                         ratio_spec: dict, bounds,
+                         has_bounds: bool) -> np.ndarray:
     """Fit one spectrum with scipy curve_fit (multi-component, A scaling).
 
     *wv_cm* is the wavelength axis in **cm** (CGS).  The fit is performed
@@ -258,15 +259,18 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     # noisy so 1e-4 tolerances introduce negligible velocity error
     # (<0.01 km/s at good S/N, ~0.15 km/s at very faint signals).
     # Cap function evaluations as a safety net (fits converge in ~50).
-    use_trf = isinstance(bounds, tuple)
-    fit_kwargs: dict = {
-        "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
-        **({
-            "max_nfev": 350,
-        } if use_trf else {
-            "maxfev": 350,
-        }),
-    }
+    # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
+    # each method uses a different keyword for max evaluations.
+    if has_bounds:
+        fit_kwargs: dict = {
+            "method": "trf", "max_nfev": 350,
+            "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
+        }
+    else:
+        fit_kwargs: dict = {
+            "method": "lm", "maxfev": 350,
+            "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
+        }
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
@@ -519,7 +523,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     if not use_mpfit:
         # scipy curve_fit -- LM when unconstrained, TRF when bounds active.
         (model_func, free_to_full, n_free,
-         free_indices, ratio_spec, bounds) = _build_scipy_multi(fit_config)
+         free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(fit_config)
 
         def _fit_block_multi(spec_block):
             results = np.empty((spec_block.shape[0], n_params))
@@ -527,7 +531,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 results[i] = _fit_one_scipy_multi(
                     wv.value, spec_block[i], fit_config,
                     model_func, free_to_full, free_indices,
-                    ratio_spec, bounds)
+                    ratio_spec, bounds, has_bounds)
             return results
 
     else:
