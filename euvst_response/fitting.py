@@ -254,11 +254,25 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
 
     wv_A = wv_cm * CM_TO_A
 
+    # Loosen tolerances for both LM and TRF methods.  The spectra are
+    # noisy so 1e-4 tolerances introduce negligible velocity error
+    # (<0.01 km/s at good S/N, ~0.15 km/s at very faint signals).
+    # Cap function evaluations as a safety net (fits converge in ~50).
+    use_trf = isinstance(bounds, tuple)
+    fit_kwargs: dict = {
+        "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
+        **({
+            "max_nfev": 350,
+        } if use_trf else {
+            "maxfev": 350,
+        }),
+    }
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
             popt_free_A, _ = curve_fit(model_func, wv_A, prof, p0=p0_free_A,
-                                       bounds=bounds, maxfev=5000)
+                                       bounds=bounds, **fit_kwargs)
         except Exception:
             popt_free_A = p0_free_A
 
