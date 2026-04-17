@@ -1303,7 +1303,7 @@ def main(args=None) -> None:
         print(f"  Cube shape: {args.cube_shape}")
         print(f"  Voxel sizes: {voxel_dx:.3f} x {voxel_dy:.3f} x {voxel_dz:.3f}")
         print(f"  Integration axis: {integration_axis}")
-        print(f"  Velocity grid: ±{vel_lim:.1f} at {vel_res:.1f} resolution")
+        print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
         if downsample:
             print(f"  Downsampling: {downsample}x")

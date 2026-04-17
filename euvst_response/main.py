@@ -20,7 +20,7 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import load_atmosphere, rebin_atmosphere
 from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
-from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error
+from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error, rebin_slit_offchip
 import numpy as np
 
 
@@ -237,9 +237,11 @@ def main() -> None:
                 wl = parse_yaml_input(comp_dict["wavelength"])
                 tie_center = comp_dict.get("tie_center", None)
                 tie_width = comp_dict.get("tie_width", None)
+                amp_gt = comp_dict.get("amplitude_greater_than", None)
                 components.append(FitComponent(wavelength=wl,
                                                tie_center=tie_center,
-                                               tie_width=tie_width))
+                                               tie_width=tie_width,
+                                               amplitude_greater_than=amp_gt))
             primary = fitting_cfg.get("primary_component", 0)
             constrain_pos = fitting_cfg.get("constrain_positive_intensity", False)
             backend_override = fitting_cfg.get("backend", None)
@@ -258,6 +260,32 @@ def main() -> None:
             print(f"Multi-component fitting enabled: {fit_config.n_components} components "
                   f"(primary={primary}, {fit_config.n_full_params} params, "
                   f"backend={backend_label})")
+
+    # Parse off-chip slit binning (ground-based spatial binning along the slit)
+    offchip_bin_slits = ensure_list(config.get("offchip_bin_slit", [1]))
+    # ensure_list wraps scalars in a list; values are plain ints (no units)
+    offchip_bin_slits = [int(v) for v in offchip_bin_slits]
+    offchip_bin_slits = deduplicate_list(offchip_bin_slits, "offchip_bin_slit")
+    if any(b > 1 for b in offchip_bin_slits):
+        print(f"Off-chip slit binning values: {offchip_bin_slits} "
+              f"(ground-based, all noise per pixel before summation)")
+
+    # Build slit_width -> [offchip_bin_slit, ...] mapping
+    # If slit_bin_pairs is provided, use explicit pairing instead of Cartesian product
+    from collections import OrderedDict
+    slit_bin_pairs_cfg = config.get("slit_bin_pairs", None)
+    if slit_bin_pairs_cfg is not None:
+        slit_bin_grouped = OrderedDict()
+        for pair in slit_bin_pairs_cfg:
+            sw = parse_yaml_input(pair["slit_width"])
+            ob = int(pair.get("offchip_bin_slit", 1))
+            slit_bin_grouped.setdefault(sw, []).append(ob)
+        # Override slit_widths and offchip_bin_slits for parameter_ranges
+        slit_widths = list(slit_bin_grouped.keys())
+        offchip_bin_slits = sorted(set(ob for obs in slit_bin_grouped.values() for ob in obs))
+        print(f"Using explicit slit/bin pairs: {[(sw, obs) for sw, obs in slit_bin_grouped.items()]}")
+    else:
+        slit_bin_grouped = OrderedDict((sw, list(offchip_bin_slits)) for sw in slit_widths)
 
     # Load synthetic atmosphere cube
     print("Loading atmosphere...")
@@ -323,11 +351,12 @@ def main() -> None:
     cube_reb_dict = {}
 
     # Loop over all parameter combinations
-    total_combinations = len(slit_widths) * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures) * len(psf_settings) * len(enable_pinholes_vals)
+    n_slit_bin_pairs = sum(len(obs) for obs in slit_bin_grouped.values())
+    total_combinations = n_slit_bin_pairs * len(oxide_thicknesses) * len(c_thicknesses) * len(aluminium_thicknesses) * len(ccd_temperatures) * len(vis_sl_vals) * len(exposures) * len(psf_settings) * len(enable_pinholes_vals)
     print(f"Running {total_combinations} parameter combinations...")
     
     combination_idx = 0
-    for slit_width in slit_widths:
+    for slit_width, bin_list in slit_bin_grouped.items():
         # Rebin atmosphere only when slit width changes (expensive operation)
         print(f"\nRebinning atmosphere cube for slit width {slit_width}...")
         SIM_temp = Simulation(
@@ -340,130 +369,133 @@ def main() -> None:
         )
         cube_reb = rebin_atmosphere(cube_sim, DET, SIM_temp)
         
-        # Store rebinned cube for this slit width
-        slit_width_key = slit_width.to_value(u.arcsec)
-        cube_reb_dict[slit_width_key] = cube_reb
+        for offchip_bin_slit in bin_list:
+            # Apply off-chip binning to the rebinned cube and store
+            cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
+            slit_width_key = slit_width.to_value(u.arcsec)
+            cube_reb_dict[(slit_width_key, offchip_bin_slit)] = cube_reb_binned
+            
+            print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
+            fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
         
-        print("Fitting ground truth cube...")
-        fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu, fit_config=fit_config)
-        
-        for oxide_thickness in oxide_thicknesses:
-            for c_thickness in c_thicknesses:
-                for aluminium_thickness in aluminium_thicknesses:
-                    for ccd_temperature in ccd_temperatures:
-                        for vis_sl in vis_sl_vals:
-                            for exposure in exposures:
-                                for psf in psf_settings:
-                                    for enable_pinholes in enable_pinholes_vals:
-                                        combination_idx += 1
-                                        print(f"--- Combination {combination_idx}/{total_combinations} ---")
-                                        print(f"Slit width: {slit_width}")
-                                        print(f"Oxide thickness: {oxide_thickness}")
-                                        print(f"Carbon thickness: {c_thickness}")
-                                        print(f"Aluminium thickness: {aluminium_thickness}")
-                                        print(f"CCD temperature: {ccd_temperature}")
-                                        print(f"Visible stray light (before filter): {vis_sl}")
-                                        print(f"Exposure time: {exposure}")
-                                        print(f"PSF enabled: {psf}")
-                                        print(f"Pinhole effects enabled: {enable_pinholes}")
-                                        if enable_pinholes and len(pinhole_sizes) > 0:
-                                            print(f"Pinhole sizes: {pinhole_sizes}")
-                                            print(f"Pinhole positions: {pinhole_positions}")
-                                        
-                                        # Set up telescope configuration for this combination
-                                        if instrument == "SWC":
-                                            filter_obj = AluminiumFilter(
-                                                oxide_thickness=oxide_thickness,
-                                                c_thickness=c_thickness,
-                                                al_thickness=aluminium_thickness,
+            for oxide_thickness in oxide_thicknesses:
+                for c_thickness in c_thicknesses:
+                    for aluminium_thickness in aluminium_thicknesses:
+                        for ccd_temperature in ccd_temperatures:
+                            for vis_sl in vis_sl_vals:
+                                for exposure in exposures:
+                                    for psf in psf_settings:
+                                        for enable_pinholes in enable_pinholes_vals:
+                                            combination_idx += 1
+                                            print(f"--- Combination {combination_idx}/{total_combinations} ---")
+                                            print(f"Slit width: {slit_width}")
+                                            print(f"Off-chip slit binning: {offchip_bin_slit}")
+                                            print(f"Oxide thickness: {oxide_thickness}")
+                                            print(f"Carbon thickness: {c_thickness}")
+                                            print(f"Aluminium thickness: {aluminium_thickness}")
+                                            print(f"CCD temperature: {ccd_temperature}")
+                                            print(f"Visible stray light (before filter): {vis_sl}")
+                                            print(f"Exposure time: {exposure}")
+                                            print(f"PSF enabled: {psf}")
+                                            print(f"Pinhole effects enabled: {enable_pinholes}")
+                                            if enable_pinholes and len(pinhole_sizes) > 0:
+                                                print(f"Pinhole sizes: {pinhole_sizes}")
+                                                print(f"Pinhole positions: {pinhole_positions}")
+                                            
+                                            # Set up telescope configuration for this combination
+                                            if instrument == "SWC":
+                                                filter_obj = AluminiumFilter(
+                                                    oxide_thickness=oxide_thickness,
+                                                    c_thickness=c_thickness,
+                                                    al_thickness=aluminium_thickness,
+                                                )
+                                                print(f"Microroughness sigma: {microroughness_sigma}")
+                                                TEL = Telescope_EUVST(filter=filter_obj, microroughness_sigma=microroughness_sigma)
+                                            elif instrument == "EIS":
+                                                TEL = Telescope_EIS()
+                                                # EIS uses fixed filter configuration - no custom parameters needed
+                                            else:
+                                                raise ValueError(f"Unknown instrument: {instrument}")
+
+                                            # Set up detector configuration with calculated dark current
+                                            if instrument == "SWC":
+                                                # Create a detector with calculated dark current for this temperature
+                                                DET = Detector_SWC.with_temperature(ccd_temperature)
+                                                print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                            elif instrument == "EIS":
+                                                DET = Detector_EIS.with_temperature(ccd_temperature)
+                                                print(f"Calculated dark current: {DET.dark_current:.2e}")
+                                            else:
+                                                raise ValueError(f"Unknown instrument: {instrument}")
+
+                                            # Create simulation object
+                                            SIM = Simulation(
+                                                expos=exposure,  # Single exposure value
+                                                n_iter=n_iter,
+                                                slit_width=slit_width,
+                                                ncpu=ncpu,
+                                                instrument=instrument,
+                                                vis_sl=vis_sl,
+                                                psf=psf,
+                                                enable_pinholes=enable_pinholes,
+                                                pinhole_sizes=pinhole_sizes if enable_pinholes else [],
+                                                pinhole_positions=pinhole_positions if enable_pinholes else [],
                                             )
-                                            print(f"Microroughness sigma: {microroughness_sigma}")
-                                            TEL = Telescope_EUVST(filter=filter_obj, microroughness_sigma=microroughness_sigma)
-                                        elif instrument == "EIS":
-                                            TEL = Telescope_EIS()
-                                            # EIS uses fixed filter configuration - no custom parameters needed
-                                        else:
-                                            raise ValueError(f"Unknown instrument: {instrument}")
 
-                                        # Set up detector configuration with calculated dark current
-                                        if instrument == "SWC":
-                                            # Create a detector with calculated dark current for this temperature
-                                            DET = Detector_SWC.with_temperature(ccd_temperature)
-                                            print(f"Calculated dark current: {DET.dark_current:.2e}")
-                                        elif instrument == "EIS":
-                                            DET = Detector_EIS.with_temperature(ccd_temperature)
-                                            print(f"Calculated dark current: {DET.dark_current:.2e}")
-                                        else:
-                                            raise ValueError(f"Unknown instrument: {instrument}")
+                                            # Run Monte Carlo for this single parameter combination
+                                            first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
+                                                cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter,
+                                                fit_config=fit_config,
+                                                offchip_bin_slit=offchip_bin_slit
+                                            )
 
-                                        # Create simulation object
-                                        SIM = Simulation(
-                                            expos=exposure,  # Single exposure value
-                                            n_iter=n_iter,
-                                            slit_width=slit_width,
-                                            ncpu=ncpu,
-                                            instrument=instrument,
-                                            vis_sl=vis_sl,
-                                            psf=psf,
-                                            enable_pinholes=enable_pinholes,
-                                            pinhole_sizes=pinhole_sizes if enable_pinholes else [],
-                                            pinhole_positions=pinhole_positions if enable_pinholes else [],
-                                        )
-
-                                        # # Debug breakpoint - inspect simulation parameters
-                                        # debug_break("Before Monte Carlo simulation", locals(), globals())
-
-                                        # Run Monte Carlo for this single parameter combination
-                                        first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-                                            cube_reb, exposure, DET, TEL, SIM, n_iter=SIM.n_iter,
-                                            fit_config=fit_config
-                                        )
-
-                                        # Store results for this parameter combination
-                                        sec = exposure.to_value(u.s)
-                                        param_key = (
-                                            slit_width.to_value(u.arcsec),
-                                            oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
-                                            c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
-                                            aluminium_thickness.to_value(u.AA),
-                                            ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
-                                            vis_sl.to_value(u.photon / (u.s * u.cm**2)),
-                                            sec,
-                                            psf,
-                                            enable_pinholes
-                                        )
-                                        
-                                        # Store fit_truth data and units separately
-                                        all_results[param_key] = {
-                                            "parameters": {
-                                                "slit_width": slit_width,
-                                                "oxide_thickness": oxide_thickness,
-                                                "c_thickness": c_thickness,
-                                                "aluminium_thickness": aluminium_thickness,
-                                                "ccd_temperature": ccd_temperature,
-                                                "vis_sl": vis_sl,
-                                                "exposure": exposure,
-                                                "psf": psf,
-                                                "enable_pinholes": enable_pinholes,
-                                                "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
-                                                "pinhole_positions": pinhole_positions if enable_pinholes else [],
-                                            },
-                                            # Store signal data and units separately
-                                            "first_dn_signal_data": first_dn_signal.data,
-                                            "first_dn_signal_unit": first_dn_signal.unit,
-                                            "first_photon_signal_data": first_photon_signal.data,
-                                            "first_photon_signal_unit": first_photon_signal.unit,
-                                            "first_signal_wcs": first_dn_signal.wcs,
-                                            "dn_fit_stats": dn_fit_stats,
-                                            "photon_fit_stats": photon_fit_stats,
-                                            "ground_truth": {
-                                                "fit_truth_data": fit_truth_data,
-                                                "fit_truth_units": fit_truth_units,
+                                            # Store results for this parameter combination
+                                            sec = exposure.to_value(u.s)
+                                            param_key = (
+                                                slit_width.to_value(u.arcsec),
+                                                oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
+                                                c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
+                                                aluminium_thickness.to_value(u.AA),
+                                                ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
+                                                vis_sl.to_value(u.photon / (u.s * u.cm**2)),
+                                                sec,
+                                                psf,
+                                                enable_pinholes,
+                                                offchip_bin_slit,
+                                            )
+                                            
+                                            # Store fit_truth data and units separately
+                                            all_results[param_key] = {
+                                                "parameters": {
+                                                    "slit_width": slit_width,
+                                                    "oxide_thickness": oxide_thickness,
+                                                    "c_thickness": c_thickness,
+                                                    "aluminium_thickness": aluminium_thickness,
+                                                    "ccd_temperature": ccd_temperature,
+                                                    "vis_sl": vis_sl,
+                                                    "exposure": exposure,
+                                                    "psf": psf,
+                                                    "enable_pinholes": enable_pinholes,
+                                                    "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
+                                                    "pinhole_positions": pinhole_positions if enable_pinholes else [],
+                                                    "offchip_bin_slit": offchip_bin_slit,
+                                                },
+                                                # Store signal data and units separately
+                                                "first_dn_signal_data": first_dn_signal.data,
+                                                "first_dn_signal_unit": first_dn_signal.unit,
+                                                "first_photon_signal_data": first_photon_signal.data,
+                                                "first_photon_signal_unit": first_photon_signal.unit,
+                                                "first_signal_wcs": first_dn_signal.wcs,
+                                                "dn_fit_stats": dn_fit_stats,
+                                                "photon_fit_stats": photon_fit_stats,
+                                                "ground_truth": {
+                                                    "fit_truth_data": fit_truth_data,
+                                                    "fit_truth_units": fit_truth_units,
+                                                }
                                             }
-                                        }
-                                        
-                                        # Clean up memory
-                                        del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
+                                            
+                                            # Clean up memory
+                                            del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
 
     # Prepare final results structure
     results = {
@@ -480,6 +512,7 @@ def main() -> None:
             "enable_pinholes_vals": enable_pinholes_vals,
             "pinhole_sizes": pinhole_sizes,
             "pinhole_positions": pinhole_positions,
+            "offchip_bin_slits": offchip_bin_slits,
         }
     }
 

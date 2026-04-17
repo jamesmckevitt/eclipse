@@ -214,6 +214,7 @@ def get_results_for_combination(
     exposure: u.Quantity = None,
     psf: bool = None,
     enable_pinholes: bool = None,
+    offchip_bin_slit: int = None,
     debug: bool = False
 ) -> Dict[str, Any]:
     """
@@ -241,6 +242,8 @@ def get_results_for_combination(
         PSF setting (True or False). If None, uses first available.
     enable_pinholes : bool, optional
         Pinhole effects setting (True or False). If None, uses first available.
+    offchip_bin_slit : int, optional
+        Off-chip slit binning factor. If None, uses first available.
     debug : bool, optional
         If True, print debugging information about available keys.
         
@@ -268,7 +271,7 @@ def get_results_for_combination(
     
     # Check if no parameters were specified at all
     no_params_specified = all(param is None for param in [slit_width, oxide_thickness, c_thickness, 
-                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf, enable_pinholes])
+                                                          aluminium_thickness, ccd_temperature, vis_sl, exposure, psf, enable_pinholes, offchip_bin_slit])
     
     if no_params_specified and len(all_combinations) > 1:
         print(f"Error: No parameters specified, but {len(all_combinations)} combinations are available!")
@@ -286,15 +289,24 @@ def get_results_for_combination(
         'vis_sl': vis_sl,
         'exposure': exposure,
         'psf': psf,
-        'enable_pinholes': enable_pinholes
+        'enable_pinholes': enable_pinholes,
+        'offchip_bin_slit': offchip_bin_slit,
     }
+    
+    # Detect key format: 10-element (new, includes offchip_bin_slit) or 9-element (legacy)
+    sample_key = next(iter(all_combinations.keys()))
+    has_offchip_key = len(sample_key) == 10
     
     # FIRST: Check if the specified parameters match multiple combinations
     # before filling in any defaults
     matching_combinations = []
     
     for key in all_combinations.keys():
-        key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf, key_enable_pinholes = key
+        if has_offchip_key:
+            key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf, key_enable_pinholes, key_offchip = key
+        else:
+            key_slit, key_oxide, key_carbon, key_aluminium, key_ccd, key_vis_sl, key_exposure, key_psf, key_enable_pinholes = key
+            key_offchip = 1  # legacy default
         
         # Check if this combination matches all specified (non-None) parameters
         matches = True
@@ -318,6 +330,8 @@ def get_results_for_combination(
             matches = False
         if enable_pinholes is not None and key_enable_pinholes != enable_pinholes:
             matches = False
+        if offchip_bin_slit is not None and key_offchip != offchip_bin_slit:
+            matches = False
             
         if matches:
             matching_combinations.append(key)
@@ -328,9 +342,14 @@ def get_results_for_combination(
         print(f"Use summary_table(results) to see all available parameter combinations.")
         print(f"Matching combinations found:")
         for i, combo in enumerate(matching_combinations[:5]):  # Show first 5
-            slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val = combo
+            if has_offchip_key:
+                slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val, offchip = combo
+            else:
+                slit, oxide, carbon, aluminium, ccd, vis_sl, exp, psf_val, enable_pinholes_val = combo
+                offchip = 1
             print(f"  {i+1}: slit={slit:.2f}arcsec, oxide={oxide:.1f}nm, carbon={carbon:.1f}nm, "
-                  f"Al={aluminium:.0f}A, CCD={ccd:.1f}C, stray={vis_sl:.2g}, exp={exp:.1f}s, psf={psf_val}, pinholes={enable_pinholes_val}")
+                  f"Al={aluminium:.0f}A, CCD={ccd:.1f}C, stray={vis_sl:.2g}, exp={exp:.1f}s, "
+                  f"psf={psf_val}, pinholes={enable_pinholes_val}, offchip_bin={offchip}")
         if len(matching_combinations) > 5:
             print(f"  ... and {len(matching_combinations) - 5} more")
         raise ValueError(f"Multiple combinations match your parameters. Please specify more parameters to select a unique combination.")
@@ -357,6 +376,9 @@ def get_results_for_combination(
         psf = param_ranges["psf_settings"][0]
     if enable_pinholes is None:
         enable_pinholes = param_ranges["enable_pinholes_vals"][0]
+    if offchip_bin_slit is None:
+        offchip_bin_slits = param_ranges.get("offchip_bin_slits", [1])
+        offchip_bin_slit = offchip_bin_slits[0]
     
     # Convert units to the same format as stored in keys (without units)
     slit_width_val = slit_width.to_value(u.arcsec)
@@ -367,9 +389,15 @@ def get_results_for_combination(
     vis_sl_val = vis_sl.to_value() if hasattr(vis_sl, 'to_value') else vis_sl
     exposure_val = exposure.to_value(u.s)
     
-    # Find matching combination (9-element key format)
-    target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
-                  aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val, psf, enable_pinholes)
+    # Build target key in the appropriate format
+    if has_offchip_key:
+        target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
+                      aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val,
+                      psf, enable_pinholes, offchip_bin_slit)
+    else:
+        target_key = (slit_width_val, oxide_thickness_val, c_thickness_val, 
+                      aluminium_thickness_val, ccd_temperature_val, vis_sl_val, exposure_val,
+                      psf, enable_pinholes)
     
     if debug:
         print(f"Target key: {target_key}")
@@ -450,25 +478,38 @@ def summary_table(results: Dict[str, Any]) -> None:
     all_combinations = results["results"]["all_combinations"]
     param_ranges = results["results"]["parameter_ranges"]
     
+    # Detect key format
+    sample_key = next(iter(all_combinations.keys()))
+    has_offchip = len(sample_key) == 10
+    
     print("Parameter Combination Summary")
-    print("=" * 155)
-    print(f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (A)':<10} {'CCD (C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}")
-    print("-" * 155)
+    print("=" * 165)
+    header = f"{'Slit (arcsec)':<12} {'Oxide (nm)':<12} {'Carbon (nm)':<12} {'Al (A)':<10} {'CCD (C)':<10} {'Stray Light':<12} {'Exp (s)':<10} {'PSF':<5} {'Pinholes':<8}"
+    if has_offchip:
+        header += f" {'Slit Bin':<8}"
+    print(header)
+    print("-" * 165)
     
     for key, combo_results in all_combinations.items():
-        slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf, enable_pinholes = key
-        params = combo_results["parameters"]
+        if has_offchip:
+            slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf, enable_pinholes, offchip = key
+        else:
+            slit, oxide, carbon, aluminium, ccd_temp, vis_sl, exposure, psf, enable_pinholes = key
+            offchip = 1
         
-        print(f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5} {str(enable_pinholes):<8}")
+        row = f"{slit:<12.2f} {oxide:<12.1f} {carbon:<12.1f} {aluminium:<10.0f} {ccd_temp:<10.1f} {vis_sl:<12.2g} {exposure:<10.1f} {str(psf):<5} {str(enable_pinholes):<8}"
+        if has_offchip:
+            row += f" {offchip:<8}"
+        print(row)
     
-    print("-" * 155)
+    print("-" * 165)
     print(f"Total combinations: {len(all_combinations)}")
     print(f"Exposure times: {[exp.to_value(u.s) for exp in param_ranges['exposures']]}")
 
 
 def create_sunpy_maps_from_combo(
     combination_results: Dict[str, Any],
-    cube_reb,
+    cube_reb=None,
     rest_wavelength: u.Quantity = 195.119 * u.AA,
     data_type: str = "dn",
     precision_requirement: u.Quantity = 2.0 * u.km / u.s,
@@ -482,8 +523,9 @@ def create_sunpy_maps_from_combo(
     ----------
     combination_results : dict
         Results for a specific parameter combination from get_results_for_combination().
-    cube_reb : NDCube
+    cube_reb : NDCube, optional
         NDCube with helioprojective WCS to use for all maps.
+        If not provided, the WCS stored in the combination results is used.
     rest_wavelength : u.Quantity, optional
         Rest wavelength for velocity conversion (default: 195.119 A for Fe XII).
     data_type : str, optional
@@ -526,8 +568,11 @@ def create_sunpy_maps_from_combo(
     else:
         analysis_per_exp = None
     
-    # Extract 2D helioprojective WCS from the cube
-    wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
+    # Extract 2D helioprojective WCS from the cube or stored signal WCS
+    if cube_reb is not None:
+        wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
+    else:
+        wcs_2d = combination_results["first_signal_wcs"].celestial.swapaxes(0, 1)
     
     # Get the data arrays - now only first iteration is saved
     first_photon_signal = combination_results["first_photon_signal"]  # Shape: (nx, ny, nwave)

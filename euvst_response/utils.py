@@ -126,6 +126,54 @@ def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
 
 
+def rebin_slit_offchip(cube, n_bin: int):
+    """Sum adjacent pixels along the slit axis to simulate off-chip binning.
+
+    Off-chip (ground-based) binning sums already-read-out pixels, so each
+    pixel carries its own independent noise (read noise, dark current, etc.).
+    The resulting signal increases by *n_bin* while uncorrelated noise adds
+    in quadrature, improving SNR by sqrt(n_bin).
+
+    Parameters
+    ----------
+    cube : NDCube
+        Data cube with shape ``(n_scan, n_slit, n_lambda)``.
+    n_bin : int
+        Number of slit pixels to sum.  Must be >= 1.
+        Pixels that don't fill a complete bin at the slit edge are discarded.
+
+    Returns
+    -------
+    NDCube
+        Rebinned cube with shape ``(n_scan, n_slit // n_bin, n_lambda)``.
+        WCS is updated so the slit pixel scale (CDELT) is scaled by *n_bin*.
+    """
+    from ndcube import NDCube
+
+    if n_bin <= 1:
+        return cube
+
+    data = cube.data
+    n_scan, n_slit, n_lam = data.shape
+    n_keep = (n_slit // n_bin) * n_bin
+    trimmed = data[:, :n_keep, :]
+    rebinned = trimmed.reshape(n_scan, n_keep // n_bin, n_bin, n_lam).sum(axis=2)
+
+    # Update WCS for the slit axis.
+    # Numpy axis 1 (slit) corresponds to WCS axis 1 (HPLT) in the
+    # reversed FITS convention (naxis-1-numpy_axis for a 3-axis WCS).
+    new_wcs = cube.wcs.deepcopy()
+    slit_wcs_axis = 1  # HPLT-TAN
+    new_wcs.wcs.cdelt[slit_wcs_axis] *= n_bin
+    # Map the original reference pixel to the new grid:
+    # original 1-based pixel p maps to binned pixel (p + n_bin - 1) / n_bin
+    new_wcs.wcs.crpix[slit_wcs_axis] = (
+        new_wcs.wcs.crpix[slit_wcs_axis] + n_bin - 1
+    ) / n_bin
+
+    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit)
+
+
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:
     """Convert linear distance to angular size at 1 AU."""
     if distance.unit.physical_type != "length":

@@ -15,7 +15,7 @@ from .radiometric import (
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
 from .fitting import fit_cube_gauss
-from .utils import angle_to_distance
+from .utils import angle_to_distance, rebin_slit_offchip
 
 
 def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDCube, ...]:
@@ -91,7 +91,7 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
 
 
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
-                fit_config=None) -> Tuple[NDCube, dict, NDCube, dict]:
+                fit_config=None, offchip_bin_slit: int = 1) -> Tuple[NDCube, dict, NDCube, dict]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -111,6 +111,10 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         Number of Monte Carlo iterations
     fit_config : FitConfig, optional
         Multi-component Gaussian fit configuration.
+    offchip_bin_slit : int
+        Number of slit pixels to sum (off-chip, ground-based binning).
+        Each pixel is read out independently so all noise sources are
+        present per pixel before summation.  Default 1 (no binning).
         
     Returns
     -------
@@ -130,17 +134,21 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
          photons_focused, photon_arrivals, electrons, electrons_stray, 
          electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
         
-        # Store first iteration signals only
+        # Store first iteration signals only (binned, to match fit shapes)
         if i == 0:
-            first_dn_signal = dn
-            first_photon_signal = photon_arrivals
+            first_dn_signal = rebin_slit_offchip(dn, offchip_bin_slit)
+            first_photon_signal = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
         
+        # Off-chip slit binning (sum already noisy pixels)
+        dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
+        photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
+
         # Fit DN signal
-        dn_fit_values, dn_fit_units = fit_cube_gauss(dn, n_jobs=sim.ncpu, fit_config=fit_config)
+        dn_fit_values, dn_fit_units = fit_cube_gauss(dn_binned, n_jobs=sim.ncpu, fit_config=fit_config)
         dn_fit_values_list.append(dn_fit_values)
         
         # Fit photon signal
-        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_arrivals, n_jobs=sim.ncpu, fit_config=fit_config)
+        photon_fit_values, photon_fit_units = fit_cube_gauss(photon_binned, n_jobs=sim.ncpu, fit_config=fit_config)
         photon_fit_values_list.append(photon_fit_values)
         
     # Stack fit results

@@ -54,7 +54,7 @@ detector = Detector_SWC()
 print(f"Telescope collecting area: {telescope.collecting_area:.4f}")
 print(f"Detector QE (EUV): {detector.qe_euv:.2f}")
 
-# Calculate effective area at Fe XII 195.119 Å
+# Calculate effective area at Fe XII 195.119 Angstrom
 fe12_wl = 195.119 * u.AA
 effective_area = telescope.collecting_area * telescope.throughput(fe12_wl) * detector.qe_euv
 
@@ -84,6 +84,17 @@ from euvst_response import (
     create_sunpy_maps_from_combo,
     summary_table
 )
+
+# Load results
+results = load_instrument_response_results("run/result/my_results.pkl")
+
+# Get results for a specific parameter combination:
+combo = get_results_for_combination(
+    results, exposure=40*u.s, slit_width=0.4*u.arcsec, offchip_bin_slit=2
+)
+
+# Create SunPy maps
+maps = create_sunpy_maps_from_combo(combo, rest_wavelength=195.119*u.AA, data_type='dn')
 ```
 
 ## Detailed instructions
@@ -235,7 +246,7 @@ The synthesis results can be loaded and analyzed using the package API:
 import euvst_response
 
 # Load synthesis results - this sums all line cubes into a single cube
-# By default uses Fe XII 195.119 Å as reference for wavelength grid
+# By default uses Fe XII 195.119 Angstrom as reference for wavelength grid
 cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
 print(f"Combined cube shape: {cube.data.shape}")
 
@@ -283,7 +294,7 @@ instrument: SWC  # Options: SWC (EUVST Short Wavelength) or EIS (Hinode/EIS)
 synthesis_file: ./run/input/synthesised_spectra.pkl  # Default location
 
 # Reference line for wavelength grid and metadata when combining all spectral lines
-reference_line: Fe12_195.1190  # Default reference line (Fe XII 195.119 Å)
+reference_line: Fe12_195.1190  # Default reference line (Fe XII 195.119 Angstrom)
 
 # Point Spread Function
 psf: False  # Enable PSF convolution
@@ -327,6 +338,29 @@ fitting:
     - wavelength: 195.179 angstrom
       tie_center: 0  # Centroid offset tied to component 0
       tie_width: 0  # Same width as component 0
+```
+
+Off-chip binning in the slit direction can also be performed:
+
+```yaml
+offchip_bin_slit: 2          # Bin every 2 slit pixels
+offchip_bin_slit: [1, 2, 4]  # Sweep over multiple binning factors
+```
+
+Alternatively, you can specify paired slit width and off-chip binning values to only simulate specific combinations:
+
+```yaml
+# Paired slit width / off-chip binning
+# Only the listed (slit_width, offchip_bin_slit) pairs are simulated
+slit_bin_pairs:
+  - slit_width: 0.2 arcsec
+    offchip_bin_slit: 1
+  - slit_width: 0.4 arcsec
+    offchip_bin_slit: 2
+  - slit_width: 0.8 arcsec
+    offchip_bin_slit: 5
+  - slit_width: 1.6 arcsec
+    offchip_bin_slit: 10
 ```
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
