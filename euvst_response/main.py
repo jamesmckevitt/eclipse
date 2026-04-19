@@ -67,14 +67,26 @@ def main() -> None:
     from .utils import _get_mpi_info
     _comm, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
+        # Intel MPI pins each rank to cores, breaking joblib/loky.
+        # Reset affinity to the full SLURM allocation.
+        _slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+        if _slurm_cpus is not None:
+            os.sched_setaffinity(0, range(int(_slurm_cpus)))
+
         if _mpi_rank == 0:
             print(f"MPI distributed mode: {_mpi_size} processes "
                   f"(MC iterations will be split across ranks)")
         else:
-            # Silence stdout and stderr on non-root ranks to avoid duplicated output
-            _devnull = open(os.devnull, "w")
-            sys.stdout = _devnull
-            sys.stderr = _devnull
+            # Silence stdout and stderr on non-root ranks to avoid duplicated
+            # output. Redirect at the OS file-descriptor level, not
+            # just the Python objects, because SLURM captures fd 1/2 directly
+            # and tqdm can bypass the Python sys.stderr object.
+            _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
+            os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
+            os.close(_devnull_fd)
+            sys.stdout = open(os.devnull, "w")
+            sys.stderr = open(os.devnull, "w")
 
     # Check if config file exists
     config_path = Path(args.config)
@@ -103,6 +115,22 @@ def main() -> None:
     psf_settings = deduplicate_list(psf_settings, "psf")  # Remove duplicates
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
+
+    # In MPI mode, if a ncpu value specified, cap it to
+    # the CPUs available to this rank so joblib doesn't oversubscribe.
+    # Leave ncpu=-1 alone - joblib handles it natively via the OS affinity
+    # mask (which I_MPI_PIN_DOMAIN=auto sets correctly).
+    if _mpi_size > 1:
+        if ncpu != -1:
+            slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+            if slurm_cpus is not None:
+                available_cpus = int(slurm_cpus)
+            else:
+                available_cpus = os.cpu_count() or 1
+            if ncpu > available_cpus:
+                ncpu = available_cpus
+        if _mpi_rank == 0:
+            print(f"MPI: ncpu={ncpu} per rank")
 
     # Print PSF warnings for any True values in the list
     if any(psf_settings):
