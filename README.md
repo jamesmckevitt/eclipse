@@ -383,6 +383,12 @@ eclipse --config ./run/input/config.yaml
 - `--config`: Path to YAML configuration file (required)
 - `--debug`: Enable debug mode with IPython breakpoints on errors (optional)
 
+#### Multi-node MPI parallelisation
+
+When launched with multiple MPI ranks on a SLURM cluster (via `srun` or `mpirun`), ECLIPSE automatically distributes Monte Carlo iterations across ranks and gathers results on rank 0. No code or configuration changes are needed - MPI is auto-detected at runtime. If `mpi4py` is not installed or only one rank is present, the code falls back to single-process mode.
+
+Requirements: `mpi4py` and `intel-mpi` (load with `module load intel-mpi` before launching).
+
 #### Output
 
 Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:

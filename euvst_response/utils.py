@@ -5,6 +5,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 from __future__ import annotations
 import contextlib
 from pathlib import Path
+import warnings
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -14,6 +15,28 @@ from tqdm import tqdm
 
 # Global debug flag - can be set by command line or configuration
 DEBUG_MODE = False
+
+
+def _get_mpi_info():
+    """Return (comm, rank, world_size) if MPI is active with multiple ranks.
+
+    MPI is auto-detected: if ``mpi4py`` is importable **and** the MPI world
+    contains more than one process (i.e. launched via ``srun`` / ``mpirun``),
+    the communicator is returned.  Otherwise falls back to single-process
+    mode ``(None, 0, 1)``.
+    """
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
+        if size > 1:
+            return comm, comm.Get_rank(), size
+    except (ImportError, RuntimeError):
+        # ImportError: mpi4py not installed.
+        # RuntimeError: mpi4py installed but MPI library not loaded (e.g. on a
+        #   login node before 'module load intel-mpi').  Falls back to serial mode.
+        pass
+    return None, 0, 1
 
 
 def set_debug_mode(enabled: bool):
@@ -230,6 +253,39 @@ def load_maps(path: str | Path) -> dict:
 
 
 @contextlib.contextmanager
+def deduplicate_list(param_list, param_name):
+    """Remove duplicates from a parameter list, warning if any are found.
+
+    Preserves original order.  Astropy ``Quantity`` values are compared by
+    (value, unit) so that e.g. ``1*u.s`` and ``1.0*u.s`` are treated as
+    duplicates.
+    """
+    seen = set()
+    deduplicated = []
+    duplicates_found = False
+
+    for item in param_list:
+        if hasattr(item, 'unit'):
+            key = (item.value, str(item.unit))
+        else:
+            key = item
+
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(item)
+        else:
+            duplicates_found = True
+
+    if duplicates_found:
+        warnings.warn(
+            f"Duplicate values found in '{param_name}' parameter list. "
+            f"Removed duplicates: {len(param_list)} -> {len(deduplicated)} unique values.",
+            UserWarning,
+        )
+
+    return deduplicated
+
+
 def tqdm_joblib(tqdm_object):
     """
     Context manager that patches joblib so it uses the supplied tqdm

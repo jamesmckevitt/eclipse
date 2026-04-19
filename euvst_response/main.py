@@ -5,6 +5,7 @@ Main execution script for instrument response simulations.
 from __future__ import annotations
 import argparse
 import os
+import sys
 import shutil
 import warnings
 from datetime import datetime
@@ -20,52 +21,8 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import load_atmosphere, rebin_atmosphere
 from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
-from .utils import parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error, rebin_slit_offchip
+from .utils import parse_yaml_input, ensure_list, deduplicate_list, set_debug_mode, debug_break, debug_on_error, rebin_slit_offchip
 import numpy as np
-
-
-def deduplicate_list(param_list, param_name):
-    """
-    Remove duplicates from a parameter list and warn if duplicates were found.
-    
-    Parameters
-    ----------
-    param_list : list
-        List of parameter values that may contain duplicates.
-    param_name : str
-        Name of the parameter for warning messages.
-        
-    Returns
-    -------
-    list
-        List with duplicates removed, preserving original order.
-    """
-    seen = set()
-    deduplicated = []
-    duplicates_found = False
-    
-    for item in param_list:
-        # For quantities, compare values and units; for other types, compare directly
-        if hasattr(item, 'unit'):
-            # Create a comparable key from value and unit
-            key = (item.value, str(item.unit))
-        else:
-            key = item
-            
-        if key not in seen:
-            seen.add(key)
-            deduplicated.append(item)
-        else:
-            duplicates_found = True
-    
-    if duplicates_found:
-        warnings.warn(
-            f"Duplicate values found in '{param_name}' parameter list. "
-            f"Removed duplicates: {len(param_list)} -> {len(deduplicated)} unique values.",
-            UserWarning
-        )
-    
-    return deduplicated
 
 
 @debug_on_error
@@ -104,6 +61,19 @@ def main() -> None:
     set_debug_mode(args.debug)
     if args.debug:
         print("Debug mode enabled - will break to IPython on errors")
+
+    # MPI auto-detection: when launched via srun/mpirun with multiple tasks,
+    # Monte Carlo iterations are distributed across ranks automatically.
+    from .utils import _get_mpi_info
+    _comm, _mpi_rank, _mpi_size = _get_mpi_info()
+    if _mpi_size > 1:
+        if _mpi_rank == 0:
+            print(f"MPI distributed mode: {_mpi_size} processes "
+                  f"(MC iterations will be split across ranks)")
+        else:
+            # Silence stdout on non-root ranks to avoid duplicated output
+            import io
+            sys.stdout = open(os.devnull, "w")
 
     # Check if config file exists
     config_path = Path(args.config)
@@ -465,99 +435,102 @@ def main() -> None:
                                             )
 
                                             # Store results for this parameter combination
-                                            sec = exposure.to_value(u.s)
-                                            param_key = (
-                                                slit_width.to_value(u.arcsec),
-                                                oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
-                                                c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
-                                                aluminium_thickness.to_value(u.AA),
-                                                ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
-                                                vis_sl.to_value(u.photon / (u.s * u.cm**2)),
-                                                sec,
-                                                psf,
-                                                enable_pinholes,
-                                                offchip_bin_slit,
-                                            )
-                                            
-                                            # Store fit_truth data and units separately
-                                            all_results[param_key] = {
-                                                "parameters": {
-                                                    "slit_width": slit_width,
-                                                    "oxide_thickness": oxide_thickness,
-                                                    "c_thickness": c_thickness,
-                                                    "aluminium_thickness": aluminium_thickness,
-                                                    "ccd_temperature": ccd_temperature,
-                                                    "vis_sl": vis_sl,
-                                                    "exposure": exposure,
-                                                    "psf": psf,
-                                                    "enable_pinholes": enable_pinholes,
-                                                    "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
-                                                    "pinhole_positions": pinhole_positions if enable_pinholes else [],
-                                                    "offchip_bin_slit": offchip_bin_slit,
-                                                },
-                                                # Store signal data and units separately
-                                                "first_dn_signal_data": first_dn_signal.data,
-                                                "first_dn_signal_unit": first_dn_signal.unit,
-                                                "first_photon_signal_data": first_photon_signal.data,
-                                                "first_photon_signal_unit": first_photon_signal.unit,
-                                                "first_signal_wcs": first_dn_signal.wcs,
-                                                "dn_fit_stats": dn_fit_stats,
-                                                "photon_fit_stats": photon_fit_stats,
-                                                "fit_signals": fit_signals,
-                                                "ground_truth": {
-                                                    "fit_truth_data": fit_truth_data,
-                                                    "fit_truth_units": fit_truth_units,
+                                            # (only rank 0 has gathered statistics in MPI mode)
+                                            if first_dn_signal is not None:
+                                                sec = exposure.to_value(u.s)
+                                                param_key = (
+                                                    slit_width.to_value(u.arcsec),
+                                                    oxide_thickness.to_value(u.nm) if oxide_thickness.unit.is_equivalent(u.nm) else oxide_thickness.to_value(u.AA),
+                                                    c_thickness.to_value(u.nm) if c_thickness.unit.is_equivalent(u.nm) else c_thickness.to_value(u.AA),
+                                                    aluminium_thickness.to_value(u.AA),
+                                                    ccd_temperature.to_value(u.Celsius,equivalencies=u.temperature()),
+                                                    vis_sl.to_value(u.photon / (u.s * u.cm**2)),
+                                                    sec,
+                                                    psf,
+                                                    enable_pinholes,
+                                                    offchip_bin_slit,
+                                                )
+                                                
+                                                # Store fit_truth data and units separately
+                                                all_results[param_key] = {
+                                                    "parameters": {
+                                                        "slit_width": slit_width,
+                                                        "oxide_thickness": oxide_thickness,
+                                                        "c_thickness": c_thickness,
+                                                        "aluminium_thickness": aluminium_thickness,
+                                                        "ccd_temperature": ccd_temperature,
+                                                        "vis_sl": vis_sl,
+                                                        "exposure": exposure,
+                                                        "psf": psf,
+                                                        "enable_pinholes": enable_pinholes,
+                                                        "pinhole_sizes": pinhole_sizes if enable_pinholes else [],
+                                                        "pinhole_positions": pinhole_positions if enable_pinholes else [],
+                                                        "offchip_bin_slit": offchip_bin_slit,
+                                                    },
+                                                    # Store signal data and units separately
+                                                    "first_dn_signal_data": first_dn_signal.data,
+                                                    "first_dn_signal_unit": first_dn_signal.unit,
+                                                    "first_photon_signal_data": first_photon_signal.data,
+                                                    "first_photon_signal_unit": first_photon_signal.unit,
+                                                    "first_signal_wcs": first_dn_signal.wcs,
+                                                    "dn_fit_stats": dn_fit_stats,
+                                                    "photon_fit_stats": photon_fit_stats,
+                                                    "fit_signals": fit_signals,
+                                                    "ground_truth": {
+                                                        "fit_truth_data": fit_truth_data,
+                                                        "fit_truth_units": fit_truth_units,
+                                                    }
                                                 }
-                                            }
                                             
                                             # Clean up memory
                                             del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
 
-    # Prepare final results structure
-    results = {
-        "all_combinations": all_results,
-        "parameter_ranges": {
-            "slit_widths": slit_widths,
-            "oxide_thicknesses": oxide_thicknesses,
-            "c_thicknesses": c_thicknesses,
-            "aluminium_thicknesses": aluminium_thicknesses,
-            "ccd_temperatures": ccd_temperatures,
-            "vis_sl_vals": vis_sl_vals,
-            "exposures": exposures,
-            "psf_settings": psf_settings,
-            "enable_pinholes_vals": enable_pinholes_vals,
-            "pinhole_sizes": pinhole_sizes,
-            "pinhole_positions": pinhole_positions,
-            "offchip_bin_slits": offchip_bin_slits,
+    # Prepare final results structure and save (rank 0 only in MPI mode)
+    if _mpi_rank == 0:
+        results = {
+            "all_combinations": all_results,
+            "parameter_ranges": {
+                "slit_widths": slit_widths,
+                "oxide_thicknesses": oxide_thicknesses,
+                "c_thicknesses": c_thicknesses,
+                "aluminium_thicknesses": aluminium_thicknesses,
+                "ccd_temperatures": ccd_temperatures,
+                "vis_sl_vals": vis_sl_vals,
+                "exposures": exposures,
+                "psf_settings": psf_settings,
+                "enable_pinholes_vals": enable_pinholes_vals,
+                "pinhole_sizes": pinhole_sizes,
+                "pinhole_positions": pinhole_positions,
+                "offchip_bin_slits": offchip_bin_slits,
+            }
         }
-    }
 
-    # Generate output filename based on config file
-    config_path = Path(args.config)
-    config_base = config_path.stem
-    output_file = Path(f"run/result/{config_base}.pkl")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+        # Generate output filename based on config file
+        config_path = Path(args.config)
+        config_base = config_path.stem
+        output_file = Path(f"run/result/{config_base}.pkl")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nSaving results to {output_file}")
-    
-    # Prepare the data to save
-    save_data = {
-        "results": results,
-        "config": config,
-        "instrument": instrument,
-        "cube_sim": cube_sim,
-        "cube_reb_dict": cube_reb_dict,
-        "fit_config": fit_config,
-        "fit_signals": fit_signals,
-    }
-    
-    with open(output_file, "wb") as f:
-        dill.dump(save_data, f)
+        print(f"\nSaving results to {output_file}")
+        
+        # Prepare the data to save
+        save_data = {
+            "results": results,
+            "config": config,
+            "instrument": instrument,
+            "cube_sim": cube_sim,
+            "cube_reb_dict": cube_reb_dict,
+            "fit_config": fit_config,
+            "fit_signals": fit_signals,
+        }
+        
+        with open(output_file, "wb") as f:
+            dill.dump(save_data, f)
 
-    print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+        print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
 
-    print(f"Instrument response simulation complete!")
-    print(f"Total parameter combinations: {total_combinations}")
+        print(f"Instrument response simulation complete!")
+        print(f"Total parameter combinations: {total_combinations}")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from .radiometric import (
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
 from .fitting import fit_cube_gauss
-from .utils import angle_to_distance, rebin_slit_offchip
+from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
 
 
 def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDCube, ...]:
@@ -136,17 +136,32 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     do_dn = fit_signals in ("both", "dn")
     do_photon = fit_signals in ("both", "photon")
 
+    # --- MPI distribution: split iterations across ranks -----------------
+    comm, rank, world_size = _get_mpi_info()
+    if world_size > 1:
+        base, remainder = divmod(n_iter, world_size)
+        local_n_iter = base + (1 if rank < remainder else 0)
+        if rank == 0:
+            print(f"MPI: distributing {n_iter} MC iterations across "
+                  f"{world_size} ranks ({local_n_iter} per rank)")
+    else:
+        local_n_iter = n_iter
+
     first_dn_signal, first_photon_signal = None, None
     dn_fit_values_list, photon_fit_values_list = [], []
     
-    for i in tqdm(range(n_iter), desc="Monte-Carlo", unit="iter", leave=False):
+    show_progress = (rank == 0)
+    desc = "Monte-Carlo" if world_size == 1 else f"MC (rank 0/{world_size})"
+
+    for i in tqdm(range(local_n_iter), desc=desc, unit="iter", leave=False,
+                  disable=not show_progress):
         # Simulate one run
         (intensity_exp, photons_total, photons_throughput, photons_pixels, 
          photons_focused, photon_arrivals, electrons, electrons_stray, 
          electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
         
-        # Store first iteration signals only (binned, to match fit shapes)
-        if i == 0:
+        # Store first iteration signals only on rank 0 (binned, to match fit shapes)
+        if i == 0 and rank == 0:
             first_dn_signal = rebin_slit_offchip(dn, offchip_bin_slit)
             first_photon_signal = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
         
@@ -160,26 +175,39 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
             photon_fit_values, photon_fit_units = fit_cube_gauss(photon_binned, n_jobs=sim.ncpu, fit_config=fit_config)
             photon_fit_values_list.append(photon_fit_values)
-        
-    # Stack fit results and compute statistics
+
+    # --- MPI gather: collect fit arrays from all ranks on root -----------
+    if world_size > 1:
+        if do_dn:
+            all_dn_lists = comm.gather(dn_fit_values_list, root=0)
+            if rank == 0:
+                dn_fit_values_list = [v for sublist in all_dn_lists for v in sublist]
+        if do_photon:
+            all_photon_lists = comm.gather(photon_fit_values_list, root=0)
+            if rank == 0:
+                photon_fit_values_list = [v for sublist in all_photon_lists for v in sublist]
+
+    # --- Compute statistics (only meaningful on rank 0) ------------------
     dn_fit_results = None
-    if do_dn:
-        dn_fits_values = np.stack(dn_fit_values_list)
-        dn_fit_results = {
-            "first_fit_data": dn_fits_values[0],
-            "mean_data": dn_fits_values.mean(axis=0),
-            "std_data": dn_fits_values.std(axis=0),
-            "units": dn_fit_units,
-        }
-    
     photon_fit_results = None
-    if do_photon:
-        photon_fits_values = np.stack(photon_fit_values_list)
-        photon_fit_results = {
-            "first_fit_data": photon_fits_values[0],
-            "mean_data": photon_fits_values.mean(axis=0),
-            "std_data": photon_fits_values.std(axis=0),
-            "units": photon_fit_units,
-        }
+
+    if rank == 0:
+        if do_dn and dn_fit_values_list:
+            dn_fits_values = np.stack(dn_fit_values_list)
+            dn_fit_results = {
+                "first_fit_data": dn_fits_values[0],
+                "mean_data": dn_fits_values.mean(axis=0),
+                "std_data": dn_fits_values.std(axis=0),
+                "units": dn_fit_units,
+            }
+
+        if do_photon and photon_fit_values_list:
+            photon_fits_values = np.stack(photon_fit_values_list)
+            photon_fit_results = {
+                "first_fit_data": photon_fits_values[0],
+                "mean_data": photon_fits_values.mean(axis=0),
+                "std_data": photon_fits_values.std(axis=0),
+                "units": photon_fit_units,
+            }
     
     return first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results
