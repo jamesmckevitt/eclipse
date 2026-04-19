@@ -33,9 +33,17 @@ dependencies = [
     "pyyaml",
     "reproject",
     "sunpy[all]",
+    "dask",
+    "psutil",
+    "mendeleev",
+    "h5py",
+    "fiasco",
 ]
 
 [project.optional-dependencies]
+mpi = [
+    "mpi4py",
+]
 dev = [
     "pytest",
     "black",

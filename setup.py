@@ -39,30 +39,7 @@ setup(
         "Programming Language :: Python :: 3.11",
     ],
     python_requires=">=3.10",
-    install_requires=[
-        "numpy",
-        "astropy",
-        "ndcube",
-        "specutils",
-        "scipy",
-        "matplotlib",
-        "joblib",
-        "tqdm",
-        "dill",
-        "pyyaml",
-        "reproject",
-        "dask",
-        "psutil",
-        "mendeleev",
-    ],
-    extras_require={
-        "dev": [
-            "pytest",
-            "black",
-            "flake8",
-            "mypy",
-        ],
-    },
+    # Dependencies are defined in pyproject.toml.
     entry_points={
         "console_scripts": [
             "eclipse=euvst_response.cli:main",
