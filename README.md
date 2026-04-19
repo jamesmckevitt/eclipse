@@ -30,7 +30,7 @@ After installation, you can run ECLIPSE from the command line:
 
 ```bash
 # Run synthesis script (convert 3D MHD data to synthetic spectra)
-synthesise-spectra --data-dir ./data/atmosphere --goft-file ./data/gofnt.sav --output-dir ./run/input
+synthesise-spectra --data-dir ./data/atmosphere --lines Fe12_195.1190 --output-dir ./run/input
 
 # Run instrument response simulation
 eclipse --config ./run/input/config.yaml
@@ -99,18 +99,9 @@ maps = create_sunpy_maps_from_combo(combo, rest_wavelength=195.119*u.AA, data_ty
 
 ## Detailed instructions
 
-### 1. Generate contribution functions for the desired emission lines
+### 1. Run the line synthesis
 
-Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
-
-Run the following command:
-```bash
-idl -e "make_goft"
-```
-
-### 2. Run the line synthesis
-
-The synthesis script converts 3D MHD simulation data into synthetic solar spectra. It can be run directly from the command line with extensive configuration options.
+The synthesis script converts 3D MHD simulation data into synthetic solar spectra. Contribution functions G(T, n_e) are computed on-the-fly using [fiasco](https://fiasco.readthedocs.io/) (a Python interface to the CHIANTI atomic database).
 
 #### Basic Usage
 
@@ -118,7 +109,9 @@ The synthesis script converts 3D MHD simulation data into synthetic solar spectr
 # Example using all available command line options
 synthesise-spectra \
   --data-dir ./data/atmosphere \
-  --goft-file ./data/gofnt.sav \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --abundance sun_coronal_2021_chianti \
+  --n-workers 4 \
   --output-dir ./run/input \
   --output-name synthesised_spectra.pkl \
   --temp-file temp/eosT.0270000 \
@@ -138,8 +131,7 @@ synthesise-spectra \
   --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
-  --mean-mol-wt 1.29 \
-  --limit-lines Fe12_195.1190
+  --mean-mol-wt 1.29
 
 # Show all available options
 synthesise-spectra --help
@@ -149,9 +141,13 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 - `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
-- `--goft-file`: Path to CHIANTI G(T,N) save file (default: `./data/gofnt.sav`)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+
+**Line and Abundance Selection:**
+- `--lines`: Emission lines to synthesise, e.g., `--lines Fe12_195.1190 Fe12_195.1790` (required)
+- `--abundance`: CHIANTI abundance dataset name (default: `sun_coronal_2021_chianti`)
+- `--n-workers`: Number of parallel workers for the fiasco G(T, n_e) computation. Each distinct ion is computed in a separate process. `0` uses all available CPUs (default: `0`). Set to `1` for serial execution.
 
 **Simulation Files:**
 - `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
@@ -185,9 +181,6 @@ synthesise-spectra --help
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
 - `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
 
-**Line Selection:**
-- `--limit-lines`: Limit to specific lines, e.g., `--limit-lines Fe12_195.1190 Fe12_195.1790`
-
 #### Dynamic Mode (Time-varying Atmospheres)
 
 For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
@@ -195,7 +188,8 @@ For simulating raster scans over evolving atmospheres, use dynamic mode which co
 ```bash
 synthesise-spectra \
   --data-dir ./data/atmosphere \
-  --goft-file ./data/gofnt.sav \
+  --lines Fe12_195.1190 \
+  --abundance sun_coronal_2021_chianti \
   --output-dir ./run/input \
   --slit-rest-time "40 s" \
   --slit-width "0.2 arcsec" \
@@ -233,7 +227,6 @@ The synthesis produces a pickle file containing:
 
 - Use `--downsample 2` or `--downsample 4` for initial testing
 - Use `--precision float32` to reduce memory usage (may affect accuracy)
-- Use `--limit-lines` to synthesise only specific lines for development
 - Use spatial cropping to focus on regions of interest and reduce computation time
 - Monitor memory usage - full resolution synthesis can require 50+ GB RAM
 - Side views (`--integration-axis x` or `y`) may require different velocity files
@@ -270,7 +263,7 @@ This step can require a lot of memory at full resolution. A fully synthesised at
 
 **Important:** You can place the synthesised atmosphere file anywhere and specify its location using the `synthesis_file` parameter in your YAML configuration file. The default location is `./run/input/synthesised_spectra.pkl`.
 
-### 3. Simulate the instrument response
+### 2. Simulate the instrument response
 
 #### Configuration File
 
