@@ -71,9 +71,10 @@ def main() -> None:
             print(f"MPI distributed mode: {_mpi_size} processes "
                   f"(MC iterations will be split across ranks)")
         else:
-            # Silence stdout on non-root ranks to avoid duplicated output
-            import io
-            sys.stdout = open(os.devnull, "w")
+            # Silence stdout and stderr on non-root ranks to avoid duplicated output
+            _devnull = open(os.devnull, "w")
+            sys.stdout = _devnull
+            sys.stderr = _devnull
 
     # Check if config file exists
     config_path = Path(args.config)
