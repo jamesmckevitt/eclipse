@@ -252,7 +252,6 @@ def load_maps(path: str | Path) -> dict:
     )
 
 
-@contextlib.contextmanager
 def deduplicate_list(param_list, param_name):
     """Remove duplicates from a parameter list, warning if any are found.
 
@@ -286,6 +285,7 @@ def deduplicate_list(param_list, param_name):
     return deduplicated
 
 
+@contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
     """
     Context manager that patches joblib so it uses the supplied tqdm
