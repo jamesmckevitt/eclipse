@@ -16,6 +16,17 @@ from tqdm import tqdm
 from .utils import tqdm_joblib, distance_to_angle
 
 
+def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
+    """Resample a chunk of pixels (module-level for efficient pickling)."""
+    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
+    batch_results = np.empty((flat_chunk.shape[0], n_spec))
+    for i in range(flat_chunk.shape[0]):
+        spec = Spectrum(flux=flat_chunk[i] * unit, spectral_axis=spectral_world)
+        res = resampler(spec, new_spec_grid)
+        batch_results[i] = res.flux.value
+    return batch_results
+
+
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
     Load synthetic atmosphere cube from pickle file.
@@ -170,19 +181,15 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     # Create batch indices
     batch_indices = [(i, min(i + batch_size, n_pixels)) for i in range(0, n_pixels, batch_size)]
 
-    def _resample_batch(start_idx, end_idx):
-        """Resample a batch of pixels."""
-        resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
-        batch_results = np.empty((end_idx - start_idx, n_spec))
-        for i, pixel_idx in enumerate(range(start_idx, end_idx)):
-            spec = Spectrum(flux=flat_data[pixel_idx] * ndcube.unit, spectral_axis=spectral_world)
-            res = resampler(spec, new_spec_grid)
-            batch_results[i] = res.flux.value
-        return batch_results
+    # Pass .copy() slices so loky pickles only the small chunk, not the full array
+    unit = ndcube.unit
 
     with tqdm_joblib(tqdm(total=len(batch_indices), desc="Resampling spectral axis", unit="batch", leave=False)):
         results = Parallel(n_jobs=ncpu)(
-            delayed(_resample_batch)(start, end) for start, end in batch_indices
+            delayed(_resample_batch)(
+                flat_data[start:end].copy(), unit, spectral_world, new_spec_grid, n_spec
+            )
+            for start, end in batch_indices
         )
     resampled = np.vstack(results)
 
