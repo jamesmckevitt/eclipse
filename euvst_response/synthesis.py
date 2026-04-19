@@ -17,8 +17,6 @@ import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import angle_to_distance
-import fiasco
-import logging
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -574,6 +572,9 @@ def build_composite_cubes_mhd(
 def _compute_single_ion(args):
     """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
     that each spawned process gets its own HDF5 handles."""
+
+    import fiasco
+    import logging
 
     elem, stage, temperature_K, densities_cm3, abundance, lines = args
     temperature = temperature_K * u.K
