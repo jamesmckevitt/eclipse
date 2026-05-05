@@ -73,8 +73,11 @@ def main() -> None:
             os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
             os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
             os.close(_devnull_fd)
-            sys.stdout = open(os.devnull, "w")
-            sys.stderr = open(os.devnull, "w")
+            # Wrap the already-redirected fds rather than opening new devnull
+            # handles; closefd=False prevents a ResourceWarning when these
+            # objects are later garbage-collected.
+            sys.stdout = open(1, "w", closefd=False)
+            sys.stderr = open(2, "w", closefd=False)
 
     config_path = Path(args.config)
     if not config_path.is_file():
@@ -359,7 +362,9 @@ def main() -> None:
 
     # Main sweep loop
     all_results = {}
-    # Keyed by (slit_width_arcsec, plate_scale_arcsec_per_pix, wvl_res_cgs)
+    # cube_reb_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res)
+    cube_reb_cache = {}
+    # rebin_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res, offchip_bin_slit)
     rebin_cache = {}
     # Keyed by slit_width_arcsec (first match) for convenient downstream access
     cube_reb_dict = {}
@@ -420,21 +425,22 @@ def main() -> None:
             TEL = Telescope_EIS(**tel_kwargs) if tel_kwargs else Telescope_EIS()
             DET = Detector_EIS(**all_det) if all_det else Detector_EIS()
 
-        # Rebinning (cached per unique spatial/spectral sampling + offchip binning)
-        rebin_cache_key = (
+        # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
+        # so cube_reb_cache is keyed by the 3-tuple to avoid redundant rebin calls when
+        # sweeping multiple binning values at fixed spatial/spectral sampling.
+        cube_reb_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
-            offchip_bin_slit,
         )
+        rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
 
-        if rebin_cache_key not in rebin_cache:
+        if cube_reb_key not in cube_reb_cache:
             print(
                 f"\nRebinning atmosphere "
                 f"(slit_width={slit_width}, "
                 f"plate_scale={DET.plate_scale_angle}, "
-                f"wvl_res={DET.wvl_res}, "
-                f"offchip_bin_slit={offchip_bin_slit})..."
+                f"wvl_res={DET.wvl_res})..."
             )
             SIM_rebin = Simulation(
                 expos=1.0 * u.s,
@@ -445,7 +451,7 @@ def main() -> None:
                 psf=False,
             )
             if uniform_intensity_mode:
-                cube_reb = create_uniform_intensity_cube(
+                cube_reb_cache[cube_reb_key] = create_uniform_intensity_cube(
                     total_intensity=uniform_intensity,
                     rest_wavelength=uniform_rest_wavelength,
                     thermal_width=uniform_thermal_width,
@@ -453,17 +459,20 @@ def main() -> None:
                     sim=SIM_rebin,
                 )
             else:
-                cube_reb = rebin_atmosphere(cube_sim, DET, SIM_rebin)
+                cube_reb_cache[cube_reb_key] = rebin_atmosphere(cube_sim, DET, SIM_rebin)
 
+        cube_reb = cube_reb_cache[cube_reb_key]
+
+        if rebin_cache_key not in rebin_cache:
             # Apply off-chip binning
             cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
 
             print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
             fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
-            rebin_cache[rebin_cache_key] = (cube_reb, cube_reb_binned, fit_truth_data, fit_truth_units)
-            cube_reb_dict.setdefault(rebin_cache_key[0], cube_reb_binned)
+            rebin_cache[rebin_cache_key] = (cube_reb_binned, fit_truth_data, fit_truth_units)
+            cube_reb_dict.setdefault(cube_reb_key[0], cube_reb_binned)
 
-        cube_reb, cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
+        cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
 
         # Build Simulation object
         SIM = Simulation(
