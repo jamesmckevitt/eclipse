@@ -173,7 +173,13 @@ def main() -> None:
         raw_components = fitting_cfg.get("components", [])
         if len(raw_components) >= 2:
             components = []
-            for comp_dict in raw_components:
+            for idx, comp_dict in enumerate(raw_components):
+                if "wavelength" not in comp_dict:
+                    raise ValueError(
+                        f"fitting.components[{idx}] is missing required field "
+                        f"'wavelength' (rest wavelength of this Gaussian component, "
+                        f"e.g. 'wavelength: 195.119 angstrom')."
+                    )
                 wl = parse_yaml_input(comp_dict["wavelength"])
                 tie_center = comp_dict.get("tie_center", None)
                 tie_width = comp_dict.get("tie_width", None)
@@ -470,7 +476,10 @@ def main() -> None:
             print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
             fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
             rebin_cache[rebin_cache_key] = (cube_reb_binned, fit_truth_data, fit_truth_units)
-            cube_reb_dict.setdefault(cube_reb_key[0], cube_reb_binned)
+            # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
+            # multiple binning factors at fixed slit width all retain their cubes
+            # (a single-key dict would silently keep only the first one).
+            cube_reb_dict.setdefault((cube_reb_key[0], offchip_bin_slit), cube_reb_binned)
 
         cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
 
