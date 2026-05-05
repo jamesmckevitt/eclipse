@@ -272,6 +272,7 @@ simulation runs every combination (cartesian product).
 - `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`)
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
+- `offchip_bin_slit`: off-chip slit binning factor (default `1`)
 - `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
@@ -286,6 +287,7 @@ reference_line: Fe12_195.1190
 # Global settings (apply to all combinations)
 n_iter: 500
 ncpu: -1
+offchip_bin_slit: [1, 2]  # sweep no-binning and 2-pixel off-chip binning
 
 # Simulation parameters
 # Any field listed as a list is swept over; all combinations are run.
@@ -331,6 +333,26 @@ fit_signals: dn       # Fit only the DN signal
 fit_signals: photon   # Fit only the photon signal
 fit_signals: both     # Fit both (default)
 ```
+
+To fit blended spectral lines with multiple Gaussian components, add a `fitting` block:
+
+```yaml
+fitting:
+  primary_component: 0           # index of the component whose velocity is reported
+  constrain_positive_intensity: true  # reject fits with negative amplitudes
+  backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
+  components:
+    - {}                         # component 0: free centre, width, amplitude
+    - tie_center: 0              # component 1: centre tied to component 0
+      tie_width: 0               #              width  tied to component 0
+```
+
+Each entry in `components` corresponds to one Gaussian. Optional per-component keys:
+- `tie_center: <i>`: constrain this component's centre to match component *i*
+- `tie_width: <i>`: constrain this component's line width to match component *i*
+- `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
+
+Omitting the `fitting` block fits a single Gaussian (default behaviour).
 
 If you synthesised data in dynamic mode, your configuration must specify:
 - Exactly one slit width matching the synthesis slit width
