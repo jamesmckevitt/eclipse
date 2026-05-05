@@ -342,10 +342,13 @@ fitting:
   constrain_positive_intensity: true  # reject fits with negative amplitudes
   backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
   components:
-    - {}                         # component 0: free centre, width, amplitude
-    - tie_center: 0              # component 1: centre tied to component 0
-      tie_width: 0               #              width  tied to component 0
+    - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
+    - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
+      tie_center: 0
+      tie_width: 0
 ```
+
+Each component requires a `wavelength` field giving its rest wavelength.
 
 Each entry in `components` corresponds to one Gaussian. Optional per-component keys:
 - `tie_center: <i>`: constrain this component's centre to match component *i*
