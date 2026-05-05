@@ -87,7 +87,6 @@ from euvst_response import (
 )
 
 # Load results
-# Load results
 results = load_instrument_response_results("run/result/my_run.pkl")
 
 # Print a summary table (auto-discovers all parameters and shows git commit)
