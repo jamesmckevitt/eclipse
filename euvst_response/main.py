@@ -460,10 +460,10 @@ def main() -> None:
 
             print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
             fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
-            rebin_cache[rebin_cache_key] = (cube_reb_binned, fit_truth_data, fit_truth_units)
+            rebin_cache[rebin_cache_key] = (cube_reb, cube_reb_binned, fit_truth_data, fit_truth_units)
             cube_reb_dict.setdefault(rebin_cache_key[0], cube_reb_binned)
 
-        cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
+        cube_reb, cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
 
         # Build Simulation object
         SIM = Simulation(
@@ -496,7 +496,7 @@ def main() -> None:
 
         # Run Monte Carlo
         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-            cube_reb_binned, expos, DET, TEL, SIM,
+            cube_reb, expos, DET, TEL, SIM,
             n_iter=SIM.n_iter,
             fit_config=fit_config,
             offchip_bin_slit=offchip_bin_slit,
