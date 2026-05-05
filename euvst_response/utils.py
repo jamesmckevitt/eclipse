@@ -410,20 +410,10 @@ def _params_to_key(params: dict) -> tuple:
     for name, val in params.items():
         if name in _skip:
             continue
-        if hasattr(val, "unit"):
-            try:
-                items[name] = float(val.si.value)
-            except Exception:
-                try:
-                    items[name] = float(val.to(u.K, equivalencies=u.temperature()).value)
-                except Exception:
-                    items[name] = float(val.value)
-        elif isinstance(val, (list, tuple)):
-            items[name] = tuple(
-                float(v.si.value) if hasattr(v, "unit") else v for v in val
-            )
+        if isinstance(val, (list, tuple)):
+            items[name] = tuple(_to_canonical_scalar(v) for v in val)
         else:
-            items[name] = val
+            items[name] = _to_canonical_scalar(val)
     return tuple(sorted(items.items()))
 
 
