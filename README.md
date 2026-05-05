@@ -256,12 +256,6 @@ print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
 print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 ```
 
-#### Pre-computed Atmospheres
-
-This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
-
-**Important:** You can place the synthesised atmosphere file anywhere and specify its location using the `synthesis_file` parameter in your YAML configuration file. The default location is `./run/input/synthesised_spectra.pkl`.
-
 ### 2. Simulate the instrument response
 
 #### Configuration File
