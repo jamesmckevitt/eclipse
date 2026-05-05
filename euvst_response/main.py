@@ -5,6 +5,7 @@ Main execution script for instrument response simulations.
 from __future__ import annotations
 import argparse
 import os
+import sys
 import warnings
 from itertools import product as itertools_product
 from pathlib import Path
@@ -16,12 +17,13 @@ import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
-from .fitting import fit_cube_gauss
+from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
     _parse_section, _params_to_key, _extract_config_params, _SECTION_LIST_FIELDS,
+    rebin_slit_offchip,
 )
 import numpy as np
 
@@ -48,6 +50,35 @@ def main() -> None:
     if args.debug:
         print("Debug mode enabled - will break to IPython on errors")
 
+    # MPI auto-detection: when launched via srun/mpirun with multiple tasks,
+    # Monte Carlo iterations are distributed across ranks automatically.
+    from .utils import _get_mpi_info
+    _comm, _mpi_rank, _mpi_size = _get_mpi_info()
+    if _mpi_size > 1:
+        # Intel MPI pins each rank to cores, breaking joblib/loky.
+        # Reset affinity to the full SLURM allocation.
+        _slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+        if _slurm_cpus is not None:
+            os.sched_setaffinity(0, range(int(_slurm_cpus)))
+
+        if _mpi_rank == 0:
+            print(f"MPI distributed mode: {_mpi_size} processes "
+                  f"(MC iterations will be split across ranks)")
+        else:
+            # Silence stdout and stderr on non-root ranks to avoid duplicated
+            # output. Redirect at the OS file-descriptor level, not
+            # just the Python objects, because SLURM captures fd 1/2 directly
+            # and tqdm can bypass the Python sys.stderr object.
+            _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
+            os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
+            os.close(_devnull_fd)
+            # Wrap the already-redirected fds rather than opening new devnull
+            # handles; closefd=False prevents a ResourceWarning when these
+            # objects are later garbage-collected.
+            sys.stdout = open(1, "w", closefd=False)
+            sys.stderr = open(2, "w", closefd=False)
+
     config_path = Path(args.config)
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {args.config}")
@@ -59,6 +90,22 @@ def main() -> None:
     instrument = config.get("instrument", "SWC").upper()
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
+
+    # In MPI mode, if a ncpu value specified, cap it to
+    # the CPUs available to this rank so joblib doesn't oversubscribe.
+    # Leave ncpu=-1 alone - joblib handles it natively via the OS affinity
+    # mask (which I_MPI_PIN_DOMAIN=auto sets correctly).
+    if _mpi_size > 1:
+        if ncpu != -1:
+            slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+            if slurm_cpus is not None:
+                available_cpus = int(slurm_cpus)
+            else:
+                available_cpus = os.cpu_count() or 1
+            if ncpu > available_cpus:
+                ncpu = available_cpus
+        if _mpi_rank == 0:
+            print(f"MPI: ncpu={ncpu} per rank")
 
     # Simulation mode
     uniform_intensity_mode = "uniform_intensity" in config
@@ -118,6 +165,70 @@ def main() -> None:
                 tel_sweep.pop(key, None)
         if pinhole_sizes or sim_fixed.get("enable_pinholes") or sim_sweep.get("enable_pinholes"):
             raise ValueError("Pinhole effects are not supported for EIS.")
+
+    # Parse fitting configuration (multi-component Gaussian)
+    fit_config = None
+    fitting_cfg = config.get("fitting", None)
+    if fitting_cfg is not None:
+        raw_components = fitting_cfg.get("components", [])
+        if len(raw_components) >= 2:
+            components = []
+            for idx, comp_dict in enumerate(raw_components):
+                if "wavelength" not in comp_dict:
+                    raise ValueError(
+                        f"fitting.components[{idx}] is missing required field "
+                        f"'wavelength' (rest wavelength of this Gaussian component, "
+                        f"e.g. 'wavelength: 195.119 angstrom')."
+                    )
+                wl = parse_yaml_input(comp_dict["wavelength"])
+                tie_center = comp_dict.get("tie_center", None)
+                tie_width = comp_dict.get("tie_width", None)
+                amp_gt = comp_dict.get("amplitude_greater_than", None)
+                components.append(FitComponent(wavelength=wl,
+                                               tie_center=tie_center,
+                                               tie_width=tie_width,
+                                               amplitude_greater_than=amp_gt))
+            primary = fitting_cfg.get("primary_component", 0)
+            constrain_pos = fitting_cfg.get("constrain_positive_intensity", False)
+            backend_override = fitting_cfg.get("backend", None)
+            if backend_override is not None and backend_override not in ("scipy", "mpfit"):
+                raise ValueError(
+                    f"Unknown fitting backend '{backend_override}'. "
+                    f"Supported values: 'scipy', 'mpfit', or omit for auto."
+                )
+            fit_config = FitConfig(components=components,
+                                   primary_component=primary,
+                                   constrain_positive_intensity=constrain_pos,
+                                   backend=backend_override)
+            if backend_override == "mpfit":
+                backend_label = "mpfit (forced)"
+            elif backend_override == "scipy":
+                backend_label = "scipy (forced)"
+            else:
+                backend_label = "scipy (auto)"
+            print(f"Multi-component fitting enabled: {fit_config.n_components} components "
+                  f"(primary={primary}, {fit_config.n_full_params} params, "
+                  f"backend={backend_label})")
+
+    # Parse off-chip slit binning (ground-based spatial binning along the slit)
+    offchip_bin_slits = ensure_list(config.get("offchip_bin_slit", [1]))
+
+    # Parse which signals to fit (default: both DN and photon)
+    fit_signals = config.get("fit_signals", "both")
+    if fit_signals not in ("both", "dn", "photon"):
+        raise ValueError(
+            f"Unknown fit_signals value '{fit_signals}'. "
+            f"Supported values: 'both', 'dn', 'photon'."
+        )
+    if fit_signals != "both":
+        skipped = "photon" if fit_signals == "dn" else "dn"
+        print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
+    # ensure_list wraps scalars in a list; values are plain ints (no units)
+    offchip_bin_slits = [int(v) for v in offchip_bin_slits]
+    offchip_bin_slits = deduplicate_list(offchip_bin_slits, "offchip_bin_slit")
+    if any(b > 1 for b in offchip_bin_slits):
+        print(f"Off-chip slit binning values: {offchip_bin_slits} "
+              f"(ground-based, all noise per pixel before summation)")
 
     # Apply defaults for required params not specified anywhere
     _sim_defaults = {
@@ -257,15 +368,30 @@ def main() -> None:
 
     # Main sweep loop
     all_results = {}
-    # Keyed by (slit_width_arcsec, plate_scale_arcsec_per_pix, wvl_res_cgs)
+    # cube_reb_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res)
+    cube_reb_cache = {}
+    # rebin_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res, offchip_bin_slit)
     rebin_cache = {}
     # Keyed by slit_width_arcsec (first match) for convenient downstream access
     cube_reb_dict = {}
+
+    # Add offchip_bin_slit as a sweep dimension if needed
+    if len(offchip_bin_slits) > 1:
+        sweep_dims["offchip_bin_slit"] = offchip_bin_slits
+        dim_names = list(sweep_dims.keys())
+        dim_values = [sweep_dims[n] for n in dim_names]
+        total_combinations = 1
+        for v in dim_values:
+            total_combinations *= len(v)
+        print(f"\nUpdated to {total_combinations} parameter combination(s) (including offchip_bin_slit sweep).")
 
     product_iter = itertools_product(*dim_values) if dim_names else [()]
 
     for combination_idx, combo_values in enumerate(product_iter, start=1):
         combo = dict(zip(dim_names, combo_values)) if dim_names else {}
+
+        # Extract offchip_bin_slit from combo if present
+        offchip_bin_slit = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
 
         # Merge sweep values with fixed values for this combination
         all_sim = {
@@ -305,14 +431,17 @@ def main() -> None:
             TEL = Telescope_EIS(**tel_kwargs) if tel_kwargs else Telescope_EIS()
             DET = Detector_EIS(**all_det) if all_det else Detector_EIS()
 
-        # Rebinning (cached per unique spatial/spectral sampling)
-        rebin_cache_key = (
+        # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
+        # so cube_reb_cache is keyed by the 3-tuple to avoid redundant rebin calls when
+        # sweeping multiple binning values at fixed spatial/spectral sampling.
+        cube_reb_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
         )
+        rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
 
-        if rebin_cache_key not in rebin_cache:
+        if cube_reb_key not in cube_reb_cache:
             print(
                 f"\nRebinning atmosphere "
                 f"(slit_width={slit_width}, "
@@ -328,7 +457,7 @@ def main() -> None:
                 psf=False,
             )
             if uniform_intensity_mode:
-                cube_reb = create_uniform_intensity_cube(
+                cube_reb_cache[cube_reb_key] = create_uniform_intensity_cube(
                     total_intensity=uniform_intensity,
                     rest_wavelength=uniform_rest_wavelength,
                     thermal_width=uniform_thermal_width,
@@ -336,14 +465,23 @@ def main() -> None:
                     sim=SIM_rebin,
                 )
             else:
-                cube_reb = rebin_atmosphere(cube_sim, DET, SIM_rebin)
+                cube_reb_cache[cube_reb_key] = rebin_atmosphere(cube_sim, DET, SIM_rebin)
 
-            print("Fitting ground truth cube...")
-            fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb, n_jobs=ncpu)
-            rebin_cache[rebin_cache_key] = (cube_reb, fit_truth_data, fit_truth_units)
-            cube_reb_dict.setdefault(rebin_cache_key[0], cube_reb)
+        cube_reb = cube_reb_cache[cube_reb_key]
 
-        cube_reb, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
+        if rebin_cache_key not in rebin_cache:
+            # Apply off-chip binning
+            cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
+
+            print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
+            fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
+            rebin_cache[rebin_cache_key] = (cube_reb_binned, fit_truth_data, fit_truth_units)
+            # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
+            # multiple binning factors at fixed slit width all retain their cubes
+            # (a single-key dict would silently keep only the first one).
+            cube_reb_dict.setdefault((cube_reb_key[0], offchip_bin_slit), cube_reb_binned)
+
+        cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
 
         # Build Simulation object
         SIM = Simulation(
@@ -363,7 +501,9 @@ def main() -> None:
         print(f"\n--- Combination {combination_idx}/{total_combinations} ---")
         for k, v in combo.items():
             print(f"  {k}: {v}")
-        if not combo:
+        if offchip_bin_slit > 1:
+            print(f"  offchip_bin_slit: {offchip_bin_slit}")
+        if not combo and offchip_bin_slit == 1:
             print("  (single combination - all parameters fixed)")
         print(f"  Calculated dark current: {DET.dark_current:.2e}")
         if instrument == "SWC":
@@ -376,84 +516,95 @@ def main() -> None:
         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
             cube_reb, expos, DET, TEL, SIM,
             n_iter=SIM.n_iter,
+            fit_config=fit_config,
+            offchip_bin_slit=offchip_bin_slit,
+            fit_signals=fit_signals,
             uniform_mode=uniform_intensity_mode,
         )
 
-        # Build parameters dict from actual config objects so all fields
-        # (including those using class defaults) are recorded.
-        parameters = {}
-        parameters.update(_extract_config_params(SIM, "simulation"))
-        parameters.update(_extract_config_params(DET, "detector"))
-        if instrument == "SWC":
-            parameters.update(_extract_config_params(filter_obj, "filter"))
-        parameters.update(_extract_config_params(TEL, "telescope"))
+        # Only store results on rank 0 (MPI-aware)
+        if _mpi_rank == 0 and first_dn_signal is not None:
+            # Build parameters dict from actual config objects so all fields
+            # (including those using class defaults) are recorded.
+            parameters = {}
+            parameters.update(_extract_config_params(SIM, "simulation"))
+            parameters.update(_extract_config_params(DET, "detector"))
+            if instrument == "SWC":
+                parameters.update(_extract_config_params(filter_obj, "filter"))
+            parameters.update(_extract_config_params(TEL, "telescope"))
+            # Add offchip_bin_slit to the parameters dict
+            parameters["offchip_bin_slit"] = offchip_bin_slit
 
-        param_key = _params_to_key(parameters)
+            param_key = _params_to_key(parameters)
 
-        all_results[param_key] = {
-            "parameters": parameters,
-            "config_objects": {
-                "detector": DET,
-                "telescope": TEL,
-                "simulation": SIM,
+            all_results[param_key] = {
+                "parameters": parameters,
+                "config_objects": {
+                    "detector": DET,
+                    "telescope": TEL,
+                    "simulation": SIM,
+                },
+                "first_dn_signal_data": first_dn_signal.data,
+                "first_dn_signal_unit": first_dn_signal.unit,
+                "first_photon_signal_data": first_photon_signal.data,
+                "first_photon_signal_unit": first_photon_signal.unit,
+                "first_signal_wcs": first_dn_signal.wcs,
+                "dn_fit_stats": dn_fit_stats,
+                "photon_fit_stats": photon_fit_stats,
+                "ground_truth": {
+                    "fit_truth_data": fit_truth_data,
+                    "fit_truth_units": fit_truth_units,
+                },
+            }
+
+            del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
+
+    # Package results (rank 0 only in MPI mode)
+    if _mpi_rank == 0:
+        results = {
+            "all_combinations": all_results,
+            # All sweep dimensions and their value lists
+            "sweep_dimensions": sweep_dims,
+            # All fixed (non-swept) parameter values
+            "fixed_params": {
+                **{f"simulation.{k}": v for k, v in sim_fixed.items()},
+                **{f"detector.{k}": v for k, v in det_fixed.items()},
+                **{f"telescope.{k}": v for k, v in tel_fixed.items()},
+                **(
+                    {f"filter.{k}": v for k, v in fil_fixed.items()}
+                    if instrument == "SWC"
+                    else {}
+                ),
+                "offchip_bin_slit": offchip_bin_slits[0] if len(offchip_bin_slits) == 1 else None,
             },
-            "first_dn_signal_data": first_dn_signal.data,
-            "first_dn_signal_unit": first_dn_signal.unit,
-            "first_photon_signal_data": first_photon_signal.data,
-            "first_photon_signal_unit": first_photon_signal.unit,
-            "first_signal_wcs": first_dn_signal.wcs,
-            "dn_fit_stats": dn_fit_stats,
-            "photon_fit_stats": photon_fit_stats,
-            "ground_truth": {
-                "fit_truth_data": fit_truth_data,
-                "fit_truth_units": fit_truth_units,
-            },
+            "fit_config": fit_config,
+            "fit_signals": fit_signals,
         }
 
-        del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats
+        # Save
+        git_commit_id = get_git_commit_id()
+        software_version = _get_software_version()
 
-    # Package results
-    results = {
-        "all_combinations": all_results,
-        # All sweep dimensions and their value lists
-        "sweep_dimensions": sweep_dims,
-        # All fixed (non-swept) parameter values
-        "fixed_params": {
-            **{f"simulation.{k}": v for k, v in sim_fixed.items()},
-            **{f"detector.{k}": v for k, v in det_fixed.items()},
-            **{f"telescope.{k}": v for k, v in tel_fixed.items()},
-            **(
-                {f"filter.{k}": v for k, v in fil_fixed.items()}
-                if instrument == "SWC"
-                else {}
-            ),
-        },
-    }
+        output_file = Path(f"run/result/{Path(args.config).stem}.pkl")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save
-    git_commit_id = get_git_commit_id()
-    software_version = _get_software_version()
+        print(f"\nSaving results to {output_file}")
+        save_data = {
+            "results": results,
+            "config": config,
+            "instrument": instrument,
+            "cube_sim": cube_sim,
+            "cube_reb_dict": cube_reb_dict,
+            "git_commit_id": git_commit_id,
+            "software_version": software_version,
+        }
 
-    output_file = Path(f"run/result/{Path(args.config).stem}.pkl")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "wb") as f:
+            dill.dump(save_data, f)
 
-    print(f"\nSaving results to {output_file}")
-    save_data = {
-        "results": results,
-        "config": config,
-        "instrument": instrument,
-        "cube_sim": cube_sim,
-        "cube_reb_dict": cube_reb_dict,
-        "git_commit_id": git_commit_id,
-        "software_version": software_version,
-    }
-
-    with open(output_file, "wb") as f:
-        dill.dump(save_data, f)
-
-    print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
-    print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
-    print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
+        print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+        print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
+        print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
 
 
 if __name__ == "__main__":

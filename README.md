@@ -30,7 +30,7 @@ After installation, you can run ECLIPSE from the command line:
 
 ```bash
 # Run synthesis script (convert 3D MHD data to synthetic spectra)
-synthesise-spectra --data-dir ./data/atmosphere --goft-file ./data/gofnt.sav --output-dir ./run/input
+synthesise-spectra --data-dir ./data/atmosphere --lines Fe12_195.1190 --output-dir ./run/input
 
 # Run instrument response simulation
 eclipse --config ./run/input/config.yaml
@@ -55,7 +55,7 @@ detector = Detector_SWC()
 print(f"Telescope collecting area: {telescope.collecting_area:.4f}")
 print(f"Detector QE (EUV): {detector.qe_euv:.2f}")
 
-# Calculate effective area at Fe XII 195.119 Å
+# Calculate effective area at Fe XII 195.119 Angstrom
 fe12_wl = 195.119 * u.AA
 effective_area = telescope.collecting_area * telescope.throughput(fe12_wl) * detector.qe_euv
 
@@ -98,18 +98,9 @@ combo = get_results_for_combination(results, **{"simulation.expos": 40*u.s, "sim
 
 ## Detailed instructions
 
-### 1. Generate contribution functions for the desired emission lines
+### 1. Run the line synthesis
 
-Edit `make_gofnt.pro` to specify the desired emission lines and the location of the CHIANTI files. You can use CHIANTI to identify the required lines.
-
-Run the following command:
-```bash
-idl -e "make_goft"
-```
-
-### 2. Run the line synthesis
-
-The synthesis script converts 3D MHD simulation data into synthetic solar spectra. It can be run directly from the command line with extensive configuration options.
+The synthesis script converts 3D MHD simulation data into synthetic solar spectra. Contribution functions G(T, n_e) are computed on-the-fly using [fiasco](https://fiasco.readthedocs.io/) (a Python interface to the CHIANTI atomic database).
 
 #### Basic Usage
 
@@ -117,7 +108,9 @@ The synthesis script converts 3D MHD simulation data into synthetic solar spectr
 # Example using all available command line options
 synthesise-spectra \
   --data-dir ./data/atmosphere \
-  --goft-file ./data/gofnt.sav \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --abundance sun_coronal_2021_chianti \
+  --n-workers 4 \
   --output-dir ./run/input \
   --output-name synthesised_spectra.pkl \
   --temp-file temp/eosT.0270000 \
@@ -137,8 +130,7 @@ synthesise-spectra \
   --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
-  --mean-mol-wt 1.29 \
-  --limit-lines Fe12_195.1190
+  --mean-mol-wt 1.29
 
 # Show all available options
 synthesise-spectra --help
@@ -148,9 +140,13 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 - `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
-- `--goft-file`: Path to CHIANTI G(T,N) save file (default: `./data/gofnt.sav`)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+
+**Line and Abundance Selection:**
+- `--lines`: Emission lines to synthesise, e.g., `--lines Fe12_195.1190 Fe12_195.1790` (required)
+- `--abundance`: CHIANTI abundance dataset name (default: `sun_coronal_2021_chianti`)
+- `--n-workers`: Number of parallel workers for the fiasco G(T, n_e) computation. Each distinct ion is computed in a separate process. `0` uses all available CPUs (default: `0`). Set to `1` for serial execution.
 
 **Simulation Files:**
 - `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
@@ -184,9 +180,6 @@ synthesise-spectra --help
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
 - `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
 
-**Line Selection:**
-- `--limit-lines`: Limit to specific lines, e.g., `--limit-lines Fe12_195.1190 Fe12_195.1790`
-
 #### Dynamic Mode (Time-varying Atmospheres)
 
 For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
@@ -194,7 +187,8 @@ For simulating raster scans over evolving atmospheres, use dynamic mode which co
 ```bash
 synthesise-spectra \
   --data-dir ./data/atmosphere \
-  --goft-file ./data/gofnt.sav \
+  --lines Fe12_195.1190 \
+  --abundance sun_coronal_2021_chianti \
   --output-dir ./run/input \
   --slit-rest-time "40 s" \
   --slit-width "0.2 arcsec" \
@@ -232,7 +226,6 @@ The synthesis produces a pickle file containing:
 
 - Use `--downsample 2` or `--downsample 4` for initial testing
 - Use `--precision float32` to reduce memory usage (may affect accuracy)
-- Use `--limit-lines` to synthesise only specific lines for development
 - Use spatial cropping to focus on regions of interest and reduce computation time
 - Monitor memory usage - full resolution synthesis can require 50+ GB RAM
 - Side views (`--integration-axis x` or `y`) may require different velocity files
@@ -245,7 +238,7 @@ The synthesis results can be loaded and analyzed using the package API:
 import euvst_response
 
 # Load synthesis results - this sums all line cubes into a single cube
-# By default uses Fe XII 195.119 Å as reference for wavelength grid
+# By default uses Fe XII 195.119 Angstrom as reference for wavelength grid
 cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
 print(f"Combined cube shape: {cube.data.shape}")
 
@@ -263,13 +256,7 @@ print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
 print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 ```
 
-#### Pre-computed Atmospheres
-
-This step can require a lot of memory at full resolution. A fully synthesised atmosphere using the Cheung et al. (2018) atmosphere (doi:10.1038/s41550-018-0629-3) for the Fe XII 195.119 and 195.179 lines, including 5 background lines from each side, can be downloaded here: https://liveuclac-my.sharepoint.com/:f:/g/personal/ucasjem_ucl_ac_uk/Es-ts6rwXIlInAweGI7hmdMB5BoGqv9uSpIXOvMkzhS3cw?e=54si7R
-
-**Important:** You can place the synthesised atmosphere file anywhere and specify its location using the `synthesis_file` parameter in your YAML configuration file. The default location is `./run/input/synthesised_spectra.pkl`.
-
-### 3. Simulate the instrument response
+### 2. Simulate the instrument response
 
 #### Configuration File
 
@@ -285,6 +272,7 @@ simulation runs every combination (cartesian product).
 - `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`)
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
+- `offchip_bin_slit`: off-chip slit binning factor (default `1`)
 - `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
@@ -299,6 +287,7 @@ reference_line: Fe12_195.1190
 # Global settings (apply to all combinations)
 n_iter: 500
 ncpu: -1
+offchip_bin_slit: [1, 2]  # sweep no-binning and 2-pixel off-chip binning
 
 # Simulation parameters
 # Any field listed as a list is swept over; all combinations are run.
@@ -337,6 +326,37 @@ detector:
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
 
+By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
+
+```yaml
+fit_signals: dn       # Fit only the DN signal
+fit_signals: photon   # Fit only the photon signal
+fit_signals: both     # Fit both (default)
+```
+
+To fit blended spectral lines with multiple Gaussian components, add a `fitting` block:
+
+```yaml
+fitting:
+  primary_component: 0           # index of the component whose velocity is reported
+  constrain_positive_intensity: true  # reject fits with negative amplitudes
+  backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
+  components:
+    - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
+    - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
+      tie_center: 0
+      tie_width: 0
+```
+
+Each component requires a `wavelength` field giving its rest wavelength.
+
+Each entry in `components` corresponds to one Gaussian. Optional per-component keys:
+- `tie_center: <i>`: constrain this component's centre to match component *i*
+- `tie_width: <i>`: constrain this component's line width to match component *i*
+- `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
+
+Omitting the `fitting` block fits a single Gaussian (default behaviour).
+
 If you synthesised data in dynamic mode, your configuration must specify:
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time
@@ -351,6 +371,12 @@ eclipse --config ./run/input/config.yaml
 **Command-line options:**
 - `--config`: Path to YAML configuration file (required)
 - `--debug`: Enable debug mode with IPython breakpoints on errors (optional)
+
+#### Multi-node MPI parallelisation
+
+When launched with multiple MPI ranks on a SLURM cluster (via `srun` or `mpirun`, and setting `--ntasks-per-node`), ECLIPSE automatically distributes Monte Carlo iterations across ranks and gathers results on rank 0. No code or configuration changes are needed - MPI is auto-detected at runtime. If `mpi4py` is not installed or only one rank is present, the code falls back to single-process mode.
+
+Requirements: `mpi4py` and `intel-mpi` (load with `module load intel-mpi` before launching).
 
 #### Output
 

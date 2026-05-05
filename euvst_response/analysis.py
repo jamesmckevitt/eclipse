@@ -119,7 +119,8 @@ def get_parameter_combinations(results: Dict[str, Any]) -> List[Dict]:
 def analyse_fit_statistics(
     combination_results: Dict[str, Any],
     rest_wavelength: u.Quantity,
-    data_type: str = "dn"
+    data_type: str = "dn",
+    fit_config=None,
 ) -> Dict[str, Any]:
     """
     Analyze fit statistics to compute velocity and line width statistics.
@@ -132,35 +133,52 @@ def analyse_fit_statistics(
         Rest wavelength for velocity conversion.
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to analyze.
+    fit_config : FitConfig, optional
+        Multi-component fitting configuration. When provided the primary-
+        component indices are used; otherwise indices 1 (centre) and
+        2 (sigma) are assumed (single-component default).
         
     Returns
     -------
     dict
         Dictionary containing velocity and width statistics.
     """
+    # Determine parameter indices for the primary component
+    if fit_config is not None and not fit_config.is_single:
+        idx_center = fit_config.idx_center
+        idx_sigma = fit_config.idx_sigma
+    else:
+        idx_center = 1
+        idx_sigma = 2
+
     # Get fit statistics
     fit_stats_key = f"{data_type}_fit_stats"
     if fit_stats_key not in combination_results:
         raise ValueError(f"No {fit_stats_key} found in combination results")
     
     fit_stats = combination_results[fit_stats_key]
+    if fit_stats is None:
+        raise ValueError(
+            f"'{data_type}' signal was not fitted for this combination. "
+            f"Check the 'fit_signals' setting in your YAML config."
+        )
     fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
     fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
     
     # Extract data and units
-    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, 4)
-    std_data = fit_stats["std_data"]        # Shape: (nx, ny, 4)
-    units = fit_stats["units"]              # List of 4 astropy units
+    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, n_params)
+    std_data = fit_stats["std_data"]        # Shape: (nx, ny, n_params)
+    units = fit_stats["units"]              # List of n_params astropy units
     
-    # Get center statistics (parameter index 1)
-    center_mean_data = mean_data[..., 1]    # (nx, ny) - values only
-    center_std_data = std_data[..., 1]      # (nx, ny) - values only
-    center_unit = units[1]                  # wavelength unit
+    # Get center statistics for the primary component
+    center_mean_data = mean_data[..., idx_center]
+    center_std_data = std_data[..., idx_center]
+    center_unit = units[idx_center]
     
-    # Get width statistics (parameter index 2)
-    width_mean_data = mean_data[..., 2]     # (nx, ny) - values only
-    width_std_data = std_data[..., 2]       # (nx, ny) - values only
-    width_unit = units[2]                   # wavelength unit
+    # Get width statistics for the primary component
+    width_mean_data = mean_data[..., idx_sigma]
+    width_std_data = std_data[..., idx_sigma]
+    width_unit = units[idx_sigma]
     
     # Create quantities
     center_mean_q = center_mean_data * center_unit
@@ -177,7 +195,7 @@ def analyse_fit_statistics(
     
     # Convert to velocities
     v_mean = centers_to_velocity(center_mean_q, rest_wavelength)
-    v_true = centers_to_velocity(fit_truth_data[..., 1] * fit_truth_units[1], rest_wavelength)
+    v_true = centers_to_velocity(fit_truth_data[..., idx_center] * fit_truth_units[idx_center], rest_wavelength)
     v_err = v_true - v_mean
     
     # Convert center std to velocity std using differential: dv/dlambda = c/lambda
@@ -377,11 +395,12 @@ def summary_table(results: Dict[str, Any]) -> None:
 
 def create_sunpy_maps_from_combo(
     combination_results: Dict[str, Any],
-    cube_reb,
+    cube_reb=None,
     rest_wavelength: u.Quantity = 195.119 * u.AA,
     data_type: str = "dn",
     precision_requirement: u.Quantity = 2.0 * u.km / u.s,
-    exposure_time_results: List[Dict[str, Any]] | None = None
+    exposure_time_results: List[Dict[str, Any]] | None = None,
+    fit_config=None,
 ) -> Dict[str, Any]:
     """
     Create SunPy maps from combination results using the new fit statistics structure.
@@ -390,8 +409,9 @@ def create_sunpy_maps_from_combo(
     ----------
     combination_results : dict
         Results for a specific parameter combination from get_results_for_combination().
-    cube_reb : NDCube
+    cube_reb : NDCube, optional
         NDCube with helioprojective WCS to use for all maps.
+        If not provided, the WCS stored in the combination results is used.
     rest_wavelength : u.Quantity, optional
         Rest wavelength for velocity conversion (default: 195.119 A for Fe XII).
     data_type : str, optional
@@ -401,6 +421,9 @@ def create_sunpy_maps_from_combo(
     exposure_time_results : list of dict, optional
         List of results from get_results_for_combination() for different exposure times.
         If provided, will create an exposure time map showing minimum exposure needed.
+    fit_config : FitConfig, optional
+        Multi-component fitting configuration. When provided, the primary-
+        component indices are used to extract centre and width parameters.
         
     Returns
     -------
@@ -426,19 +449,27 @@ def create_sunpy_maps_from_combo(
             # Extract exposure time from parameters
             exposure_time = result["parameters"]["simulation.expos"].to_value(u.s)
             # Create analysis for this exposure
-            analysis = analyse_fit_statistics(result, rest_wavelength, data_type)
+            analysis = analyse_fit_statistics(result, rest_wavelength, data_type, fit_config=fit_config)
             analysis_per_exp[exposure_time] = analysis
     else:
         analysis_per_exp = None
     
-    # Extract 2D helioprojective WCS from the cube
-    wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
+    # Extract 2D helioprojective WCS from the cube or stored signal WCS
+    if cube_reb is not None:
+        wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
+    else:
+        wcs_2d = combination_results["first_signal_wcs"].celestial.swapaxes(0, 1)
     
     # Get the data arrays - now only first iteration is saved
     first_photon_signal = combination_results["first_photon_signal"]  # Shape: (nx, ny, nwave)
     first_dn_signal = combination_results["first_dn_signal"]         # Shape: (nx, ny, nwave)
     fit_stats_key = f"{data_type}_fit_stats"
     fit_stats = combination_results[fit_stats_key]          # Contains first_fit_data, mean_data, std_data, units
+    if fit_stats is None:
+        raise ValueError(
+            f"'{data_type}' signal was not fitted for this combination. "
+            f"Check the 'fit_signals' setting in your YAML config."
+        )
     
     maps = {}
 
@@ -457,14 +488,22 @@ def create_sunpy_maps_from_combo(
     maps['total_dn'] = sunpy.map.Map(total_dn_data.T, wcs_2d)
     maps['total_dn'].meta['bunit'] = str(total_dn_unit)
     
+    # Determine parameter indices for the primary component
+    if fit_config is not None and not fit_config.is_single:
+        idx_center = fit_config.idx_center
+        idx_sigma = fit_config.idx_sigma
+    else:
+        idx_center = 1
+        idx_sigma = 2
+
     # --- Get velocity and width analysis for this combination ---
-    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type)
+    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type, fit_config=fit_config)
 
     # --- Velocity maps ---
-    # Velocity from first fit (parameter 1 = center)
-    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, 4)
-    center_first_data = first_fit_data[..., 1]    # Extract center parameter
-    center_first_unit = fit_stats["units"][1]     # Get units for center parameter
+    # Velocity from first fit (primary component center)
+    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, n_params)
+    center_first_data = first_fit_data[..., idx_center]
+    center_first_unit = fit_stats["units"][idx_center]
 
     def centers_to_velocity(centers_data, centers_unit, lambda0):
         """Convert wavelength centers to velocities"""
@@ -492,9 +531,9 @@ def create_sunpy_maps_from_combo(
     maps['velocity_err'].meta['bunit'] = str(analysis["v_err"].unit)
 
     # --- Line width maps ---
-    # Line width from first fit (parameter 2 = width)
-    width_first_data = first_fit_data[..., 2]     # Extract width parameter data
-    width_first_unit = fit_stats["units"][2]      # Get units for width parameter
+    # Line width from first fit (primary component sigma)
+    width_first_data = first_fit_data[..., idx_sigma]
+    width_first_unit = fit_stats["units"][idx_sigma]
 
     # Create quantity with proper units
     width_quantity = width_first_data * width_first_unit

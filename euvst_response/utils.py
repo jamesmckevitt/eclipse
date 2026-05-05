@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import subprocess
 from pathlib import Path
+import warnings
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -16,6 +17,28 @@ from tqdm import tqdm
 
 # Global debug flag - can be set by command line or configuration
 DEBUG_MODE = False
+
+
+def _get_mpi_info():
+    """Return (comm, rank, world_size) if MPI is active with multiple ranks.
+
+    MPI is auto-detected: if ``mpi4py`` is importable **and** the MPI world
+    contains more than one process (i.e. launched via ``srun`` / ``mpirun``),
+    the communicator is returned.  Otherwise falls back to single-process
+    mode ``(None, 0, 1)``.
+    """
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
+        if size > 1:
+            return comm, comm.Get_rank(), size
+    except (ImportError, RuntimeError):
+        # ImportError: mpi4py not installed.
+        # RuntimeError: mpi4py installed but MPI library not loaded (e.g. on a
+        #   login node before 'module load intel-mpi').  Falls back to serial mode.
+        pass
+    return None, 0, 1
 
 
 def set_debug_mode(enabled: bool):
@@ -100,11 +123,84 @@ def gaussian(wave, peak, centre, sigma, back):
     return peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2) + back
 
 
+def multi_gaussian(wave, *params, n_components=1):
+    """Multi-component Gaussian plus constant background.
+
+    Parameters are ordered as::
+
+        [peak_0, centre_0, sigma_0, peak_1, centre_1, sigma_1, ..., background]
+
+    Total number of parameters = 3 * n_components + 1.
+    """
+    result = np.zeros_like(wave, dtype=float)
+    for i in range(n_components):
+        peak = params[3 * i]
+        centre = params[3 * i + 1]
+        sigma = params[3 * i + 2]
+        if sigma == 0:
+            continue
+        result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
+    result += params[-1]  # background
+    return result
+
+
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     """Convert angular size to linear distance at 1 AU."""
     if angle.unit.physical_type != "angle":
         raise ValueError("Input must be an angle")
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
+
+
+def rebin_slit_offchip(cube, n_bin: int):
+    """Sum adjacent pixels along the slit axis to simulate off-chip binning.
+
+    Off-chip (ground-based) binning sums already-read-out pixels, so each
+    pixel carries its own independent noise (read noise, dark current, etc.).
+    The resulting signal increases by *n_bin* while uncorrelated noise adds
+    in quadrature, improving SNR by sqrt(n_bin).
+
+    Parameters
+    ----------
+    cube : NDCube
+        Data cube with shape ``(n_scan, n_slit, n_lambda)``.
+    n_bin : int
+        Number of slit pixels to sum.  Must be >= 1.
+        Pixels that don't fill a complete bin at the slit edge are discarded.
+
+    Returns
+    -------
+    NDCube
+        Rebinned cube with shape ``(n_scan, n_slit // n_bin, n_lambda)``.
+        WCS is updated so the slit pixel scale (CDELT) is scaled by *n_bin*.
+    """
+    from ndcube import NDCube
+
+    if n_bin < 1:
+        raise ValueError(f"n_bin must be >= 1, got {n_bin}")
+    if n_bin == 1:
+        return cube
+
+    data = cube.data
+    n_scan, n_slit, n_lam = data.shape
+    n_keep = (n_slit // n_bin) * n_bin
+    trimmed = data[:, :n_keep, :]
+    rebinned = trimmed.reshape(n_scan, n_keep // n_bin, n_bin, n_lam).sum(axis=2)
+
+    # Update WCS for the slit axis.
+    # Numpy axis 1 (slit) corresponds to WCS axis 1 (HPLT) in the
+    # reversed FITS convention (naxis-1-numpy_axis for a 3-axis WCS).
+    new_wcs = cube.wcs.deepcopy()
+    slit_wcs_axis = 1  # HPLT-TAN
+    new_wcs.wcs.cdelt[slit_wcs_axis] *= n_bin
+    # Map the original reference pixel to the new grid.
+    # FITS crpix is 1-based; the center-preserving mapping for binning
+    # anchored at pixel 1 is:  crpix_new = (crpix_old - 0.5) / n_bin + 0.5
+    new_wcs.wcs.crpix[slit_wcs_axis] = (
+        new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
+    ) / n_bin + 0.5
+
+    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit,
+                  meta=cube.meta)
 
 
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:
@@ -199,7 +295,6 @@ def deduplicate_list(param_list, param_name):
     list
         List with duplicates removed, preserving original order.
     """
-    import warnings
     seen = set()
     deduplicated = []
     duplicates_found = False
@@ -286,6 +381,19 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
     return fixed, sweep
 
 
+def _to_canonical_scalar(val):
+    """Convert a parameter value to a canonical scalar for comparison."""
+    if hasattr(val, "unit"):
+        try:
+            return float(val.si.value)
+        except Exception:
+            try:
+                return float(val.to(u.K, equivalencies=u.temperature()).value)
+            except Exception:
+                return float(val.value)
+    return val
+
+
 def _params_to_key(params: dict) -> tuple:
     """
     Convert a parameters dict to a hashable tuple key.
@@ -302,20 +410,10 @@ def _params_to_key(params: dict) -> tuple:
     for name, val in params.items():
         if name in _skip:
             continue
-        if hasattr(val, "unit"):
-            try:
-                items[name] = float(val.si.value)
-            except Exception:
-                try:
-                    items[name] = float(val.to(u.K, equivalencies=u.temperature()).value)
-                except Exception:
-                    items[name] = float(val.value)
-        elif isinstance(val, (list, tuple)):
-            items[name] = tuple(
-                float(v.si.value) if hasattr(v, "unit") else v for v in val
-            )
+        if isinstance(val, (list, tuple)):
+            items[name] = tuple(_to_canonical_scalar(v) for v in val)
         else:
-            items[name] = val
+            items[name] = _to_canonical_scalar(val)
     return tuple(sorted(items.items()))
 
 
@@ -338,6 +436,7 @@ def _extract_config_params(obj, section: str) -> dict:
             continue
         params[f"{section}.{f.name}"] = val
     return params
+
 
 
 @contextlib.contextmanager

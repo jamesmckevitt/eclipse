@@ -1,10 +1,10 @@
 import os
+import re
 import argparse
 import warnings
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 import numpy as np
-from scipy.io import readsav
 from scipy.interpolate import RegularGridInterpolator
 import astropy.units as u
 import astropy.constants as const
@@ -569,61 +569,185 @@ def build_composite_cubes_mhd(
     return temp_ndcube, rho_ndcube, vel_ndcube
 
 
-def read_goft(
-    sav_file: str | Path,
-    limit_lines: Optional[List[str]] = None,
+def _compute_single_ion(args):
+    """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
+    that each spawned process gets its own HDF5 handles."""
+
+    import fiasco
+    import logging
+
+    elem, stage, temperature_K, densities_cm3, abundance, lines = args
+    temperature = temperature_K * u.K
+    densities = densities_cm3 / u.cm**3
+
+    # Suppress repetitive fiasco warnings about missing proton data and
+    # autoionization/rrlvl files.  These are CHIANTI database gaps (not all
+    # ions have .psplups or .auto/.rrlvl data) and both fiasco and IDL
+    # gracefully fall back to excluding proton rates / using the single-ion
+    # model.  The warnings fire once per density point, producing hundreds of
+    # identical lines.
+    fiasco_logger = logging.getLogger('fiasco')
+    prev_level = fiasco_logger.level
+    fiasco_logger.setLevel(logging.ERROR)
+
+    try:
+        ion = fiasco.Ion(f'{elem} {stage}', temperature, abundance=abundance)
+
+        g = ion.contribution_function(densities)
+        pe_ratio = ion.proton_electron_ratio
+        g = g * pe_ratio[:, np.newaxis, np.newaxis]
+    finally:
+        fiasco_logger.setLevel(prev_level)
+
+    bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
+
+    results = {}
+    for line_name, target_wl_aa in lines:
+        target_wl = target_wl_aa * u.AA
+        idx = int(np.argmin(np.abs(bb_wl - target_wl)))
+        matched_wl = bb_wl[idx]
+
+        g_tn = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value.T
+        np.nan_to_num(g_tn, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+        results[line_name] = {
+            "g_tn": g_tn,
+            "atom": int(ion.atomic_number),
+            "ion": stage,
+            "target_wl_cm": float(target_wl.to(u.cm).value),
+            "matched_wl_aa": float(matched_wl.to(u.AA).value),
+            "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
+        }
+    return results
+
+
+def compute_goft_fiasco(
+    line_names: List[str],
+    abundance: str = "sun_coronal_2021_chianti",
+    logT_min: float = 4.0,
+    logT_max: float = 9.0,
+    nT: int = 101,
+    logN_min: float = 7.0,
+    logN_max: float = 13.0,
+    nN: int = 21,
     precision: type = np.float64,
+    n_workers: int = 0,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
-    Read a CHIANTI G(T,N) .sav file produced by IDL.
+    Compute G(T,N) contribution functions using fiasco.
+
+    For each line specification (e.g. "Fe12_195.1190"), creates a fiasco Ion,
+    computes the contribution function over a (T, n_e) grid, and extracts the
+    transition closest to the requested wavelength.
+
+    The CHIANTI contribution function is::
+
+        G_ij = Ab(X) * f_{X,k} * (N_j / N) * A_ij * dE_ij / n_e
+
+    with units of erg cm^3 s^-1.  fiasco's ``contribution_function`` does
+    **not** include the n_H / n_e ratio.  However, this function explicitly
+    multiplies G by the proton-to-electron ratio so that the result is
+    consistent with the n_e^2 * dh emission measure used downstream.
 
     Parameters
     ----------
-    sav_file : str | Path
-        Path to the IDL save file containing GOFT data.
-    limit_lines : List[str], optional
-        If provided, only load these specific lines.
+    line_names : List[str]
+        Line identifiers, e.g. ``["Fe12_195.1190", "Fe09_171.073"]``.
+    abundance : str
+        CHIANTI abundance dataset name passed to ``fiasco.Ion``.
+    logT_min, logT_max : float
+        Bounds of the log10(T / K) grid.
+    nT : int
+        Number of temperature grid points.
+    logN_min, logN_max : float
+        Bounds of the log10(n_e / cm^-3) grid.
+    nN : int
+        Number of density grid points.
     precision : type
-        Precision for arrays (np.float32 or np.float64).
+        Output array dtype (``np.float32`` or ``np.float64``).
+    n_workers : int
+        Number of parallel processes for multi-ion runs.  Each worker
+        spawns a separate process (to avoid HDF5 fork-safety issues) and
+        imports fiasco independently, so there is a startup cost per
+        worker.  Only useful when computing lines from 2+ distinct ions.
+        Defaults to 0, which uses ``os.cpu_count()``.
 
     Returns
     -------
     goft_dict : Dict[str, dict]
         Dictionary keyed by line name, each entry holding:
-            'wl0'      - rest wavelength (Quantity, cm)
-            'g_tn'     - 2-D array G(logT, logN)  [erg cm^3 s^-1]
-            'atom'     - atomic number
-            'ion'      - ionisation stage
+            ``'wl0'``  -- rest wavelength (Quantity, cm)
+            ``'g_tn'`` -- 2-D array G(logN, logT) shape ``(nN, nT)``
+            ``'atom'`` -- atomic number
+            ``'ion'``  -- ionisation stage
     logT_grid : np.ndarray
-        1-D array of log10(T/K) values.
+        1-D array of log10(T / K) values.
     logN_grid : np.ndarray
-        1-D array of log10(N_e/cm^3) values.
+        1-D array of log10(n_e / cm^-3) values.
     """
-    raw = readsav(sav_file)
+    logT_grid = np.linspace(logT_min, logT_max, nT)
+    logN_grid = np.linspace(logN_min, logN_max, nN)
+
+    temperature_K = 10.0 ** logT_grid
+    densities_cm3 = 10.0 ** logN_grid
+
+    # ---- parse line names and group by ion for efficiency ----
+    line_pattern = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
+    ion_lines: Dict[Tuple[str, int], List[Tuple[str, float]]] = {}
+
+    for name in line_names:
+        m = line_pattern.match(name)
+        if not m:
+            raise ValueError(
+                f"Cannot parse line name '{name}'. "
+                f"Expected format like 'Fe12_195.1190'."
+            )
+        elem = m.group(1)
+        stage = int(m.group(2))
+        wl = float(m.group(3))
+        ion_lines.setdefault((elem, stage), []).append((name, wl))
+
+    # Build worker arguments (all picklable plain types / numpy arrays)
+    worker_args = [
+        (elem, stage, temperature_K, densities_cm3, abundance, lines)
+        for (elem, stage), lines in ion_lines.items()
+    ]
+
+    # ---- dispatch: parallel for 2+ ions, serial otherwise ----
+    n_ions = len(worker_args)
+    if n_workers <= 0:
+        n_workers = os.cpu_count() or 1
+    use_parallel = n_workers > 1 and n_ions > 1
+
+    if use_parallel:
+        import multiprocessing as mp
+        pool_size = min(n_workers, n_ions)
+        ctx = mp.get_context("spawn")
+        print(f"  Parallel: {pool_size} workers for {n_ions} ions")
+        with ctx.Pool(pool_size) as pool:
+            all_results = pool.map(_compute_single_ion, worker_args)
+    else:
+        all_results = [_compute_single_ion(a) for a in tqdm(
+            worker_args, desc="Computing G(T,N)", unit="ion"
+        )]
+
+    # ---- collect results ----
     goft_dict: Dict[str, dict] = {}
+    for result in all_results:
+        for line_name, info in result.items():
+            print(
+                f"  {line_name}: requested {info['target_wl_cm']*1e8:.4f} Angstrom, "
+                f"matched {info['matched_wl_aa']:.4f} Angstrom "
+                f"(delta={info['delta_aa']:.4f} Angstrom)"
+            )
+            goft_dict[line_name] = {
+                "wl0": info["target_wl_cm"] * u.cm,
+                "g_tn": info["g_tn"].astype(precision),
+                "atom": info["atom"],
+                "ion": info["ion"],
+            }
 
-    logT_grid = raw["logTarr"].astype(precision)
-    logN_grid = raw["logNarr"].astype(precision)
-
-    for entry in raw["goftarr"]:
-        # Handle both string and bytes for line names (different IDL save versions)
-        line_name = entry[0]  # This is the 'name' field from the IDL structure
-        if hasattr(line_name, 'decode'):
-            line_name = line_name.decode()  # bytes -> string
-        # line_name is now a string, e.g. "Fe12_195.1190"
-        
-        if limit_lines and line_name not in limit_lines:
-            continue
-
-        rest_wl = float(line_name.split("_")[1]) * u.AA  # A -> Quantity
-        goft_dict[line_name] = {
-            "wl0": rest_wl.to(u.cm),
-            "g_tn": entry[4].astype(precision),  # This is the 'goft' field [nT, nN]
-            "atom": entry[1],  # This is the 'atom' field
-            "ion": entry[2],   # This is the 'ion' field
-        }
-
-    return goft_dict, logT_grid, logN_grid
+    return goft_dict, logT_grid.astype(precision), logN_grid.astype(precision)
 
 
 ##############################################################################
@@ -875,7 +999,7 @@ def synthesise_spectra(
         atom_weight_g = (atom.atomic_weight * u.u).cgs.value
 
         # Thermal width per T-bin: sigma_T (nT,)
-        sigma_T = wl0 * np.sqrt(2 * kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
+        sigma_T = wl0 * np.sqrt(kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
 
         # Doppler-shifted center for each v-bin: (nv,)
         lam_cent = wl0 * (1 + vel_grid.value / c_cm_s)
@@ -1024,12 +1148,19 @@ def parse_arguments():
     # Input/Output paths
     parser.add_argument("--data-dir", type=str, default="data/atmosphere",
                        help="Directory containing simulation data")
-    parser.add_argument("--goft-file", type=str, default="./data/gofnt.sav",
-                       help="Path to CHIANTI G(T,N) save file")
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
                        help="Output filename")
+    
+    # Line / abundance specification (fiasco)
+    parser.add_argument("--lines", nargs="+", required=True,
+                       help="Line specifications (e.g. Fe12_195.1190 Fe09_171.073)")
+    parser.add_argument("--abundance", type=str, default="sun_coronal_2021_chianti",
+                       help="CHIANTI abundance dataset name for fiasco")
+    parser.add_argument("--n-workers", type=int, default=0,
+                       help="Number of parallel workers for fiasco G(T,N) "
+                            "computation (0 = all CPUs, default: 0)")
     
     # Simulation files
     parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
@@ -1078,10 +1209,6 @@ def parse_arguments():
                        help="Numerical precision")
     parser.add_argument("--mean-mol-wt", type=float, default=1.29,
                        help="Mean molecular weight")
-    
-    # Line selection
-    parser.add_argument("--limit-lines", nargs="*", default=None,
-                       help="Limit to specific lines (e.g. Fe12_195.1190)")
     
     # Dynamic atmosphere mode (time-varying synthesis)
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
@@ -1140,7 +1267,6 @@ def main(args=None) -> None:
     # ---------------- Configuration from arguments -----------------
     precision = np.float32 if args.precision == "float32" else np.float64
     downsample = args.downsample if args.downsample > 1 else False
-    limit_lines = args.limit_lines
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
     voxel_dz = u.Quantity(args.voxel_dz)
@@ -1307,8 +1433,8 @@ def main(args=None) -> None:
         print(f"  Precision: {precision}")
         if downsample:
             print(f"  Downsampling: {downsample}x")
-        if limit_lines:
-            print(f"  Limited to lines: {limit_lines}")
+        print(f"  Lines: {args.lines}")
+        print(f"  Abundance: {args.abundance}")
         if args.crop_x or args.crop_y or args.crop_z:
             print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
         print()
@@ -1347,10 +1473,6 @@ def main(args=None) -> None:
     
     # ---------------- Common processing (both modes) -----------------
     
-    goft_path = Path(args.goft_file)
-    if not goft_path.exists():
-        raise FileNotFoundError(f"GOFT file not found: {goft_path}")
-    
     # Build velocity grid
     vel_grid = np.arange(
         -vel_lim.to(u.cm / u.s).value,
@@ -1367,9 +1489,12 @@ def main(args=None) -> None:
     
     vel_data = vel_cube.data
 
-    # ---------------- Load contribution functions -----------------
-    print(f"Loading contribution functions ({print_mem()})")
-    goft, logT_goft, logN_grid = read_goft(goft_path, limit_lines, precision)
+    # ---------------- Compute contribution functions (fiasco) ---------
+    print(f"Computing contribution functions via fiasco ({print_mem()})")
+    goft, logT_goft, logN_grid = compute_goft_fiasco(
+        args.lines, abundance=args.abundance, precision=precision,
+        n_workers=args.n_workers,
+    )
 
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
@@ -1434,7 +1559,8 @@ def main(args=None) -> None:
             "intensity_unit": str(intensity_unit),
             "cube_shape": args.cube_shape,
             "data_dir": str(base_dir),
-            "goft_file": str(goft_path),
+            "lines": args.lines,
+            "abundance": args.abundance,
             "integration_axis": integration_axis,
             "crop_params": {
                 "crop_x": args.crop_x,

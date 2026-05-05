@@ -35,36 +35,11 @@ setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Astronomy",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
-    python_requires=">=3.8",
-    install_requires=[
-        "numpy",
-        "astropy",
-        "ndcube",
-        "specutils",
-        "scipy",
-        "matplotlib",
-        "joblib",
-        "tqdm",
-        "dill",
-        "pyyaml",
-        "reproject",
-        "dask",
-        "psutil",
-        "mendeleev",
-    ],
-    extras_require={
-        "dev": [
-            "pytest",
-            "black",
-            "flake8",
-            "mypy",
-        ],
-    },
+    python_requires=">=3.10",
+    # Dependencies are defined in pyproject.toml.
     entry_points={
         "console_scripts": [
             "eclipse=euvst_response.cli:main",

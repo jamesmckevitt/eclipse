@@ -4,7 +4,7 @@ ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 This package provides tools for modeling the performance of the EUV spectrograph EUVST, on SOLAR-C.
 """
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
@@ -13,11 +13,11 @@ from .config import Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, 
 from .utils import wl_to_vel, vel_to_wl, angle_to_distance, distance_to_angle
 from .radiometric import (
     intensity_to_photons, add_telescope_throughput, photons_to_pixel_counts,
-    apply_exposure_and_poisson, add_poisson, apply_focusing_optics_psf, to_electrons, 
+    apply_exposure, sample_photon_arrivals, add_poisson, apply_focusing_optics_psf, to_electrons, 
     to_dn, add_visible_stray_light, add_pinhole_visible_light
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction, airy_disk_pattern
-from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse
+from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse, FitConfig, FitComponent
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
@@ -36,9 +36,10 @@ __all__ = [
     "Simulation", "AluminiumFilter",
     "wl_to_vel", "vel_to_wl", "angle_to_distance", "distance_to_angle",
     "intensity_to_photons", "add_telescope_throughput", "photons_to_pixel_counts",
-    "apply_exposure_and_poisson", "add_poisson", "apply_focusing_optics_psf", "to_electrons", 
+    "apply_exposure", "sample_photon_arrivals", "add_poisson", "apply_focusing_optics_psf", "to_electrons", 
     "to_dn", "add_visible_stray_light", "add_pinhole_visible_light",
     "fit_cube_gauss", "velocity_from_fit", "width_from_fit", "analyse",
+    "FitConfig", "FitComponent",
     "simulate_once", "monte_carlo",
     "main",
     "load_atmosphere",
