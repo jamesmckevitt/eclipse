@@ -331,9 +331,10 @@ def create_uniform_intensity_cube(
     det,
     sim,
     n_sigma_extent: float = 8.0,
+    n_slit_pixels: int = 1,
 ) -> NDCube:
     """
-    Create a 1x1 pixel NDCube containing a Gaussian emission line.
+    Create a 1 x ``n_slit_pixels`` pixel NDCube containing a Gaussian emission line.
 
     The cube is built directly at the detector's spectral resolution and
     assigned a helioprojective WCS consistent with the output of
@@ -355,11 +356,16 @@ def create_uniform_intensity_cube(
     n_sigma_extent : float, optional
         Number of sigma either side of line centre to include in the
         wavelength grid (default: 8).
+    n_slit_pixels : int, optional
+        Number of (uniform) slit pixels to generate.  Set to the
+        ``offchip_bin_slit`` value so that subsequent ``rebin_slit_offchip``
+        sums ``n_slit_pixels`` independent noise realisations into a single
+        binned pixel (default: 1).
 
     Returns
     -------
     NDCube
-        Shape ``(1, 1, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
+        Shape ``(1, n_slit_pixels, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
         helioprojective + wavelength WCS.
     """
     # --- Spectral grid --------------------------------------------------
@@ -383,15 +389,20 @@ def create_uniform_intensity_cube(
     A = (total_intensity / (sigma_lam * np.sqrt(2 * np.pi))).to(
         u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     )
+    if n_slit_pixels < 1:
+        raise ValueError(f"n_slit_pixels must be >= 1, got {n_slit_pixels}")
+
     profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
-    data = profile.value[np.newaxis, np.newaxis, :]  # shape (1, 1, n_lam)
+    # Tile uniform profile along the slit axis to allow ground-based off-chip
+    # binning of n_slit_pixels independent noise realisations downstream.
+    data = np.tile(profile.value, (1, n_slit_pixels, 1))  # shape (1, n_slit_pixels, n_lam)
 
     # --- WCS (matches reproject_ndcube output format) --------------------
     # Axes: WAVE (cm), HPLT-TAN (arcsec), HPLN-TAN (arcsec)
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
-    wcs.wcs.crpix = [(n_lam + 1) / 2, 1.0, 1.0]
+    wcs.wcs.crpix = [(n_lam + 1) / 2, (n_slit_pixels + 1) / 2, 1.0]
     wcs.wcs.crval = [lam0.value, 0.0, 0.0]
     wcs.wcs.cdelt = [
         dlam.to_value(u.cm),

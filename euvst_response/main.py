@@ -433,13 +433,23 @@ def main() -> None:
 
         # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
         # so cube_reb_cache is keyed by the 3-tuple to avoid redundant rebin calls when
-        # sweeping multiple binning values at fixed spatial/spectral sampling.
+        # sweeping multiple binning values at fixed spatial/spectral sampling.  In
+        # uniform-intensity mode, however, the cube is built with one slit pixel per
+        # binning factor (so rebin_slit_offchip can sum independent noise realisations),
+        # so offchip_bin_slit must be part of the cube_reb_cache key in that case.
         cube_reb_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
         )
-        rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
+        if uniform_intensity_mode:
+            cube_reb_key = (*cube_reb_key, offchip_bin_slit)
+        rebin_cache_key = (
+            slit_width.to_value(u.arcsec),
+            DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
+            DET.wvl_res.to_value(u.cm / u.pixel),
+            offchip_bin_slit,
+        )
 
         if cube_reb_key not in cube_reb_cache:
             print(
@@ -463,6 +473,7 @@ def main() -> None:
                     thermal_width=uniform_thermal_width,
                     det=DET,
                     sim=SIM_rebin,
+                    n_slit_pixels=offchip_bin_slit,
                 )
             else:
                 cube_reb_cache[cube_reb_key] = rebin_atmosphere(cube_sim, DET, SIM_rebin)
