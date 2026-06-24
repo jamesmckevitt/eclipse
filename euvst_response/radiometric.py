@@ -11,6 +11,8 @@ from scipy.signal import convolve2d
 from .utils import wl_to_vel, vel_to_wl, debug_break
 
 
+
+
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det) -> np.ndarray:
     """
     Vectorized version of Fano noise calculation for improved performance.
@@ -213,7 +215,13 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     )
 
 
-def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
+def to_electrons(
+    photon_counts: NDCube,
+    t_exp: u.Quantity,
+    det,
+    *,
+    dark_current_inverse_transform: bool = False,
+) -> NDCube:
     """
     Convert a photon-count NDCube to an electron-count NDCube.
 
@@ -225,6 +233,15 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
         Exposure time (used for dark current and read noise).
     det : Detector_SWC or Detector_EIS
         Detector description.
+    dark_current_inverse_transform : bool, optional
+        When True, dark-current shot noise is drawn by inverse-transform
+        (quantile) sampling: one uniform draw per pixel passed through the
+        Poisson inverse-CDF (scipy.stats.poisson.ppf).  The marginal
+        distribution is identical to np.random.poisson, but unlike rejection
+        sampling this consumes a fixed number of RNG draws per pixel, keeping
+        the random stream synchronised across runs that differ only in
+        dark-current level.  This enables common-random-number variance
+        reduction.  Default False.
 
     Returns
     -------
@@ -242,10 +259,20 @@ def to_electrons(photon_counts: NDCube, t_exp: u.Quantity, det) -> NDCube:
 
     e = electron_counts * (u.electron / u.pixel)
 
-    # Add dark current with Poisson noise (per pixel)
+    # Add dark current with Poisson shot noise (per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    dark_current_poisson = np.random.poisson(dark_current_mean, size=photon_counts.data.shape) * (u.electron / u.pixel)
-    e += dark_current_poisson
+    if dark_current_inverse_transform:
+        # Inverse-transform Poisson: one uniform per pixel through the Poisson
+        # inverse-CDF.  Same marginal as np.random.poisson but consumes a
+        # fixed number of RNG draws (CRN-friendly).
+        from scipy.stats import poisson as _poisson
+        u_dark = np.random.random(size=photon_counts.data.shape)
+        dark_current_counts = _poisson.ppf(u_dark, dark_current_mean)
+    else:
+        # Standard Poisson (rejection sampling, variable RNG use).
+        dark_current_counts = np.random.poisson(dark_current_mean, size=photon_counts.data.shape)
+    dark_current_signal = dark_current_counts * (u.electron / u.pixel)
+    e += dark_current_signal
     
     # Add read noise
     e += np.random.normal(0, det.read_noise_rms.value,
@@ -317,7 +344,11 @@ def add_poisson(cube: NDCube) -> NDCube:
     )
 
 
-def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
+def sample_photon_arrivals(
+    photon_counts: NDCube,
+    *,
+    photon_shot_inverse_transform: bool = False,
+) -> NDCube:
     """
     Sample a discrete Poisson realisation of photon arrivals per pixel.
 
@@ -331,6 +362,14 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     ----------
     photon_counts : NDCube
         Expected (mean) photon counts per pixel.
+    photon_shot_inverse_transform : bool, optional
+        When True, photon shot noise is drawn by inverse-transform (quantile)
+        sampling: one uniform draw per pixel passed through the Poisson
+        inverse-CDF (scipy.stats.poisson.ppf).  The marginal distribution is
+        identical to np.random.poisson, but unlike rejection sampling this
+        consumes a fixed number of RNG draws per pixel, keeping the random
+        stream synchronised across runs that differ only in photon flux.
+        This enables common-random-number variance reduction.  Default False.
 
     Returns
     -------
@@ -344,7 +383,12 @@ def sample_photon_arrivals(photon_counts: NDCube) -> NDCube:
     mean_counts = q.to(canonical_units).value
     mean_counts = np.maximum(mean_counts, 0)
 
-    sampled = np.random.poisson(mean_counts)
+    if photon_shot_inverse_transform:
+        from scipy.stats import poisson as _poisson
+        u_shot = np.random.random(size=mean_counts.shape)
+        sampled = _poisson.ppf(u_shot, mean_counts)
+    else:
+        sampled = np.random.poisson(mean_counts)
 
     return NDCube(
         data=sampled.astype(np.int64),
