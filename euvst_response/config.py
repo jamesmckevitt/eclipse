@@ -344,6 +344,12 @@ class Simulation:
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)
+    # Position along the spectral axis, as a fraction (0.0 to 1.0) of the
+    # detector width, one per pinhole.  Empty (the default) projects every
+    # pinhole to the centre of the spectral window, as before.  On a slit-scan
+    # spectrograph this fraction is what decides which emission lines a
+    # pinhole contaminates.
+    pinhole_positions_spectral: List[float] = field(default_factory=list)
 
     @property
     def slit_scan_step(self) -> u.Quantity:

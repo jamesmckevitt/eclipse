@@ -50,8 +50,51 @@ def airy_disk_pattern(r: np.ndarray, wavelength: u.Quantity, pinhole_diameter: u
     # Airy disk intensity pattern: I(beta) = (2*J1(beta)/beta)^2
     # where J1 is the first-order Bessel function
     intensity = (2 * j1(beta) / beta) ** 2
-    
+
     return intensity
+
+
+def airy_peak_fraction_per_pixel(
+    pinhole_diameter: u.Quantity,
+    distance: u.Quantity,
+    wavelength: u.Quantity,
+    pixel_size: u.Quantity,
+) -> float:
+    """
+    Fraction of a pinhole's transmitted photons that land in the single
+    brightest detector pixel.
+
+    This is the ABSOLUTE normalisation of the Airy pattern, which
+    ``calculate_pinhole_diffraction_pattern`` deliberately does not carry (it
+    returns a pattern normalised to a peak of 1.0).  For a circular aperture
+    of area A at distance L, the on-axis irradiance is
+
+        E_0 = P_total * A / (lambda^2 L^2)
+
+    (integrating (2*J1(u)/u)^2 over the plane gives 4*lambda^2*L^2/(pi*D^2),
+    which recovers P_total), so the fraction of the transmitted power falling
+    on one pixel of area a is ``A * a / (lambda L)^2``.
+
+    Why this matters: a pattern normalised by its sum over the detector array
+    implicitly forces every pinhole photon onto the detector.  For a small
+    pinhole the Airy disc is far larger than the detector - a 1 micron hole at
+    250 mm has its first minimum at 183 mm, against a detector tens of mm
+    across - so most of the light misses the detector entirely and must not be
+    redistributed onto it.  Use this function when absolute photon numbers
+    matter, e.g. deriving a pinhole budget.
+
+    Returns
+    -------
+    float
+        Fraction of transmitted photons in the brightest pixel, capped at 1.0
+        (the cap only binds for holes so large that the geometric image is
+        smaller than a pixel, where Fraunhofer diffraction no longer applies).
+    """
+    area = np.pi * (pinhole_diameter.to(u.m).value / 2.0) ** 2
+    pix = pixel_size.to(u.m).value
+    lam = wavelength.to(u.m).value
+    dist = distance.to(u.m).value
+    return float(min(1.0, area * pix ** 2 / (lam * dist) ** 2))
 
 def calculate_pinhole_diffraction_pattern(
     detector_shape: Tuple[int, int],
@@ -61,11 +104,12 @@ def calculate_pinhole_diffraction_pattern(
     slit_width: u.Quantity,
     plate_scale: u.Quantity,
     distance: u.Quantity,
-    wavelength: u.Quantity
+    wavelength: u.Quantity,
+    pinhole_position_spectral: float | None = None,
 ) -> np.ndarray:
     """
     Calculate the diffraction pattern from a single pinhole on the detector.
-    
+
     Parameters
     ----------
     detector_shape : tuple of int
@@ -84,11 +128,20 @@ def calculate_pinhole_diffraction_pattern(
         Distance from pinhole to detector
     wavelength : u.Quantity
         Wavelength of light
-        
+    pinhole_position_spectral : float, optional
+        Position along the SPECTRAL axis as a fraction (0.0 to 1.0) of the
+        detector width.  ``None`` (the default) reproduces the previous
+        behaviour of projecting every pinhole to the centre of the spectral
+        window.  On a slit-scan spectrograph the spectral axis is wavelength,
+        so this fraction decides which emission lines a given pinhole
+        contaminates - the centre-only assumption cannot answer that.
+
     Returns
     -------
     np.ndarray
-        2D diffraction pattern normalized to peak intensity of 1.0
+        2D diffraction pattern normalized to peak intensity of 1.0.  This
+        carries no absolute normalisation; see ``airy_peak_fraction_per_pixel``
+        when photon numbers matter.
     """
     n_slit, n_spectral = detector_shape
     
@@ -99,9 +152,13 @@ def calculate_pinhole_diffraction_pattern(
     # Convert pinhole position from slit fraction to pixel coordinate
     pinhole_pixel_slit = pinhole_position_slit * (n_slit - 1)
     
-    # Calculate distances from pinhole position on detector
-    # Assuming pinhole projects to center of spectral direction
-    pinhole_pixel_spectral = n_spectral // 2
+    # Calculate distances from pinhole position on detector.  Without an
+    # explicit spectral position, fall back to the centre of the spectral
+    # window (the historical assumption).
+    if pinhole_position_spectral is None:
+        pinhole_pixel_spectral = n_spectral // 2
+    else:
+        pinhole_pixel_spectral = pinhole_position_spectral * (n_spectral - 1)
     
     # Create 2D coordinate arrays
     slit_grid, spectral_grid = np.meshgrid(slit_pixels, spectral_pixels, indexing='ij')
