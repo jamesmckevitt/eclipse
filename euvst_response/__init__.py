@@ -10,6 +10,7 @@ __email__ = "jm2@mssl.ucl.ac.uk"
 
 # Import main classes and functions for easy access
 from .config import Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, AluminiumFilter
+from .eis_calibration import effective_area as eis_effective_area
 from .utils import wl_to_vel, vel_to_wl, angle_to_distance, distance_to_angle
 from .radiometric import (
     intensity_to_photons, add_telescope_throughput, photons_to_pixel_counts,
@@ -34,6 +35,7 @@ from .analysis import (
 __all__ = [
     "Detector_SWC", "Detector_EIS", "Telescope_EUVST", "Telescope_EIS", 
     "Simulation", "AluminiumFilter",
+    "eis_effective_area",
     "wl_to_vel", "vel_to_wl", "angle_to_distance", "distance_to_angle",
     "intensity_to_photons", "add_telescope_throughput", "photons_to_pixel_counts",
     "apply_exposure", "sample_photon_arrivals", "add_poisson", "apply_focusing_optics_psf", "to_electrons", 

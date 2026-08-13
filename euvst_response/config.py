@@ -9,6 +9,7 @@ from typing import List
 import numpy as np
 import astropy.units as u
 import scipy.interpolate
+from . import eis_calibration
 from .utils import angle_to_distance
 from importlib.resources import files
 
@@ -314,17 +315,94 @@ class Telescope_EUVST:
 
 @dataclass
 class Telescope_EIS:
-    """Hinode/EIS telescope configuration for comparison."""
+    """
+    Hinode/EIS telescope configuration for comparison.
+
+    The effective area is read from the instrument's calibration tables, so it
+    varies with wavelength and, for the in-flight calibrations, with the
+    observation date. Both matter: across the short-wavelength channel alone
+    the area spans a factor of 25, and by 2012 the long-wavelength channel had
+    lost most of its sensitivity. See ``eis_calibration`` for the four
+    supported calibrations and their sources.
+
+    Parameters
+    ----------
+    calibration : str
+        ``'ground'`` (default), ``'dz2013'``, ``'warren2014'`` or ``'dz2025'``.
+        The default is the pre-flight measurement, which has no epoch and so
+        is well defined without a date. ``'dz2025'`` is the current
+        recommendation for modelling a real observation.
+    date : str, optional
+        Observation date, e.g. ``'2012-06-03'``. Required by every calibration
+        except ``'ground'``, which ignores it. Also accepts a ``datetime`` or
+        an ``astropy.time.Time``, since YAML parses an unquoted date into a
+        ``datetime.date``.
+    qe_euv : float
+        Detector quantum efficiency. The tabulated effective areas already
+        include it, and ECLIPSE applies it separately as a binomial draw in
+        ``to_electrons``, so ``ea_and_throughput`` divides it back out to
+        avoid counting it twice.
+
+    Examples
+    --------
+    >>> tel = Telescope_EIS()                                  # pre-flight
+    >>> tel = Telescope_EIS(calibration="dz2025", date="2012-06-03")
+    """
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
-    
+    calibration: str = "ground"
+    date: str | None = None
+    qe_euv: float = Detector_EIS.qe_euv
+
+    def __post_init__(self):
+        if self.calibration not in eis_calibration.CALIBRATIONS:
+            raise ValueError(
+                f"Unknown EIS calibration {self.calibration!r}. Choose from: "
+                f"{', '.join(eis_calibration.CALIBRATIONS)}."
+            )
+        if self.date is not None:
+            self.date = eis_calibration.normalise_date(self.date)
+        elif self.calibration in eis_calibration.TIME_DEPENDENT_CALIBRATIONS:
+            raise ValueError(
+                f"The {self.calibration!r} EIS calibration is time-dependent, "
+                f"so Telescope_EIS needs a date, for example "
+                f"Telescope_EIS(calibration='{self.calibration}', "
+                f"date='2012-06-03'). Use calibration='ground' for the "
+                f"epoch-independent pre-flight calibration."
+            )
+
+    def effective_area(self, wl0: u.Quantity) -> u.Quantity:
+        """
+        Effective area at one or more wavelengths, including the detector QE.
+
+        This is the quantity the EIS calibration tables and the EIS
+        radiometric formula are written in terms of. Use it to compare against
+        published effective-area curves; use ``ea_and_throughput`` to feed
+        ECLIPSE's radiometric chain.
+        """
+        wl_aa = u.Quantity(wl0).to_value(u.AA)
+        area = eis_calibration.effective_area(
+            wl_aa, date=self.date, method=self.calibration
+        )
+
+        if np.any(~np.isfinite(area)):
+            bad = np.atleast_1d(wl_aa)[~np.isfinite(area)]
+            raise ValueError(
+                f"EIS has no effective area at {bad[0]:.3f} Angstrom "
+                f"({bad.size} wavelength(s) affected). Its bands are "
+                f"{eis_calibration.SW_BAND} and {eis_calibration.LW_BAND} "
+                f"Angstrom."
+            )
+
+        area = area * u.cm**2
+        return area[0] if np.ndim(wl_aa) == 0 else area
+
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
-        # Effective area including detector QE is 0.23 cm2
+        # The tabulated areas include the detector QE, which ECLIPSE applies
+        # separately, so it is divided back out here.
             # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
             # https://solarb.mssl.ucl.ac.uk/SolarB/eis_docs/eis_notes/02_RADIOMETRIC_CALIBRATION/eis_swnote_02.pdf
-        # Returning the throughput (without the QE):
-        eis_detector = Detector_EIS()
-        return (0.23 * u.cm**2) / eis_detector.qe_euv
+        return self.effective_area(wl0) / self.qe_euv
 
 
 @dataclass
