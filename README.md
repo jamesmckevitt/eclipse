@@ -66,6 +66,56 @@ micro_eff = telescope.microroughness_efficiency(fe12_wl)
 filter_eff = telescope.filter.total_throughput(fe12_wl)
 ```
 
+#### Hinode/EIS effective area
+
+EIS is included as a reference instrument. Its effective area comes from the
+instrument's own calibration tables, so it varies with wavelength and, for the
+in-flight calibrations, with the observation date:
+
+```python
+from euvst_response import Telescope_EIS
+
+# Pre-flight ground calibration (the default; no epoch)
+Telescope_EIS().effective_area(195.119 * u.AA)          # 0.3018 cm2
+
+# Del Zanna et al. (2025), the current recommendation, for a given date
+eis = Telescope_EIS(calibration="dz2025", date="2012-06-03")
+eis.effective_area(195.119 * u.AA)
+```
+
+| `calibration` | Source | Epoch |
+|---|---|---|
+| `ground` (default) | Pre-flight MSSL tables, `eis_ea.pro` | none |
+| `dz2013` | Del Zanna (2013), `eis_ltds.pro` | required |
+| `warren2014` | Warren, Ugarte-Urra & Landi (2014) | required |
+| `dz2025` | Del Zanna et al. (2025), `interpol_eis_ea.pro` | required |
+
+The three in-flight calibrations need a `date` and raise without one. Both
+values matter to any study that compares photon statistics between lines or
+between epochs: the effective area spans a factor of 25 across the
+short-wavelength channel alone, and the long-wavelength channel lost most of
+its sensitivity over the mission. Returned areas include the CCD quantum
+efficiency, which is the convention the EIS calibration tables and the EIS
+radiometric formula use; `ea_and_throughput` divides it back out, because
+ECLIPSE applies it separately as a binomial draw further down the chain.
+
+In a configuration file:
+
+```yaml
+instrument: EIS
+telescope:
+  calibration: dz2025
+  date: "2012-06-03"    # quoted, so it stays a string
+```
+
+Like any other parameter, both can be swept:
+
+```yaml
+telescope:
+  calibration: dz2025
+  date: ["2008-01-01", "2013-01-01", "2018-01-01"]
+```
+
 ### Analysis Tutorial
 
 For analyzing simulation results, see the included Jupyter notebook `analysis_tutorial.ipynb` which demonstrates how to:
