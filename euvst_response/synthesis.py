@@ -576,9 +576,15 @@ def _compute_single_ion(args):
     import fiasco
     import logging
 
-    elem, stage, temperature_K, densities_cm3, abundance, lines = args
+    elem, stage, temperature_K, densities_cm3, abundance, lines, hdf5_dbase_root = args
     temperature = temperature_K * u.K
     densities = densities_cm3 / u.cm**3
+
+    # A spawned process re-imports fiasco from scratch, so it re-reads
+    # ~/.fiasco/fiascorc and knows nothing about a database the parent
+    # selected in memory. The root therefore has to travel in the arguments.
+    ion_kwargs = {} if hdf5_dbase_root is None else {
+        'hdf5_dbase_root': hdf5_dbase_root}
 
     # Suppress repetitive fiasco warnings about missing proton data and
     # autoionization/rrlvl files.  These are CHIANTI database gaps (not all
@@ -591,7 +597,8 @@ def _compute_single_ion(args):
     fiasco_logger.setLevel(logging.ERROR)
 
     try:
-        ion = fiasco.Ion(f'{elem} {stage}', temperature, abundance=abundance)
+        ion = fiasco.Ion(f'{elem} {stage}', temperature, abundance=abundance,
+                         **ion_kwargs)
 
         g = ion.contribution_function(densities)
         pe_ratio = ion.proton_electron_ratio
@@ -617,6 +624,9 @@ def _compute_single_ion(args):
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
+            # Reported back so the caller can confirm the worker really read
+            # the database it was asked to, rather than the user's default.
+            "hdf5_dbase_root": str(ion.hdf5_dbase_root),
         }
     return results
 
@@ -632,6 +642,7 @@ def compute_goft_fiasco(
     nN: int = 21,
     precision: type = np.float64,
     n_workers: int = 0,
+    hdf5_dbase_root=None,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
     Compute G(T,N) contribution functions using fiasco.
@@ -671,6 +682,15 @@ def compute_goft_fiasco(
         imports fiasco independently, so there is a startup cost per
         worker.  Only useful when computing lines from 2+ distinct ions.
         Defaults to 0, which uses ``os.cpu_count()``.
+    hdf5_dbase_root : str or `~pathlib.Path`, optional
+        CHIANTI HDF5 database to use.  Defaults to fiasco's own, which comes
+        from ``~/.fiasco/fiascorc``.  Pass this to run against a database
+        other than the user's default: because each worker is spawned rather
+        than forked, it re-imports fiasco and re-reads that file, so setting
+        ``fiasco.defaults`` in the parent process has no effect on the
+        workers.  The value each worker actually used is checked against the
+        request, so a mismatch raises instead of silently returning G(T) from
+        the wrong atomic data.
 
     Returns
     -------
@@ -708,8 +728,9 @@ def compute_goft_fiasco(
         ion_lines.setdefault((elem, stage), []).append((name, wl))
 
     # Build worker arguments (all picklable plain types / numpy arrays)
+    dbase_root = None if hdf5_dbase_root is None else str(hdf5_dbase_root)
     worker_args = [
-        (elem, stage, temperature_K, densities_cm3, abundance, lines)
+        (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root)
         for (elem, stage), lines in ion_lines.items()
     ]
 
@@ -735,6 +756,13 @@ def compute_goft_fiasco(
     goft_dict: Dict[str, dict] = {}
     for result in all_results:
         for line_name, info in result.items():
+            used = info["hdf5_dbase_root"]
+            if dbase_root is not None and used != dbase_root:
+                raise RuntimeError(
+                    f"A G(T,N) worker read the CHIANTI database at {used} "
+                    f"instead of the requested {dbase_root}. Its contribution "
+                    f"functions would come from the wrong atomic data."
+                )
             print(
                 f"  {line_name}: requested {info['target_wl_cm']*1e8:.4f} Angstrom, "
                 f"matched {info['matched_wl_aa']:.4f} Angstrom "
@@ -1161,6 +1189,11 @@ def parse_arguments():
     parser.add_argument("--n-workers", type=int, default=0,
                        help="Number of parallel workers for fiasco G(T,N) "
                             "computation (0 = all CPUs, default: 0)")
+    parser.add_argument("--hdf5-dbase-root", type=str, default=None,
+                       help="CHIANTI HDF5 database to use, overriding the one "
+                            "in ~/.fiasco/fiascorc. Use this to run against a "
+                            "second CHIANTI version without changing the "
+                            "default for other work.")
     
     # Simulation files
     parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
@@ -1494,6 +1527,7 @@ def main(args=None) -> None:
     goft, logT_goft, logN_grid = compute_goft_fiasco(
         args.lines, abundance=args.abundance, precision=precision,
         n_workers=args.n_workers,
+        hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
     )
 
     # Use the GOFT temperature grid as our DEM temperature grid
