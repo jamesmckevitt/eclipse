@@ -384,21 +384,37 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         else:
             sigma = (wv.max() - wv.min()) / 10
 
-    # Use the peak-intensity pixel as the initial centre for the primary
-    peak_wl = wv[np.nanargmax(prof_c)]
+    # Estimate ONE global shift from the brightest pixel, and start every
+    # centre at its rest wavelength plus that shift.
+    #
+    # The peak pixel belongs to whichever component dominates the window,
+    # which is not necessarily the primary. Starting the primary's centre on
+    # it therefore displaces the primary by the gap between the two, and since
+    # every tied centre is a fixed offset from the primary, the whole comb
+    # starts shifted by that gap. The optimiser does not reliably recover: a
+    # noiseless 7-component EIS window whose primary sat 0.14 Angstrom from
+    # the dominant line returned a 239 km/s centroid for lines that were at
+    # rest by construction, and moving the primary to a different component
+    # changed the answer to 451 km/s, each time by very nearly the offset
+    # between that component and the brightest one.
+    #
+    # Attributing the peak pixel to the *nearest* component gives a shift that
+    # is meaningful for all of them. With a single component this reduces to
+    # the previous behaviour exactly.
+    rest_wl = np.array([c.wavelength.to(u.cm).value
+                        for c in fit_config.components])
+    if peak > 0:
+        peak_wl = wv[np.nanargmax(prof_c)]
+        shift = peak_wl - rest_wl[np.argmin(np.abs(rest_wl - peak_wl))]
+    else:
+        shift = 0.0
 
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
-        wl_cm = comp.wavelength.to(u.cm).value
-        if i == fit_config.primary_component:
-            full_guess[base] = peak
-            full_guess[base + 1] = peak_wl  # peak pixel, not rest wavelength
-            full_guess[base + 2] = sigma
-        else:
-            full_guess[base] = peak * 0.15
-            full_guess[base + 1] = wl_cm
-            full_guess[base + 2] = sigma
+        full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
+        full_guess[base + 1] = rest_wl[i] + shift
+        full_guess[base + 2] = sigma
     full_guess[-1] = back
     return full_guess
 
