@@ -376,13 +376,33 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     if peak == 0:
         sigma = (wv.max() - wv.min()) / 10
     else:
+        # Width of the feature *containing the peak*, not of everything above
+        # half maximum.
+        #
+        # Taking the first and last pixel above half max measures one line in
+        # a single-line window and the span of the whole blend in a
+        # multi-component one. Every component then starts several pixels
+        # wide, and the fit can settle there: on a seven-component EIS window
+        # the widths came out at 89 mA and 16 mA either side of a 28 mA
+        # instrumental floor, with a residual 45 percent of the peak and the
+        # requested line fitted at effectively zero. Walking outwards from the
+        # peak until the profile drops below half maximum measures the peak
+        # feature alone, and is identical for a single line.
         half_max = 0.5 * peak
-        indices = np.where(prof_c >= half_max)[0]
-        if len(indices) > 1:
-            fwhm = wv[indices[-1]] - wv[indices[0]]
-            sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        above = prof_c >= half_max
+        peak_idx = int(np.nanargmax(prof_c))
+        lo = hi = peak_idx
+        while lo > 0 and above[lo - 1]:
+            lo -= 1
+        while hi < len(above) - 1 and above[hi + 1]:
+            hi += 1
+        if hi > lo:
+            sigma = (wv[hi] - wv[lo]) / (2 * np.sqrt(2 * np.log(2)))
         else:
-            sigma = (wv.max() - wv.min()) / 10
+            # Unresolved: the feature is one pixel wide, so take that as an
+            # upper bound on the width rather than a tenth of the window.
+            sigma = float(np.median(np.diff(wv))) if len(wv) > 1 else \
+                (wv.max() - wv.min()) / 10
 
     # Estimate ONE global shift from the brightest pixel, and start every
     # centre at its rest wavelength plus that shift.
