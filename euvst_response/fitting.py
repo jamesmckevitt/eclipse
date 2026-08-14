@@ -261,14 +261,30 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     # Cap function evaluations as a safety net (fits converge in ~50).
     # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
     # each method uses a different keyword for max evaluations.
+    #
+    # The 350 budget was calibrated on a single Gaussian, which has four free
+    # parameters. Both methods spend one finite-difference Jacobian per
+    # iteration, costing n_free + 1 evaluations, so the same 350 buys about
+    # eighty iterations for one line and about twenty for a fifteen-parameter
+    # blend. The fit then stops wherever it has got to. Scaling the budget
+    # with the problem keeps the original behaviour for a single line.
+    n_free = len(free_indices)
+    budget = max(350, 200 * n_free)
     if has_bounds:
         fit_kwargs: dict = {
-            "method": "trf", "max_nfev": 350,
+            "method": "trf", "max_nfev": budget,
+            # Amplitudes run to ~1e11 while sigmas are ~0.03 Angstrom, so the
+            # free parameters span some thirteen orders of magnitude. trf
+            # takes steps in the raw variables unless told to normalise them
+            # from the Jacobian, and makes almost no progress when they are
+            # scaled this differently. lm does its own scaling internally,
+            # which is why only the bounded path suffers.
+            "x_scale": "jac",
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
     else:
         fit_kwargs: dict = {
-            "method": "lm", "maxfev": 350,
+            "method": "lm", "maxfev": budget,
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
 
