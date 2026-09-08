@@ -50,6 +50,11 @@ dev = [
     "flake8",
     "mypy",
 ]
+docs = [
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
+]
 
 [project.scripts]
 eclipse = "euvst_response.cli:main"
