@@ -29,4 +29,5 @@ pip install git+https://github.com/jamesmckevitt/eclipse.git
 - [Quick start](quickstart.md) - CLI and Python API basics
 - [Analysis tutorial](tutorial.ipynb) - worked notebook example
 - [Line synthesis](synthesis.md) - full options for `synthesise-spectra`
+- [Synthesis from a DEM](dem-synthesis.md) - start from an observed DEM instead of an MHD cube
 - [Instrument response](instrument-response.md) - configuration file reference and `eclipse` CLI
