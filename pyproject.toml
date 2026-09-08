@@ -65,6 +65,7 @@ synthesise_spectra = "euvst_response.synthesis_cli:main"
 [project.urls]
 Homepage = "https://github.com/jamesmckevitt/eclipse"
 Repository = "https://github.com/jamesmckevitt/eclipse"
+Documentation = "https://solarc-eclipse.readthedocs.io"
 
 [tool.setuptools.packages.find]
 include = ["euvst_response*"]
