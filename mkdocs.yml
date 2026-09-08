@@ -28,6 +28,7 @@ nav:
   - Quick start: quickstart.md
   - Analysis tutorial: tutorial.ipynb
   - Line synthesis: synthesis.md
+  - Synthesis from a DEM: dem-synthesis.md
   - Instrument response: instrument-response.md
   - Acknowledgements: acknowledgements.md
 
