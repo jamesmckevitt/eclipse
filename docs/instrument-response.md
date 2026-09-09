@@ -6,7 +6,7 @@ ECLIPSE uses YAML configuration files to specify simulation parameters.
 Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`.
 Any field of those classes can be set here.
 **Any parameter that is given as a list is automatically swept over** and the
-simulation runs every combination (cartesian product).
+simulation runs every combination (Cartesian product).
 
 **Top-level keys** (not sections):
 

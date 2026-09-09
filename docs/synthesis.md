@@ -66,7 +66,7 @@ synthesise-spectra --help
 **Velocity Grid:**
 
 - `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`)
-- `--vel-lim`: Velocity limit +-km/s with units (default: `"300.0 km/s"`)
+- `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`)
 
 **Integration and Viewing:**
 
