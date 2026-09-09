@@ -1,6 +1,6 @@
 # ECLIPSE
 
-**E**mission **C**a**l**cu**l**at**i**on and Line **P**rediction for **S**OLAR-C **E**UVST
+**E**mission **C**alculation and **Li**ne **P**rediction for **S**OLAR-C **E**UVST
 
 ECLIPSE is used to forward model the performance of the EUV spectrograph EUVST onboard the SOLAR-C spacecraft.
 
