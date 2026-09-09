@@ -49,6 +49,10 @@ dev = [
     "black",
     "flake8",
     "mypy",
+    # Lets tqdm use its widget progress bars in the tutorial notebook. Without
+    # it tqdm emits a TqdmWarning that gets stored in the notebook outputs and
+    # then rendered as an error block on the docs site.
+    "ipywidgets",
 ]
 docs = [
     "mkdocs-material",
