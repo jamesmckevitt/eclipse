@@ -125,6 +125,9 @@ passing the DEM's `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, the
 assert they agree. If they do not line up, `G(T)` and `DEM(T)` are silently
 sampled at different temperatures.
 
+**Line names.** The same `<Element><Stage>_<Wavelength>` convention as the MHD
+route - see [naming spectral lines](synthesis.md#naming-spectral-lines).
+
 **Scene size.** `create_line_cube` needs at least two pixels along each spatial
 axis, so a single DEM profile still has to be laid out on a 2x2 or larger scene.
 

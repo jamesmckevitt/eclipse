@@ -1,6 +1,16 @@
-# Line synthesis
+# Synthesising from an MHD simulation
 
 The synthesis script converts 3D MHD simulation data into synthetic solar spectra. Contribution functions G(T, n_e) are computed on-the-fly using [fiasco](https://fiasco.readthedocs.io/) (a Python interface to the CHIANTI atomic database).
+
+The output is a synthesis file, which is the input to the
+[instrument response](instrument-response.md) stage.
+
+!!! note "Which simulations are supported"
+
+    The reader currently expects MURaM output: separate binary files for
+    temperature, density, and velocity, with the cube shape given on the command
+    line. Support for other MHD codes, and for spectra synthesised by external
+    tools including optically thick ones, is being added.
 
 ## Basic usage
 
@@ -87,6 +97,29 @@ synthesise-spectra --help
 - `--downsample`: Downsampling factor (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
 - `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
+
+## Naming spectral lines
+
+Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
+
+- `Fe` - element symbol, capitalised as usual (`Fe`, `Si`, `S`, `O`).
+- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so
+  `Fe12` is Fe XII, not Fe XI or Fe XIII.
+- `195.1190` - rest wavelength in Angstrom.
+
+The same names are used by `--lines`, by the `reference_line` key in the
+instrument configuration, and as the keys of `line_cubes` in the output file.
+
+The wavelength does not have to be exact. ECLIPSE finds the nearest transition of
+that ion in CHIANTI and prints both the requested and matched wavelengths:
+
+```text
+  Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom (delta=0.0000 Angstrom)
+```
+
+Check that line. A large difference means the transition you meant is not in the
+database for that ion, and a neighbouring one was picked up instead. A name that
+does not match the pattern at all raises `ValueError` immediately.
 
 ## Dynamic mode (time-varying atmospheres)
 
