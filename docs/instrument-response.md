@@ -67,7 +67,8 @@ detector:
   qe_euv: [0.5, 0.65, 0.76]   # sweep over three QE values
 ```
 
-For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
+For guidance on recommended values, see
+[McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000).
 
 !!! warning "Parameters must go inside their section"
 
