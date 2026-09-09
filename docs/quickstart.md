@@ -16,7 +16,16 @@ synthesise-spectra --help
 eclipse --help
 ```
 
-See [Line synthesis](synthesis.md) and [Instrument response](instrument-response.md) for the full set of options.
+That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
+spectra, `eclipse` puts them through the instrument. See
+[From an MHD simulation](synthesis.md) and
+[Simulating the instrument](instrument-response.md) for the full set of options.
+
+Starting from an observed DEM instead of an MHD cube? See
+[From a DEM](dem-synthesis.md). Only want the precision on a line of known
+brightness, with no atmosphere at all? See
+[From a single intensity](uniform-intensity.md), which skips
+`synthesise-spectra` entirely.
 
 ## Python API
 
