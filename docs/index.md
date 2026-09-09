@@ -82,6 +82,18 @@ Contribution functions are computed with [fiasco](https://fiasco.readthedocs.io/
 which downloads and builds a local copy of the CHIANTI atomic database the first
 time it is used. Expect the first synthesis run to take longer than later ones.
 
+## Citing ECLIPSE
+
+If ECLIPSE contributed to a publication, please cite both the paper describing
+the instrument model and the software version you actually ran:
+
+- [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000)
+- The Zenodo DOI for the release: [10.5281/zenodo.17543844](https://doi.org/10.5281/zenodo.17543844)
+  resolves to the latest version, and each release has its own DOI.
+
+Every results file records the version and git commit that produced it, so
+`summary_table(results)` will tell you which version to cite.
+
 ## Where to go next
 
 - [Quick start](quickstart.md) - CLI and Python API basics
