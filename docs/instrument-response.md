@@ -69,6 +69,15 @@ detector:
 
 For guidance on recommended values, see McKevitt et al. (2025) (in prep.).
 
+!!! warning "Parameters must go inside their section"
+
+    Only `simulation`, `detector`, `telescope`, and `filter` are read as
+    sections. A parameter written at the top level instead - `expos:` or
+    `ccd_temperature:` directly under the document root - is **silently
+    ignored**, and the run proceeds with the default value. There is no
+    warning. If a sweep produces suspiciously identical results across
+    combinations, check the indentation first.
+
 By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
 
 ```yaml
@@ -106,6 +115,37 @@ If you synthesised data in dynamic mode, your configuration must specify:
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time
 
+## Uniform intensity mode
+
+Instead of a synthesised atmosphere, you can feed the instrument a single
+spectral line of known integrated intensity. Setting `uniform_intensity` switches
+this on, and no `synthesis_file` is needed.
+
+```yaml
+instrument: SWC
+uniform_intensity: 5000 erg / (s cm2 sr)   # units are required
+rest_wavelength: 195.119 AA                # default 195.119 AA
+thermal_width: 20 km/s                     # 1-sigma velocity width, default 20 km/s
+
+n_iter: 500
+ncpu: -1
+
+simulation:
+  slit_width: [0.2 arcsec, 0.4 arcsec]
+  expos: [5 s, 20 s, 80 s, 320 s]
+  psf: True
+```
+
+This builds a 1x1 pixel Gaussian line directly at the detector's spectral
+resolution and runs the usual Monte Carlo over it. Because the input intensity is
+exact and uniform, everything in the scatter of the fitted results comes from the
+instrument, which makes it the cleanest way to answer questions of the form "how
+precisely can this instrument measure a line this bright, at this exposure?".
+
+That is useful for building measurement uncertainty budgets - for example
+propagating a line-intensity precision into the uncertainty on a FIP-bias ratio -
+without committing to any particular atmosphere.
+
 ## Running simulations
 
 Run the instrument response function using:
@@ -124,6 +164,32 @@ eclipse --config ./run/input/config.yaml
 When launched with multiple MPI ranks on a SLURM cluster (via `srun` or `mpirun`, and setting `--ntasks-per-node`), ECLIPSE automatically distributes Monte Carlo iterations across ranks and gathers results on rank 0. No code or configuration changes are needed - MPI is auto-detected at runtime. If `mpi4py` is not installed or only one rank is present, the code falls back to single-process mode.
 
 Requirements: `mpi4py` and `intel-mpi` (load with `module load intel-mpi` before launching).
+
+A working submission script, one rank per node with joblib using the cores inside
+each rank:
+
+```bash
+#!/bin/bash
+#SBATCH -N 5
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=256
+#SBATCH --time=1-00:00:00
+
+module load intel-mpi
+export I_MPI_PMI_LIBRARY=/opt/slurm/slurm-21-08-5-1/lib/libpmi.so
+export I_MPI_PIN_DOMAIN=auto
+export LOKY_MAX_CPU_COUNT=$SLURM_CPUS_PER_TASK
+source /path/to/venv/bin/activate
+
+srun --mpi=pmi2 eclipse --config ./run/input/my_run.yaml
+```
+
+The two layers matter: MPI spreads Monte Carlo iterations across nodes, and
+joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an
+affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib
+oversubscribing against that mask. Setting `ncpu` in the config is optional - in
+MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read
+the affinity mask itself.
 
 ## Output
 
