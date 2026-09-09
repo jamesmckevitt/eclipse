@@ -1,4 +1,33 @@
-# Instrument response
+# Simulating the instrument
+
+This is the second stage of a run. It takes the spectra produced when you
+[synthesised an atmosphere](index.md#how-eclipse-works), puts them through the
+telescope and detector, adds the noise, and fits the result the same way you
+would fit real data. Because the noise is random, the whole thing is a Monte
+Carlo: `n_iter` realisations give a distribution of measured intensities,
+velocities, and line widths to compare against the known truth.
+
+## Choosing an instrument
+
+The top-level `instrument:` key selects the instrument model:
+
+- `SWC` (default) - SOLAR-C/EUVST short wavelength channel.
+- `EIS` - Hinode/EIS.
+
+Nothing else in the pipeline changes. A synthesis file made for one instrument
+can be run through the other.
+
+Three things are specific to `SWC` and are handled as follows under `EIS`:
+
+- The `filter:` section describes the EUVST aluminium filter. EIS has no such
+  filter, so the whole section is ignored with a warning.
+- `telescope.microroughness_sigma` is ignored with a warning.
+- Pinhole effects (`pinhole_sizes`, `pinhole_positions`,
+  `simulation.enable_pinholes`) raise an error rather than being ignored.
+
+The EIS point spread function is not well characterised. ECLIPSE uses a
+symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS
+Software Note 2, and prints a warning saying so whenever `psf: True` is set.
 
 ## Configuration file
 
@@ -12,7 +41,7 @@ simulation runs every combination (Cartesian product).
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
 - `synthesis_file`: path to the synthesised spectra pickle file
-- `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`)
+- `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`)
@@ -118,34 +147,9 @@ If you synthesised data in dynamic mode, your configuration must specify:
 
 ## Uniform intensity mode
 
-Instead of a synthesised atmosphere, you can feed the instrument a single
-spectral line of known integrated intensity. Setting `uniform_intensity` switches
-this on, and no `synthesis_file` is needed.
-
-```yaml
-instrument: SWC
-uniform_intensity: 5000 erg / (s cm2 sr)   # units are required
-rest_wavelength: 195.119 AA                # default 195.119 AA
-thermal_width: 20 km/s                     # 1-sigma velocity width, default 20 km/s
-
-n_iter: 500
-ncpu: -1
-
-simulation:
-  slit_width: [0.2 arcsec, 0.4 arcsec]
-  expos: [5 s, 20 s, 80 s, 320 s]
-  psf: True
-```
-
-This builds a 1x1 pixel Gaussian line directly at the detector's spectral
-resolution and runs the usual Monte Carlo over it. Because the input intensity is
-exact and uniform, everything in the scatter of the fitted results comes from the
-instrument, which makes it the cleanest way to answer questions of the form "how
-precisely can this instrument measure a line this bright, at this exposure?".
-
-That is useful for building measurement uncertainty budgets - for example
-propagating a line-intensity precision into the uncertainty on a FIP-bias ratio -
-without committing to any particular atmosphere.
+Setting `uniform_intensity` replaces the atmosphere with a single spectral line
+of known integrated intensity, and no `synthesis_file` is needed. See
+[synthesis from a single intensity](uniform-intensity.md).
 
 ## Running simulations
 
