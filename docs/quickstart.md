@@ -55,11 +55,11 @@ filter_eff = telescope.filter.total_throughput(fe12_wl)
 
 ## Working with results
 
-For analyzing simulation results, see the [analysis tutorial](tutorial.ipynb), which demonstrates how to:
+For analysing simulation results, see the [analysis tutorial](tutorial.ipynb), which demonstrates how to:
 
 - Load simulation results
 - Explore parameter combinations
-- Analyze fit statistics and compute velocity/line width errors
+- Analyse fit statistics and compute velocity/line width errors
 - Create SunPy maps for visualization
 
 The analysis functions are available directly from the package:

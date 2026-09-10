@@ -1,28 +1,19 @@
 # Synthesising lines from an observed DEM
 
-The [line synthesis](synthesis.md) page starts from a 3D MHD cube. If instead you
-already have a differential emission measure (DEM) - from an inversion of real
-observations, for example - you can feed it into ECLIPSE directly and forward
-model how the instrument would measure it.
+If you already have a differential emission measure (DEM) - from an inversion of real observations, for example - you can feed it into ECLIPSE directly and forward model how the instrument would measure it.
 
-This is the route used to study how EIS instrument effects bias FIP-bias
-measurements: take observed DEMs, synthesise a low-FIP and a high-FIP line from
-each, and run the instrument response to see how well the ratio can be recovered.
+This is the route used to study how EIS instrument effects bias FIP-bias measurements: take observed DEMs, synthesise a low-FIP and a high-FIP line from each, and run the instrument response to see how well the ratio can be recovered.
 
 ## How it fits together
 
-Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra
-from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected
-at that step. Two things differ from the MHD case:
+Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
 
 - **No velocity information.** All the emission goes in the zero-velocity bin.
-- **No density information.** `G(T, n_e)` is evaluated at a single assumed
-  electron density.
+- **No density information.** `G(T, n_e)` is evaluated at a single assumed electron density.
 
 ## Minimal example
 
-This synthesises Si X 258.375 (low FIP) and S X 264.230 (high FIP) from a single
-analytic DEM profile. Swap the profile for your own inversion output.
+This synthesises Si X 258.375 (low FIP) and S X 264.230 (high FIP) from a single analytic DEM profile. Swap the profile for your own inversion output.
 
 ```python
 import numpy as np
@@ -108,39 +99,23 @@ if __name__ == "__main__":
 
 !!! warning "Keep the `if __name__ == \"__main__\":` guard"
 
-    `compute_goft_fiasco` parallelises over ions using the `spawn` start method,
-    so each worker re-imports the main module. Without the guard, every worker
-    re-runs the script top to bottom and spawns more workers, which forks without
-    bound until the machine gives up.
+    `compute_goft_fiasco` parallelises over ions using the `spawn` start method, so each worker re-imports the main module. Without the guard, every worker re-runs the script top to bottom and spawns more workers.
 
-## Things that matter
+## Key points
 
-**Units.** An observed DEM is usually per kelvin (cm^-5 K^-1), while ECLIPSE's
-`em_tv` is emission measure summed per log10(T) bin (cm^-5). Convert with the
-linear temperature width of each bin, as in step 2. Getting this wrong scales
-every intensity.
+**Units.** An observed DEM is usually per kelvin (cm^-5 K^-1), while ECLIPSE's `em_tv` is emission measure summed per log10(T) bin (cm^-5). Convert with the linear temperature width of each bin, as in step 2.
 
-**Grid alignment.** Force the `G(T)` grid to match the DEM grid exactly by
-passing the DEM's `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, then
-assert they agree. If they do not line up, `G(T)` and `DEM(T)` are silently
-sampled at different temperatures.
+**Grid alignment.** Force the `G(T)` grid to match the DEM grid exactly by passing the DEM's `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, then make sure they agree. If they do not line up, `G(T)` and `DEM(T)` are silently sampled at different temperatures.
 
-**Line names.** The same `<Element><Stage>_<Wavelength>` convention as the MHD
-route - see [naming spectral lines](synthesis.md#naming-spectral-lines).
+**Line names.** The same `<Element><Stage>_<Wavelength>` convention as the MHD route - see [naming spectral lines](synthesis.md#naming-spectral-lines).
 
-**Scene size.** `create_line_cube` needs at least two pixels along each spatial
-axis, so a single DEM profile still has to be laid out on a 2x2 or larger scene.
+**Scene size.** `create_line_cube` needs at least two pixels along each spatial axis, so a single DEM profile still has to be laid out on a 2x2 or larger scene.
 
-**Abundance.** The `abundance` argument sets the FIP treatment. For FIP work,
-synthesise once per abundance set (for example `sun_coronal_2021_chianti` and
-`sun_photospheric_2021_asplund`); the ratio between them is the FIP enhancement
-you are trying to recover.
+**Abundance.** The `abundance` argument sets the FIP treatment. For FIP work, synthesise once per abundance set (for example `sun_coronal_2021_chianti` and `sun_photospheric_2021_asplund`); the ratio between them is the FIP enhancement you are trying to recover.
 
 ## Running the instrument response
 
-The pickle is in the normal synthesis format, so the
-[instrument response](instrument-response.md) stage consumes it unchanged. One
-run per spectral window:
+The pickle is in the normal synthesis format, so the [instrument response](instrument-response.md) stage can use it. One run per spectral window:
 
 ```yaml
 # configs/eis_si10.yaml
@@ -161,5 +136,4 @@ simulation:
 eclipse --config configs/eis_si10.yaml
 ```
 
-Then load the results and compare the fitted intensities against the truth, as
-in the [analysis tutorial](tutorial.ipynb).
+Then you can perform analysis, like the example in [analysis tutorial](tutorial.ipynb).

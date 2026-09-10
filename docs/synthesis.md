@@ -2,21 +2,13 @@
 
 The synthesis script converts 3D MHD simulation data into synthetic solar spectra. Contribution functions G(T, n_e) are computed on-the-fly using [fiasco](https://fiasco.readthedocs.io/) (a Python interface to the CHIANTI atomic database).
 
-The output is a synthesis file, which is the input to the
-[instrument response](instrument-response.md) stage.
+The output is a synthesis file, which is the input to the [instrument response](instrument-response.md) stage.
 
 !!! note "Which simulations are supported"
 
-    The reader currently expects MURaM output: separate binary files for
-    temperature, density, and velocity, with the cube shape given on the command
-    line. Support for other MHD codes is being added; until then, reducing your
-    simulation to a [VDEM](vdem-synthesis.md) is the way to use it.
+    The reader currently expects MURaM output: separate binary files for temperature, density, and velocity, with the cube shape given on the command line. Support for other MHD codes is being added; until then, reducing your simulation to a [VDEM](vdem-synthesis.md) is the best way to use it.
 
-    Synthesis here is optically thin, and is meant to stay that way. If you need
-    optically thick lines, synthesise them with a code built for it, such as
-    Lightweaver or RH1.5D, and bring the spectra in at the
-    [instrument response](instrument-response.md) stage instead of this one.
-    Reading externally synthesised spectra is coming soon.
+    Synthesis here is optically thin. If you need optically thick lines, synthesise them with a code such as Lightweaver or RH1.5D, and bring the spectra in at the [instrument response](instrument-response.md) stage instead of this one. Reading externally synthesised spectra is coming soon.
 
 ## Basic usage
 
@@ -181,7 +173,7 @@ The synthesis produces a pickle file containing:
 
 ## Working with synthesis results
 
-The synthesis results can be loaded and analyzed using the package API:
+The synthesis results can be loaded and analysed using the package API:
 
 ```python
 import euvst_response

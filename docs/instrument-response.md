@@ -1,51 +1,27 @@
 # Simulating the instrument
 
-This is the second stage of a run. It takes the spectra produced when you
-[synthesised an atmosphere](index.md#how-eclipse-works), puts them through the
-telescope and detector, adds the noise, and fits the result the same way you
-would fit real data. Because the noise is random, the whole thing is a Monte
-Carlo: `n_iter` realisations give a distribution of measured intensities,
-velocities, and line widths to compare against the known truth.
-
-The stage is deliberately independent of where the spectra came from. It reads a
-synthesis file and knows nothing about whether that file came from an MHD cube, a
-VDEM, or a DEM. The same will hold for spectra synthesised outside ECLIPSE
-altogether, by an optically thick code such as Lightweaver or RH1.5D or by
-anything else: ECLIPSE has no ambition to reproduce those codes, only to receive
-what they produce and put an instrument in front of it. Reading them directly is
-coming soon.
+This is the second stage of a run. It takes the spectra produced when you [synthesised an atmosphere](index.md#how-eclipse-works), puts them through the telescope and detector, adds the noise, and fits the result the same way you would fit real data. Because the noise is random, a Monte Carlo simulation gives a distribution of measured intensities, velocities, and line widths to compare against the known truth.
 
 ## Choosing an instrument
 
 The top-level `instrument:` key selects the instrument model:
 
-- `SWC` (default) - SOLAR-C/EUVST short wavelength channel.
+- `SWC` - SOLAR-C/EUVST-SW (short wavelength channel).
 - `EIS` - Hinode/EIS.
-
-Nothing else in the pipeline changes. A synthesis file made for one instrument
-can be run through the other.
 
 Three things are specific to `SWC` and are handled as follows under `EIS`:
 
-- The `filter:` section describes the EUVST aluminium filter. EIS has no such
-  filter, so the whole section is ignored with a warning.
-- `telescope.microroughness_sigma` is ignored with a warning.
-- Pinhole effects (`pinhole_sizes`, `pinhole_positions`,
-  `simulation.enable_pinholes`) raise an error rather than being ignored.
+- The `filter:` section describes the EUVST-SW aluminium filter. ECLIPSE treats the EIS effective area as one value and cannot vary engineering values for its aluminium filter, so the whole section is ignored with a warning for EIS.
+- `telescope.microroughness_sigma` is an engineering parameter specific to the EUVST-primary mirror. For EIS, it is ignored with a warning.
+- Pinhole effects (`pinhole_sizes`, `pinhole_positions`, `simulation.enable_pinholes`) are specific to EUVST-SW, and so raise an error when specified for EIS.
 
-The EIS point spread function is not well characterised. ECLIPSE uses a
-symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS
-Software Note 2, and prints a warning saying so whenever `psf: True` is set.
+The EIS point spread function is not well characterised. ECLIPSE uses a symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
 
 ## Configuration file
 
-ECLIPSE uses YAML configuration files to specify simulation parameters.
-Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`.
-Any field of those classes can be set here.
-**Any parameter that is given as a list is automatically swept over** and the
-simulation runs every combination (Cartesian product).
+ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter that is given as a list is automatically swept over** and the simulation runs every combination (Cartesian product).
 
-**Top-level keys** (not sections):
+**Top-level keys**:
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
 - `synthesis_file`: path to the synthesised spectra pickle file
@@ -109,12 +85,7 @@ For guidance on recommended values, see
 
 !!! warning "Parameters must go inside their section"
 
-    Only `simulation`, `detector`, `telescope`, and `filter` are read as
-    sections. A parameter written at the top level instead - `expos:` or
-    `ccd_temperature:` directly under the document root - is **silently
-    ignored**, and the run proceeds with the default value. There is no
-    warning. If a sweep produces suspiciously identical results across
-    combinations, check the indentation first.
+    Only `simulation`, `detector`, `telescope`, and `filter` are read as sections. A parameter written at the top level instead - `expos:` or `ccd_temperature:` directly under the document root - is **silently ignored**, and the run proceeds with the default value. There is no warning. If a sweep produces suspiciously identical results across combinations, check the indentation first.
 
 By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
 
@@ -146,7 +117,7 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `tie_width: <i>`: constrain this component's line width to match component *i*
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
-Omitting the `fitting` block fits a single Gaussian (default behaviour).
+Omitting the `fitting` block fits a single Gaussian.
 
 If you synthesised data in dynamic mode, your configuration must specify:
 
@@ -155,9 +126,7 @@ If you synthesised data in dynamic mode, your configuration must specify:
 
 ## Uniform intensity mode
 
-Setting `uniform_intensity` replaces the atmosphere with a single spectral line
-of known integrated intensity, and no `synthesis_file` is needed. See
-[synthesis from a single intensity](uniform-intensity.md).
+Setting `uniform_intensity` replaces the atmosphere with a single spectral line of known integrated intensity, and no `synthesis_file` is needed. See [synthesis from a single intensity](uniform-intensity.md).
 
 ## Running simulations
 
@@ -178,8 +147,7 @@ When launched with multiple MPI ranks on a SLURM cluster (via `srun` or `mpirun`
 
 Requirements: `mpi4py` and `intel-mpi` (load with `module load intel-mpi` before launching).
 
-A working submission script, one rank per node with joblib using the cores inside
-each rank:
+A working submission script, one rank per node with joblib using the cores inside each rank:
 
 ```bash
 #!/bin/bash
@@ -197,12 +165,7 @@ source /path/to/venv/bin/activate
 srun --mpi=pmi2 eclipse --config ./run/input/my_run.yaml
 ```
 
-The two layers matter: MPI spreads Monte Carlo iterations across nodes, and
-joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an
-affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib
-oversubscribing against that mask. Setting `ncpu` in the config is optional - in
-MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read
-the affinity mask itself.
+MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib oversubscribing against that mask. Setting `ncpu` in the config is optional - in MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read the affinity mask itself.
 
 ## Output
 
