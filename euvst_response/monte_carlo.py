@@ -25,6 +25,7 @@ def simulate_once(
     tel,
     sim,
     *,
+    uniform_mode: bool = False,
     photon_shot_inverse_transform: bool = False,
     dark_current_inverse_transform: bool = False,
 ) -> Tuple[NDCube, ...]:
@@ -43,6 +44,11 @@ def simulate_once(
         Telescope configuration
     sim : Simulation
         Simulation configuration
+    uniform_mode : bool, optional
+        If True the input cube is uniform along the slit, so the PSF is
+        convolved in the spectral direction only.  See
+        :func:`~euvst_response.radiometric.apply_focusing_optics_psf`.
+        Default False.
     photon_shot_inverse_transform : bool, optional
         Use inverse-transform Poisson sampling for photon shot noise, so that
         common random numbers survive a change in photon flux.  Default False.
@@ -73,7 +79,9 @@ def simulate_once(
 
     # Apply focusing optics PSF (primary mirror + diffraction grating)
     if sim.psf:
-        photons_focused = apply_focusing_optics_psf(photons_pixels, tel)
+        photons_focused = apply_focusing_optics_psf(
+            photons_pixels, tel, convolve_spatial=not uniform_mode
+        )
     else:
         photons_focused = photons_pixels
     
@@ -200,6 +208,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
              photons_focused, photon_arrivals, electrons, electrons_stray,
              electrons_pinholes, dn) = simulate_once(
                 I_cube, t_exp, det, tel, sim,
+                uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
                 dark_current_inverse_transform=dark_current_inverse_transform,
             )
@@ -283,6 +292,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
              photons_focused, photon_arrivals, electrons, electrons_stray,
              electrons_pinholes, dn) = simulate_once(
                 I_cube, t_exp, det, tel, sim,
+                uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
                 dark_current_inverse_transform=dark_current_inverse_transform,
             )
