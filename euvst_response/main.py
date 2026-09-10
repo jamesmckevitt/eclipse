@@ -432,24 +432,18 @@ def main() -> None:
             DET = Detector_EIS(**all_det) if all_det else Detector_EIS()
 
         # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
-        # so cube_reb_cache is keyed by the 3-tuple to avoid redundant rebin calls when
-        # sweeping multiple binning values at fixed spatial/spectral sampling.  In
-        # uniform-intensity mode, however, the cube is built with one slit pixel per
-        # binning factor (so rebin_slit_offchip can sum independent noise realisations),
-        # so offchip_bin_slit must be part of the cube_reb_cache key in that case.
-        cube_reb_key = (
+        # so cube_reb_cache is keyed by the sampling alone to avoid redundant rebin calls
+        # when sweeping multiple binning values at fixed spatial/spectral sampling.
+        sampling_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
         )
-        if uniform_intensity_mode:
-            cube_reb_key = (*cube_reb_key, offchip_bin_slit)
-        rebin_cache_key = (
-            slit_width.to_value(u.arcsec),
-            DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
-            DET.wvl_res.to_value(u.cm / u.pixel),
-            offchip_bin_slit,
-        )
+        # In uniform-intensity mode the cube is built with one slit pixel per binning
+        # factor, so that rebin_slit_offchip has independent noise realisations to sum.
+        # The cube therefore does depend on offchip_bin_slit, and the key must say so.
+        cube_reb_key = (*sampling_key, offchip_bin_slit) if uniform_intensity_mode else sampling_key
+        rebin_cache_key = (*sampling_key, offchip_bin_slit)
 
         if cube_reb_key not in cube_reb_cache:
             print(
@@ -490,7 +484,7 @@ def main() -> None:
             # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
             # multiple binning factors at fixed slit width all retain their cubes
             # (a single-key dict would silently keep only the first one).
-            cube_reb_dict.setdefault((cube_reb_key[0], offchip_bin_slit), cube_reb_binned)
+            cube_reb_dict.setdefault((sampling_key[0], offchip_bin_slit), cube_reb_binned)
 
         cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
 
