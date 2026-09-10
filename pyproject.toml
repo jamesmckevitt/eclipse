@@ -10,7 +10,7 @@ authors = [
 ]
 description = "ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST"
 readme = "README.md"
-license = {text = "Contact for permission"}
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -49,6 +49,16 @@ dev = [
     "black",
     "flake8",
     "mypy",
+    # Needed when re-running the tutorial notebook, not when building the docs
+    # (mkdocs-jupyter renders the stored outputs without executing anything).
+    # Without it tqdm emits a TqdmWarning, which gets saved into the notebook
+    # outputs and then shows up as an error block on the docs site.
+    "ipywidgets",
+]
+docs = [
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
 ]
 
 [project.scripts]
@@ -60,6 +70,7 @@ synthesise_spectra = "euvst_response.synthesis_cli:main"
 [project.urls]
 Homepage = "https://github.com/jamesmckevitt/eclipse"
 Repository = "https://github.com/jamesmckevitt/eclipse"
+Documentation = "https://solarc-eclipse.readthedocs.io"
 
 [tool.setuptools.packages.find]
 include = ["euvst_response*"]
