@@ -189,7 +189,7 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 
 Both are keyword-only and both default to `False`. The distribution is the same, so a run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler.
 
-None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
+None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
 
 ## Output
 
