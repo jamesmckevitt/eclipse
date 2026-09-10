@@ -368,6 +368,9 @@ def create_uniform_intensity_cube(
         Shape ``(1, n_slit_pixels, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
         helioprojective + wavelength WCS.
     """
+    if n_slit_pixels < 1:
+        raise ValueError(f"n_slit_pixels must be >= 1, got {n_slit_pixels}")
+
     # --- Spectral grid --------------------------------------------------
     lam0 = rest_wavelength.to(u.cm)
 
@@ -389,12 +392,10 @@ def create_uniform_intensity_cube(
     A = (total_intensity / (sigma_lam * np.sqrt(2 * np.pi))).to(
         u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     )
-    if n_slit_pixels < 1:
-        raise ValueError(f"n_slit_pixels must be >= 1, got {n_slit_pixels}")
-
     profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
-    # Tile uniform profile along the slit axis to allow ground-based off-chip
-    # binning of n_slit_pixels independent noise realisations downstream.
+    # Tile the profile along the slit axis.  Every slit pixel holds the same
+    # intensity, but each is noised independently downstream, which is what
+    # rebin_slit_offchip needs in order to sum them.
     data = np.tile(profile.value, (1, n_slit_pixels, 1))  # shape (1, n_slit_pixels, n_lam)
 
     # --- WCS (matches reproject_ndcube output format) --------------------
