@@ -169,6 +169,32 @@ srun --mpi=pmi2 eclipse --config ./run/input/my_run.yaml
 
 MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib oversubscribing against that mask. Setting `ncpu` in the config is optional - in MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read the affinity mask itself.
 
+## Common random numbers
+
+When two runs differ in only one parameter, most of the scatter in the difference between them is the noise they do not share. Driving both runs from the *same* random numbers cancels that shared noise, so a small difference can be resolved with far fewer Monte Carlo iterations than either run would need on its own. This is variance reduction by common random numbers.
+
+The obstacle is the Poisson sampler. `np.random.poisson` uses rejection sampling, which consumes a variable number of random draws depending on the mean it is given. Change the photon flux or the dark-current level and the two runs pull different amounts from the stream, so every draw after the first divergence is unrelated and the shared noise no longer cancels.
+
+Two options switch the affected samplers to inverse-transform sampling, which spends exactly one draw per pixel whatever the mean:
+
+```python
+from euvst_response.monte_carlo import monte_carlo
+
+first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
+    I_cube, t_exp, det, tel, sim, n_iter=500,
+    photon_shot_inverse_transform=True,    # for runs differing in photon flux
+    dark_current_inverse_transform=True,   # for runs differing in dark current
+)
+```
+
+Both default to `False`, and both are keyword-only. The distribution sampled is identical either way, so switching them on does not change the statistics of a single run, only how that run's noise is correlated with another's. Inverting the CDF is slower than the default sampler, which is the price paid for needing fewer iterations.
+
+!!! note "You must also seed the generator yourself"
+
+    These options keep the random stream *aligned*; they do not make it repeat. ECLIPSE does not seed NumPy's global generator, so getting the same numbers in both runs means calling `np.random.seed(...)` with the same value before each `monte_carlo()` call. Without that the two runs draw independent streams and there is nothing to cancel.
+
+    There is no configuration key for any of this, so a comparison of this kind is written against the Python API rather than run through `eclipse --config`. Under MPI each rank keeps its own generator state, so the two runs must also use the same number of ranks.
+
 ## Output
 
 Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
