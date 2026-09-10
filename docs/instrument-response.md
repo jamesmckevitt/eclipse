@@ -171,11 +171,11 @@ MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within 
 
 ## Common random numbers
 
-When two runs differ in only one parameter, most of the scatter in the difference between them is the noise they do not share. Driving both runs from the *same* random numbers cancels that shared noise, so a small difference can be resolved with far fewer Monte Carlo iterations than either run would need on its own. This is variance reduction by common random numbers.
+Comparing two runs that differ in one parameter is noisy. Each run has its own Monte Carlo scatter, usually a good deal bigger than the difference being looked for, so it takes a lot of iterations before that difference shows through. Give both runs the same random numbers and most of the scatter cancels in the difference, which is the usual trick of common random numbers.
 
-The obstacle is the Poisson sampler. `np.random.poisson` uses rejection sampling, which consumes a variable number of random draws depending on the mean it is given. Change the photon flux or the dark-current level and the two runs pull different amounts from the stream, so every draw after the first divergence is unrelated and the shared noise no longer cancels.
+It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux fall out of step almost immediately, and past that point they are just two unrelated streams.
 
-Two options switch the affected samplers to inverse-transform sampling, which spends exactly one draw per pixel whatever the mean:
+Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages:
 
 ```python
 from euvst_response.monte_carlo import monte_carlo
@@ -187,13 +187,13 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 )
 ```
 
-Both default to `False`, and both are keyword-only. The distribution sampled is identical either way, so switching them on does not change the statistics of a single run, only how that run's noise is correlated with another's. Inverting the CDF is slower than the default sampler, which is the price paid for needing fewer iterations.
+Both are keyword-only and both default to `False`. The distribution is the same either way, so a single run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler, so you are trading time per iteration against needing fewer of them.
 
-!!! note "You must also seed the generator yourself"
+!!! note "Seed the generator yourself"
 
-    These options keep the random stream *aligned*; they do not make it repeat. ECLIPSE does not seed NumPy's global generator, so getting the same numbers in both runs means calling `np.random.seed(...)` with the same value before each `monte_carlo()` call. Without that the two runs draw independent streams and there is nothing to cancel.
+    These options keep the two streams in step, they do not make the numbers repeat. ECLIPSE never seeds NumPy's global generator, so call `np.random.seed` with the same value before each `monte_carlo` call. Without that the runs get independent streams and there is nothing to cancel.
 
-    There is no configuration key for any of this, so a comparison of this kind is written against the Python API rather than run through `eclipse --config`. Under MPI each rank keeps its own generator state, so the two runs must also use the same number of ranks.
+    None of this has a configuration key, so a comparison like this is written against the Python API rather than run with `eclipse --config`. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
 
 ## Output
 
