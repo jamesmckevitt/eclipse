@@ -50,7 +50,9 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 **Units and binning.** `em_tv` is emission measure *summed within* each bin (cm^-5), not a density per unit temperature or per unit velocity. If your code gives a VDEM per kelvin and per km/s, multiply by each bin's width, as in [step 2 of the DEM example](dem-synthesis.md#minimal-example).
 
-**Bin centres, not edges.** Both `logT` and `vel_grid` hold bin centres. The velocity grid does not have to be uniform - edges are derived from the centres - but it does have to be monotonic.
+**Bin centres, not edges.** Both `logT` and `vel_grid` hold bin centres.
+
+**Use a uniformly spaced velocity grid.** Non-uniform spacing is not supported. Bin edges are derived by applying the *first* spacing to the whole grid, and the output cube's WCS is written with a single linear `CDELT` taken from the first wavelength step. An unevenly spaced grid therefore gets both its bin widths and its wavelength coordinates silently wrong.
 
 **Grid alignment.** As on the DEM page, force the `G(T)` grid to match your temperature grid by passing `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, and make sure they agree.
 

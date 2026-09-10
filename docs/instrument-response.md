@@ -13,13 +13,15 @@ Three things are specific to `SWC` and are handled as follows under `EIS`:
 
 - The `filter:` section describes the EUVST-SW aluminium filter. ECLIPSE treats the EIS effective area as one value and cannot vary engineering values for its aluminium filter, so the whole section is ignored with a warning for EIS.
 - `telescope.microroughness_sigma` is an engineering parameter specific to the EUVST-primary mirror. For EIS, it is ignored with a warning.
-- Pinhole effects (`pinhole_sizes`, `pinhole_positions`, `simulation.enable_pinholes`) are specific to EUVST-SW, and so raise an error when specified for EIS.
+- Pinhole effects are specific to EUVST-SW. Setting `pinhole_sizes`, or `simulation.enable_pinholes: True`, raises an error for EIS. Note that `pinhole_positions` on its own does not: without `pinhole_sizes` it is ignored for either instrument.
 
 The EIS point spread function is not well characterised. ECLIPSE uses a symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
 
 ## Configuration file
 
-ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter that is given as a list is automatically swept over** and the simulation runs every combination (Cartesian product).
+ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
+
+There is one exception: `telescope.psf_params` is itself a list-valued parameter, so it is always taken as a single fixed value rather than as a sweep dimension.
 
 **Top-level keys**:
 
@@ -90,9 +92,9 @@ For guidance on recommended values, see
 By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
 
 ```yaml
-fit_signals: dn       # Fit only the DN signal
-fit_signals: photon   # Fit only the photon signal
-fit_signals: both     # Fit both (default)
+fit_signals: dn   # "dn" fits only the DN signal
+                  # "photon" fits only the photon signal
+                  # "both" fits both, and is the default
 ```
 
 To fit blended spectral lines with multiple Gaussian components, add a `fitting` block:

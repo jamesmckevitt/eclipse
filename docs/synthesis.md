@@ -178,15 +178,19 @@ The synthesis results can be loaded and analysed using the package API:
 ```python
 import euvst_response
 
-# Load synthesis results - this sums all line cubes into a single cube
-# By default uses Fe XII 195.119 Angstrom as reference for wavelength grid
-cube = euvst_response.load_atmosphere("./run/input/synthesised_spectra.pkl")
+# Load synthesis results - this sums all line cubes into a single cube.
+# Returns a (cube, dynamic_mode_info) tuple, so unpack it.
+# The second argument is the reference line whose wavelength grid the other
+# lines are interpolated onto; omit it and the first line in the file is used.
+cube, dynamic_mode_info = euvst_response.load_atmosphere(
+    "./run/input/synthesised_spectra.pkl", "Fe12_195.1190"
+)
 print(f"Combined cube shape: {cube.data.shape}")
 
 # Access individual line cubes if needed
-import pickle
+import dill
 with open("./run/input/synthesised_spectra.pkl", "rb") as f:
-    data = pickle.load(f)
+    data = dill.load(f)
 
 # Access individual line cubes
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]
