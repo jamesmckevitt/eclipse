@@ -173,9 +173,9 @@ MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within 
 
 If you want to compare two instrument configurations whose noise is lower than another noise source, the scatter in the results will make finding trends difficult. The solution is to use the same random numbers for their shared noise. This is variance reduction by common random numbers.
 
-It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux fall out of step almost immediately, and past that point they are just two unrelated streams.
+It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux therefore become out of step.
 
-Inverse-transform sampling uses one random value per pixel whatever the mean, so that stage stays in step. There is an option for each of the two Poisson stages:
+Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages:
 
 ```python
 from euvst_response.monte_carlo import monte_carlo
@@ -187,15 +187,9 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 )
 ```
 
-Both are keyword-only and both default to `False`. The distribution is the same either way, so a single run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler, so you are trading time per iteration against needing fewer of them.
+Both are keyword-only and both default to `False`. The distribution is the same, so a run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler.
 
-These are not the only random draws in the pipeline. Quantum efficiency is a binomial draw, and Fano noise is drawn only for the pixels that received a photon, so both use an amount of randomness that depends on the data. A change in flux still knocks the dark current and read noise out of step whatever these options are set to, and the cancellation is only partial. On a uniform field, resolving a 1 per cent change in flux to 5 sigma took 28 iterations from unrelated seeds, 15 from the same seed, and 4 with photon shot noise inverse-transformed. Varying dark current instead, where nothing upstream changes, the same seed alone cuts the scatter on the difference by a factor of 12 and the option takes off another 1.2.
-
-!!! note "Seed the generator yourself"
-
-    These options keep the two streams in step, they do not make the numbers repeat. ECLIPSE never seeds NumPy's global generator, so call `np.random.seed` with the same value before each `monte_carlo` call. Without that the runs get independent streams and there is nothing to cancel.
-
-    None of this has a configuration key, so a comparison like this is written against the Python API rather than run with `eclipse --config`. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
+None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
 
 ## Output
 
