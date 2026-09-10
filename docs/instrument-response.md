@@ -178,7 +178,10 @@ It does not work with `np.random.poisson`, which draws by rejection and so uses 
 Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages:
 
 ```python
+import numpy as np
 from euvst_response.monte_carlo import monte_carlo
+
+np.random.seed(1234)   # the same value before each run being compared
 
 first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
     I_cube, t_exp, det, tel, sim, n_iter=500,
