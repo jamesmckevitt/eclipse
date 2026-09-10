@@ -146,11 +146,12 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         ``"photon"``.  Fitting is the most expensive step, so
         selecting only the signal of interest roughly halves runtime.
     uniform_mode : bool, optional
-        If True the input cube is assumed to be a single 1x1 spatial pixel
-        (uniform-intensity mode).  All MC simulations are run first and
-        the resulting spectra are stacked so that fitting is parallelised
-        over the n_iter iterations rather than over the spatial dimension.
-        Default: False.
+        If True the input cube is taken to be uniform-intensity mode: one scan
+        position and ``offchip_bin_slit`` identical slit pixels, which
+        *offchip_bin_slit* then sums back down to a single spatial pixel.  All
+        MC simulations are run first and the resulting spectra are stacked so
+        that fitting is parallelised over the n_iter iterations rather than
+        over the spatial dimension.  Default: False.
     photon_shot_inverse_transform : bool, optional
         Use inverse-transform Poisson sampling for photon shot noise, so that
         common random numbers survive a change in photon flux.  Default False.

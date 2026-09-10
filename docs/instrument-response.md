@@ -30,7 +30,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
-- `offchip_bin_slit`: off-chip slit binning factor (default `1`)
+- `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
@@ -125,6 +125,14 @@ If you synthesised data in dynamic mode, your configuration must specify:
 
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time
+
+## Off-chip slit binning
+
+`offchip_bin_slit` sums adjacent pixels along the slit after read-out, so it is binning done on the ground rather than on the detector. Summing `n` pixels multiplies the signal by `n` while the noise only adds in quadrature. Signal to noise therefore goes up as `sqrt(n)`, with a reduction of spatial resolution along the slit.
+
+```yaml
+offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
+```
 
 ## Uniform intensity mode
 
