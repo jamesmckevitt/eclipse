@@ -2,21 +2,38 @@
 
 A velocity differential emission measure (VDEM) is a DEM resolved in
 line-of-sight velocity: how much emitting material there is at each temperature
-*and* each velocity. If another code has produced one - an optically thin or
-optically thick synthesis code, or a VDEM inversion of real observations -
-ECLIPSE can synthesise lines from it and forward model how the instrument would
-measure them.
+*and* each velocity. It is computed from an MHD simulation, by binning every
+voxel along the line of sight by its temperature and velocity. If you already
+have one, ECLIPSE can synthesise lines from it and forward model how the
+instrument would measure them.
 
 This is ECLIPSE's native internal representation. The
-[MHD route](synthesis.md) reads a simulation, bins every voxel by temperature
-and line-of-sight velocity, and produces exactly this object before folding it
-with `G(T, n_e)`. Handing one over directly just skips the first step.
+[MHD route](synthesis.md) does exactly that binning itself, and produces this
+object before folding it with `G(T, n_e)`. Handing one over directly just skips
+the first step.
 
-It follows that the VDEM route is the [DEM route](dem-synthesis.md) without the
-DEM route's main limitation. A DEM carries no velocity information, so that page
-puts all the emission in the zero-velocity bin; a VDEM fills the velocity bins
-in, and the synthesised lines come out Doppler shifted and broadened by the bulk
-motions as well as thermally.
+Two reasons to take this route rather than the [MHD route](synthesis.md):
+
+- **Your simulation is not MURaM.** ECLIPSE's reader currently expects MURaM
+  output. Reducing your own simulation to a VDEM is the way to use it in the
+  meantime.
+- **The reduction is already done.** A VDEM is far smaller than the cube it came
+  from, and cheap to re-synthesise from with different lines or abundances.
+
+It also follows that the VDEM route is the [DEM route](dem-synthesis.md) without
+the DEM route's main limitation. A DEM carries no velocity information, so that
+page puts all the emission in the zero-velocity bin; a VDEM fills the velocity
+bins in, and the synthesised lines come out Doppler shifted and broadened by the
+bulk motions as well as thermally.
+
+!!! note "This is not the route for another code's spectra"
+
+    A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer
+    on it, optically thin. If a code such as Lightweaver or RH1.5D has already
+    synthesised *spectra* from an atmosphere, that is a different input: the
+    synthesis stage is skipped altogether and the spectra go straight into the
+    [instrument response](instrument-response.md). Direct support for reading
+    those is coming.
 
 ## Minimal example
 
