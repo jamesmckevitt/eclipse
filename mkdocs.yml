@@ -29,6 +29,7 @@ nav:
   - Synthesising an atmosphere:
       - From an MHD simulation: synthesis.md
       - From a DEM: dem-synthesis.md
+      - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument: instrument-response.md
   - Analysing the results: tutorial.ipynb
@@ -37,7 +38,11 @@ nav:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - pymdownx.tabbed:
       alternate_style: true
