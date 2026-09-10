@@ -468,6 +468,7 @@ def main() -> None:
                     det=DET,
                     sim=SIM_rebin,
                     n_slit_pixels=offchip_bin_slit,
+                    tel=TEL,
                 )
             else:
                 cube_reb_cache[cube_reb_key] = rebin_atmosphere(cube_sim, DET, SIM_rebin)
