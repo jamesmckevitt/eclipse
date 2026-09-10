@@ -1,0 +1,62 @@
+site_name: ECLIPSE
+site_description: Emission Calculation and Line Prediction for SOLAR-C EUVST
+repo_url: https://github.com/jamesmckevitt/eclipse
+repo_name: jamesmckevitt/eclipse
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.expand
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Quick start: quickstart.md
+  - Synthesising an atmosphere:
+      - From an MHD simulation: synthesis.md
+      - From a DEM: dem-synthesis.md
+      - From a VDEM: vdem-synthesis.md
+      - From a single intensity: uniform-intensity.md
+  - Simulating the instrument: instrument-response.md
+  - Analysing the results: tutorial.ipynb
+  - Acknowledgements: acknowledgements.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocs-jupyter:
+      include_source: true
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_root_heading: true
+            show_source: false
