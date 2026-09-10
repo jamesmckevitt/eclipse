@@ -16,6 +16,8 @@ Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra
 This synthesises Si X 258.375 (low FIP) and S X 264.230 (high FIP) from a single analytic DEM profile. Swap the profile for your own inversion output.
 
 ```python
+from pathlib import Path
+
 import numpy as np
 import astropy.units as u
 import dill
@@ -84,7 +86,9 @@ def main():
         for name, info in goft.items()
     }
 
-    with open("./run/input/dem_synth.pkl", "wb") as f:
+    out_path = Path("./run/input/dem_synth.pkl")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "wb") as f:
         dill.dump({
             "line_cubes": line_cubes,
             "dynamic_mode": {"enabled": False},
@@ -97,7 +101,7 @@ if __name__ == "__main__":
     main()
 ```
 
-!!! warning "Keep the `if __name__ == \"__main__\":` guard"
+!!! warning "Keep the `if __name__ == '__main__':` guard"
 
     `compute_goft_fiasco` parallelises over ions using the `spawn` start method, so each worker re-imports the main module. Without the guard, every worker re-runs the script top to bottom and spawns more workers.
 

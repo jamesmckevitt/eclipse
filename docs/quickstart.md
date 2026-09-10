@@ -16,6 +16,21 @@ synthesise-spectra --help
 eclipse --help
 ```
 
+There is no default configuration file, so write `config.yaml` yourself between
+those two commands. A minimal one that consumes what the synthesis just wrote:
+
+```yaml
+instrument: SWC
+synthesis_file: ./run/input/synthesised_spectra.pkl
+reference_line: Fe12_195.1190
+n_iter: 100
+
+simulation:
+  expos: [10 s, 40 s]
+```
+
+See [Simulating the instrument](instrument-response.md) for every available key.
+
 That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
 spectra, `eclipse` puts them through the instrument. See
 [From an MHD simulation](synthesis.md) and
