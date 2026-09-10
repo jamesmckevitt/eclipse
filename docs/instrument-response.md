@@ -128,15 +128,15 @@ If you synthesised data in dynamic mode, your configuration must specify:
 
 ## Off-chip slit binning
 
-`offchip_bin_slit` sums adjacent pixels along the slit *after* read-out, as binning done on the ground rather than on the detector. Each contributing pixel therefore carries its own independent read noise, dark current and shot noise. Summing `n` of them multiplies the signal by `n` while the uncorrelated noise adds in quadrature, so the signal-to-noise ratio improves by roughly `sqrt(n)` at the cost of spatial resolution along the slit.
+`offchip_bin_slit` sums adjacent pixels along the slit after read-out, so it is binning done on the ground rather than on the detector. Every pixel going into the sum has already picked up its own read noise, dark current and shot noise, and summing `n` of them multiplies the signal by `n` while that noise only adds in quadrature. Signal to noise therefore goes up as `sqrt(n)`, and the price is spatial resolution along the slit.
 
-Pixels left over at the slit edge, which cannot fill a whole bin, are discarded.
+Any pixels left at the end of the slit that cannot fill a whole bin are thrown away.
 
 ```yaml
 offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
 ```
 
-In [uniform-intensity mode](uniform-intensity.md) there is no atmosphere to bin, so ECLIPSE instead builds the input cube with `offchip_bin_slit` slit pixels, each holding the same intensity. They are noised independently and then summed, which reproduces the same `sqrt(n)` improvement.
+[Uniform-intensity mode](uniform-intensity.md) has no atmosphere to bin, so ECLIPSE builds the cube with `offchip_bin_slit` slit pixels instead, all at the same intensity. Each one is noised separately before they are summed, so the `sqrt(n)` still holds.
 
 ## Uniform intensity mode
 

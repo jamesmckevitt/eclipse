@@ -27,14 +27,14 @@ This builds a single-pixel Gaussian line directly at the detector's spectral res
 
 ## Off-chip binning
 
-[`offchip_bin_slit`](instrument-response.md#off-chip-slit-binning) works here too, even though there is no atmosphere to bin. ECLIPSE builds the cube with one slit pixel per binning factor, each holding the same intensity, so that the pixels summed at the binning step carry independent noise:
+[`offchip_bin_slit`](instrument-response.md#off-chip-slit-binning) still applies here, even with no atmosphere to bin. ECLIPSE builds the cube with one slit pixel per binning factor, all at the same intensity, so the pixels being summed have picked up independent noise first:
 
 ```yaml
 uniform_intensity: 5000 erg / (s cm2 sr)
 offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 ```
 
-The signal-to-noise ratio improves by roughly `sqrt(n)`, exactly as it does for a synthesised atmosphere.
+Signal to noise then goes up as `sqrt(n)`, the same as it would for a synthesised atmosphere.
 
 ## Why use it
 
