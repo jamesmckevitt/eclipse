@@ -16,8 +16,13 @@ synthesise-spectra --help
 eclipse --help
 ```
 
+That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
+spectra, `eclipse` puts them through the instrument. See
+[From an MHD simulation](synthesis.md) and
+[Simulating the instrument](instrument-response.md) for the full set of options.
+
 There is no default configuration file, so write `config.yaml` yourself between
-those two commands. A minimal one that consumes what the synthesis just wrote:
+those two commands. A minimal one that reads what the synthesis just wrote:
 
 ```yaml
 instrument: SWC
@@ -28,13 +33,6 @@ n_iter: 100
 simulation:
   expos: [10 s, 40 s]
 ```
-
-See [Simulating the instrument](instrument-response.md) for every available key.
-
-That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
-spectra, `eclipse` puts them through the instrument. See
-[From an MHD simulation](synthesis.md) and
-[Simulating the instrument](instrument-response.md) for the full set of options.
 
 Starting from an observed DEM instead of an MHD cube? See
 [From a DEM](dem-synthesis.md). Only want the precision on a line of known
