@@ -56,12 +56,16 @@ known truth, sweep across exposure times and slit widths, and make maps. See the
 - `SWC` - SOLAR-C/EUVST short wavelength channel (default).
 - `EIS` - Hinode/EIS, which is useful for validating the model against a flying
   instrument, and for planning observations.
+- The EUVST long wavelength channel (LW) is coming soon, and will complete the
+  full EUVST instrument.
 
 The instrument is chosen with a single top-level `instrument:` key in the
 configuration file. Everything else in the pipeline is unchanged.
 
 ## Coming soon
 
+- **The long wavelength channel**, completing EUVST alongside the short
+  wavelength channel already modelled.
 - **More MHD codes.** Synthesis currently reads MURaM output. Support for other
   MHD codes is being added.
 - **Spectra from other synthesis tools.** ECLIPSE will accept spectra synthesised
