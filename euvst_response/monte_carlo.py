@@ -44,11 +44,12 @@ def simulate_once(
     sim : Simulation
         Simulation configuration
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for photon shot noise.
-        Enables CRN across runs that differ only in photon flux.  Default False.
+        Use inverse-transform Poisson sampling for photon shot noise, so that
+        common random numbers survive a change in photon flux.  Default False.
     dark_current_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for dark-current shot noise.
-        Enables CRN across runs that differ only in dark-current level.  Default False.
+        Use inverse-transform Poisson sampling for dark-current shot noise, so
+        that common random numbers survive a change in dark-current level.
+        Default False.
         
     Returns
     -------
@@ -114,6 +115,7 @@ def simulate_once(
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
                 fit_config=None, offchip_bin_slit: int = 1,
                 fit_signals: str = "both", uniform_mode: bool = False,
+                *,
                 photon_shot_inverse_transform: bool = False,
                 dark_current_inverse_transform: bool = False) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
     """
@@ -150,11 +152,12 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         over the n_iter iterations rather than over the spatial dimension.
         Default: False.
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for photon shot noise.
-        Enables CRN across runs that differ only in photon flux.  Default False.
+        Use inverse-transform Poisson sampling for photon shot noise, so that
+        common random numbers survive a change in photon flux.  Default False.
     dark_current_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for dark-current shot noise.
-        Enables CRN across runs that differ only in dark-current level.  Default False.
+        Use inverse-transform Poisson sampling for dark-current shot noise, so
+        that common random numbers survive a change in dark-current level.
+        Default False.
         
     Returns
     -------
