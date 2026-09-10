@@ -13,3 +13,5 @@
 build/
 dist/
 .eggs/
+site/
+.cache/
