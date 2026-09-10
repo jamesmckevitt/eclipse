@@ -65,7 +65,7 @@ flowchart LR
 
 The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The last has no synthesis step at all and is set directly in the instrument configuration.
 
-**2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simualtion, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
+**2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
 
 **3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](tutorial.ipynb).
 

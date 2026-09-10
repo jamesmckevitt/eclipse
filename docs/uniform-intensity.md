@@ -29,6 +29,6 @@ This builds a 1x1 pixel Gaussian line directly at the detector's spectral resolu
 
 Because the input intensity is exact and uniform, everything in the scatter of the fitted results comes from the instrument.
 
-That is useful for building measurement uncertainty budgets, for example propagating a line-intensity precision into the uncertainty on a FIP-bias ratio..
+That is useful for building measurement uncertainty budgets, for example propagating a line-intensity precision into the uncertainty on a FIP-bias ratio.
 
 It is also much cheaper than the other two routes as there is no contribution function to compute so a broad sweep over instrument configurations and exposure times can be done quickly.
