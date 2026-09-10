@@ -12,10 +12,11 @@ The output is a synthesis file, which is the input to the
     line. Support for other MHD codes is being added; until then, reducing your
     simulation to a [VDEM](vdem-synthesis.md) is the way to use it.
 
-    Synthesis here is optically thin. Reading spectra that an optically thick
-    code such as Lightweaver or RH1.5D has already synthesised from an
-    atmosphere is also coming - those skip this stage entirely and go straight
-    to the [instrument response](instrument-response.md).
+    Synthesis here is optically thin, and is meant to stay that way. If you need
+    optically thick lines, synthesise them with a code built for it, such as
+    Lightweaver or RH1.5D, and bring the spectra in at the
+    [instrument response](instrument-response.md) stage instead of this one.
+    Reading externally synthesised spectra is coming soon.
 
 ## Basic usage
 

@@ -9,9 +9,11 @@ velocities, and line widths to compare against the known truth.
 
 The stage is deliberately independent of where the spectra came from. It reads a
 synthesis file and knows nothing about whether that file came from an MHD cube, a
-VDEM, or a DEM. Reading spectra synthesised by an external optically thick code,
-such as Lightweaver or RH1.5D, is coming, and will enter the pipeline at exactly
-this point.
+VDEM, or a DEM. The same will hold for spectra synthesised outside ECLIPSE
+altogether, by an optically thick code such as Lightweaver or RH1.5D or by
+anything else: ECLIPSE has no ambition to reproduce those codes, only to receive
+what they produce and put an instrument in front of it. Reading them directly is
+coming soon.
 
 ## Choosing an instrument
 

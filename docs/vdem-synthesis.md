@@ -29,11 +29,11 @@ bulk motions as well as thermally.
 !!! note "This is not the route for another code's spectra"
 
     A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer
-    on it, optically thin. If a code such as Lightweaver or RH1.5D has already
-    synthesised *spectra* from an atmosphere, that is a different input: the
-    synthesis stage is skipped altogether and the spectra go straight into the
-    [instrument response](instrument-response.md). Direct support for reading
-    those is coming.
+    on it, optically thin. If another code has already synthesised the *spectra*
+    from an atmosphere - Lightweaver, RH1.5D, or anything else - that is a
+    different input: the synthesis stage is skipped altogether and the spectra go
+    straight into the [instrument response](instrument-response.md). Reading
+    those directly is coming soon.
 
 ## Minimal example
 
