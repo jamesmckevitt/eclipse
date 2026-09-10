@@ -34,7 +34,7 @@ uniform_intensity: 5000 erg / (s cm2 sr)
 offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 ```
 
-Signal to noise then goes up as `sqrt(n)`, the same as it would for a synthesised atmosphere.
+Signal to noise then goes up as `sqrt(n)`, the same as it would for a synthesised atmosphere, provided `psf` is off. With the PSF on, the signal level itself changes with the binning factor, for the reason given under [off-chip slit binning](instrument-response.md#off-chip-slit-binning).
 
 ## Why use it
 

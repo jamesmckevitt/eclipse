@@ -136,7 +136,13 @@ Any pixels left at the end of the slit that cannot fill a whole bin are thrown a
 offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
 ```
 
-[Uniform-intensity mode](uniform-intensity.md) has no atmosphere to bin, so ECLIPSE builds the cube with `offchip_bin_slit` slit pixels instead, all at the same intensity. Each one is noised separately before they are summed, so the `sqrt(n)` still holds.
+[Uniform-intensity mode](uniform-intensity.md) has no atmosphere to bin, so ECLIPSE builds the cube with `offchip_bin_slit` slit pixels instead, all at the same intensity. Each one is noised separately before they are summed, so the `sqrt(n)` holds there too, with one caveat.
+
+!!! warning "Sweeping the binning factor needs `psf: False` in uniform-intensity mode"
+
+    The PSF is convolved with everything outside the array treated as dark, so a uniform field loses flux off the ends of the slit. With a single slit pixel only 35 per cent of the signal survives, rising to 95 per cent at 16 pixels and 99.7 per cent at 256. Changing `offchip_bin_slit` therefore changes the signal level as well as the noise, and the binned signal does not scale as `n`: between 1 and 256 pixels it grows 2.8 times more than it should.
+
+    So a sweep over binning factors with `psf: True` mixes the binning in with a changing calibration. Set `psf: False` for that comparison, or bin at a fixed factor. Note also that the flux lost this way is a straight underestimate of intensity in uniform-intensity mode whether or not binning is swept.
 
 ## Uniform intensity mode
 
