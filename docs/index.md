@@ -18,9 +18,12 @@ A run has three stages, always in this order.
 ```mermaid
 flowchart LR
     MHD["MHD simulation"] --> SYN
+    MHD --> VDEM["VDEM"]
+    MHD -.-> EXT["Optically thick synthesis<br>Lightweaver, RH1.5D<br><i>(coming soon)</i>"]
+    VDEM --> SYN
     DEM["Observed DEM"] --> SYN
-    VDEM["VDEM from another<br>synthesis code"] --> SYN
     SYN["<b>1. Synthesise</b><br>fold with G(T, n_e)"] --> PKL[("synthesis<br>file")]
+    EXT -.-> PKL
     PKL --> INS
     UNI["Single intensity"] --> INS
     INS["<b>2. Simulate</b><br>optics, detector, noise, fitting"] --> RES[("results<br>file")]
@@ -29,17 +32,21 @@ flowchart LR
 
 **1. Synthesise an atmosphere.** Turn a model of the emitting plasma into
 synthetic spectra as they leave the Sun, before the telescope sees them. There
-are four ways in, depending on what you already have:
+are several ways in, depending on what you already have:
 
 | Starting point | Page | Use it when |
 | --- | --- | --- |
 | A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. |
+| A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity, or it comes from a code ECLIPSE cannot yet read directly. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
-| A VDEM | [From a VDEM](vdem-synthesis.md) | Another code, optically thin or thick, has given you emission measure resolved in both temperature and line-of-sight velocity. |
+| Spectra from another synthesis code | Coming soon | An optically thick code such as Lightweaver or RH1.5D has already synthesised the spectra from an MHD atmosphere, and you only want the instrument on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
 
-The first three produce a synthesis file. The fourth has no synthesis step at
-all - it is set directly in the instrument configuration.
+The first three run ECLIPSE's own optically thin synthesis and produce a
+synthesis file. The fourth skips that stage entirely, because the spectra
+already exist - the other code has done the radiative transfer, and ECLIPSE only
+has to read the result. The last has no synthesis step at all and is set
+directly in the instrument configuration.
 
 **2. Simulate the instrument.** Take those spectra through the telescope,
 filter, grating, and detector, add the noise sources, and fit the resulting
@@ -68,10 +75,11 @@ configuration file. Everything else in the pipeline is unchanged.
   wavelength channel already modelled.
 - **More MHD codes.** Synthesis currently reads MURaM output. Support for other
   MHD codes is being added.
-- **Spectra from other synthesis tools.** ECLIPSE will accept spectra synthesised
-  elsewhere, including by optically thick codes, so the instrument stage can be
-  run on them directly. In the meantime, a [VDEM](vdem-synthesis.md) is the way
-  to bring in another code's output.
+- **Spectra from other synthesis codes.** ECLIPSE's own synthesis is optically
+  thin. Codes such as [Lightweaver](https://github.com/Goobley/Lightweaver) and
+  [RH1.5D](https://rh15d.readthedocs.io/) solve the optically thick problem on an
+  MHD atmosphere, and their spectra will be readable directly, so the instrument
+  stage can be run on lines that ECLIPSE cannot itself synthesise.
 
 ## Installation
 
@@ -108,7 +116,7 @@ Every results file records the version and git commit that produced it, so
 - [Quick start](quickstart.md) - CLI and Python API basics
 - [From an MHD simulation](synthesis.md) - full options for `synthesise-spectra`
 - [From a DEM](dem-synthesis.md) - start from an observed DEM instead of an MHD cube
-- [From a VDEM](vdem-synthesis.md) - bring in another code's temperature and velocity resolved output
+- [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Analysing the results](tutorial.ipynb) - worked notebook example
