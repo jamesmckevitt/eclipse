@@ -23,16 +23,16 @@ flowchart LR
 
     MHD --> VDEM["VDEM"]
 
-    subgraph SYN["Synthesise an atmosphere"]
+    subgraph SYN["1. Synthesise an atmosphere"]
         ECL["ECLIPSE synthesis<br>optically thin, G(T, n_e)"]
         EXT["Any other synthesis code<br>Lightweaver, RH1.5D, ...<br>optically thin or thick"]
     end
 
-    subgraph SIM["Simulate the instrument"]
+    subgraph SIM["2. Simulate the instrument"]
         INS["Optics, detector and noise,<br>then line fitting"]
     end
 
-    subgraph ANL["Analyse the results"]
+    subgraph ANL["3. Analyse the results"]
         ANA["Measured against truth"]
     end
 
@@ -45,6 +45,12 @@ flowchart LR
     EXT -. "coming soon" .-> INS
     UNI --> INS
     INS -- "results file" --> ANA
+
+    classDef node fill:#ECECFF,fill-opacity:1,stroke:#9370DB,stroke-opacity:1,color:#1a1a1a;
+    class MHD,DEM,UNI,VDEM,ECL,EXT,INS,ANA node
+    style SYN fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
+    style SIM fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
+    style ANL fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
 ```
 
 **1. Synthesise an atmosphere.** Turn a model of the emitting plasma into
