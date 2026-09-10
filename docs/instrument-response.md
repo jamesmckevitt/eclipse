@@ -7,6 +7,12 @@ would fit real data. Because the noise is random, the whole thing is a Monte
 Carlo: `n_iter` realisations give a distribution of measured intensities,
 velocities, and line widths to compare against the known truth.
 
+The stage is deliberately independent of where the spectra came from. It reads a
+synthesis file and knows nothing about whether that file came from an MHD cube, a
+VDEM, or a DEM. Reading spectra synthesised by an external optically thick code,
+such as Lightweaver or RH1.5D, is coming, and will enter the pipeline at exactly
+this point.
+
 ## Choosing an instrument
 
 The top-level `instrument:` key selects the instrument model:

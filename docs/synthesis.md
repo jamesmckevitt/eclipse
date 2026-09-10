@@ -9,8 +9,13 @@ The output is a synthesis file, which is the input to the
 
     The reader currently expects MURaM output: separate binary files for
     temperature, density, and velocity, with the cube shape given on the command
-    line. Support for other MHD codes, and for spectra synthesised by external
-    tools including optically thick ones, is being added.
+    line. Support for other MHD codes is being added; until then, reducing your
+    simulation to a [VDEM](vdem-synthesis.md) is the way to use it.
+
+    Synthesis here is optically thin. Reading spectra that an optically thick
+    code such as Lightweaver or RH1.5D has already synthesised from an
+    atmosphere is also coming - those skip this stage entirely and go straight
+    to the [instrument response](instrument-response.md).
 
 ## Basic usage
 
