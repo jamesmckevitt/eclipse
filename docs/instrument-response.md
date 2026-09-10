@@ -177,6 +177,31 @@ srun --mpi=pmi2 eclipse --config ./run/input/my_run.yaml
 
 MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib oversubscribing against that mask. Setting `ncpu` in the config is optional - in MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read the affinity mask itself.
 
+## Common random numbers
+
+If you want to compare two instrument configurations whose noise is lower than another noise source, the scatter in the results will make finding trends difficult. The solution is to use the same random numbers for their shared noise. This is variance reduction by common random numbers.
+
+It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux therefore become out of step.
+
+Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages:
+
+```python
+import numpy as np
+from euvst_response.monte_carlo import monte_carlo
+
+np.random.seed(1234)   # the same value before each run being compared
+
+first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
+    I_cube, t_exp, det, tel, sim, n_iter=500,
+    photon_shot_inverse_transform=True,    # for runs differing in photon flux
+    dark_current_inverse_transform=True,   # for runs differing in dark current
+)
+```
+
+Both are keyword-only and both default to `False`. The distribution is the same, so a run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler.
+
+None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
+
 ## Output
 
 Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:

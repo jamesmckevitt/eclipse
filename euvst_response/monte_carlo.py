@@ -18,7 +18,16 @@ from .fitting import fit_cube_gauss
 from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
 
 
-def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDCube, ...]:
+def simulate_once(
+    I_cube: NDCube,
+    t_exp: u.Quantity,
+    det,
+    tel,
+    sim,
+    *,
+    photon_shot_inverse_transform: bool = False,
+    dark_current_inverse_transform: bool = False,
+) -> Tuple[NDCube, ...]:
     """
     Run a single Monte Carlo simulation of the instrument response.
     
@@ -34,6 +43,13 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
         Telescope configuration
     sim : Simulation
         Simulation configuration
+    photon_shot_inverse_transform : bool, optional
+        Use inverse-transform Poisson sampling for photon shot noise, so that
+        common random numbers survive a change in photon flux.  Default False.
+    dark_current_inverse_transform : bool, optional
+        Use inverse-transform Poisson sampling for dark-current shot noise, so
+        that common random numbers survive a change in dark-current level.
+        Default False.
         
     Returns
     -------
@@ -68,10 +84,16 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
         photons_euv_pinholes = photons_focused
 
     # Sample discrete photon arrivals (photon shot noise)
-    photon_arrivals = sample_photon_arrivals(photons_euv_pinholes)
+    photon_arrivals = sample_photon_arrivals(
+        photons_euv_pinholes,
+        photon_shot_inverse_transform=photon_shot_inverse_transform,
+    )
 
     # Convert to electrons (detector response: QE, Fano noise, dark current, read noise)
-    electrons = to_electrons(photon_arrivals, t_exp, det)
+    electrons = to_electrons(
+        photon_arrivals, t_exp, det,
+        dark_current_inverse_transform=dark_current_inverse_transform,
+    )
     
     # Add visible stray light (with filter throughput)
     electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel)
@@ -92,7 +114,10 @@ def simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> Tuple[NDC
 
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
                 fit_config=None, offchip_bin_slit: int = 1,
-                fit_signals: str = "both", uniform_mode: bool = False) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
+                fit_signals: str = "both", uniform_mode: bool = False,
+                *,
+                photon_shot_inverse_transform: bool = False,
+                dark_current_inverse_transform: bool = False) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -127,6 +152,13 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         MC simulations are run first and the resulting spectra are stacked so
         that fitting is parallelised over the n_iter iterations rather than
         over the spatial dimension.  Default: False.
+    photon_shot_inverse_transform : bool, optional
+        Use inverse-transform Poisson sampling for photon shot noise, so that
+        common random numbers survive a change in photon flux.  Default False.
+    dark_current_inverse_transform : bool, optional
+        Use inverse-transform Poisson sampling for dark-current shot noise, so
+        that common random numbers survive a change in dark-current level.
+        Default False.
         
     Returns
     -------
@@ -166,7 +198,11 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                       disable=not show_progress):
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+             electrons_pinholes, dn) = simulate_once(
+                I_cube, t_exp, det, tel, sim,
+                photon_shot_inverse_transform=photon_shot_inverse_transform,
+                dark_current_inverse_transform=dark_current_inverse_transform,
+            )
 
             if i == 0 and rank == 0:
                 first_dn_signal = rebin_slit_offchip(dn, offchip_bin_slit)
@@ -245,7 +281,11 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             # Simulate one run
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(I_cube, t_exp, det, tel, sim)
+             electrons_pinholes, dn) = simulate_once(
+                I_cube, t_exp, det, tel, sim,
+                photon_shot_inverse_transform=photon_shot_inverse_transform,
+                dark_current_inverse_transform=dark_current_inverse_transform,
+            )
 
             # Store first iteration signals only on rank 0 (binned, to match fit shapes)
             if i == 0 and rank == 0:
