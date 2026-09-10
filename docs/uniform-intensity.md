@@ -23,7 +23,18 @@ simulation:
 eclipse --config configs/uniform.yaml
 ```
 
-This builds a 1x1 pixel Gaussian line directly at the detector's spectral resolution and runs the usual Monte Carlo over it.
+This builds a single-pixel Gaussian line directly at the detector's spectral resolution and runs the usual Monte Carlo over it.
+
+## Off-chip binning
+
+[`offchip_bin_slit`](instrument-response.md#off-chip-slit-binning) works here too, even though there is no atmosphere to bin. ECLIPSE builds the cube with one slit pixel per binning factor, each holding the same intensity, so that the pixels summed at the binning step carry independent noise:
+
+```yaml
+uniform_intensity: 5000 erg / (s cm2 sr)
+offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
+```
+
+The signal-to-noise ratio improves by roughly `sqrt(n)`, exactly as it does for a synthesised atmosphere.
 
 ## Why use it
 
