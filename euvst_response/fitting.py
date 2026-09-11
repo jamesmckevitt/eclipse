@@ -262,14 +262,18 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
     # each method uses a different keyword for max evaluations.
     #
-    # The 350 budget was calibrated on a single Gaussian, which has four free
-    # parameters. Both methods spend one finite-difference Jacobian per
-    # iteration, costing n_free + 1 evaluations, so the same 350 buys about
-    # eighty iterations for one line and about twenty for a fifteen-parameter
-    # blend. The fit then stops wherever it has got to. Scaling the budget
-    # with the problem keeps the original behaviour for a single line.
+    # The 350 cap was calibrated on a single Gaussian, which has four free
+    # parameters, and the two methods do not count against it the same way.
+    # MINPACK's lm counts every residual call, including the n_free calls
+    # that build each forward-difference Jacobian, so 350 buys seventy
+    # iterations for one line but only twenty for a fifteen-parameter blend,
+    # and the fit then stops wherever it has got to. least_squares' trf
+    # counts only its own residual calls and reports Jacobian work separately
+    # in njev, so the same number goes much further there. Budget seventy lm
+    # iterations whatever the parameter count: a single line keeps exactly
+    # its original 350, and trf stays comfortably provisioned.
     n_free = len(free_indices)
-    budget = max(350, 200 * n_free)
+    budget = max(350, 70 * (n_free + 1))
     if has_bounds:
         fit_kwargs: dict = {
             "method": "trf", "max_nfev": budget,
