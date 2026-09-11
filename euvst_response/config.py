@@ -368,3 +368,22 @@ class Simulation:
         elif inst in ("SWC"):
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
+
+        # The pinhole lists are paired, and both pipelines zip them together.
+        # zip stops at the shortest, so a mismatch would drop the trailing
+        # pinholes from the run without saying anything. main() checks this
+        # for configuration files, but Simulation is also constructed directly.
+        if self.pinhole_positions_spectral and (
+                len(self.pinhole_positions_spectral) != len(self.pinhole_sizes)):
+            raise ValueError(
+                "pinhole_positions_spectral, when given, needs one entry per "
+                f"pinhole: got {len(self.pinhole_positions_spectral)} for "
+                f"{len(self.pinhole_sizes)} pinhole_sizes."
+            )
+        if self.pinhole_sizes and (
+                len(self.pinhole_sizes) != len(self.pinhole_positions)):
+            raise ValueError(
+                "pinhole_sizes and pinhole_positions are paired and must be "
+                f"the same length: got {len(self.pinhole_sizes)} and "
+                f"{len(self.pinhole_positions)}."
+            )
