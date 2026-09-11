@@ -120,49 +120,17 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `tie_width: <i>`: constrain this component's line width to match component *i*
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
-Omitting the `fitting` block fits a single Gaussian.
+Omitting the `fitting` block fits a single Gaussian, with `max_iter` at its default.
 
-`max_iter` caps how long the optimiser may work on one spectrum before it gives
-up and returns wherever it reached, which it does silently. It is counted in
-iterations, so it means the same thing on either backend and does not shrink as
-components are added, and it applies to single-Gaussian fits as well as blends.
-Fits converge in tens of iterations, so the default of 1000 is a safety net
-rather than a tuning knob; raise it if a difficult blend looks under-converged.
-For comparison, EISPAC uses 2000.
-
-Without a `fitting` block there is nowhere to write it, so single-Gaussian runs
-take the same 1000 by default.
+`max_iter` caps how long the optimiser may work on one spectrum before it gives up and returns wherever it reached, which it does silently.
 
 #### Choosing the components
 
-Three things about blends are worth knowing before you trust the velocities.
+**Nominate a primary that has flux.** The reported velocity comes from `primary_component`, and the initial guess places the whole comb against the profile. If that line is absent from your data the comb can settle a whole component spacing away - 92 km/s for Fe XII 195.119 and 195.179.
 
-**Nominate a primary that has flux.** The reported velocity is read from
-`primary_component`, and the initial guess places the whole comb by matching it
-against the profile. If the primary is a line that is absent in your data, no
-amount of fitting recovers its velocity, and the comb can settle a whole
-component spacing away: for Fe XII 195.119 and 195.179 that is 92 km/s. As soon
-as the primary carries even a few per cent of the blend the placement is
-reliable again. Choose the line you actually want to measure, not the one that
-happens to be first in the list.
+**Comparable lines closer than about three line widths are hard.** The dip between them never falls below half maximum, so the initial width covers the whole blend and the fit can settle for one broad component instead of two. `constrain_positive_intensity` does not rescue it, and can make it worse.
 
-**Comparable lines closer than about three line widths are hard.** The initial
-width is estimated by walking out from the brightest pixel until the profile
-falls below half its height. When two lines of similar brightness sit closer
-than that, the dip between them never drops below half maximum, so the estimate
-covers the whole blend and the fit can start twice as wide as the truth and
-settle for one broad component instead of two. Enforcing
-`constrain_positive_intensity` does not rescue it, and can make it worse by
-pinning the second amplitude at zero. A blend of very unequal lines, or one
-wider than a few line widths, is unaffected.
-
-**`tie_center` ties velocities, not separations.** A common Doppler shift
-stretches a blend rather than sliding it, because each line moves by an amount
-proportional to its own wavelength. `tie_center` therefore scales each tied
-centre by the ratio of the rest wavelengths, so the one fitted centre means one
-velocity for every component in the group, whatever the width of the window.
-`tie_width` is a plain equality, unchanged: thermal broadening does scale with
-wavelength, but the instrumental width that dominates these windows does not.
+**`tie_center` ties a velocity, not a separation.** A Doppler shift stretches a blend rather than sliding it, so tied centres are scaled by the ratio of their rest wavelengths and one fitted centre means one velocity at any window width. `tie_width` is a plain equality.
 
 If you synthesised data in dynamic mode, your configuration must specify:
 
