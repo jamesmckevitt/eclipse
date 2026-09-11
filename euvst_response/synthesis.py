@@ -624,8 +624,9 @@ def _compute_single_ion(args):
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
-            # Reported back so the caller can confirm the worker really read
-            # the database it was asked to, rather than the user's default.
+            # The root this Ion was built against.  fiasco resolves it to the
+            # fiascorc default when the caller did not choose one, so this is
+            # always the database the contribution functions came from.
             "hdf5_dbase_root": str(ion.hdf5_dbase_root),
         }
     return results
@@ -688,9 +689,11 @@ def compute_goft_fiasco(
         other than the user's default: because each worker is spawned rather
         than forked, it re-imports fiasco and re-reads that file, so setting
         ``fiasco.defaults`` in the parent process has no effect on the
-        workers.  The value each worker actually used is checked against the
-        request, so a mismatch raises instead of silently returning G(T) from
-        the wrong atomic data.
+        workers.  Each worker reports back the root its ``Ion`` was built
+        with, and that is checked against the request, so a root that fails
+        to reach a worker raises rather than letting that worker fall back to
+        the fiascorc default.  Note this confirms the argument arrived, not
+        that fiasco read the file correctly once pointed at it.
 
     Returns
     -------
@@ -700,6 +703,8 @@ def compute_goft_fiasco(
             ``'g_tn'`` -- 2-D array G(logN, logT) shape ``(nN, nT)``
             ``'atom'`` -- atomic number
             ``'ion'``  -- ionisation stage
+            ``'hdf5_dbase_root'`` -- CHIANTI database these came from,
+            resolved to the fiascorc default when none was requested
     logT_grid : np.ndarray
         1-D array of log10(T / K) values.
     logN_grid : np.ndarray
@@ -759,9 +764,11 @@ def compute_goft_fiasco(
             used = info["hdf5_dbase_root"]
             if dbase_root is not None and used != dbase_root:
                 raise RuntimeError(
-                    f"A G(T,N) worker read the CHIANTI database at {used} "
-                    f"instead of the requested {dbase_root}. Its contribution "
-                    f"functions would come from the wrong atomic data."
+                    f"A G(T,N) worker built its Ion against the CHIANTI "
+                    f"database at {used} instead of the requested "
+                    f"{dbase_root}, so the request did not reach it. Its "
+                    f"contribution functions would come from the wrong "
+                    f"atomic data."
                 )
             print(
                 f"  {line_name}: requested {info['target_wl_cm']*1e8:.4f} Angstrom, "
@@ -773,6 +780,7 @@ def compute_goft_fiasco(
                 "g_tn": info["g_tn"].astype(precision),
                 "atom": info["atom"],
                 "ion": info["ion"],
+                "hdf5_dbase_root": used,
             }
 
     return goft_dict, logT_grid.astype(precision), logN_grid.astype(precision)
@@ -1530,6 +1538,14 @@ def main(args=None) -> None:
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
     )
 
+    # Record the database the contribution functions actually came from, not
+    # the request, so that a run which did not choose one is still traceable
+    # to the atomic data it used.
+    goft_dbase_root = (
+        next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
+    )
+    print(f"  CHIANTI database: {goft_dbase_root}")
+
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
     
@@ -1595,6 +1611,7 @@ def main(args=None) -> None:
             "data_dir": str(base_dir),
             "lines": args.lines,
             "abundance": args.abundance,
+            "hdf5_dbase_root": goft_dbase_root,
             "integration_axis": integration_axis,
             "crop_params": {
                 "crop_x": args.crop_x,

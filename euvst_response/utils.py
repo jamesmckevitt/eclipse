@@ -457,3 +457,8 @@ def tqdm_joblib(tqdm_object):
     finally:
         joblib.parallel.BatchCompletionCallBack = old_callback
         tqdm_object.close()
+
+
+def _fwhm_to_sigma(fwhm: float) -> float:
+    """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
+    return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
