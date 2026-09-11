@@ -624,8 +624,9 @@ def _compute_single_ion(args):
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
-            # Reported back so the caller can confirm the worker really read
-            # the database it was asked to, rather than the user's default.
+            # The root this Ion was built against.  fiasco resolves it to the
+            # fiascorc default when the caller did not choose one, so this is
+            # always the database the contribution functions came from.
             "hdf5_dbase_root": str(ion.hdf5_dbase_root),
         }
     return results
@@ -761,9 +762,11 @@ def compute_goft_fiasco(
             used = info["hdf5_dbase_root"]
             if dbase_root is not None and used != dbase_root:
                 raise RuntimeError(
-                    f"A G(T,N) worker read the CHIANTI database at {used} "
-                    f"instead of the requested {dbase_root}. Its contribution "
-                    f"functions would come from the wrong atomic data."
+                    f"A G(T,N) worker built its Ion against the CHIANTI "
+                    f"database at {used} instead of the requested "
+                    f"{dbase_root}, so the request did not reach it. Its "
+                    f"contribution functions would come from the wrong "
+                    f"atomic data."
                 )
             print(
                 f"  {line_name}: requested {info['target_wl_cm']*1e8:.4f} Angstrom, "
