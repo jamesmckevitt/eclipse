@@ -34,6 +34,10 @@ uniform_intensity: 5000 erg / (s cm2 sr)
 offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 ```
 
+## The point spread function
+
+With `psf: True` the PSF is convolved in the spectral direction only.
+
 ## Why use it
 
 Because the input intensity is exact and uniform, everything in the scatter of the fitted results comes from the instrument.

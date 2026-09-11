@@ -7,9 +7,10 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
+from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.stats import poisson
-from .utils import wl_to_vel, vel_to_wl, debug_break
+from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
 
 def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
@@ -163,12 +164,12 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     )
 
 
-def _fwhm_to_sigma(fwhm: float) -> float:
-    """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
-    return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-
-
-def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
+def apply_focusing_optics_psf(
+    signal: NDCube,
+    tel,
+    *,
+    convolve_spatial: bool = True,
+) -> NDCube:
     """
     Convolve each detector frame (n_slit, n_lambda) of an NDCube with an
     anisotropic 2-D PSF from the focusing optics.
@@ -184,6 +185,14 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     tel : Telescope_EUVST or Telescope_EIS
         Telescope configuration containing PSF parameters.
         psf_params = [spatial_fwhm, spectral_fwhm] in pixel units.
+    convolve_spatial : bool, optional
+        When False, convolve the spectral axis only and leave the slit axis
+        alone.  This is for a field that is uniform along the slit, where
+        convolving a constant with a normalised kernel returns the same
+        constant and the spatial pass is an identity operation.  Doing it
+        anyway would not be harmless: the convolution treats everything
+        outside the array as dark, so a uniform field would lose flux off the
+        ends of the slit that it really does have.  Default True.
 
     Returns
     -------
@@ -196,6 +205,11 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
 
     psf_type = tel.psf_type.lower()
     psf_params = tel.psf_params
+
+    if psf_type != "gaussian":
+        raise ValueError(
+            f"Unsupported PSF type: {psf_type}. Supported: 'gaussian'."
+        )
 
     if len(psf_params) < 2:
         raise ValueError(
@@ -219,6 +233,20 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     if kx % 2 == 0:
         kx += 1
 
+    if not convolve_spatial:
+        # Spectral axis only.  Zero padding is correct here: the wavelength
+        # grid extends several sigma past the line, so there is no flux at its
+        # edges to lose.
+        x_1d = np.arange(kx) - kx // 2
+        psf_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
+        psf_1d /= psf_1d.sum()
+        return NDCube(
+            data=convolve1d(data_in, psf_1d, axis=2, mode="constant", cval=0.0),
+            wcs=signal.wcs.deepcopy(),
+            unit=unit,
+            meta=signal.meta,
+        )
+
     # Coordinate grids centred at zero
     cy, cx = ky // 2, kx // 2
     y, x = np.mgrid[:ky, :kx]
@@ -226,13 +254,8 @@ def apply_focusing_optics_psf(signal: NDCube, tel) -> NDCube:
     x = (x - cx).astype(float)
 
     # Build PSF
-    if psf_type == "gaussian":
-        psf = np.exp(-0.5 * ((y / sigma_spatial) ** 2
-                             + (x / sigma_spectral) ** 2))
-    else:
-        raise ValueError(
-            f"Unsupported PSF type: {psf_type}. Supported: 'gaussian'."
-        )
+    psf = np.exp(-0.5 * ((y / sigma_spatial) ** 2
+                         + (x / sigma_spectral) ** 2))
 
     # Normalise
     psf /= psf.sum()
