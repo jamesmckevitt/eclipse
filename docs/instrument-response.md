@@ -49,7 +49,7 @@ From Python:
 import astropy.units as u
 from euvst_response import Telescope_EIS
 
-Telescope_EIS().effective_area(195.119 * u.AA)                  # ground, 0.3018 cm2
+Telescope_EIS().effective_area(195.0 * u.AA)    # ground, 0.301803 cm2
 Telescope_EIS(calibration="dz2025", date="2012-06-03").effective_area(195.119 * u.AA)
 ```
 
