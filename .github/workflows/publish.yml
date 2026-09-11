@@ -1,0 +1,116 @@
+name: Publish to PyPI
+
+# Publishing a GitHub release is what triggers this, so the release procedure in
+# CONTRIBUTING.md stops at "push the tag and write the notes".
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Install the build tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build the sdist and wheel
+        run: python -m build
+
+      # A PyPI version cannot be replaced once it is uploaded, so everything
+      # that can be checked is checked before the publish job runs.
+      - name: Check the tag matches the packaged version
+        run: |
+          python - <<'PY'
+          import glob
+          import os
+          import zipfile
+
+          # Read the version out of the wheel rather than by importing the
+          # package, which would need every runtime dependency installed.  This
+          # also checks the artefact that is actually about to be uploaded.
+          wheel = glob.glob("dist/*.whl")[0]
+          archive = zipfile.ZipFile(wheel)
+          metadata = next(
+              name for name in archive.namelist()
+              if name.endswith(".dist-info/METADATA")
+          )
+          version = next(
+              line.split(": ", 1)[1].strip()
+              for line in archive.read(metadata).decode().splitlines()
+              if line.startswith("Version: ")
+          )
+
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          print(f"tag={tag} packaged={version}")
+          if tag != version:
+              raise SystemExit(
+                  f"::error::tag {tag} does not match the packaged version {version}"
+              )
+          PY
+
+      - name: Check the package data is in the wheel
+        run: |
+          python - <<'PY'
+          import glob
+          import pathlib
+          import zipfile
+
+          # Compare against the source tree rather than a hardcoded list, so
+          # this keeps working when data files are added, and so partial
+          # inclusion fails rather than passing on the strength of one file.
+          source = pathlib.Path("euvst_response/data")
+          expected = {
+              str(path.as_posix())
+              for path in source.rglob("*")
+              if path.is_file()
+          }
+          if not expected:
+              raise SystemExit("no euvst_response/data files in the checkout")
+
+          wheel = glob.glob("dist/*.whl")[0]
+          packaged = set(zipfile.ZipFile(wheel).namelist())
+
+          missing = sorted(expected - packaged)
+          if missing:
+              raise SystemExit(
+                  f"::error::{len(missing)} of {len(expected)} data files are "
+                  f"absent from {wheel}, so the package would install but fail "
+                  f"at runtime: {', '.join(missing)}"
+              )
+          print(f"all {len(expected)} data files are in the wheel")
+          PY
+
+      - name: Check the metadata renders
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Kept separate from the build so that id-token write is the only elevated
+    # permission granted, and only after every check above has passed.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      # Trusted publishing: PyPI verifies the workflow's OIDC identity, so there
+      # is no API token to store or rotate.  Pinned to a commit SHA rather than a
+      # moving tag, because this step can publish and a retagged upstream would
+      # otherwise change what runs here without review.  Dependabot keeps the
+      # pins current.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

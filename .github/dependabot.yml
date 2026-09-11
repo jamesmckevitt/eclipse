@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # publish.yml pins its actions to commit SHAs, so a retagged upstream cannot
+  # change what runs in a job holding id-token: write.  The cost is that the
+  # pins never pick up fixes on their own, so raise a pull request when one
+  # moves and each bump gets reviewed like any other change.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
