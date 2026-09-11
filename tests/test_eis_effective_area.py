@@ -90,6 +90,17 @@ def test_unknown_calibration_is_rejected():
         eis_calibration.effective_area(195.0, method="dz2099")
 
 
+def test_offset_dates_are_converted_not_relabelled():
+    """An ISO offset must shift the instant, not just the label.
+
+    replace(tzinfo=utc) would keep the wall clock, so a -05:00 date would
+    enter the degradation calculation five hours early.
+    """
+    utc = eis_calibration._parse_date("2012-06-03T00:00:00+00:00")
+    minus5 = eis_calibration._parse_date("2012-06-03T00:00:00-05:00")
+    assert (minus5 - utc).total_seconds() == 5 * 3600
+
+
 @pytest.mark.parametrize("date", ["2012-06-03", "2012-06-03T00:00:00"])
 def test_date_forms_agree(date):
     from datetime import date as date_type

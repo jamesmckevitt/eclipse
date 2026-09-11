@@ -113,12 +113,22 @@ def normalise_date(date) -> str:
 
 
 def _parse_date(date_str: str) -> _datetime:
-    """Parse an ISO date string to a UTC datetime."""
+    """Parse an ISO date string to a UTC datetime.
+
+    A string carrying an offset is *converted* to UTC rather than relabelled.
+    ``replace(tzinfo=utc)`` would keep the wall clock and move the instant, so
+    ``2012-06-03T00:00:00-05:00`` would enter the degradation calculation five
+    hours early.
+    """
     text = normalise_date(date_str).replace("Z", "+00:00")
     try:
-        return _datetime.fromisoformat(text).replace(tzinfo=_tz.utc)
+        parsed = _datetime.fromisoformat(text)
     except ValueError:
-        return _datetime.fromisoformat(text.split("+")[0]).replace(tzinfo=_tz.utc)
+        parsed = _datetime.fromisoformat(text.split("+")[0])
+    if parsed.tzinfo is None:
+        # Naive input is taken to be UTC, which is what EIS dates are.
+        return parsed.replace(tzinfo=_tz.utc)
+    return parsed.astimezone(_tz.utc)
 
 
 def _date_to_year_fraction(date_str: str) -> float:
