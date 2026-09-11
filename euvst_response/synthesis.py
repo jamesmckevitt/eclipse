@@ -688,9 +688,11 @@ def compute_goft_fiasco(
         other than the user's default: because each worker is spawned rather
         than forked, it re-imports fiasco and re-reads that file, so setting
         ``fiasco.defaults`` in the parent process has no effect on the
-        workers.  The value each worker actually used is checked against the
-        request, so a mismatch raises instead of silently returning G(T) from
-        the wrong atomic data.
+        workers.  Each worker reports back the root its ``Ion`` was built
+        with, and that is checked against the request, so a root that fails
+        to reach a worker raises rather than letting that worker fall back to
+        the fiascorc default.  Note this confirms the argument arrived, not
+        that fiasco read the file correctly once pointed at it.
 
     Returns
     -------
