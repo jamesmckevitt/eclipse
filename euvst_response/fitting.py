@@ -466,6 +466,14 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             score = np.zeros(trial.size)
             for r in rest_wl:
                 score += np.interp(r + trial, wv, prof_c, left=0.0, right=0.0)
+            # Known limit: if the primary component carries no flux, every
+            # alias that puts *some* component on the one visible line scores
+            # alike, and the data cannot say which component produced it. With
+            # amplitudes free, all the flux in one component at one alias fits
+            # exactly as well as all of it in another at the next, so no
+            # scoring rule resolves it and the comb can start a spacing away.
+            # The velocity asked for in that case is the velocity of a line
+            # that is not there, so there is nothing to recover.
             shift = float(trial[int(np.argmax(score))])
         else:
             # The comb is wider than the window, so no shift keeps all of it
