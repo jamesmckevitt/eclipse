@@ -278,11 +278,13 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
         fit_kwargs: dict = {
             "method": "trf", "max_nfev": budget,
             # Amplitudes run to ~1e11 while sigmas are ~0.03 Angstrom, so the
-            # free parameters span some thirteen orders of magnitude. trf
-            # takes steps in the raw variables unless told to normalise them
-            # from the Jacobian, and makes almost no progress when they are
-            # scaled this differently. lm does its own scaling internally,
-            # which is why only the bounded path suffers.
+            # free parameters span some thirteen orders of magnitude. Take
+            # steps in variables normalised by the Jacobian rather than in
+            # the raw ones; lm applies equivalent scaling internally, which
+            # is why only the bounded path has to be told. On the blends
+            # tested this changed neither the fitted velocity nor the
+            # evaluation count, so it is insurance against worse-conditioned
+            # windows rather than a fix for an observed failure.
             "x_scale": "jac",
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
