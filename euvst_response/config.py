@@ -337,11 +337,14 @@ class Telescope_EIS:
         except ``'ground'``, which ignores it. Also accepts a ``datetime`` or
         an ``astropy.time.Time``, since YAML parses an unquoted date into a
         ``datetime.date``.
-    qe_euv : float
-        Detector quantum efficiency. The tabulated effective areas already
-        include it, and ECLIPSE applies it separately as a binomial draw in
-        ``to_electrons``, so ``ea_and_throughput`` divides it back out to
-        avoid counting it twice.
+    Notes
+    -----
+    The tabulated effective areas include the CCD quantum efficiency the EIS
+    calibration is quoted against, ``eis_calibration.QE_IN_TABLES``, and
+    ECLIPSE applies a detector quantum efficiency separately as a binomial
+    draw in ``to_electrons``. ``ea_and_throughput`` therefore divides the
+    table value back out, so that the QE actually applied is the configurable
+    ``Detector_EIS.qe_euv`` and it is counted exactly once.
 
     Examples
     --------
@@ -352,7 +355,6 @@ class Telescope_EIS:
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
     calibration: str = "ground"
     date: str | None = None
-    qe_euv: float = Detector_EIS.qe_euv
 
     def __post_init__(self):
         if self.calibration not in eis_calibration.CALIBRATIONS:
@@ -398,11 +400,15 @@ class Telescope_EIS:
         return area[0] if np.ndim(wl_aa) == 0 else area
 
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
-        # The tabulated areas include the detector QE, which ECLIPSE applies
-        # separately, so it is divided back out here.
-            # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
-            # https://solarb.mssl.ucl.ac.uk/SolarB/eis_docs/eis_notes/02_RADIOMETRIC_CALIBRATION/eis_swnote_02.pdf
-        return self.effective_area(wl0) / self.qe_euv
+        # The tabulated areas include the QE the EIS calibration is quoted
+        # against, which ECLIPSE applies separately, so it is divided back out
+        # here. This is deliberately the table constant and not a configurable
+        # field: were it settable on the telescope, dividing by one value
+        # while to_electrons applied Detector_EIS.qe_euv would silently scale
+        # the whole response.
+        # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
+        # https://solarb.mssl.ucl.ac.uk/SolarB/eis_docs/eis_notes/02_RADIOMETRIC_CALIBRATION/eis_swnote_02.pdf
+        return self.effective_area(wl0) / eis_calibration.QE_IN_TABLES
 
 
 @dataclass

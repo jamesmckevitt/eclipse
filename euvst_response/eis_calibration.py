@@ -81,8 +81,12 @@ TIME_DEPENDENT_CALIBRATIONS = ("dz2013", "warren2014", "dz2025")
 _DATA_DIR = files("euvst_response") / "data" / "eis_response"
 _DZ2025_SAV = _DATA_DIR / "fit_eis_ea_2023-05-04_smooth.sav"
 
-# The tabulated areas include the CCD quantum efficiency (EIS SW Note 2).
-QE_INCLUDED_IN_TABLES = True
+# The tabulated areas include this CCD quantum efficiency (EIS SW Note 2).
+# It is a property of how the tables are quoted, not a free parameter: change
+# it and the areas no longer mean what their source says they mean. The
+# detector QE that ECLIPSE applies is a separate, configurable quantity on
+# Detector_EIS.
+QE_IN_TABLES = 0.64
 
 
 # ---------------------------------------------------------------------------

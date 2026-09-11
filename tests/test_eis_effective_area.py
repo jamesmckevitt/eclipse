@@ -116,7 +116,18 @@ class TestTelescope:
         area = tel.effective_area(195.0 * u.AA)
         throughput = tel.ea_and_throughput(195.0 * u.AA)
         assert throughput.to_value(u.cm**2) == pytest.approx(
-            area.to_value(u.cm**2) / Detector_EIS.qe_euv, rel=1e-12)
+            area.to_value(u.cm**2) / eis_calibration.QE_IN_TABLES, rel=1e-12)
+
+    def test_table_qe_is_not_a_telescope_field(self):
+        """The QE the tables are quoted against is a calibration constant.
+
+        Exposing it on the telescope would let a caller divide by one value
+        while ``to_electrons`` applied ``Detector_EIS.qe_euv``, silently
+        scaling the whole response.
+        """
+        assert not hasattr(Telescope_EIS(), "qe_euv")
+        with pytest.raises(TypeError):
+            Telescope_EIS(qe_euv=0.5)
 
     def test_time_dependent_calibration_needs_a_date(self):
         with pytest.raises(ValueError, match="time-dependent"):
