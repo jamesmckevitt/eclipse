@@ -32,6 +32,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `ncpu`: CPU cores to use (`-1` = all available)
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
+- `pinhole_positions_spectral`: where each pinhole sits along the spectral axis, as a fraction from `0.0` to `1.0` of the detector width, one per entry in `pinhole_sizes`. Omit it and every pinhole projects to the centre of the spectral window, as ECLIPSE always did. Because the spectral axis is wavelength, this fraction is what decides which emission lines a given pinhole contaminates.
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
 Here's a complete example configuration file:
