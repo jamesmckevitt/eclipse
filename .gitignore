@@ -13,6 +13,8 @@
 build/
 dist/
 .eggs/
+site/
+.cache/
 
 # Instrument response tables ship with the package, so they are exempt from
 # the extension rules above (which exist to keep working files out).

@@ -14,7 +14,7 @@ from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import tqdm_joblib, distance_to_angle
+from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma
 
 
 def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
@@ -331,9 +331,11 @@ def create_uniform_intensity_cube(
     det,
     sim,
     n_sigma_extent: float = 8.0,
+    n_slit_pixels: int = 1,
+    tel=None,
 ) -> NDCube:
     """
-    Create a 1x1 pixel NDCube containing a Gaussian emission line.
+    Create a 1 x ``n_slit_pixels`` pixel NDCube containing a Gaussian emission line.
 
     The cube is built directly at the detector's spectral resolution and
     assigned a helioprojective WCS consistent with the output of
@@ -354,14 +356,30 @@ def create_uniform_intensity_cube(
         Simulation configuration (provides ``slit_width``).
     n_sigma_extent : float, optional
         Number of sigma either side of line centre to include in the
-        wavelength grid (default: 8).
+        wavelength grid (default: 8).  Measured on the width the line will have
+        once the spectral PSF has been applied, if *tel* is given.
+    n_slit_pixels : int, optional
+        Number of (uniform) slit pixels to generate.  Set to the
+        ``offchip_bin_slit`` value so that subsequent ``rebin_slit_offchip``
+        sums ``n_slit_pixels`` independent noise realisations into a single
+        binned pixel (default: 1).
+    tel : Telescope_EUVST or Telescope_EIS, optional
+        Telescope configuration.  When given, the grid is widened to hold the
+        line after spectral PSF broadening, adding the PSF width to the thermal
+        width in quadrature.  Without this a narrow line gets a grid only a
+        couple of pixels wide, and convolving it with a PSF wider than the line
+        pushes flux off the ends of the grid.  Default None, which sizes the
+        grid on the thermal width alone.
 
     Returns
     -------
     NDCube
-        Shape ``(1, 1, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
+        Shape ``(1, n_slit_pixels, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
         helioprojective + wavelength WCS.
     """
+    if n_slit_pixels < 1:
+        raise ValueError(f"n_slit_pixels must be >= 1, got {n_slit_pixels}")
+
     # --- Spectral grid --------------------------------------------------
     lam0 = rest_wavelength.to(u.cm)
 
@@ -371,7 +389,19 @@ def create_uniform_intensity_cube(
     # Detector pixel pitch in cm
     dlam = det.wvl_res.to(u.cm / u.pix) * u.pix  # strip per-pixel to cm
 
-    half_range = n_sigma_extent * sigma_lam
+    # The grid has to hold the line as it will be *measured*, not as it leaves
+    # the Sun, so add the spectral PSF to the thermal width in quadrature.
+    # Widths add that way for Gaussians, and the PSF is often the broader of
+    # the two: at the default 20 km/s the line is 0.77 pixels against a PSF of
+    # 1.08.  Always widening, rather than only when psf is set, keeps the grid
+    # independent of a value that is swept and is not known when the cube is
+    # built and cached.
+    sigma_total = sigma_lam
+    if tel is not None:
+        sigma_psf = _fwhm_to_sigma(tel.psf_params[1].to(u.pixel).value) * dlam
+        sigma_total = np.sqrt(sigma_lam**2 + sigma_psf**2)
+
+    half_range = n_sigma_extent * sigma_total
     n_pix_half = int(np.ceil((half_range / dlam).decompose().value))
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
@@ -384,14 +414,17 @@ def create_uniform_intensity_cube(
         u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     )
     profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
-    data = profile.value[np.newaxis, np.newaxis, :]  # shape (1, 1, n_lam)
+    # Tile the profile along the slit axis.  Every slit pixel holds the same
+    # intensity, but each is noised independently downstream, which is what
+    # rebin_slit_offchip needs in order to sum them.
+    data = np.tile(profile.value, (1, n_slit_pixels, 1))  # shape (1, n_slit_pixels, n_lam)
 
     # --- WCS (matches reproject_ndcube output format) --------------------
     # Axes: WAVE (cm), HPLT-TAN (arcsec), HPLN-TAN (arcsec)
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
-    wcs.wcs.crpix = [(n_lam + 1) / 2, 1.0, 1.0]
+    wcs.wcs.crpix = [(n_lam + 1) / 2, (n_slit_pixels + 1) / 2, 1.0]
     wcs.wcs.crval = [lam0.value, 0.0, 0.0]
     wcs.wcs.cdelt = [
         dlam.to_value(u.cm),
