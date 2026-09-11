@@ -158,6 +158,14 @@ def calculate_pinhole_diffraction_pattern(
     if pinhole_position_spectral is None:
         pinhole_pixel_spectral = n_spectral // 2
     else:
+        if not 0.0 <= pinhole_position_spectral <= 1.0:
+            raise ValueError(
+                "pinhole_position_spectral is a fraction of the detector "
+                f"width and must lie in [0, 1], got "
+                f"{pinhole_position_spectral}. Out of range it would place "
+                "the pinhole off the detector, where it looks like a valid "
+                "pinhole whose light merely happens to be missing."
+            )
         pinhole_pixel_spectral = pinhole_position_spectral * (n_spectral - 1)
     
     # Create 2D coordinate arrays
@@ -237,10 +245,17 @@ def apply_euv_pinhole_diffraction(
     # Calculate filter throughput at each wavelength
     filter_throughput_spectrum = np.array([tel.filter.total_throughput(wl) for wl in wl_axis])
     
-    for pinhole_diameter, pinhole_position in zip(sim.pinhole_sizes, sim.pinhole_positions):
+    # Spectral positions are optional here for the same reason as in the
+    # visible path: without them every pinhole projects to the centre of the
+    # spectral window, as it always did.
+    spectral_positions = (list(sim.pinhole_positions_spectral)
+                          or [None] * len(sim.pinhole_sizes))
+
+    for pinhole_diameter, pinhole_position, pinhole_spectral in zip(
+            sim.pinhole_sizes, sim.pinhole_positions, spectral_positions):
         # Calculate pinhole area
         pinhole_area = np.pi * (pinhole_diameter / 2)**2
-        
+
         # === Physics Correction for EUV ===
         # Current photon_counts already have filter attenuation applied
         # We need to:
@@ -264,7 +279,8 @@ def apply_euv_pinhole_diffraction(
             slit_width=sim.slit_width,
             plate_scale=det.plate_scale_angle,
             distance=det.filter_distance,
-            wavelength=rest_wavelength
+            wavelength=rest_wavelength,
+            pinhole_position_spectral=pinhole_spectral,
         )
         
         # For EUV, the diffraction pattern is much smaller than visible light
