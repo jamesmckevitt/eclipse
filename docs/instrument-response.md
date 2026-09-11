@@ -11,11 +11,52 @@ The top-level `instrument:` key selects the instrument model:
 
 Three things are specific to `SWC` and are handled as follows under `EIS`:
 
-- The `filter:` section describes the EUVST-SW aluminium filter. ECLIPSE treats the EIS effective area as one value and cannot vary engineering values for its aluminium filter, so the whole section is ignored with a warning for EIS.
+- The `filter:` section describes the EUVST-SW aluminium filter. The EIS effective area comes from the instrument's own calibration tables, which already fold in its filters, so engineering values cannot be varied for it and the whole section is ignored with a warning for EIS. See [EIS effective area](#eis-effective-area) below.
 - `telescope.microroughness_sigma` is an engineering parameter specific to the EUVST-primary mirror. For EIS, it is ignored with a warning.
 - Pinhole effects are specific to EUVST-SW. Setting `pinhole_sizes`, or `simulation.enable_pinholes: True`, raises an error for EIS. Note that `pinhole_positions` on its own does not: without `pinhole_sizes` it is ignored for either instrument.
 
 The EIS point spread function is not well characterised. ECLIPSE uses a symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
+
+### EIS effective area
+
+The EIS effective area comes from the instrument's own calibration tables, so it varies with wavelength and, for the in-flight calibrations, with the date of the observation:
+
+```yaml
+instrument: EIS
+telescope:
+  calibration: dz2025
+  date: "2012-06-03"    # quoted, so YAML keeps it a string
+```
+
+| `calibration` | Source | Date |
+|---|---|---|
+| `ground` (default) | Pre-flight MSSL tables, `eis_ea.pro` | not used |
+| `dz2013` | Del Zanna (2013), `eis_ltds.pro` | required |
+| `warren2014` | Warren, Ugarte-Urra & Landi (2014) | required |
+| `dz2025` | Del Zanna et al. (2025), `interpol_eis_ea.pro` | required |
+
+The three in-flight calibrations raise without a `date`. Both keys can be swept like any other parameter:
+
+```yaml
+telescope:
+  calibration: dz2025
+  date: ["2008-01-01", "2013-01-01", "2018-01-01"]
+```
+
+From Python:
+
+```python
+from euvst_response import Telescope_EIS
+
+Telescope_EIS().effective_area(195.119 * u.AA)                  # ground, 0.3018 cm2
+Telescope_EIS(calibration="dz2025", date="2012-06-03").effective_area(195.119 * u.AA)
+```
+
+Which one you pick matters to anything comparing photon statistics between lines or between epochs: the effective area spans a factor of 25 across the short-wavelength channel alone, and the long-wavelength channel lost most of its sensitivity over the mission.
+
+!!! note "Quantum efficiency is already included"
+
+    Returned areas include the CCD quantum efficiency, which is the convention the EIS calibration tables and the EIS radiometric formula both use. `ea_and_throughput` divides it back out, because ECLIPSE applies it separately as a binomial draw further down the chain.
 
 ## Configuration file
 
