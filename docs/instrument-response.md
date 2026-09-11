@@ -46,6 +46,7 @@ telescope:
 From Python:
 
 ```python
+import astropy.units as u
 from euvst_response import Telescope_EIS
 
 Telescope_EIS().effective_area(195.119 * u.AA)                  # ground, 0.3018 cm2
