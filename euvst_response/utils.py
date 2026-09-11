@@ -340,7 +340,11 @@ _SECTION_LIST_FIELDS = {
 # every string as a Quantity and would raise on "gaussian" or "2012-06-03".
 # They can still be swept: a list of strings becomes a sweep dimension.
 _SECTION_STRING_FIELDS = {
-    "simulation": ["instrument"],
+    # 'instrument' is deliberately absent. It is a Simulation field, but the
+    # instrument is chosen by the top-level key and main() builds both
+    # Simulation objects from that, so a value here would be parsed, swept and
+    # then discarded. main() rejects it rather than letting it look effective.
+    "simulation": [],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date"],
     "filter": [],
