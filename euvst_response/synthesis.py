@@ -703,6 +703,8 @@ def compute_goft_fiasco(
             ``'g_tn'`` -- 2-D array G(logN, logT) shape ``(nN, nT)``
             ``'atom'`` -- atomic number
             ``'ion'``  -- ionisation stage
+            ``'hdf5_dbase_root'`` -- CHIANTI database these came from,
+            resolved to the fiascorc default when none was requested
     logT_grid : np.ndarray
         1-D array of log10(T / K) values.
     logN_grid : np.ndarray
@@ -778,6 +780,7 @@ def compute_goft_fiasco(
                 "g_tn": info["g_tn"].astype(precision),
                 "atom": info["atom"],
                 "ion": info["ion"],
+                "hdf5_dbase_root": used,
             }
 
     return goft_dict, logT_grid.astype(precision), logN_grid.astype(precision)
@@ -1535,6 +1538,14 @@ def main(args=None) -> None:
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
     )
 
+    # Record the database the contribution functions actually came from, not
+    # the request, so that a run which did not choose one is still traceable
+    # to the atomic data it used.
+    goft_dbase_root = (
+        next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
+    )
+    print(f"  CHIANTI database: {goft_dbase_root}")
+
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
     
@@ -1600,6 +1611,7 @@ def main(args=None) -> None:
             "data_dir": str(base_dir),
             "lines": args.lines,
             "abundance": args.abundance,
+            "hdf5_dbase_root": goft_dbase_root,
             "integration_axis": integration_axis,
             "crop_params": {
                 "crop_x": args.crop_x,
