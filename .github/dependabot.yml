@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # publish.yml pins its actions to commit SHAs, so a retagged upstream cannot
+  # change what runs in a job holding id-token: write.  The cost is that the
+  # pins never pick up fixes on their own, so raise a pull request when one
+  # moves and each bump gets reviewed like any other change.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    # One pull request for all of them rather than one each.  The actions tend
+    # to move together, since a runtime bump lands across all of them at once,
+    # and every merge here needs a review and a branch-protection bypass, so
+    # four separate pull requests for one upstream change is mostly overhead.
+    # It also keeps upload-artifact and download-artifact in step, which matters
+    # because they are versioned against each other.
+    groups:
+      actions:
+        patterns:
+          - "*"
