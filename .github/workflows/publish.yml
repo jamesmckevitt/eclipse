@@ -26,13 +26,33 @@ jobs:
       # that can be checked is checked before the publish job runs.
       - name: Check the tag matches the packaged version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg=$(python -c "import euvst_response; print(euvst_response.__version__)")
-          echo "tag=${tag} package=${pkg}"
-          if [ "${tag}" != "${pkg}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match __version__ ${pkg}"
-            exit 1
-          fi
+          python - <<'PY'
+          import glob
+          import os
+          import zipfile
+
+          # Read the version out of the wheel rather than by importing the
+          # package, which would need every runtime dependency installed.  This
+          # also checks the artefact that is actually about to be uploaded.
+          wheel = glob.glob("dist/*.whl")[0]
+          archive = zipfile.ZipFile(wheel)
+          metadata = next(
+              name for name in archive.namelist()
+              if name.endswith(".dist-info/METADATA")
+          )
+          version = next(
+              line.split(": ", 1)[1].strip()
+              for line in archive.read(metadata).decode().splitlines()
+              if line.startswith("Version: ")
+          )
+
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          print(f"tag={tag} packaged={version}")
+          if tag != version:
+              raise SystemExit(
+                  f"::error::tag {tag} does not match the packaged version {version}"
+              )
+          PY
 
       - name: Check the package data is in the wheel
         run: |
