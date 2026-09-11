@@ -440,14 +440,39 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     # changed the answer to 451 km/s, each time by very nearly the offset
     # between that component and the brightest one.
     #
-    # Attributing the peak pixel to the *nearest* component gives a shift that
-    # is meaningful for all of them. With a single component this reduces to
-    # the previous behaviour exactly.
+    # Match the whole comb against the profile instead. Attributing the peak
+    # pixel to the nearest rest wavelength would only resolve the shift while
+    # it stays below half the spacing to the neighbouring component, which is
+    # a small velocity for a close blend: Fe XII 195.119 and 195.179 are
+    # 0.060 Angstrom apart, so anything beyond about 46 km/s picks the wrong
+    # component and displaces the comb by a whole spacing again, and the
+    # synthesis default admits +/- 300 km/s.
+    #
+    # Scoring every trial shift by the total profile height under the shifted
+    # comb uses the *spacing pattern*, which one pixel does not carry. Trial
+    # shifts run over the range that keeps the comb inside the observed
+    # window, sampled at the wavelength grid itself, so no resolution is
+    # invented. With a single component the score is just the profile sampled
+    # at each grid point, so the best shift puts the centre on the brightest
+    # pixel exactly as before.
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
     if peak > 0:
-        peak_wl = wv[np.nanargmax(prof_c)]
-        shift = peak_wl - rest_wl[np.argmin(np.abs(rest_wl - peak_wl))]
+        lo = float(wv.min() - rest_wl.min())
+        hi = float(wv.max() - rest_wl.max())
+        step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
+        if hi > lo and step > 0:
+            trial = np.arange(lo, hi + 0.5 * step, step)
+            score = np.zeros(trial.size)
+            for r in rest_wl:
+                score += np.interp(r + trial, wv, prof_c, left=0.0, right=0.0)
+            shift = float(trial[int(np.argmax(score))])
+        else:
+            # The comb is wider than the window, so no shift keeps all of it
+            # inside. Fall back to the brightest pixel and the component
+            # nearest to it.
+            peak_wl = wv[np.nanargmax(prof_c)]
+            shift = float(peak_wl - rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
     else:
         shift = 0.0
 
