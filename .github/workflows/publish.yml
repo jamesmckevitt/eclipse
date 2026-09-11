@@ -58,17 +58,32 @@ jobs:
         run: |
           python - <<'PY'
           import glob
+          import pathlib
           import zipfile
 
+          # Compare against the source tree rather than a hardcoded list, so
+          # this keeps working when data files are added, and so partial
+          # inclusion fails rather than passing on the strength of one file.
+          source = pathlib.Path("euvst_response/data")
+          expected = {
+              str(path.as_posix())
+              for path in source.rglob("*")
+              if path.is_file()
+          }
+          if not expected:
+              raise SystemExit("no euvst_response/data files in the checkout")
+
           wheel = glob.glob("dist/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          data = [n for n in names if "/data/" in n]
-          if not data:
+          packaged = set(zipfile.ZipFile(wheel).namelist())
+
+          missing = sorted(expected - packaged)
+          if missing:
               raise SystemExit(
-                  f"no euvst_response/data files in {wheel}; the package would "
-                  "install but fail at runtime"
+                  f"::error::{len(missing)} of {len(expected)} data files are "
+                  f"absent from {wheel}, so the package would install but fail "
+                  f"at runtime: {', '.join(missing)}"
               )
-          print(f"{len(data)} data files in the wheel")
+          print(f"all {len(expected)} data files are in the wheel")
           PY
 
       - name: Check the metadata renders
