@@ -168,7 +168,7 @@ def _build_scipy_multi(fit_config: FitConfig):
             amp_ratio_child[j] = i
 
     free_indices: list[int] = []
-    # tie_spec[full_idx] = (source_full_idx, offset_angstrom)
+    # tie_spec[full_idx] = (source_full_idx, factor), applied multiplicatively
     tie_spec: dict[int, tuple[int, float]] = {}
     # ratio_spec[free_position] = parent_full_amplitude_index
     ratio_spec: dict[int, int] = {}
@@ -183,16 +183,28 @@ def _build_scipy_multi(fit_config: FitConfig):
         # centre
         if comp.tie_center is not None:
             src = comp.tie_center
-            offset = float((comp.wavelength
-                            - fit_config.components[src].wavelength).to(u.Angstrom).value)
-            tie_spec[base + 1] = (3 * src + 1, offset)
+            # Tied centres share one velocity, and one velocity moves a line by
+            # an amount proportional to its wavelength, so the tie is the ratio
+            # of the two rest wavelengths rather than their separation. Holding
+            # the separation fixed instead would hold the shift in wavelength
+            # constant across the window, which is a different velocity for
+            # every component: over an 8 Angstrom window near 195 Angstrom the
+            # end components disagree by (8 / 195) v, some 12 km/s at 300 km/s.
+            # The ratio is dimensionless, so it is the same number whether the
+            # model is evaluated in Angstrom or in cm.
+            factor = float(comp.wavelength.to(u.cm).value
+                           / fit_config.components[src].wavelength.to(u.cm).value)
+            tie_spec[base + 1] = (3 * src + 1, factor)
         else:
             free_indices.append(base + 1)
 
         # sigma
         if comp.tie_width is not None:
             src = comp.tie_width
-            tie_spec[base + 2] = (3 * src + 2, 0.0)
+            # Widths stay tied as equals. Thermal broadening does scale with
+            # wavelength, but the instrumental width that dominates these
+            # windows does not, so this is left as it was.
+            tie_spec[base + 2] = (3 * src + 2, 1.0)
         else:
             free_indices.append(base + 2)
 
@@ -224,8 +236,8 @@ def _build_scipy_multi(fit_config: FitConfig):
         for fp, parent_idx in ratio_spec.items():
             child_idx = free_indices[fp]
             full[child_idx] = full[parent_idx] * free_params[fp]
-        for fi, (src_fi, offset) in tie_spec.items():
-            full[fi] = full[src_fi] + offset
+        for fi, (src_fi, factor) in tie_spec.items():
+            full[fi] = full[src_fi] * factor
         return full
 
     def model_func(x, *free_params):
@@ -375,10 +387,12 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         centre_info: dict = {"value": p0[base + 1]}
         if comp.tie_center is not None:
             src = comp.tie_center
-            offset = float((comp.wavelength
-                            - fit_config.components[src].wavelength).to(u.cm).value)
+            # Ratio of rest wavelengths, so that the one free centre means one
+            # velocity for every tied component; see _build_scipy_multi.
+            factor = float(comp.wavelength.to(u.cm).value
+                           / fit_config.components[src].wavelength.to(u.cm).value)
             # mpfit tie expression references the parameter array p
-            centre_info["tied"] = f"p[{3 * src + 1}] + {offset!r}"
+            centre_info["tied"] = f"p[{3 * src + 1}] * {factor!r}"
         parinfo.append(centre_info)
 
         # --- sigma (width) ---
@@ -437,14 +451,15 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             sigma = float(np.median(np.diff(wv))) if len(wv) > 1 else \
                 (wv.max() - wv.min()) / 10
 
-    # Estimate ONE global shift from the brightest pixel, and start every
-    # centre at its rest wavelength plus that shift.
+    # Estimate ONE global shift of the primary centre, and start every other
+    # centre at its rest wavelength scaled by the same factor, which is the
+    # relation the tie itself enforces.
     #
     # The peak pixel belongs to whichever component dominates the window,
     # which is not necessarily the primary. Starting the primary's centre on
     # it therefore displaces the primary by the gap between the two, and since
-    # every tied centre is a fixed offset from the primary, the whole comb
-    # starts shifted by that gap. The optimiser does not reliably recover: a
+    # every tied centre is a fixed multiple of the primary, the whole comb
+    # starts displaced by that gap. The optimiser does not reliably recover: a
     # noiseless 7-component EIS window whose primary sat 0.14 Angstrom from
     # the dominant line returned a 239 km/s centroid for lines that were at
     # rest by construction, and moving the primary to a different component
@@ -468,15 +483,22 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     # pixel exactly as before.
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
+    ref_wl = float(rest_wl[fit_config.primary_component])
     if peak > 0:
-        lo = float(wv.min() - rest_wl.min())
-        hi = float(wv.max() - rest_wl.max())
+        # A trial shift moves the primary centre to ref_wl + shift, and every
+        # other component to its own rest wavelength times the same factor. The
+        # range is the one that keeps the whole comb inside the observed window;
+        # with all components at one wavelength it reduces to shifting the comb
+        # bodily, as the additive version did.
+        lo = float(wv.min()) * ref_wl / float(rest_wl.min()) - ref_wl
+        hi = float(wv.max()) * ref_wl / float(rest_wl.max()) - ref_wl
         step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
         if hi > lo and step > 0:
             trial = np.arange(lo, hi + 0.5 * step, step)
             score = np.zeros(trial.size)
             for r in rest_wl:
-                score += np.interp(r + trial, wv, prof_c, left=0.0, right=0.0)
+                score += np.interp(r * (ref_wl + trial) / ref_wl, wv, prof_c,
+                                   left=0.0, right=0.0)
             # Known limit: if the primary component carries no flux, every
             # alias that puts *some* component on the one visible line scores
             # alike, and the data cannot say which component produced it. With
@@ -489,17 +511,19 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         else:
             # The comb is wider than the window, so no shift keeps all of it
             # inside. Fall back to the brightest pixel and the component
-            # nearest to it.
-            peak_wl = wv[np.nanargmax(prof_c)]
-            shift = float(peak_wl - rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
+            # nearest to it, read as a Doppler factor.
+            peak_wl = float(wv[np.nanargmax(prof_c)])
+            nearest = float(rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
+            shift = ref_wl * (peak_wl / nearest - 1.0)
     else:
         shift = 0.0
 
+    doppler = (ref_wl + shift) / ref_wl
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
         full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
-        full_guess[base + 1] = rest_wl[i] + shift
+        full_guess[base + 1] = rest_wl[i] * doppler
         full_guess[base + 2] = sigma
     full_guess[-1] = back
     return full_guess

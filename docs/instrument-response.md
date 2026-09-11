@@ -116,7 +116,7 @@ Each component requires a `wavelength` field giving its rest wavelength.
 
 Each entry in `components` corresponds to one Gaussian. Optional per-component keys:
 
-- `tie_center: <i>`: constrain this component's centre to match component *i*
+- `tie_center: <i>`: constrain this component to share component *i*'s velocity
 - `tie_width: <i>`: constrain this component's line width to match component *i*
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
@@ -156,13 +156,13 @@ settle for one broad component instead of two. Enforcing
 pinning the second amplitude at zero. A blend of very unequal lines, or one
 wider than a few line widths, is unaffected.
 
-**Tied centres are offset by a fixed wavelength, not by a velocity.** A common
-Doppler shift stretches a blend, because each line moves by an amount
-proportional to its own wavelength, whereas `tie_center` holds the separation
-constant. The mismatch is the span of the blend times *v/c*: negligible for a
-close pair, but about 12 km/s across an 8 Angstrom window at 300 km/s. Tie
-lines that sit close together, and prefer separate windows for lines that do
-not.
+**`tie_center` ties velocities, not separations.** A common Doppler shift
+stretches a blend rather than sliding it, because each line moves by an amount
+proportional to its own wavelength. `tie_center` therefore scales each tied
+centre by the ratio of the rest wavelengths, so the one fitted centre means one
+velocity for every component in the group, whatever the width of the window.
+`tie_width` is a plain equality, unchanged: thermal broadening does scale with
+wavelength, but the instrumental width that dominates these windows does not.
 
 If you synthesised data in dynamic mode, your configuration must specify:
 
