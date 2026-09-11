@@ -44,6 +44,12 @@ class FitConfig:
     primary_component: int = 0
     constrain_positive_intensity: bool = False
     backend: str | None = None  # None = auto (scipy)
+    # Iterations the optimiser may take before it gives up and returns
+    # wherever it has got to. Counted in iterations rather than function
+    # evaluations so that it means the same thing whichever backend runs, and
+    # so that it does not quietly shrink as components are added. EISPAC uses
+    # 2000 for the same job; fits here converge in tens.
+    max_iter: int = 1000
 
     @property
     def n_components(self) -> int:
@@ -262,21 +268,18 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
     # each method uses a different keyword for max evaluations.
     #
-    # The 350 cap was calibrated on a single Gaussian, which has four free
-    # parameters, and the two methods do not count against it the same way.
-    # MINPACK's lm counts every residual call, including the n_free calls
-    # that build each forward-difference Jacobian, so 350 buys seventy
-    # iterations for one line but only twenty for a fifteen-parameter blend,
-    # and the fit then stops wherever it has got to. least_squares' trf
+    # fit_config.max_iter is an iteration count, so convert it to whatever
+    # each method counts. MINPACK's lm counts every residual call against
+    # maxfev, including the n_free calls that build each forward-difference
+    # Jacobian, so an iteration costs n_free + 1 and the cap has to scale with
+    # the problem or it shrinks as components are added. least_squares' trf
     # counts only its own residual calls and reports Jacobian work separately
-    # in njev, so the same number goes much further there. Budget seventy lm
-    # iterations whatever the parameter count: a single line keeps exactly
-    # its original 350, and trf stays comfortably provisioned.
+    # in njev, so there its cap is already an iteration count.
     n_free = len(free_indices)
-    budget = max(350, 70 * (n_free + 1))
+    max_iter = fit_config.max_iter
     if has_bounds:
         fit_kwargs: dict = {
-            "method": "trf", "max_nfev": budget,
+            "method": "trf", "max_nfev": max_iter,
             # Amplitudes run to ~1e11 while sigmas are ~0.03 Angstrom, so the
             # free parameters span some thirteen orders of magnitude. Take
             # steps in variables normalised by the Jacobian rather than in
@@ -290,7 +293,7 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
         }
     else:
         fit_kwargs: dict = {
-            "method": "lm", "maxfev": budget,
+            "method": "lm", "maxfev": max_iter * (n_free + 1),
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
 
@@ -540,7 +543,8 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
-                       functkw=functkw, quiet=True, maxiter=200)
+                       functkw=functkw, quiet=True,
+                       maxiter=fit_config.max_iter)
         if result.status > 0:
             out = np.asarray(result.params, dtype=float)
             # Convert ratios back to absolute amplitudes

@@ -104,6 +104,7 @@ fitting:
   primary_component: 0           # index of the component whose velocity is reported
   constrain_positive_intensity: true  # reject fits with negative amplitudes
   backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
+  max_iter: 1000                 # optimiser iterations before it gives up
   components:
     - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
     - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
@@ -120,6 +121,13 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
 Omitting the `fitting` block fits a single Gaussian.
+
+`max_iter` caps how long the optimiser may work on one spectrum before it
+gives up and returns wherever it reached, which it does silently. It is
+counted in iterations, so it means the same thing on either backend and does
+not shrink as components are added. Fits converge in tens of iterations, so
+the default of 1000 is a safety net rather than a tuning knob; raise it if a
+difficult blend looks under-converged. For comparison, EISPAC uses 2000.
 
 #### Choosing the components
 

@@ -196,10 +196,17 @@ def main() -> None:
                     f"Unknown fitting backend '{backend_override}'. "
                     f"Supported values: 'scipy', 'mpfit', or omit for auto."
                 )
+            max_iter = fitting_cfg.get("max_iter", FitConfig.max_iter)
+            if not isinstance(max_iter, int) or max_iter < 1:
+                raise ValueError(
+                    f"fitting.max_iter must be a positive integer, got "
+                    f"{max_iter!r}."
+                )
             fit_config = FitConfig(components=components,
                                    primary_component=primary,
                                    constrain_positive_intensity=constrain_pos,
-                                   backend=backend_override)
+                                   backend=backend_override,
+                                   max_iter=max_iter)
             if backend_override == "mpfit":
                 backend_label = "mpfit (forced)"
             elif backend_override == "scipy":
