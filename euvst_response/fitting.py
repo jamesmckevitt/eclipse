@@ -103,13 +103,21 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     return [peak, centre, sigma, back]
 
 
-def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
-    """Fit single spectrum with Gaussian."""
+def _fit_one(wv: np.ndarray, prof: np.ndarray,
+             max_iter: int = FitConfig.max_iter) -> np.ndarray:
+    """Fit single spectrum with Gaussian.
+
+    *max_iter* is an iteration count.  curve_fit uses lm here, since there are
+    no bounds, and lm counts every residual call against maxfev including the
+    one per parameter that builds each finite-difference Jacobian, so an
+    iteration costs len(p0) + 1 evaluations.
+    """
     p0 = _guess_params(wv, prof)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(gaussian, wv, prof, p0=p0)
+            popt, _ = curve_fit(gaussian, wv, prof, p0=p0,
+                                maxfev=max_iter * (len(p0) + 1))
             return popt
         except:
             return np.array(p0)
@@ -590,12 +598,16 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     n_scan, n_slit, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
 
+    # The iteration limit applies to every path. Without a fitting block there
+    # is no FitConfig to carry it, so fall back to the same default.
+    max_iter = FitConfig.max_iter if fit_config is None else fit_config.max_iter
+
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
         def _fit_block(spec_block):
             results = np.empty((spec_block.shape[0], 4))
             for i in range(spec_block.shape[0]):
-                results[i] = _fit_one(wv.value, spec_block[i])
+                results[i] = _fit_one(wv.value, spec_block[i], max_iter)
             return results
 
         with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks", leave=False)):

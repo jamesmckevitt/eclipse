@@ -122,12 +122,16 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 
 Omitting the `fitting` block fits a single Gaussian.
 
-`max_iter` caps how long the optimiser may work on one spectrum before it
-gives up and returns wherever it reached, which it does silently. It is
-counted in iterations, so it means the same thing on either backend and does
-not shrink as components are added. Fits converge in tens of iterations, so
-the default of 1000 is a safety net rather than a tuning knob; raise it if a
-difficult blend looks under-converged. For comparison, EISPAC uses 2000.
+`max_iter` caps how long the optimiser may work on one spectrum before it gives
+up and returns wherever it reached, which it does silently. It is counted in
+iterations, so it means the same thing on either backend and does not shrink as
+components are added, and it applies to single-Gaussian fits as well as blends.
+Fits converge in tens of iterations, so the default of 1000 is a safety net
+rather than a tuning knob; raise it if a difficult blend looks under-converged.
+For comparison, EISPAC uses 2000.
+
+Without a `fitting` block there is nowhere to write it, so single-Gaussian runs
+take the same 1000 by default.
 
 #### Choosing the components
 
