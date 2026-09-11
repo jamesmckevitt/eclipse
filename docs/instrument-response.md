@@ -121,6 +121,37 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 
 Omitting the `fitting` block fits a single Gaussian.
 
+#### Choosing the components
+
+Three things about blends are worth knowing before you trust the velocities.
+
+**Nominate a primary that has flux.** The reported velocity is read from
+`primary_component`, and the initial guess places the whole comb by matching it
+against the profile. If the primary is a line that is absent in your data, no
+amount of fitting recovers its velocity, and the comb can settle a whole
+component spacing away: for Fe XII 195.119 and 195.179 that is 92 km/s. As soon
+as the primary carries even a few per cent of the blend the placement is
+reliable again. Choose the line you actually want to measure, not the one that
+happens to be first in the list.
+
+**Comparable lines closer than about three line widths are hard.** The initial
+width is estimated by walking out from the brightest pixel until the profile
+falls below half its height. When two lines of similar brightness sit closer
+than that, the dip between them never drops below half maximum, so the estimate
+covers the whole blend and the fit can start twice as wide as the truth and
+settle for one broad component instead of two. Enforcing
+`constrain_positive_intensity` does not rescue it, and can make it worse by
+pinning the second amplitude at zero. A blend of very unequal lines, or one
+wider than a few line widths, is unaffected.
+
+**Tied centres are offset by a fixed wavelength, not by a velocity.** A common
+Doppler shift stretches a blend, because each line moves by an amount
+proportional to its own wavelength, whereas `tie_center` holds the separation
+constant. The mismatch is the span of the blend times *v/c*: negligible for a
+close pair, but about 12 km/s across an 8 Angstrom window at 300 km/s. Tie
+lines that sit close together, and prefer separate windows for lines that do
+not.
+
 If you synthesised data in dynamic mode, your configuration must specify:
 
 - Exactly one slit width matching the synthesis slit width
