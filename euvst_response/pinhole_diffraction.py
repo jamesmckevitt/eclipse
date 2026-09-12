@@ -283,15 +283,27 @@ def apply_euv_pinhole_diffraction(
             pinhole_position_spectral=pinhole_spectral,
         )
         
-        # For EUV, the diffraction pattern is much smaller than visible light
-        # Normalize the pattern to ensure total integrated intensity equals 1.0
-        # This is crucial for proper photon conservation
-        pattern_total = np.sum(euv_pattern)
-        if pattern_total > 0:
-            euv_pattern_normalized = euv_pattern / pattern_total
-        else:
-            euv_pattern_normalized = euv_pattern
-        
+        # Scale the pattern by its absolute normalisation, exactly as the
+        # visible path does.  Dividing by the sum over the detector array would
+        # force every photon through the pinhole onto the detector: the array
+        # would sum to 1 by construction whatever the geometry.  The EUV Airy
+        # pattern is about thirty times smaller than the visible one at the
+        # same diameter, but not small enough for that to be harmless - a
+        # 1 micron hole at 195 Angstrom still has its first minimum 5.95 mm out
+        # against a detector a few mm across, so most of its light misses and
+        # must be lost rather than redistributed.  euv_pattern peaks at 1.0, so
+        # multiplying by the peak per-pixel fraction gives the correct fraction
+        # everywhere and the array sums to less than 1 when light falls off the
+        # detector.
+        peak_fraction = airy_peak_fraction_per_pixel(
+            pinhole_diameter=pinhole_diameter,
+            distance=det.filter_distance,
+            wavelength=rest_wavelength,
+            pixel_size=det.pix_size * u.pix,
+        )
+        euv_pattern_normalized = euv_pattern * peak_fraction
+
+
         # Process each scan position
         for i in range(n_scan):
             # Current filtered signal at this scan position
@@ -302,8 +314,10 @@ def apply_euv_pinhole_diffraction(
             # So: unfiltered_signal = filtered_signal / filter_throughput
             unfiltered_signal = filtered_signal / filter_throughput_spectrum[np.newaxis, :]
             
-            # Calculate what would come through pinhole (unattenuated)
-            # Use normalized pattern to ensure proper photon conservation
+            # Calculate what would come through pinhole (unattenuated).
+            # unfiltered_signal * area_ratio is the light collected over the
+            # pinhole's area; the scaled pattern says what fraction of it
+            # reaches each pixel, and does not have to add up to all of it.
             pinhole_signal = unfiltered_signal * area_ratio * euv_pattern_normalized
             
             # Calculate what we incorrectly have from filter in pinhole regions
