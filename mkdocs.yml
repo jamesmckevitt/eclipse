@@ -33,6 +33,8 @@ nav:
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument: instrument-response.md
   - Analysing the results: tutorial.ipynb
+  - Advanced topics:
+      - Pinhole stray light: pinholes.md
   - Acknowledgements: acknowledgements.md
 
 markdown_extensions:
