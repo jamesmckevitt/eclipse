@@ -1,0 +1,51 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A push to a branch with an open pull request triggers this twice, and only the
+# newest commit matters, so supersede the earlier run rather than paying for it.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      # One version failing is worth knowing about even when the other already
+      # has, since the usual cause is a dependency that dropped a version.
+      fail-fast: false
+      matrix:
+        # The versions pyproject.toml claims support for. Adding a classifier
+        # without adding it here would leave the claim untested.
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      # Pinned to commit SHAs to match publish.yml, so that Dependabot's grouped
+      # bump moves every workflow together and a retagged upstream cannot change
+      # what runs here without review.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The dev extra rather than pytest alone, because that is the install a
+      # contributor is told to make and this is where it gets exercised. sunpy
+      # and fiasco pull in a lot, which is what the pip cache above is for.
+      - name: Install the package and its test dependencies
+        run: python -m pip install --editable ".[dev]"
+
+      # An editable install puts the package on the path, so this runs against
+      # the tree as checked out rather than a copy, and the data files under
+      # euvst_response/data resolve the way they do for a developer.
+      - name: Run the tests
+        run: python -m pytest tests/ -v
