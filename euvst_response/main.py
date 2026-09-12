@@ -87,6 +87,13 @@ def main() -> None:
         config = yaml.safe_load(f)
 
     # Top-level scalar settings
+    if "instrument" in config.get("simulation", {}):
+        raise ValueError(
+            "Set the instrument with the top-level 'instrument:' key, not "
+            "inside the 'simulation:' section. Both Simulation objects are "
+            "built from the top-level value, so one written here would be "
+            "read and then ignored."
+        )
     instrument = config.get("instrument", "SWC").upper()
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)

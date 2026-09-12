@@ -2,6 +2,7 @@ include README.md
 include LICENSE
 include pyproject.toml
 recursive-include euvst_response *.py
+recursive-include euvst_response/data *
 recursive-include data *
 recursive-exclude data/atmosphere *
 exclude data/gofnt.sav

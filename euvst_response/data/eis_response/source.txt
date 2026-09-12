@@ -1,0 +1,29 @@
+Hinode/EIS effective-area data, used by euvst_response/eis_calibration.py.
+
+EIS_EffArea_A.004  (long-wavelength channel, 245-292 Angstrom)
+EIS_EffArea_B.004  (short-wavelength channel, 165-213 Angstrom)
+
+    Pre-flight ground-calibration effective areas, produced at MSSL in
+    April 2007. Copied verbatim from SolarSoft:
+    $SSW/hinode/eis/response/. These are the tables IDL eis_ea.pro reads.
+    Column 1 is wavelength in Angstrom, column 2 is effective area in cm^2
+    with the CCD quantum efficiency already included.
+
+    Lang, J. et al. 2006, Applied Optics, 45, 8689
+    EIS Software Note 2, "Radiometric Calibration".
+
+fit_eis_ea_2023-05-04_smooth.sav
+
+    Fitted time- and wavelength-dependent effective areas from the Del
+    Zanna et al. (2025) in-flight radiometric calibration, covering 2007
+    to 2022. This is the save file IDL interpol_eis_ea.pro reads.
+    Distributed by Giulio Del Zanna with the accompanying README_dz2025
+    (kept alongside it here, verbatim).
+
+    doi: 10.48550/arXiv.2308.06609
+
+The Del Zanna (2013) spline points and the Warren et al. (2014) exponential
+decay coefficients are small enough to live in the source rather than in a
+data file; their provenance is recorded in eis_calibration.py.
+
+13/08/2026

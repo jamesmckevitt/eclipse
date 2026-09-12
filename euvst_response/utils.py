@@ -336,6 +336,20 @@ _SECTION_LIST_FIELDS = {
     "filter": [],
 }
 
+# String-valued dataclass fields.  These bypass parse_yaml_input, which reads
+# every string as a Quantity and would raise on "gaussian" or "2012-06-03".
+# They can still be swept: a list of strings becomes a sweep dimension.
+_SECTION_STRING_FIELDS = {
+    # 'instrument' is deliberately absent. It is a Simulation field, but the
+    # instrument is chosen by the top-level key and main() builds both
+    # Simulation objects from that, so a value here would be parsed, swept and
+    # then discarded. main() rejects it rather than letting it look effective.
+    "simulation": [],
+    "detector": ["material"],
+    "telescope": ["psf_type", "calibration", "date"],
+    "filter": [],
+}
+
 
 def _parse_section(section_dict: dict, class_name: str) -> tuple:
     """
@@ -343,7 +357,9 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
 
     Any field whose value is a list with more than one element becomes a sweep
     dimension.  Fields listed in ``_SECTION_LIST_FIELDS`` are always treated as
-    a single (list-valued) fixed parameter.
+    a single (list-valued) fixed parameter, and fields listed in
+    ``_SECTION_STRING_FIELDS`` are taken verbatim rather than parsed as
+    quantities.
 
     Parameters
     ----------
@@ -361,6 +377,7 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
         ``{attr: [values]}`` -lists of values to sweep over.
     """
     list_fields = _SECTION_LIST_FIELDS.get(class_name, [])
+    string_fields = _SECTION_STRING_FIELDS.get(class_name, [])
     fixed = {}
     sweep = {}
 
@@ -369,7 +386,10 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
             parsed = parse_yaml_input(val)
             fixed[key] = parsed if isinstance(parsed, list) else [parsed]
         else:
-            parsed = parse_yaml_input(val)
+            if key in string_fields:
+                parsed = list(val) if isinstance(val, (list, tuple)) else val
+            else:
+                parsed = parse_yaml_input(val)
             if isinstance(parsed, list):
                 if len(parsed) == 1:
                     fixed[key] = parsed[0]

@@ -1,0 +1,50 @@
+
+The files are associated with the paper
+describing the in-flight radiometric calibration of the
+Hinode EIS instrument
+
+see doi: 10.48550/arXiv.2308.06609
+ 
+
+
+The IDL save files contain a structure RETURN_STR with the results of the
+fits of the single spectra, merged.
+
+The main array is return_str.total_counts  which contains the
+total counts in the lines for all the dates, in units of
+DN/s/1arc sec
+
+The array return_str.list_lambda has the expected wavelengths of the lines.
+
+The arrays in data_active_sfit_2023.save
+return_str.eis_sw_ar_spectra and return_str.eis_lw_ar_spectra
+contain the active region averaged spectra. 
+
+The arrays in data_quiet_sfit_2023.save
+return_str.eis_sw_qs_spectra and return_str.eis_lw_qs_spectra
+contain the quiet Sun  averaged spectra. 
+
+The wavelengths can be obtained with
+eis_pixel_to_wavelength(indgen(2048),1,2)
+and
+eis_pixel_to_wavelength(indgen(2048),2,2)
+for the 2 arcsecond slit. 
+
+Note that the spectra have not been wavelength calibrated. 
+
+
+They are the result of the  processing of  a large number of EIS data
+for the in-flight calibration from 2007 to 2022.
+
+
+
+The routine used to process Hinode EIS full spectral raster atlases
+is process_atlas.pro
+
+The routine interpol_eis_ea.pro is to be used together with
+the save file fit_eis_ea_2023-05-04_smooth.sav  to obtain the
+time and wavelength-dependent effective area.
+
+
+ written by Giulio Del Zanna (GDZ), December 15 2023
+
