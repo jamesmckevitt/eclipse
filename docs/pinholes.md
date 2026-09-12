@@ -18,16 +18,4 @@ simulation:
 
 The pinhole lists are paired, one entry per pinhole, and must be the same length. `pinhole_positions_spectral` can be left out, in which case every pinhole lands at the centre of the spectral window. The spectral axis is wavelength, so that fraction is what decides which lines a pinhole contaminates - set it if that matters.
 
-## Small pinholes put most of their light off the detector
-
-The smaller the hole, the wider the pattern it projects. A 1 um hole spreads visible light over 183 mm at the 250 mm filter-to-detector distance, so a detector a few mm across catches very little of it:
-
-| diameter | first Airy minimum | fraction landing on the detector |
-| --- | --- | --- |
-| 0.5 um | 366 mm | 5.2e-05 |
-| 1 um | 183 mm | 2.1e-04 |
-| 5 um | 36.6 mm | 5.2e-03 |
-| 20 um | 9.15 mm | 7.9e-02 |
-| 100 um | 1.83 mm | 0.73 |
-
-For 128 x 256 pixels of 13.5 um. Only a hole big enough to bring the pattern inside the detector delivers most of its light.
+The smaller the hole, the wider the pattern it projects, and a small enough hole spreads most of its light past the detector entirely. A 1 um hole spreads visible light over 183 mm at the 250 mm filter-to-detector distance, against a detector a few mm across.
