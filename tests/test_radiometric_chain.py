@@ -48,6 +48,13 @@ ERG_PER_EV = 1.602176634e-12
 N_SCAN, N_SLIT, N_SPEC = 2, 8, 16
 REST = 195.119 * u.Angstrom
 
+# Spectral sampling of the input cube, in Angstrom. Deliberately not either
+# detector's wvl_res, which are 16.9 and 22.3 mAA. The chain builds the photon
+# energy from the cube's own wavelength axis but takes the wavelength a pixel
+# covers from det.wvl_res, so the two are separate quantities. Setting this to
+# one of them would let a confusion between them pass unnoticed.
+CDELT_ANGSTROM = 0.0200
+
 # Spectral radiance per unit wavelength, in the units the synthesis stage emits.
 RADIANCE_UNIT = u.erg / (u.cm**2 * u.s * u.sr * u.cm)
 RADIANCE = 1.0e4
@@ -75,7 +82,7 @@ def make_radiance_cube(value=RADIANCE, n_spec=N_SPEC, rest=REST):
     # last data axis, which is the spectral one.
     wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [0.0169, 1.0, 1.0]
+    wcs.wcs.cdelt = [CDELT_ANGSTROM, 1.0, 1.0]
     wcs.wcs.crpix = [n_spec / 2.0, N_SLIT / 2.0, 1.0]
     wcs.wcs.crval = [rest.to_value(u.Angstrom), 0.0, 0.0]
     return NDCube(
@@ -86,16 +93,24 @@ def make_radiance_cube(value=RADIANCE, n_spec=N_SPEC, rest=REST):
     )
 
 
-def sim_for(detector_cls):
-    """Simulation with a slit width the instrument actually offers.
+# Every slit width each instrument offers. Simulation rejects any other
+# value, and the two instruments share none, so a comparison between them has
+# to carry the slit ratio explicitly.
+SLIT_WIDTHS = {
+    Detector_SWC: (0.2, 0.4, 0.8, 1.6),
+    Detector_EIS: (1.0, 2.0, 4.0),
+}
+INSTRUMENT_SLITS = [(cls, slit)
+                    for cls, slits in SLIT_WIDTHS.items()
+                    for slit in slits]
 
-    Simulation validates slit width against the instrument: EIS takes 1, 2 or
-    4 arcsec and SWC takes 0.2, 0.4, 0.8 or 1.6, so the two share no legal
-    value and a comparison between them has to carry the slit ratio explicitly.
-    """
-    if detector_cls is Detector_EIS:
-        return Simulation(instrument="EIS", slit_width=1 * u.arcsec)
-    return Simulation(instrument="SWC", slit_width=0.2 * u.arcsec)
+
+def sim_for(detector_cls, slit_arcsec=None):
+    """Simulation for *detector_cls* at a slit width it actually offers."""
+    if slit_arcsec is None:
+        slit_arcsec = SLIT_WIDTHS[detector_cls][0]
+    name = "EIS" if detector_cls is Detector_EIS else "SWC"
+    return Simulation(instrument=name, slit_width=slit_arcsec * u.arcsec)
 
 
 def run_chain(cube, tel, det, sim, t_exp):
@@ -120,9 +135,9 @@ def literal_wavelength_axis_cm(n_spec=N_SPEC, rest=REST):
     the pipeline sees the axis this file thinks it wrote.
     """
     crpix = n_spec / 2.0
-    cdelt = 0.0169
     i = np.arange(n_spec)
-    return (rest.to_value(u.Angstrom) + (i + 1 - crpix) * cdelt) * 1e-8
+    return (rest.to_value(u.Angstrom)
+            + (i + 1 - crpix) * CDELT_ANGSTROM) * 1e-8
 
 
 def expected_photons_per_pixel(radiance, t_exp, area_cm2, det, sim,
@@ -152,14 +167,18 @@ def expected_photons_per_pixel(radiance, t_exp, area_cm2, det, sim,
     return radiance * t_exp.to_value(u.s) / e_ph * area_cm2 * omega_sr * dlam_cm
 
 
-@pytest.mark.parametrize("detector_cls", [Detector_SWC, Detector_EIS])
+@pytest.mark.parametrize("detector_cls,slit_arcsec", INSTRUMENT_SLITS)
 @pytest.mark.parametrize("t_exp_s", [1.0, 10.0, 60.0])
 @pytest.mark.parametrize("area_cm2", [0.25, 1.5])
-def test_photons_per_pixel_matches_standard_equation(detector_cls, t_exp_s,
-                                                     area_cm2):
-    """The headline check: ph/pix out of the chain equals the equation."""
+def test_photons_per_pixel_matches_standard_equation(detector_cls, slit_arcsec,
+                                                     t_exp_s, area_cm2):
+    """The headline check: ph/pix out of the chain equals the equation.
+
+    Run at every slit width each instrument offers, since the slit sets the
+    solid angle a pixel sees and so enters the answer linearly.
+    """
     det = detector_cls()
-    sim = sim_for(detector_cls)
+    sim = sim_for(detector_cls, slit_arcsec)
     tel = ConstantAreaTelescope(area_cm2)
     t_exp = t_exp_s * u.s
 
