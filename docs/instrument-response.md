@@ -104,6 +104,7 @@ fitting:
   primary_component: 0           # index of the component whose velocity is reported
   constrain_positive_intensity: true  # reject fits with negative amplitudes
   backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
+  max_iter: 1000                 # optimiser iterations before it gives up
   components:
     - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
     - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
@@ -115,11 +116,19 @@ Each component requires a `wavelength` field giving its rest wavelength.
 
 Each entry in `components` corresponds to one Gaussian. Optional per-component keys:
 
-- `tie_center: <i>`: constrain this component's centre to match component *i*
-- `tie_width: <i>`: constrain this component's line width to match component *i*
+- `tie_center: <i>`: fit this component at the same velocity as component *i*. Centres are scaled by the ratio of the two rest wavelengths rather than offset by a fixed wavelength, so a single velocity is correct across the whole window.
+- `tie_width: <i>`: fit this component with the same line width as component *i*.
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
-Omitting the `fitting` block fits a single Gaussian.
+Omitting the `fitting` block fits a single Gaussian, with `max_iter` at its default.
+
+`max_iter` limits how many iterations the optimiser may take on one spectrum. If it runs out it returns whatever it has reached. There is no warning.
+
+!!! warning "The primary component must be present in the data"
+
+    The velocity ECLIPSE reports is the velocity of `primary_component`, and the initial guess positions all the components together by matching them against the profile. If the line you asked for is not in your data, the fit can settle a whole component spacing away - 92 km/s for Fe XII 195.119 and 195.179. A few per cent of the blend is enough to place it correctly.
+
+    Separately, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two, because the dip between them never falls below half maximum and the initial width then covers the whole blend. `constrain_positive_intensity` does not help here and can make it worse.
 
 If you synthesised data in dynamic mode, your configuration must specify:
 

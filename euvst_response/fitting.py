@@ -44,6 +44,12 @@ class FitConfig:
     primary_component: int = 0
     constrain_positive_intensity: bool = False
     backend: str | None = None  # None = auto (scipy)
+    # Iterations the optimiser may take before it gives up and returns
+    # wherever it has got to. Counted in iterations rather than function
+    # evaluations so that it means the same thing whichever backend runs, and
+    # so that it does not quietly shrink as components are added. EISPAC uses
+    # 2000 for the same job; fits here converge in tens.
+    max_iter: int = 1000
 
     @property
     def n_components(self) -> int:
@@ -97,13 +103,21 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     return [peak, centre, sigma, back]
 
 
-def _fit_one(wv: np.ndarray, prof: np.ndarray) -> np.ndarray:
-    """Fit single spectrum with Gaussian."""
+def _fit_one(wv: np.ndarray, prof: np.ndarray,
+             max_iter: int = FitConfig.max_iter) -> np.ndarray:
+    """Fit single spectrum with Gaussian.
+
+    *max_iter* is an iteration count.  curve_fit uses lm here, since there are
+    no bounds, and lm counts every residual call against maxfev including the
+    one per parameter that builds each finite-difference Jacobian, so an
+    iteration costs len(p0) + 1 evaluations.
+    """
     p0 = _guess_params(wv, prof)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(gaussian, wv, prof, p0=p0)
+            popt, _ = curve_fit(gaussian, wv, prof, p0=p0,
+                                maxfev=max_iter * (len(p0) + 1))
             return popt
         except:
             return np.array(p0)
@@ -154,7 +168,7 @@ def _build_scipy_multi(fit_config: FitConfig):
             amp_ratio_child[j] = i
 
     free_indices: list[int] = []
-    # tie_spec[full_idx] = (source_full_idx, offset_angstrom)
+    # tie_spec[full_idx] = (source_full_idx, factor), applied multiplicatively
     tie_spec: dict[int, tuple[int, float]] = {}
     # ratio_spec[free_position] = parent_full_amplitude_index
     ratio_spec: dict[int, int] = {}
@@ -169,16 +183,28 @@ def _build_scipy_multi(fit_config: FitConfig):
         # centre
         if comp.tie_center is not None:
             src = comp.tie_center
-            offset = float((comp.wavelength
-                            - fit_config.components[src].wavelength).to(u.Angstrom).value)
-            tie_spec[base + 1] = (3 * src + 1, offset)
+            # Tied centres share one velocity, and one velocity moves a line by
+            # an amount proportional to its wavelength, so the tie is the ratio
+            # of the two rest wavelengths rather than their separation. Holding
+            # the separation fixed instead would hold the shift in wavelength
+            # constant across the window, which is a different velocity for
+            # every component: over an 8 Angstrom window near 195 Angstrom the
+            # end components disagree by (8 / 195) v, some 12 km/s at 300 km/s.
+            # The ratio is dimensionless, so it is the same number whether the
+            # model is evaluated in Angstrom or in cm.
+            factor = float(comp.wavelength.to(u.cm).value
+                           / fit_config.components[src].wavelength.to(u.cm).value)
+            tie_spec[base + 1] = (3 * src + 1, factor)
         else:
             free_indices.append(base + 1)
 
         # sigma
         if comp.tie_width is not None:
             src = comp.tie_width
-            tie_spec[base + 2] = (3 * src + 2, 0.0)
+            # Widths stay tied as equals. Thermal broadening does scale with
+            # wavelength, but the instrumental width that dominates these
+            # windows does not, so this is left as it was.
+            tie_spec[base + 2] = (3 * src + 2, 1.0)
         else:
             free_indices.append(base + 2)
 
@@ -210,8 +236,8 @@ def _build_scipy_multi(fit_config: FitConfig):
         for fp, parent_idx in ratio_spec.items():
             child_idx = free_indices[fp]
             full[child_idx] = full[parent_idx] * free_params[fp]
-        for fi, (src_fi, offset) in tie_spec.items():
-            full[fi] = full[src_fi] + offset
+        for fi, (src_fi, factor) in tie_spec.items():
+            full[fi] = full[src_fi] * factor
         return full
 
     def model_func(x, *free_params):
@@ -261,14 +287,33 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     # Cap function evaluations as a safety net (fits converge in ~50).
     # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
     # each method uses a different keyword for max evaluations.
+    #
+    # fit_config.max_iter is an iteration count, so convert it to whatever
+    # each method counts. MINPACK's lm counts every residual call against
+    # maxfev, including the n_free calls that build each forward-difference
+    # Jacobian, so an iteration costs n_free + 1 and the cap has to scale with
+    # the problem or it shrinks as components are added. least_squares' trf
+    # counts only its own residual calls and reports Jacobian work separately
+    # in njev, so there its cap is already an iteration count.
+    n_free = len(free_indices)
+    max_iter = fit_config.max_iter
     if has_bounds:
         fit_kwargs: dict = {
-            "method": "trf", "max_nfev": 350,
+            "method": "trf", "max_nfev": max_iter,
+            # Amplitudes run to ~1e11 while sigmas are ~0.03 Angstrom, so the
+            # free parameters span some thirteen orders of magnitude. Take
+            # steps in variables normalised by the Jacobian rather than in
+            # the raw ones; lm applies equivalent scaling internally, which
+            # is why only the bounded path has to be told. On the blends
+            # tested this changed neither the fitted velocity nor the
+            # evaluation count, so it is insurance against worse-conditioned
+            # windows rather than a fix for an observed failure.
+            "x_scale": "jac",
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
     else:
         fit_kwargs: dict = {
-            "method": "lm", "maxfev": 350,
+            "method": "lm", "maxfev": max_iter * (n_free + 1),
             "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
 
@@ -342,10 +387,12 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         centre_info: dict = {"value": p0[base + 1]}
         if comp.tie_center is not None:
             src = comp.tie_center
-            offset = float((comp.wavelength
-                            - fit_config.components[src].wavelength).to(u.cm).value)
+            # Ratio of rest wavelengths, so that the one free centre means one
+            # velocity for every tied component; see _build_scipy_multi.
+            factor = float(comp.wavelength.to(u.cm).value
+                           / fit_config.components[src].wavelength.to(u.cm).value)
             # mpfit tie expression references the parameter array p
-            centre_info["tied"] = f"p[{3 * src + 1}] + {offset!r}"
+            centre_info["tied"] = f"p[{3 * src + 1}] * {factor!r}"
         parinfo.append(centre_info)
 
         # --- sigma (width) ---
@@ -376,29 +423,108 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     if peak == 0:
         sigma = (wv.max() - wv.min()) / 10
     else:
+        # Width of the feature *containing the peak*, not of everything above
+        # half maximum.
+        #
+        # Taking the first and last pixel above half max measures one line in
+        # a single-line window and the span of the whole blend in a
+        # multi-component one. Every component then starts several pixels
+        # wide, and the fit can settle there: on a seven-component EIS window
+        # the widths came out at 89 mA and 16 mA either side of a 28 mA
+        # instrumental floor, with a residual 45 percent of the peak and the
+        # requested line fitted at effectively zero. Walking outwards from the
+        # peak until the profile drops below half maximum measures the peak
+        # feature alone, and is identical for a single line.
         half_max = 0.5 * peak
-        indices = np.where(prof_c >= half_max)[0]
-        if len(indices) > 1:
-            fwhm = wv[indices[-1]] - wv[indices[0]]
-            sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        above = prof_c >= half_max
+        peak_idx = int(np.nanargmax(prof_c))
+        lo = hi = peak_idx
+        while lo > 0 and above[lo - 1]:
+            lo -= 1
+        while hi < len(above) - 1 and above[hi + 1]:
+            hi += 1
+        if hi > lo:
+            sigma = (wv[hi] - wv[lo]) / (2 * np.sqrt(2 * np.log(2)))
         else:
-            sigma = (wv.max() - wv.min()) / 10
+            # Unresolved: the feature is one pixel wide, so take that as an
+            # upper bound on the width rather than a tenth of the window.
+            sigma = float(np.median(np.diff(wv))) if len(wv) > 1 else \
+                (wv.max() - wv.min()) / 10
 
-    # Use the peak-intensity pixel as the initial centre for the primary
-    peak_wl = wv[np.nanargmax(prof_c)]
+    # Estimate ONE global shift of the primary centre, and start every other
+    # centre at its rest wavelength scaled by the same factor, which is the
+    # relation the tie itself enforces.
+    #
+    # The peak pixel belongs to whichever component dominates the window,
+    # which is not necessarily the primary. Starting the primary's centre on
+    # it therefore displaces the primary by the gap between the two, and since
+    # every tied centre is a fixed multiple of the primary, the whole comb
+    # starts displaced by that gap. The optimiser does not reliably recover: a
+    # noiseless 7-component EIS window whose primary sat 0.14 Angstrom from
+    # the dominant line returned a 239 km/s centroid for lines that were at
+    # rest by construction, and moving the primary to a different component
+    # changed the answer to 451 km/s, each time by very nearly the offset
+    # between that component and the brightest one.
+    #
+    # Match the whole comb against the profile instead. Attributing the peak
+    # pixel to the nearest rest wavelength would only resolve the shift while
+    # it stays below half the spacing to the neighbouring component, which is
+    # a small velocity for a close blend: Fe XII 195.119 and 195.179 are
+    # 0.060 Angstrom apart, so anything beyond about 46 km/s picks the wrong
+    # component and displaces the comb by a whole spacing again, and the
+    # synthesis default admits +/- 300 km/s.
+    #
+    # Scoring every trial shift by the total profile height under the shifted
+    # comb uses the *spacing pattern*, which one pixel does not carry. Trial
+    # shifts run over the range that keeps the comb inside the observed
+    # window, sampled at the wavelength grid itself, so no resolution is
+    # invented. With a single component the score is just the profile sampled
+    # at each grid point, so the best shift puts the centre on the brightest
+    # pixel exactly as before.
+    rest_wl = np.array([c.wavelength.to(u.cm).value
+                        for c in fit_config.components])
+    ref_wl = float(rest_wl[fit_config.primary_component])
+    if peak > 0:
+        # A trial shift moves the primary centre to ref_wl + shift, and every
+        # other component to its own rest wavelength times the same factor. The
+        # range is the one that keeps the whole comb inside the observed window;
+        # with all components at one wavelength it reduces to shifting the comb
+        # bodily, as the additive version did.
+        lo = float(wv.min()) * ref_wl / float(rest_wl.min()) - ref_wl
+        hi = float(wv.max()) * ref_wl / float(rest_wl.max()) - ref_wl
+        step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
+        if hi > lo and step > 0:
+            trial = np.arange(lo, hi + 0.5 * step, step)
+            score = np.zeros(trial.size)
+            for r in rest_wl:
+                score += np.interp(r * (ref_wl + trial) / ref_wl, wv, prof_c,
+                                   left=0.0, right=0.0)
+            # Known limit: if the primary component carries no flux, every
+            # alias that puts *some* component on the one visible line scores
+            # alike, and the data cannot say which component produced it. With
+            # amplitudes free, all the flux in one component at one alias fits
+            # exactly as well as all of it in another at the next, so no
+            # scoring rule resolves it and the comb can start a spacing away.
+            # The velocity asked for in that case is the velocity of a line
+            # that is not there, so there is nothing to recover.
+            shift = float(trial[int(np.argmax(score))])
+        else:
+            # The comb is wider than the window, so no shift keeps all of it
+            # inside. Fall back to the brightest pixel and the component
+            # nearest to it, read as a Doppler factor.
+            peak_wl = float(wv[np.nanargmax(prof_c)])
+            nearest = float(rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
+            shift = ref_wl * (peak_wl / nearest - 1.0)
+    else:
+        shift = 0.0
 
+    doppler = (ref_wl + shift) / ref_wl
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
-        wl_cm = comp.wavelength.to(u.cm).value
-        if i == fit_config.primary_component:
-            full_guess[base] = peak
-            full_guess[base + 1] = peak_wl  # peak pixel, not rest wavelength
-            full_guess[base + 2] = sigma
-        else:
-            full_guess[base] = peak * 0.15
-            full_guess[base + 1] = wl_cm
-            full_guess[base + 2] = sigma
+        full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
+        full_guess[base + 1] = rest_wl[i] * doppler
+        full_guess[base + 2] = sigma
     full_guess[-1] = back
     return full_guess
 
@@ -449,7 +575,8 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
-                       functkw=functkw, quiet=True, maxiter=200)
+                       functkw=functkw, quiet=True,
+                       maxiter=fit_config.max_iter)
         if result.status > 0:
             out = np.asarray(result.params, dtype=float)
             # Convert ratios back to absolute amplitudes
@@ -495,12 +622,16 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     n_scan, n_slit, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
 
+    # The iteration limit applies to every path. Without a fitting block there
+    # is no FitConfig to carry it, so fall back to the same default.
+    max_iter = FitConfig.max_iter if fit_config is None else fit_config.max_iter
+
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
         def _fit_block(spec_block):
             results = np.empty((spec_block.shape[0], 4))
             for i in range(spec_block.shape[0]):
-                results[i] = _fit_one(wv.value, spec_block[i])
+                results[i] = _fit_one(wv.value, spec_block[i], max_iter)
             return results
 
         with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks", leave=False)):
