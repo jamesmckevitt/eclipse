@@ -78,6 +78,20 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     ref_cube = line_cubes[metadata_line]
     ref_wavelengths = ref_cube.axis_world_coords(-1)[0]
 
+    # Refuse files written before the cube axis order was fixed (issue #12).
+    # Those store data as (x, y, wavelength); everything downstream now
+    # expects (y, x, wavelength), so an old file would come out transposed.
+    # The WCS axis order tells the two apart.
+    _old_first_spatial = {"z": "SOLY", "x": "SOLZ", "y": "SOLZ"}
+    _int_axis = ref_cube.meta.get("integration_axis") if ref_cube.meta else None
+    if (_int_axis in _old_first_spatial
+            and ref_cube.wcs.wcs.ctype[1] == _old_first_spatial[_int_axis]):
+        raise ValueError(
+            f"{pkl_file} was written by an older ECLIPSE that stored cubes "
+            "as (x, y, wavelength). Cubes are now (y, x, wavelength). "
+            "Re-run the synthesis with this version to regenerate the file."
+        )
+
     # Get spatial dimensions from reference cube
     ny, nx, nw = ref_cube.data.shape
     

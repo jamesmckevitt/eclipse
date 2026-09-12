@@ -80,6 +80,17 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
         data = dill.load(f)
 
     for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
+        # Refuse files written before the cube axis order was fixed (issue
+        # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
+        # WCS; the maps made from one here would come out transposed.
+        wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype
+        if str(wcs_ctype[1]).startswith("HPLT"):
+            raise ValueError(
+                f"{filepath} was written by an older ECLIPSE that stored "
+                "cubes as (x, y, wavelength). Cubes are now "
+                "(y, x, wavelength). Re-run the simulation with this "
+                "version to regenerate the file."
+            )
         # Reconstruct signal NDCubes
         combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
             combination_results["first_dn_signal_data"],
