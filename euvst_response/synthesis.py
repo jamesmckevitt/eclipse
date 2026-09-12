@@ -1076,73 +1076,80 @@ def create_line_cube(
         Unit for the intensity data.
     integration_axis : str
         Axis along which integration was performed ("x", "y", or "z").
-        
+
     Returns
     -------
     NDCube
-        Cube with proper WCS and metadata.
+        Cube with proper WCS and metadata, indexed ``[row, column, wavelength]``
+        like an image: the first axis is the vertical direction of the scene
+        and the second the horizontal.  Summing over the last axis gives an
+        array that plots the right way up, and slicing out the celestial WCS
+        gives one a SunPy map accepts directly.
     """
-    cube_data = line_data["si"]  # Shape depends on integration_axis
-    
+    # synthesise_spectra fills 'si' with the two remaining simulation axes in
+    # their original order, which puts the horizontal image direction first.
+    # Swap to (row, column, wavelength) here, where the cube is built.
+    cube_data = line_data["si"].transpose(1, 0, 2)
+
     # Get spatial coordinate information from the reference cube
     if integration_axis == "x":
-        # Integration along X -> data shape (ny, nz, n_lambda), spatial axes: Y, Z
-        ny, nz, nl = cube_data.shape
-        y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates  
-        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
-        
-        spatial_axes = ['WAVE', 'SOLZ', 'SOLY']  # Wavelength, Z, Y
-        spatial_units = ['cm', 'Mm', 'Mm']
-        spatial_cdelt = [
-            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value,
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
-        ]
-        spatial_crpix = [(nl + 1) / 2, 1, (ny + 1) / 2]  # Wavelength centered, Z at first pixel, Y centered
-        spatial_crval = [
-            line_data["wl0"].to(u.cm).value, 
-            z_coords[0].to(u.Mm).value,  # Z starts where original cube starts
-            y_coords[ny//2].to(u.Mm).value  # Y centered
-        ]
-            
-    elif integration_axis == "y":
-        # Integration along Y -> data shape (nx, nz, n_lambda), spatial axes: X, Z
-        nx, nz, nl = cube_data.shape
-        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
-        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
-        
-        spatial_axes = ['WAVE', 'SOLZ', 'SOLX']  # Wavelength, Z, X
-        spatial_units = ['cm', 'Mm', 'Mm']
-        spatial_cdelt = [
-            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value,
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value
-        ]
-        spatial_crpix = [(nl + 1) / 2, 1, (nx + 1) / 2]  # Wavelength centered, Z at first pixel, X centered
-        spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            z_coords[0].to(u.Mm).value,  # Z starts where original cube starts  
-            x_coords[nx//2].to(u.Mm).value  # X centered
-        ]
-            
-    else:  # integration_axis == "z"
-        # Integration along Z -> data shape (nx, ny, n_lambda), spatial axes: X, Y
-        nx, ny, nl = cube_data.shape
-        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        # Integration along X -> data shape (nz, ny, n_lambda): rows are Z, columns are Y
+        nz, ny, nl = cube_data.shape
         y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
-        
-        spatial_axes = ['WAVE', 'SOLY', 'SOLX']  # Wavelength, Y, X
+        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+
+        spatial_axes = ['WAVE', 'SOLY', 'SOLZ']  # Wavelength, Y, Z
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
             y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value,
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value
+            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
         ]
-        spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, (nx + 1) / 2]  # All centered
+        spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
             line_data["wl0"].to(u.cm).value,
             y_coords[ny//2].to(u.Mm).value,  # Y centered
-            x_coords[nx//2].to(u.Mm).value   # X centered
+            z_coords[0].to(u.Mm).value  # Z starts where original cube starts
+        ]
+
+    elif integration_axis == "y":
+        # Integration along Y -> data shape (nz, nx, n_lambda): rows are Z, columns are X
+        nz, nx, nl = cube_data.shape
+        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+
+        spatial_axes = ['WAVE', 'SOLX', 'SOLZ']  # Wavelength, X, Z
+        spatial_units = ['cm', 'Mm', 'Mm']
+        spatial_cdelt = [
+            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
+            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+        ]
+        spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
+        spatial_crval = [
+            line_data["wl0"].to(u.cm).value,
+            x_coords[nx//2].to(u.Mm).value,  # X centered
+            z_coords[0].to(u.Mm).value  # Z starts where original cube starts
+        ]
+
+    else:  # integration_axis == "z"
+        # Integration along Z -> data shape (ny, nx, n_lambda): rows are Y, columns are X
+        ny, nx, nl = cube_data.shape
+        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
+
+        spatial_axes = ['WAVE', 'SOLX', 'SOLY']  # Wavelength, X, Y
+        spatial_units = ['cm', 'Mm', 'Mm']
+        spatial_cdelt = [
+            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
+            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
+        ]
+        spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
+        spatial_crval = [
+            line_data["wl0"].to(u.cm).value,
+            x_coords[nx//2].to(u.Mm).value,  # X centered
+            y_coords[ny//2].to(u.Mm).value   # Y centered
         ]
 
     wcs = WCS(naxis=3)

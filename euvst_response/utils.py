@@ -162,7 +162,7 @@ def rebin_slit_offchip(cube, n_bin: int):
     Parameters
     ----------
     cube : NDCube
-        Data cube with shape ``(n_scan, n_slit, n_lambda)``.
+        Data cube with shape ``(n_slit, n_scan, n_lambda)``.
     n_bin : int
         Number of slit pixels to sum.  Must be >= 1.
         Pixels that don't fill a complete bin at the slit edge are discarded.
@@ -170,7 +170,7 @@ def rebin_slit_offchip(cube, n_bin: int):
     Returns
     -------
     NDCube
-        Rebinned cube with shape ``(n_scan, n_slit // n_bin, n_lambda)``.
+        Rebinned cube with shape ``(n_slit // n_bin, n_scan, n_lambda)``.
         WCS is updated so the slit pixel scale (CDELT) is scaled by *n_bin*.
     """
     from ndcube import NDCube
@@ -181,16 +181,16 @@ def rebin_slit_offchip(cube, n_bin: int):
         return cube
 
     data = cube.data
-    n_scan, n_slit, n_lam = data.shape
+    n_slit, n_scan, n_lam = data.shape
     n_keep = (n_slit // n_bin) * n_bin
-    trimmed = data[:, :n_keep, :]
-    rebinned = trimmed.reshape(n_scan, n_keep // n_bin, n_bin, n_lam).sum(axis=2)
+    trimmed = data[:n_keep, :, :]
+    rebinned = trimmed.reshape(n_keep // n_bin, n_bin, n_scan, n_lam).sum(axis=1)
 
     # Update WCS for the slit axis.
-    # Numpy axis 1 (slit) corresponds to WCS axis 1 (HPLT) in the
+    # Numpy axis 0 (slit) corresponds to WCS axis 2 (HPLT) in the
     # reversed FITS convention (naxis-1-numpy_axis for a 3-axis WCS).
     new_wcs = cube.wcs.deepcopy()
-    slit_wcs_axis = 1  # HPLT-TAN
+    slit_wcs_axis = 2  # HPLT-TAN
     new_wcs.wcs.cdelt[slit_wcs_axis] *= n_bin
     # Map the original reference pixel to the new grid.
     # FITS crpix is 1-based; the center-preserving mapping for binning
