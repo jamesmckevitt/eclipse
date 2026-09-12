@@ -17,5 +17,3 @@ simulation:
 ```
 
 The pinhole lists are paired, one entry per pinhole, and must be the same length. `pinhole_positions_spectral` can be left out, in which case every pinhole lands at the centre of the spectral window. The spectral axis is wavelength, so that fraction is what decides which lines a pinhole contaminates - set it if that matters.
-
-The smaller the hole, the wider the pattern it projects, and a small enough hole spreads most of its light past the detector entirely. A 1 um hole spreads visible light over 183 mm at the 250 mm filter-to-detector distance, against a detector a few mm across.
