@@ -31,11 +31,3 @@ The smaller the hole, the wider the pattern it projects. A 1 um hole spreads vis
 | 100 um | 1.83 mm | 0.73 |
 
 For 128 x 256 pixels of 13.5 um. Only a hole big enough to bring the pattern inside the detector delivers most of its light.
-
-!!! warning "Visible pinhole results from earlier versions are too high"
-
-    Earlier versions put every photon that passed through a pinhole somewhere on the detector, however far the light actually spread. Multiply an old result by the last column above to see how far out it was - a factor of nearly 5000 for a 1 um hole. Anything derived from one needs recomputing.
-
-!!! note "EUV pinhole results are an upper bound"
-
-    The EUV signal is still spread over the detector the same way, so it is overstated too, but by less: the pattern is about thirty times smaller at 195 A than in visible light. A 0.5 um hole comes out about 21 times too high, 1 um about 6 times, and 5 um about 1.2 times.

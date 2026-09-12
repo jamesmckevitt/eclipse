@@ -31,10 +31,10 @@ nav:
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
-  - Simulating the instrument:
-      - Configuration and running: instrument-response.md
-      - Pinhole stray light: pinholes.md
+  - Simulating the instrument: instrument-response.md
   - Analysing the results: tutorial.ipynb
+  - Advanced topics:
+      - Pinhole stray light: pinholes.md
   - Acknowledgements: acknowledgements.md
 
 markdown_extensions:
