@@ -62,15 +62,16 @@ def load_cube(
     """
     Read a Fortran-ordered binary cube (single precision) and optionally return as NDCube.
 
-    The cube is stored (x, z, y) in the file and transposed to (x, y, z)
-    upon loading.
+    The cube is stored (x, z, y) in the file and transposed to (z, y, x)
+    upon loading, so that a horizontal slice ``data[k]`` is an image indexed
+    ``[y, x]``.
 
     Parameters
     ----------
     file_path : str | Path
         Path to the binary file.
     shape : Tuple[int, int, int]
-        Tuple (nx, ny, nz) describing the *full* cube dimensions.
+        The *full* cube dimensions in the file's own storage order.
     unit : astropy.units.Unit, optional
         Astropy unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns
         a plain ndarray.
@@ -87,10 +88,10 @@ def load_cube(
     Returns
     -------
     ndarray, Quantity, or NDCube
-        Array with shape (nx', ny', nz') or NDCube with proper coordinates.
+        Array with shape (nz', ny', nx') or NDCube with proper coordinates.
     """
     data = np.fromfile(file_path, dtype=np.float32).reshape(shape, order="F")
-    data = data.transpose(0, 2, 1)  # (x,y,z)
+    data = data.transpose(1, 2, 0)  # (z,y,x)
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
@@ -117,40 +118,41 @@ def create_atmosphere_ndcube(
 ) -> NDCube:
     """
     Create an NDCube for atmospheric data with proper heliocentric coordinates.
-    
+
     Parameters
     ----------
     data : np.ndarray or u.Quantity
-        3D data array with shape (nx, ny, nz).
+        3D data array with shape (nz, ny, nx), so that ``data[k]`` is a
+        horizontal slice indexed ``[y, x]``.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
         Voxel sizes in Mm.
-        
+
     Returns
     -------
     NDCube
         Cube with proper WCS coordinates.
         X,Y centered at origin, Z starting at 0.
     """
-    nx, ny, nz = data.shape
-    
+    nz, ny, nx = data.shape
+
     # Create WCS for heliocentric coordinates
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ['SOLZ', 'SOLY', 'SOLX']
+    wcs.wcs.ctype = ['SOLX', 'SOLY', 'SOLZ']
     wcs.wcs.cunit = ['Mm', 'Mm', 'Mm']
-    
+
     # Reference pixels (1-indexed for WCS)
-    wcs.wcs.crpix = [1, (ny + 1) / 2, (nx + 1) / 2]  # Z starts at first pixel
-    
+    wcs.wcs.crpix = [(nx + 1) / 2, (ny + 1) / 2, 1]  # Z starts at first pixel
+
     # Reference values
     wcs.wcs.crval = [0, 0, 0]  # X,Y centered at origin, Z starts at 0
-    
+
     # Pixel scales
     wcs.wcs.cdelt = [
-        voxel_dz.to(u.Mm).value,
-        voxel_dy.to(u.Mm).value,  
-        voxel_dx.to(u.Mm).value
+        voxel_dx.to(u.Mm).value,
+        voxel_dy.to(u.Mm).value,
+        voxel_dz.to(u.Mm).value
     ]
-    
+
     return NDCube(data.data,
                   wcs=wcs,
                   unit=data.unit)
@@ -423,26 +425,27 @@ def apply_cube_cropping(
     tuple of NDCube
         Cropped (temp_cube, rho_cube, vel_cube).
     """
+    # Crop points are given in world axis order, which is (SOLX, SOLY, SOLZ).
     point1 = []
     point2 = []
-    
-    if crop_z:
-        point1.append(u.Quantity(crop_z[0]))
-        point2.append(u.Quantity(crop_z[1]))
+
+    if crop_x:
+        point1.append(u.Quantity(crop_x[0]))
+        point2.append(u.Quantity(crop_x[1]))
     else:
         point1.append(None)
         point2.append(None)
-        
+
     if crop_y:
         point1.append(u.Quantity(crop_y[0]))
         point2.append(u.Quantity(crop_y[1]))
     else:
         point1.append(None)
         point2.append(None)
-        
-    if crop_x:
-        point1.append(u.Quantity(crop_x[0]))
-        point2.append(u.Quantity(crop_x[1]))
+
+    if crop_z:
+        point1.append(u.Quantity(crop_z[0]))
+        point2.append(u.Quantity(crop_z[1]))
     else:
         point1.append(None)
         point2.append(None)
@@ -492,7 +495,7 @@ def build_composite_cubes_mhd(
     grouped_slices : dict
         Slices grouped by timestep for efficient processing.
     cube_shape : tuple
-        Original cube dimensions (nx, ny, nz).
+        Original cube dimensions in the file's storage order.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
         Voxel sizes.
     downsample : int or bool
@@ -517,17 +520,17 @@ def build_composite_cubes_mhd(
         create_ndcube=True
     )
     
-    nx, ny, nz = temp_cube_ref.data.shape
+    nz, ny, nx = temp_cube_ref.data.shape
     reference_wcs = temp_cube_ref.wcs
-    
+
     # Verify dimensions match slice mapping
     if nx != nx_mhd:
         raise ValueError(f"Cube X dimension ({nx}) doesn't match slice mapping ({nx_mhd})")
-    
+
     # Initialise composite arrays
-    temp_composite = np.zeros((nx, ny, nz), dtype=precision)
-    rho_composite = np.zeros((nx, ny, nz), dtype=precision)
-    vel_composite = np.zeros((nx, ny, nz), dtype=precision)
+    temp_composite = np.zeros((nz, ny, nx), dtype=precision)
+    rho_composite = np.zeros((nz, ny, nx), dtype=precision)
+    vel_composite = np.zeros((nz, ny, nx), dtype=precision)
     
     # Process each timestep
     for suffix, slice_indices in tqdm(grouped_slices.items(), desc="Loading timesteps", unit="timestep"):
@@ -557,9 +560,9 @@ def build_composite_cubes_mhd(
         
         # Copy relevant slices to composite (no rebinning - direct copy)
         for slice_idx in slice_indices:
-            temp_composite[slice_idx, :, :] = temp_cube.data[slice_idx, :, :]
-            rho_composite[slice_idx, :, :] = rho_cube.data[slice_idx, :, :]
-            vel_composite[slice_idx, :, :] = vel_cube.data[slice_idx, :, :]
+            temp_composite[:, :, slice_idx] = temp_cube.data[:, :, slice_idx]
+            rho_composite[:, :, slice_idx] = rho_cube.data[:, :, slice_idx]
+            vel_composite[:, :, slice_idx] = vel_cube.data[:, :, slice_idx]
     
     # Create NDCubes with proper WCS (at MHD resolution)
     temp_ndcube = NDCube(temp_composite * u.K, wcs=reference_wcs, meta={"source": "composite_dynamic"})
@@ -819,29 +822,31 @@ def compute_dem(
     Returns
     -------
     dem_map : np.ndarray
-        DEM array [cm^-5 per dex]. Shape depends on integration_axis:
-        - "x": (ny, nz, nT) 
-        - "y": (nx, nz, nT)
-        - "z": (nx, ny, nT)
+        DEM array [cm^-5 per dex]. The two remaining spatial axes come out in
+        image order (row, column). Shape depends on integration_axis:
+        - "x": (nz, ny, nT)
+        - "y": (nz, nx, nT)
+        - "z": (ny, nx, nT)
     avg_ne : np.ndarray
         Mean electron density per T-bin [cm^-3]. Same shape as dem_map.
     """
     nT = len(logT_grid)
-    
-    # Determine integration axis and output shape
-    axis_map = {"x": 0, "y": 1, "z": 2}
+
+    # The cubes are (z, y, x), so integrating along a physical axis means
+    # summing over the numpy axis it lives on.
+    axis_map = {"x": 2, "y": 1, "z": 0}
     if integration_axis not in axis_map:
         raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
-    
+
     integration_axis_idx = axis_map[integration_axis]
-    
+
     # Output shape depends on which axis we integrate over
     if integration_axis == "x":
-        output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nz, nT)
+        output_shape = (logT_cube.shape[0], logT_cube.shape[1], nT)  # (nz, ny, nT)
     elif integration_axis == "y":
-        output_shape = (logT_cube.shape[0], logT_cube.shape[2], nT)  # (nx, nz, nT)
+        output_shape = (logT_cube.shape[0], logT_cube.shape[2], nT)  # (nz, nx, nT)
     else:  # "z"
-        output_shape = (logT_cube.shape[0], logT_cube.shape[1], nT)  # (nx, ny, nT)
+        output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nx, nT)
     
     # Create temperature bin edges from centers
     dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
@@ -860,7 +865,7 @@ def compute_dem(
 
     for idx in tqdm(range(nT), desc="DEM bins", unit="bin", leave=False):
         lo, hi = logT_edges[idx], logT_edges[idx + 1]
-        mask = (logT_cube >= lo) & (logT_cube < hi)  # (nx,ny,nz)
+        mask = (logT_cube >= lo) & (logT_cube < hi)  # (nz,ny,nx)
 
         # Integrate along the specified axis
         em = np.sum(w2 * mask, axis=integration_axis_idx) * voxel_dh_cm    # cm^-5
@@ -888,7 +893,8 @@ def interpolate_g_on_dem(
     goft : Dict[str, dict]
         Dictionary of line data, modified in place.
     avg_ne : np.ndarray
-        Emission-measure weighted electron density (nx, ny, nT).
+        Emission-measure weighted electron density (n_rows, n_cols, nT), in
+        the spatial layout compute_dem produces.
     logT_grid : np.ndarray
         Temperature grid for DEM (nT,).
     logN_grid : np.ndarray
@@ -898,13 +904,13 @@ def interpolate_g_on_dem(
     precision : type
         Output precision for interpolated G values.
     """
-    nT, nx, ny = len(logT_grid), *avg_ne.shape[:2]
+    nT, n_rows, n_cols = len(logT_grid), *avg_ne.shape[:2]
 
     # Build query points for interpolation
-    logNe_flat = np.log10(avg_ne, where=avg_ne > 0.0, 
+    logNe_flat = np.log10(avg_ne, where=avg_ne > 0.0,
                          out=np.zeros_like(avg_ne)).transpose(2, 0, 1).ravel()
     logT_flat = np.broadcast_to(logT_grid[:, None, None],
-                               (nT, nx, ny)).ravel()
+                               (nT, n_rows, n_cols)).ravel()
     query_pts = np.column_stack((logNe_flat, logT_flat))
 
     for name, info in tqdm(goft.items(), desc="interpolating G", unit="line", leave=False):
@@ -913,7 +919,7 @@ def interpolate_g_on_dem(
             method="linear", bounds_error=False, fill_value=0.0
         )
         g_flat = rgi(query_pts)
-        info["g"] = g_flat.reshape(nT, nx, ny).transpose(1, 2, 0).astype(precision)
+        info["g"] = g_flat.reshape(nT, n_rows, n_cols).transpose(1, 2, 0).astype(precision)
 
 
 ##############################################################################
@@ -931,12 +937,12 @@ def build_em_tv(
     integration_axis: str = "z",
 ) -> np.ndarray:
     """
-    Construct 4-D emission-measure cube EM(x,y,T,v) [cm^-5].
-    
+    Construct the 4-D emission-measure cube EM(row, column, T, v) [cm^-5].
+
     Parameters
     ----------
     logT_cube : np.ndarray
-        3D temperature cube.
+        3D temperature cube, shape (nz, ny, nx).
     vel_cube : np.ndarray
         3D velocity cube along the integration axis.
     logT_grid : np.ndarray
@@ -947,22 +953,23 @@ def build_em_tv(
         n_e^2 * dh for each voxel.
     integration_axis : str
         Axis along which to integrate ("x", "y", or "z").
-        
+
     Returns
     -------
     em_tv : np.ndarray
-        4D emission measure cube. Shape depends on integration_axis:
-        - "x": (ny, nz, nT, nv)
-        - "y": (nx, nz, nT, nv)
-        - "z": (nx, ny, nT, nv)
+        4D emission measure cube. The two remaining spatial axes come out in
+        image order (row, column). Shape depends on integration_axis:
+        - "x": (nz, ny, nT, nv)
+        - "y": (nz, nx, nT, nv)
+        - "z": (ny, nx, nT, nv)
     """
     print(f"  Building 4-D emission-measure cube along {integration_axis}-axis...")
-    
-    # Determine integration axis and output shape
-    axis_map = {"x": 0, "y": 1, "z": 2}
+
+    # The cubes are (z, y, x); see compute_dem.
+    axis_map = {"x": 2, "y": 1, "z": 0}
     if integration_axis not in axis_map:
         raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
-    
+
     integration_axis_idx = axis_map[integration_axis]
     
     # Create temperature bin edges from centers
@@ -986,13 +993,14 @@ def build_em_tv(
     mask_T_d   = da.from_array(mask_T,   chunks='auto')
     mask_V_d   = da.from_array(mask_V,   chunks='auto')
     
-    # Sum along the specified integration axis
+    # Sum along the specified integration axis. The cube subscripts are
+    # i=z, j=y, k=x, so the surviving pair is always (row, column).
     if integration_axis == "x":
-        em_tv_d = da.einsum("ijk,ijkl,ijkm->jklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+        em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
     elif integration_axis == "y":
         em_tv_d = da.einsum("ijk,ijkl,ijkm->iklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
     else:  # "z"
-        em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
+        em_tv_d = da.einsum("ijk,ijkl,ijkm->jklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
         
     with ProgressBar():
         em_tv = em_tv_d.compute()
@@ -1008,14 +1016,15 @@ def synthesise_spectra(
 ) -> None:
     """
     Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
-    specific intensity cube I(x,y,lambda) for every line.
-    
+    specific intensity cube I(row, column, lambda) for every line.
+
     Parameters
     ----------
     goft : Dict[str, dict]
         Dictionary of line data, modified in place with 'si' and 'wl_grid'.
     em_tv : np.ndarray
-        4D emission measure cube (nx, ny, nT, nv).
+        4D emission measure cube (n_rows, n_cols, nT, nv), in the spatial
+        layout build_em_tv produces.
     vel_grid : np.ndarray
         Velocity grid centers for wavelength calculation.
     logT_grid : np.ndarray
@@ -1045,10 +1054,10 @@ def synthesise_spectra(
         phi = np.exp(-0.5 * (delta / sigma_T[:, None, None]) ** 2)
         phi /= sigma_T[:, None, None] * np.sqrt(2 * np.pi)
 
-        # EM(x,y,T,v) * G(T)  ->  (nx,ny,nT,nv)
+        # EM(row,col,T,v) * G(T)  ->  (n_rows,n_cols,nT,nv)
         weighted = em_tv * data["g"][..., None]
 
-        # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (nx,ny,n_lambda)
+        # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (n_rows,n_cols,n_lambda)
         spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
 
         data["si"] = spec_map / (4 * np.pi)
@@ -1086,17 +1095,17 @@ def create_line_cube(
         array that plots the right way up, and slicing out the celestial WCS
         gives one a SunPy map accepts directly.
     """
-    # synthesise_spectra fills 'si' with the two remaining simulation axes in
-    # their original order, which puts the horizontal image direction first.
-    # Swap to (row, column, wavelength) here, where the cube is built.
-    cube_data = line_data["si"].transpose(1, 0, 2)
+    # The simulation cubes are (z, y, x), so integrating one axis out leaves
+    # 'si' already in (row, column, wavelength) order for every view.
+    cube_data = line_data["si"]
 
-    # Get spatial coordinate information from the reference cube
+    # Get spatial coordinate information from the reference cube,
+    # whose array axes are (z, y, x)
     if integration_axis == "x":
         # Integration along X -> data shape (nz, ny, n_lambda): rows are Z, columns are Y
         nz, ny, nl = cube_data.shape
         y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
-        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+        z_coords = spatial_cube.axis_world_coords(0)[0]  # Z coordinates
 
         spatial_axes = ['WAVE', 'SOLY', 'SOLZ']  # Wavelength, Y, Z
         spatial_units = ['cm', 'Mm', 'Mm']
@@ -1115,8 +1124,8 @@ def create_line_cube(
     elif integration_axis == "y":
         # Integration along Y -> data shape (nz, nx, n_lambda): rows are Z, columns are X
         nz, nx, nl = cube_data.shape
-        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
-        z_coords = spatial_cube.axis_world_coords(2)[0]  # Z coordinates
+        x_coords = spatial_cube.axis_world_coords(2)[0]  # X coordinates
+        z_coords = spatial_cube.axis_world_coords(0)[0]  # Z coordinates
 
         spatial_axes = ['WAVE', 'SOLX', 'SOLZ']  # Wavelength, X, Z
         spatial_units = ['cm', 'Mm', 'Mm']
@@ -1135,7 +1144,7 @@ def create_line_cube(
     else:  # integration_axis == "z"
         # Integration along Z -> data shape (ny, nx, n_lambda): rows are Y, columns are X
         ny, nx, nl = cube_data.shape
-        x_coords = spatial_cube.axis_world_coords(0)[0]  # X coordinates
+        x_coords = spatial_cube.axis_world_coords(2)[0]  # X coordinates
         y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
 
         spatial_axes = ['WAVE', 'SOLX', 'SOLY']  # Wavelength, X, Y

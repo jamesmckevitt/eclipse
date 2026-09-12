@@ -1,10 +1,12 @@
-"""Pin down the cube axis convention: data is (row, column, wavelength).
+"""Pin down the cube axis conventions.
 
-Rows run along the slit (image vertical) and columns along the raster scan
-(image horizontal), against a WCS whose FITS axes are (WAVE, HPLN, HPLT).
-Everything here would pass with the two spatial axes swapped throughout as
-long as the swap were consistent, so each test anchors one end of the chain
-to something absolute: where a known feature lands in the array, which WCS
+Observation cubes are (row, column, wavelength): rows run along the slit
+(image vertical) and columns along the raster scan (image horizontal),
+against a WCS whose FITS axes are (WAVE, HPLN, HPLT). Simulation volumes are
+(z, y, x) against (SOLX, SOLY, SOLZ), so a horizontal slice is an image too.
+Everything here would pass with the spatial axes swapped throughout as long
+as the swap were consistent, so each test anchors one end of the chain to
+something absolute: where a known feature lands in the array, which WCS
 entry a physical pitch is written to, or which way a map comes out.
 """
 import astropy.units as u
@@ -27,33 +29,39 @@ from euvst_response.utils import rebin_slit_offchip
 REST = 195.119 * u.Angstrom
 
 
-def test_line_cube_puts_simulation_x_on_the_second_axis():
-    """A feature at simulation (x=i, y=j) must land at cube.data[j, i].
+def test_line_cube_is_row_column_wavelength():
+    """A feature at scene (row j, column i) must land at cube.data[j, i],
+    with X on FITS axis 2 of both the volume and the line cube.
 
     Built through synthesise_spectra with a hand-made emission measure whose
-    value encodes its own (x, y) position, so the check reads the position
-    back out of the data rather than trusting any labelling.
+    value encodes its own position, so the check reads the position back out
+    of the data rather than trusting any labelling. Distinct x and y voxel
+    sizes then pin which spatial axis the WCS calls X.
     """
     nx, ny = 3, 5
     logT_grid = np.array([6.0, 6.2])
     vel_grid = np.array([-50.0e5, 0.0, 50.0e5]) * (u.cm / u.s)
 
-    weight = 1.0 + 10.0 * np.arange(nx)[:, None] + 100.0 * np.arange(ny)[None, :]
-    em_tv = np.zeros((nx, ny, len(logT_grid), len(vel_grid)))
+    weight = 1.0 + 10.0 * np.arange(nx)[None, :] + 100.0 * np.arange(ny)[:, None]
+    em_tv = np.zeros((ny, nx, len(logT_grid), len(vel_grid)))
     em_tv[:, :, 0, 1] = weight
 
     goft = {"Fe12_195.1190": {
         "wl0": REST.to(u.cm),
-        "g": np.ones((nx, ny, len(logT_grid))),
+        "g": np.ones((ny, nx, len(logT_grid))),
         "atom": 26,
         "ion": 12,
     }}
     synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
 
     reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 2)) * u.K,
+        np.zeros((2, ny, nx)) * u.K,
         voxel_dx=2.0 * u.Mm, voxel_dy=1.0 * u.Mm, voxel_dz=0.5 * u.Mm,
     )
+    assert list(reference.wcs.wcs.ctype) == ["SOLX", "SOLY", "SOLZ"]
+    assert reference.wcs.wcs.cdelt[0] == pytest.approx(2.0)
+    assert reference.wcs.wcs.cdelt[2] == pytest.approx(0.5)
+
     cube = create_line_cube("Fe12_195.1190", goft["Fe12_195.1190"], reference,
                             u.erg / u.s / u.cm**2 / u.sr / u.cm,
                             integration_axis="z")
@@ -62,9 +70,9 @@ def test_line_cube_puts_simulation_x_on_the_second_axis():
 
     # The emission is linear in the emission measure, so the total intensity
     # image divided by the weight of the pixel it claims to be is constant
-    # exactly when every value sits at (row=j, col=i).
+    # exactly when every value stayed at (row=j, col=i).
     image = cube.data.sum(axis=-1)
-    ratio = image / weight.T
+    ratio = image / weight
     assert np.allclose(ratio, ratio[0, 0], rtol=1e-12)
 
     # And the WCS says the same thing: FITS axis 2 is X with the 2 Mm pitch,

@@ -321,8 +321,8 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     -------
     dict
         Dictionary containing DEM data with keys:
-        - 'dem_map': DEM(T) map (numpy array, shape nx, ny, nT)
-        - 'em_tv': EM(T,v) map (numpy array, shape nx, ny, nT, nv)
+        - 'dem_map': DEM(T) map (numpy array, shape ny, nx, nT)
+        - 'em_tv': EM(T,v) map (numpy array, shape ny, nx, nT, nv)
         - 'logT_centres': Temperature bin centers (numpy array)
         - 'v_edges': Velocity bin edges (numpy array)
         - 'goft': Contribution function data (dict)
