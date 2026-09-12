@@ -141,6 +141,16 @@ def main() -> None:
     if pinhole_sizes and len(pinhole_sizes) != len(pinhole_positions):
         raise ValueError("pinhole_sizes and pinhole_positions must have the same length.")
 
+    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
+    # the detector's spectral width.  Omit to project every pinhole to the
+    # centre of the spectral window, which is what ECLIPSE always did.
+    pinhole_positions_spectral = []
+    if "pinhole_positions_spectral" in config:
+        pinhole_positions_spectral = ensure_list(config["pinhole_positions_spectral"])
+        if len(pinhole_positions_spectral) != len(pinhole_sizes):
+            raise ValueError("pinhole_positions_spectral, when given, must have "
+                             "the same length as pinhole_sizes.")
+
     # Parse config sections
     sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
     det_fixed, det_sweep = _parse_section(config.get("detector", {}), "detector")
@@ -508,6 +518,8 @@ def main() -> None:
             enable_pinholes=enable_pinholes,
             pinhole_sizes=pinhole_sizes if enable_pinholes else [],
             pinhole_positions=pinhole_positions if enable_pinholes else [],
+            pinhole_positions_spectral=(pinhole_positions_spectral
+                                        if enable_pinholes else []),
         )
 
         # Progress output

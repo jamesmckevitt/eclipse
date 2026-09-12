@@ -31,7 +31,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
-- `pinhole_sizes`, `pinhole_positions`: fixed paired lists for pinhole diffraction tests (SWC only)
+- `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only), covered in [pinhole stray light](pinholes.md)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 
 Here's a complete example configuration file:
