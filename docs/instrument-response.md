@@ -43,22 +43,6 @@ telescope:
   date: ["2008-01-01", "2013-01-01", "2018-01-01"]
 ```
 
-From Python:
-
-```python
-import astropy.units as u
-from euvst_response import Telescope_EIS
-
-Telescope_EIS().effective_area(195.0 * u.AA)    # ground, 0.301803 cm2
-Telescope_EIS(calibration="dz2025", date="2012-06-03").effective_area(195.119 * u.AA)
-```
-
-Which one you pick matters to anything comparing photon statistics between lines or between epochs: the effective area spans a factor of 25 across the short-wavelength channel alone, and the long-wavelength channel lost most of its sensitivity over the mission.
-
-!!! note "Quantum efficiency is already included"
-
-    Returned areas include the CCD quantum efficiency, which is the convention the EIS calibration tables and the EIS radiometric formula both use. `ea_and_throughput` divides it back out, because ECLIPSE applies it separately as a binomial draw further down the chain.
-
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
