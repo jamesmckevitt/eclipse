@@ -169,6 +169,7 @@ def apply_focusing_optics_psf(
     tel,
     *,
     convolve_spatial: bool = True,
+    boundary: str = "replicate",
 ) -> NDCube:
     """
     Convolve each detector frame (n_slit, n_lambda) of an NDCube with an
@@ -193,12 +194,25 @@ def apply_focusing_optics_psf(
         anyway would not be harmless: the convolution treats everything
         outside the array as dark, so a uniform field would lose flux off the
         ends of the slit that it really does have.  Default True.
+    boundary : {"replicate", "zero"}, optional
+        What lies beyond the ends of the slit.  ``"replicate"`` continues the
+        edge rows outward; ``"zero"`` treats everything outside the field as
+        dark.  Zero fill is wrong for a raster, because the Sun carries on
+        past the field of view and the rows just inside the edge really do
+        receive PSF contributions from it.  With the default SWC spatial PSF
+        the kernel is seven rows wide and zero fill costs the edge row about
+        a third of the kernel weight, the next row 8 per cent, and the one
+        after 1 per cent.  Default ``"replicate"``.
 
     Returns
     -------
     NDCube
         New cube with identical WCS / unit / meta but PSF-blurred data.
     """
+    if boundary not in ("replicate", "zero"):
+        raise ValueError(
+            f"boundary must be 'replicate' or 'zero', got {boundary!r}."
+        )
     data_in = signal.data
     unit = signal.unit
     n_scan, n_slit, n_lambda = data_in.shape
@@ -260,10 +274,18 @@ def apply_focusing_optics_psf(
     # Normalise
     psf /= psf.sum()
 
-    # Convolve each scan position
+    # Convolve each scan position. Padding the slit axis by half a kernel is
+    # exactly enough for every real row to see replicated rows rather than
+    # the zeros convolve2d assumes outside the array; the spectral axis is
+    # left to zero-fill, which is correct there.
+    pad = (ky // 2) if boundary == "replicate" else 0
     blurred = np.empty_like(data_in)
     for i in range(n_scan):
-        blurred[i] = convolve2d(data_in[i], psf, mode="same")
+        frame = data_in[i]
+        if pad:
+            frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
+        convolved = convolve2d(frame, psf, mode="same")
+        blurred[i] = convolved[pad:pad + n_slit, :] if pad else convolved
 
     return NDCube(
         data=blurred,
