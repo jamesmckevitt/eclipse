@@ -28,6 +28,85 @@ from .utils import (
 import numpy as np
 
 
+def _check_fraction_list(values: list, name: str) -> None:
+    """Reject positions that do not lie in [0, 1].
+
+    Both position lists are a fraction of the way across the detector. Out of
+    range puts the pinhole off it, where it looks like a working pinhole whose
+    light merely happens to be missing.
+    """
+    for idx, value in enumerate(values):
+        try:
+            as_float = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{name}[{idx}] is {value!r}. Positions are a plain fraction "
+                f"of the detector, so they carry no units."
+            ) from None
+        if not 0.0 <= as_float <= 1.0:
+            raise ValueError(
+                f"{name}[{idx}] is {as_float}. Positions are a fraction of the "
+                f"way across the detector and must lie in [0, 1]."
+            )
+
+
+def _parse_pinhole_config(config: dict) -> tuple:
+    """
+    Read the pinhole lists from a YAML config and validate them.
+
+    The lists are paired, one entry per pinhole, so any of them without the
+    sizes describes no pinhole at all and is always a mistake.
+
+    Parameters
+    ----------
+    config : dict
+        The whole parsed YAML config.
+
+    Returns
+    -------
+    tuple
+        ``(pinhole_sizes, pinhole_positions, pinhole_positions_spectral)``.
+    """
+    pinhole_sizes = []
+    pinhole_positions = []
+    if "pinhole_sizes" in config:
+        pinhole_sizes = ensure_list(parse_yaml_input(config["pinhole_sizes"]))
+    if "pinhole_positions" in config:
+        pinhole_positions = ensure_list(config["pinhole_positions"])
+
+    # Compared unconditionally. Guarding this on pinhole_sizes let a config
+    # carrying positions alone through, and the run then produced no pinholes
+    # and said nothing about it.
+    if len(pinhole_sizes) != len(pinhole_positions):
+        raise ValueError(
+            f"pinhole_sizes and pinhole_positions are a paired list, one entry "
+            f"per pinhole, so they must have the same length. Got "
+            f"{len(pinhole_sizes)} size(s) and {len(pinhole_positions)} "
+            f"position(s)."
+        )
+
+    _check_fraction_list(pinhole_positions, "pinhole_positions")
+
+    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
+    # the detector's spectral width.  Omit to project every pinhole to the
+    # centre of the spectral window, which is what ECLIPSE always did.
+    pinhole_positions_spectral = []
+    if "pinhole_positions_spectral" in config:
+        pinhole_positions_spectral = ensure_list(
+            config["pinhole_positions_spectral"])
+        if len(pinhole_positions_spectral) != len(pinhole_sizes):
+            raise ValueError(
+                f"pinhole_positions_spectral, when given, must have the same "
+                f"length as pinhole_sizes. Got "
+                f"{len(pinhole_positions_spectral)} spectral position(s) and "
+                f"{len(pinhole_sizes)} size(s)."
+            )
+        _check_fraction_list(pinhole_positions_spectral,
+                             "pinhole_positions_spectral")
+
+    return pinhole_sizes, pinhole_positions, pinhole_positions_spectral
+
+
 @debug_on_error
 def main() -> None:
     """Main function for running instrument response simulations."""
@@ -139,24 +218,8 @@ def main() -> None:
             )
 
     # Pinhole config (fixed paired lists, not swept)
-    pinhole_sizes = []
-    pinhole_positions = []
-    if "pinhole_sizes" in config:
-        pinhole_sizes = ensure_list(parse_yaml_input(config["pinhole_sizes"]))
-    if "pinhole_positions" in config:
-        pinhole_positions = ensure_list(config["pinhole_positions"])
-    if pinhole_sizes and len(pinhole_sizes) != len(pinhole_positions):
-        raise ValueError("pinhole_sizes and pinhole_positions must have the same length.")
-
-    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
-    # the detector's spectral width.  Omit to project every pinhole to the
-    # centre of the spectral window, which is what ECLIPSE always did.
-    pinhole_positions_spectral = []
-    if "pinhole_positions_spectral" in config:
-        pinhole_positions_spectral = ensure_list(config["pinhole_positions_spectral"])
-        if len(pinhole_positions_spectral) != len(pinhole_sizes):
-            raise ValueError("pinhole_positions_spectral, when given, must have "
-                             "the same length as pinhole_sizes.")
+    (pinhole_sizes, pinhole_positions,
+     pinhole_positions_spectral) = _parse_pinhole_config(config)
 
     # Parse config sections
     sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
@@ -180,8 +243,16 @@ def main() -> None:
                 )
                 tel_fixed.pop(key, None)
                 tel_sweep.pop(key, None)
-        if pinhole_sizes or sim_fixed.get("enable_pinholes") or sim_sweep.get("enable_pinholes"):
-            raise ValueError("Pinhole effects are not supported for EIS.")
+        # Any pinhole key at all, not just the sizes: a config carrying
+        # positions alone was accepted here and then silently ignored.
+        if (pinhole_sizes or pinhole_positions or pinhole_positions_spectral
+                or sim_fixed.get("enable_pinholes")
+                or any(sim_sweep.get("enable_pinholes", []))):
+            raise ValueError(
+                "Pinhole effects are not supported for EIS. Remove "
+                "enable_pinholes, pinhole_sizes, pinhole_positions and "
+                "pinhole_positions_spectral, or run this config against SWC."
+            )
 
     # Parse fitting configuration (multi-component Gaussian)
     fit_config = None
