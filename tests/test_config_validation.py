@@ -186,6 +186,12 @@ def test_every_config_example_in_the_docs_is_valid():
 
     This is the check that would have caught an over-tight key list: the
     examples are the closest thing to a corpus of configs people write.
+
+    A block that names its instrument is checked against that one. Several
+    examples are fragments showing one section, and take their instrument
+    from the prose around them, so those have to pass for either instrument
+    rather than for an assumed default. That still catches a key no
+    instrument accepts, which is the mismatch worth finding.
     """
     import yaml
 
@@ -196,10 +202,18 @@ def test_every_config_example_in_the_docs_is_valid():
         config = yaml.safe_load(block)
         if not isinstance(config, dict):
             continue
-        instrument = str(config.get("instrument", "SWC")).upper()
-        try:
-            _validate_config_keys(config, instrument)
-        except ValueError as error:
+
+        named = config.get("instrument")
+        candidates = [str(named).upper()] if named else ["SWC", "EIS"]
+
+        errors = []
+        for instrument in candidates:
+            try:
+                _validate_config_keys(config, instrument)
+                break
+            except ValueError as error:
+                errors.append(f"as {instrument}: {error}")
+        else:
             raise AssertionError(
-                f"config example in docs/{page} is rejected:\n{error}"
-            ) from None
+                f"config example in docs/{page} is rejected:\n"
+                + "\n".join(errors))
