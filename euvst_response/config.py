@@ -425,6 +425,14 @@ class Simulation:
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
     psf: bool = False
+    # What the spatial PSF convolution assumes lies beyond the ends of the
+    # slit. "replicate" continues the edge rows outward, which says the Sun
+    # goes on looking much as it does at the edge of the field. "zero" treats
+    # everything outside as dark, which is what ECLIPSE did before and which
+    # removes real signal from the outermost rows. The spectral direction is
+    # zero-filled either way: the wavelength grid runs several sigma past the
+    # line, so there is nothing at its ends to lose.
+    psf_boundary: str = "replicate"
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)
@@ -452,6 +460,12 @@ class Simulation:
         elif inst in ("SWC"):
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
+
+        if self.psf_boundary not in ("replicate", "zero"):
+            raise ValueError(
+                f"psf_boundary must be 'replicate' or 'zero', got "
+                f"{self.psf_boundary!r}."
+            )
 
         # The pinhole lists are paired, and both pipelines zip them together.
         # zip stops at the shortest, so a mismatch would drop the trailing

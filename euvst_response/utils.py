@@ -344,7 +344,7 @@ _SECTION_STRING_FIELDS = {
     # instrument is chosen by the top-level key and main() builds both
     # Simulation objects from that, so a value here would be parsed, swept and
     # then discarded. main() rejects it rather than letting it look effective.
-    "simulation": [],
+    "simulation": ["psf_boundary"],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date"],
     "filter": [],

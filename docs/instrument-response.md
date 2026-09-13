@@ -169,6 +169,20 @@ If you synthesised data in dynamic mode, your configuration must specify:
 offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
 ```
 
+## The edge of the raster
+
+The spatial PSF has to assume something about the Sun beyond the ends of the slit. By default it continues the edge rows outward, which says the emission just outside the field looks much like the emission just inside it:
+
+```yaml
+simulation:
+  psf: True
+  psf_boundary: replicate   # or 'zero' for the old behaviour
+```
+
+`zero` treats everything outside the field as dark. That removes real signal from the outermost rows: with the default SWC spatial PSF the edge row loses about a third of the kernel's weight, the next row 8 per cent, and the one after 1 per cent. Rows further in are untouched either way.
+
+Neither is measured, because nothing was observed out there. `replicate` is the better assumption of the two, but if you need the outer rows to be trustworthy, crop them.
+
 ## Uniform intensity mode
 
 Setting `uniform_intensity` replaces the atmosphere with a single spectral line of known integrated intensity, and no `synthesis_file` is needed. See [synthesis from a single intensity](uniform-intensity.md).
