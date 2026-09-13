@@ -49,10 +49,11 @@ def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
     return poisson.ppf(u_draw, mean_counts).astype(np.int64)
 
 
-def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det) -> np.ndarray:
+def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
+                           *, noise: bool = True) -> np.ndarray:
     """
     Vectorized version of Fano noise calculation for improved performance.
-    
+
     Parameters
     ----------
     photon_counts : np.ndarray
@@ -61,7 +62,11 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
         Rest wavelength with units
     det : Detector_SWC or Detector_EIS
         Detector object with fano noise parameters
-        
+    noise : bool, optional
+        When False, return the mean number of electrons each photon liberates
+        rather than drawing around it.  The conversion gain is unchanged; only
+        its spread is dropped.  Default True.
+
     Returns
     -------
     np.ndarray
@@ -102,16 +107,20 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # This is mathematically equivalent for large N and much faster
     
     mean_total_electrons = positive_photons * mean_electrons_per_photon
-    std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
-    
-    # Sample total electrons per pixel
-    total_electrons = np.random.normal(
-        loc=mean_total_electrons,
-        scale=std_total_electrons
-    )
-    
-    # Ensure non-negative
-    total_electrons = np.maximum(total_electrons, 0)
+
+    if noise:
+        std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
+
+        # Sample total electrons per pixel
+        total_electrons = np.random.normal(
+            loc=mean_total_electrons,
+            scale=std_total_electrons
+        )
+
+        # Ensure non-negative
+        total_electrons = np.maximum(total_electrons, 0)
+    else:
+        total_electrons = mean_total_electrons
     
     # Map back to full array
     electron_counts[mask_positive] = total_electrons
@@ -279,6 +288,7 @@ def to_electrons(
     det,
     *,
     dark_current_inverse_transform: bool = False,
+    noise: bool = True,
 ) -> NDCube:
     """
     Convert a photon-count NDCube to an electron-count NDCube.
@@ -297,6 +307,11 @@ def to_electrons(
         The distribution is unchanged, but the random stream stays synchronised
         across runs that differ only in dark-current level, which is what
         common-random-number variance reduction needs.  Default False.
+    noise : bool, optional
+        When False, every random draw here is replaced by its mean: quantum
+        efficiency becomes a straight multiplication, the Fano spread and the
+        read noise are dropped, and the dark current contributes its expected
+        number of electrons.  Default True.
 
     Returns
     -------
@@ -306,17 +321,26 @@ def to_electrons(
     # Get rest wavelength from metadata (keep as Quantity with units)
     rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
 
-    # Apply quantum efficiency via binomial distribution
-    photons_detected = np.random.binomial(photon_counts.to(u.photon/u.pix).data.astype(int), det.qe_euv)
+    # Apply quantum efficiency.  With noise on this is a binomial draw over
+    # whole photons; with it off the same expectation, qe * N, without the
+    # cast to integers that a draw would need.
+    incident = photon_counts.to(u.photon / u.pix).data
+    if noise:
+        photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
+    else:
+        photons_detected = incident * det.qe_euv
 
     # Apply proper Fano noise per pixel using a vectorized approach
-    electron_counts = _vectorized_fano_noise(photons_detected.astype(float), rest_wavelength, det)
+    electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
+                                             rest_wavelength, det, noise=noise)
 
     e = electron_counts * (u.electron / u.pixel)
 
     # Add dark current with Poisson shot noise (per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    if dark_current_inverse_transform:
+    if not noise:
+        dark_current_counts = np.full(photon_counts.data.shape, dark_current_mean)
+    elif dark_current_inverse_transform:
         dark_current_counts = _poisson_inverse_transform(
             dark_current_mean, size=photon_counts.data.shape
         )
@@ -324,10 +348,12 @@ def to_electrons(
         dark_current_counts = np.random.poisson(dark_current_mean, size=photon_counts.data.shape)
     dark_current_signal = dark_current_counts * (u.electron / u.pixel)
     e += dark_current_signal
-    
-    # Add read noise
-    e += np.random.normal(0, det.read_noise_rms.value,
-                          photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
+
+    # Add read noise.  It is zero-mean, so with noise off there is nothing to
+    # add rather than something to average.
+    if noise:
+        e += np.random.normal(0, det.read_noise_rms.value,
+                              photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
 
     e = e.to(u.electron / u.pixel)
     e_val = e.value
@@ -399,6 +425,7 @@ def sample_photon_arrivals(
     photon_counts: NDCube,
     *,
     photon_shot_inverse_transform: bool = False,
+    noise: bool = True,
 ) -> NDCube:
     """
     Sample a discrete Poisson realisation of photon arrivals per pixel.
@@ -419,11 +446,17 @@ def sample_photon_arrivals(
         The distribution is unchanged, but the random stream stays synchronised
         across runs that differ only in photon flux, which is what
         common-random-number variance reduction needs.  Default False.
+    noise : bool, optional
+        When False, return the expected counts rather than a draw around them.
+        The result is left as floating point: rounding it to whole photons
+        would put quantisation back in where the point was to remove the
+        randomness.  Default True.
 
     Returns
     -------
     NDCube
-        Poisson-sampled integer photon counts per pixel.
+        Poisson-sampled integer photon counts per pixel, or the expected
+        counts as floats when *noise* is False.
     """
     q = photon_counts.data * photon_counts.unit
 
@@ -431,6 +464,14 @@ def sample_photon_arrivals(
 
     mean_counts = q.to(canonical_units).value
     mean_counts = np.maximum(mean_counts, 0)
+
+    if not noise:
+        return NDCube(
+            data=mean_counts,
+            wcs=photon_counts.wcs.deepcopy(),
+            unit=canonical_units,
+            meta=photon_counts.meta,
+        )
 
     if photon_shot_inverse_transform:
         sampled = _poisson_inverse_transform(mean_counts)
@@ -475,7 +516,8 @@ def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
     )
 
 
-def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=None) -> NDCube:
+def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=None,
+                            *, noise: bool = True) -> NDCube:
     """
     Add visible-light stray-light to a cube of electron counts.
 
@@ -507,22 +549,27 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
         vis_sl_per_pixel *= filter_throughput
     
     # Draw Poisson realisation of stray-light photons
-    n_vis_ph = np.random.poisson(
-        (vis_sl_per_pixel * t_exp).to_value(u.photon / u.pixel),
-        size=electrons.data.shape
-    ) * (u.photon / u.pixel)
+    vis_mean = (vis_sl_per_pixel * t_exp).to_value(u.photon / u.pixel)
+    if noise:
+        n_vis_ph = np.random.poisson(
+            vis_mean, size=electrons.data.shape) * (u.photon / u.pixel)
+    else:
+        n_vis_ph = np.full(electrons.data.shape, vis_mean) * (u.photon / u.pixel)
 
     # Assume visible stray light is ~600nm (typical visible wavelength)
     visible_wavelength = 600 * u.nm  # Keep as Quantity with units
-    
+
     # Apply quantum efficiency first, then vectorized Fano noise
-    vis_photons_detected = np.random.binomial(
-        n_vis_ph.to_value(u.photon / u.pixel).astype(int),
-        det.qe_vis
-    )
-    
+    vis_incident = n_vis_ph.to_value(u.photon / u.pixel)
+    if noise:
+        vis_photons_detected = np.random.binomial(
+            vis_incident.astype(int), det.qe_vis)
+    else:
+        vis_photons_detected = vis_incident * det.qe_vis
+
     # Apply vectorized Fano noise to detected visible photons
-    stray_electrons_values = _vectorized_fano_noise(vis_photons_detected.astype(float), visible_wavelength, det)
+    stray_electrons_values = _vectorized_fano_noise(
+        vis_photons_detected.astype(float), visible_wavelength, det, noise=noise)
     stray_electrons = stray_electrons_values * (u.electron / u.pixel)
 
     # Add to original signal
@@ -537,7 +584,8 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
     )
 
 
-def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel) -> NDCube:
+def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel,
+                              *, noise: bool = True) -> NDCube:
     """
     Add visible light contributions from pinholes to electron counts.
     
@@ -626,18 +674,26 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         vis_pattern_normalized = vis_pattern * peak_fraction
 
         vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
-        
+
         # Sample Poisson photons for this pinhole contribution
-        vis_photons_poisson = np.random.poisson(vis_photons_distributed)
-        
+        if noise:
+            vis_photons_poisson = np.random.poisson(vis_photons_distributed)
+        else:
+            vis_photons_poisson = vis_photons_distributed
+
         # Apply quantum efficiency
-        vis_photons_detected = np.random.binomial(
-            vis_photons_poisson.astype(int),
-            det.qe_vis
-        )
+        if noise:
+            vis_photons_detected = np.random.binomial(
+                vis_photons_poisson.astype(int),
+                det.qe_vis
+            )
+        else:
+            vis_photons_detected = vis_photons_poisson * det.qe_vis
 
         # Apply Fano noise to detected visible photons
-        vis_electrons_values = _vectorized_fano_noise(vis_photons_detected.astype(float), visible_wavelength, det)
+        vis_electrons_values = _vectorized_fano_noise(
+            vis_photons_detected.astype(float), visible_wavelength, det,
+            noise=noise)
 
         # Add to all scan positions (visible light affects all equally)
         for scan_idx in range(n_scan):
