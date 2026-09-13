@@ -209,7 +209,7 @@ def apply_euv_pinhole_diffraction(
     Parameters
     ----------
     photon_counts : NDCube
-        EUV photon counts per pixel (shape: n_scan, n_slit, n_spectral)
+        EUV photon counts per pixel (shape: n_slit, n_scan, n_spectral)
         These should already have filter throughput applied.
     det : Detector_SWC
         Detector configuration
@@ -227,8 +227,8 @@ def apply_euv_pinhole_diffraction(
         return photon_counts  # No pinholes enabled
     
     # Get detector and data properties
-    data_shape = photon_counts.data.shape  # (n_scan, n_slit, n_spectral)
-    n_scan, n_slit, n_spectral = data_shape
+    data_shape = photon_counts.data.shape  # (n_slit, n_scan, n_spectral)
+    n_slit, n_scan, n_spectral = data_shape
     
     # Get rest wavelength for EUV calculations
     rest_wavelength = photon_counts.meta['rest_wav']
@@ -307,7 +307,7 @@ def apply_euv_pinhole_diffraction(
         # Process each scan position
         for i in range(n_scan):
             # Current filtered signal at this scan position
-            filtered_signal = photon_counts.data[i, :, :]  # Shape: (n_slit, n_spectral)
+            filtered_signal = photon_counts.data[:, i, :]  # Shape: (n_slit, n_spectral)
             
             # Back-calculate unfiltered signal (before filter attenuation)
             # filtered_signal = unfiltered_signal * filter_throughput
@@ -334,7 +334,7 @@ def apply_euv_pinhole_diffraction(
             
             # Equivalent simplified form (more efficient):
             # correction = filtered_signal * area_ratio * euv_pattern * (1/filter_throughput_spectrum[np.newaxis, :] - 1)
-            additional_photons[i, :, :] += correction
+            additional_photons[:, i, :] += correction
     
     # Create new photon counts with EUV pinhole contributions
     new_data = photon_counts.data + additional_photons

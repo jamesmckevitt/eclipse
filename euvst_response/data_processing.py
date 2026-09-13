@@ -77,7 +77,21 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     # Use the metadata line's wavelength grid as the reference
     ref_cube = line_cubes[metadata_line]
     ref_wavelengths = ref_cube.axis_world_coords(-1)[0]
-    
+
+    # Refuse files written before the cube axis order was fixed (issue #12).
+    # Those store data as (x, y, wavelength); everything downstream now
+    # expects (y, x, wavelength), so an old file would come out transposed.
+    # The WCS axis order tells the two apart.
+    _old_first_spatial = {"z": "SOLY", "x": "SOLZ", "y": "SOLZ"}
+    _int_axis = ref_cube.meta.get("integration_axis") if ref_cube.meta else None
+    if (_int_axis in _old_first_spatial
+            and ref_cube.wcs.wcs.ctype[1] == _old_first_spatial[_int_axis]):
+        raise ValueError(
+            f"{pkl_file} was written by an older ECLIPSE that stored cubes "
+            "as (x, y, wavelength). Cubes are now (y, x, wavelength). "
+            "Re-run the synthesis with this version to regenerate the file."
+        )
+
     # Get spatial dimensions from reference cube
     ny, nx, nw = ref_cube.data.shape
     
@@ -229,50 +243,50 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
         positive integers specify exact count. Default is -1.
     """
 
-    nx, ny, _ = new_cube_spec.shape
+    ny, nx, _ = new_cube_spec.shape
     wcs_hc = new_cube_spec.wcs
 
-    dx = wcs_hc.wcs.cdelt[2] * wcs_hc.wcs.cunit[2]
-    dy = wcs_hc.wcs.cdelt[1] * wcs_hc.wcs.cunit[1]
+    dx = wcs_hc.wcs.cdelt[1] * wcs_hc.wcs.cunit[1]
+    dy = wcs_hc.wcs.cdelt[2] * wcs_hc.wcs.cunit[2]
     x_angle = distance_to_angle(dx)
     y_angle = distance_to_angle(dy)
-    
-    crval_x_hc = wcs_hc.wcs.crval[2] * u.Unit(wcs_hc.wcs.cunit[2])
-    crval_y_hc = wcs_hc.wcs.crval[1] * u.Unit(wcs_hc.wcs.cunit[1])
+
+    crval_x_hc = wcs_hc.wcs.crval[1] * u.Unit(wcs_hc.wcs.cunit[1])
+    crval_y_hc = wcs_hc.wcs.crval[2] * u.Unit(wcs_hc.wcs.cunit[2])
     crval_x_hp = distance_to_angle(crval_x_hc).to_value(u.arcsec)
     crval_y_hp = distance_to_angle(crval_y_hc).to_value(u.arcsec)
 
     wcs_hp = WCS(naxis=3)
-    wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
+    wcs_hp.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
     wcs_hp.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
     wcs_hp.wcs.crpix = [wcs_hc.wcs.crpix[0],
-                        (ny + 1) / 2,
-                        (nx + 1) / 2]
-    wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], crval_y_hp, crval_x_hp]
-    wcs_hp.wcs.cdelt = [wcs_hc.wcs.cdelt[0], y_angle.to_value(u.arcsec), x_angle.to_value(u.arcsec)]
+                        (nx + 1) / 2,
+                        (ny + 1) / 2]
+    wcs_hp.wcs.crval = [wcs_hc.wcs.crval[0], crval_x_hp, crval_y_hp]
+    wcs_hp.wcs.cdelt = [wcs_hc.wcs.cdelt[0], x_angle.to_value(u.arcsec), y_angle.to_value(u.arcsec)]
     new_cube_spec_hp = NDCube(new_cube_spec.data, wcs=wcs_hp, unit=new_cube_spec.unit, meta=new_cube_spec.meta)
 
-    nx_in, ny_in, nl_in = new_cube_spec_hp.shape
+    ny_in, nx_in, nl_in = new_cube_spec_hp.shape
     fov_x = nx_in * x_angle
     fov_y = ny_in * y_angle
     pitch_x = sim.slit_width
     pitch_y = det.plate_scale_angle
     nx_out = int(np.floor((fov_x / pitch_x).decompose().value))
     ny_out = int(np.floor((fov_y / pitch_y).decompose().value))
-    shape_out = [nx_out, ny_out, nl_in]
+    shape_out = [ny_out, nx_out, nl_in]
 
-    crpix_spec = (shape_out[2] + 1) / 2
-    crpix_y = (shape_out[1] + 1) / 2
-    crpix_x = (shape_out[0] + 1) / 2
+    crpix_spec = (nl_in + 1) / 2
+    crpix_y = (ny_out + 1) / 2
+    crpix_x = (nx_out + 1) / 2
 
     wcs_tgt = WCS(naxis=3)
-    wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLT-TAN', 'HPLN-TAN']
+    wcs_tgt.wcs.ctype = [wcs_hc.wcs.ctype[0], 'HPLN-TAN', 'HPLT-TAN']
     wcs_tgt.wcs.cunit = [wcs_hc.wcs.cunit[0], 'arcsec', 'arcsec']
-    wcs_tgt.wcs.crpix = [crpix_spec, crpix_y, crpix_x]
-    wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], crval_y_hp, crval_x_hp]
+    wcs_tgt.wcs.crpix = [crpix_spec, crpix_x, crpix_y]
+    wcs_tgt.wcs.crval = [wcs_hc.wcs.crval[0], crval_x_hp, crval_y_hp]
     wcs_tgt.wcs.cdelt = [wcs_hc.wcs.cdelt[0],
-                        (det.plate_scale_angle * u.pix).to_value(u.arcsec),
-                        (sim.slit_width).to_value(u.arcsec)]
+                        (sim.slit_width).to_value(u.arcsec),
+                        (det.plate_scale_angle * u.pix).to_value(u.arcsec)]
 
     # Determine parallelization setting:
     # - If ncpu=-1, use True (all available cores)
@@ -310,11 +324,11 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     NDCube
         Rebinned cube at instrument resolution
     """
-    print("  Spectral rebinning to instrument resolution (nx,ny,*nl*)...")
+    print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
 
     cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix, ncpu=sim.ncpu)
 
-    print("  Spatially rebinning to plate scale (nx,*ny*,nl) and slit width (*nx*,ny,nl)...")
+    print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     cube_det = reproject_ndcube_heliocentric_to_helioprojective(
         cube_spec,
         sim,
@@ -335,7 +349,7 @@ def create_uniform_intensity_cube(
     tel=None,
 ) -> NDCube:
     """
-    Create a 1 x ``n_slit_pixels`` pixel NDCube containing a Gaussian emission line.
+    Create an ``n_slit_pixels`` x 1 pixel NDCube containing a Gaussian emission line.
 
     The cube is built directly at the detector's spectral resolution and
     assigned a helioprojective WCS consistent with the output of
@@ -374,7 +388,7 @@ def create_uniform_intensity_cube(
     Returns
     -------
     NDCube
-        Shape ``(1, n_slit_pixels, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
+        Shape ``(n_slit_pixels, 1, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
         helioprojective + wavelength WCS.
     """
     if n_slit_pixels < 1:
@@ -417,19 +431,19 @@ def create_uniform_intensity_cube(
     # Tile the profile along the slit axis.  Every slit pixel holds the same
     # intensity, but each is noised independently downstream, which is what
     # rebin_slit_offchip needs in order to sum them.
-    data = np.tile(profile.value, (1, n_slit_pixels, 1))  # shape (1, n_slit_pixels, n_lam)
+    data = np.tile(profile.value, (n_slit_pixels, 1, 1))  # shape (n_slit_pixels, 1, n_lam)
 
     # --- WCS (matches reproject_ndcube output format) --------------------
-    # Axes: WAVE (cm), HPLT-TAN (arcsec), HPLN-TAN (arcsec)
+    # Axes: WAVE (cm), HPLN-TAN (arcsec), HPLT-TAN (arcsec)
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
-    wcs.wcs.crpix = [(n_lam + 1) / 2, (n_slit_pixels + 1) / 2, 1.0]
+    wcs.wcs.crpix = [(n_lam + 1) / 2, 1.0, (n_slit_pixels + 1) / 2]
     wcs.wcs.crval = [lam0.value, 0.0, 0.0]
     wcs.wcs.cdelt = [
         dlam.to_value(u.cm),
-        (det.plate_scale_angle * u.pix).to_value(u.arcsec),
         sim.slit_width.to_value(u.arcsec),
+        (det.plate_scale_angle * u.pix).to_value(u.arcsec),
     ]
 
     unit = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
