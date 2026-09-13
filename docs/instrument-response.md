@@ -169,6 +169,21 @@ If you synthesised data in dynamic mode, your configuration must specify:
 offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
 ```
 
+## Turning the noise off
+
+`noise: False` replaces every random draw in the detector chain with its mean, so the run gives the signal the instrument would measure on average:
+
+```yaml
+simulation:
+  noise: False
+
+n_iter: 1     # every iteration would be identical
+```
+
+Photon shot noise, the quantum efficiency draw, Fano noise, dark current shot noise and read noise all go. What stays is everything deterministic: the effective area, the PSF, the dark current level itself, and the conversion to DN, which still rounds to whole numbers and still clips at the full well.
+
+Use it to separate what the instrument does to a line from what the noise does to it. Because the result is the same every time, `n_iter` above 1 just repeats the same run, and ECLIPSE warns if you ask for that.
+
 ## Uniform intensity mode
 
 Setting `uniform_intensity` replaces the atmosphere with a single spectral line of known integrated intensity, and no `synthesis_file` is needed. See [synthesis from a single intensity](uniform-intensity.md).

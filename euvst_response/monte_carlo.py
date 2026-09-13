@@ -91,24 +91,33 @@ def simulate_once(
     else:
         photons_euv_pinholes = photons_focused
 
+    # Every random draw below is controlled by this one flag, so a run with
+    # sim.noise False returns the signal the instrument would measure on
+    # average rather than one realisation of it.
+    noise = getattr(sim, "noise", True)
+
     # Sample discrete photon arrivals (photon shot noise)
     photon_arrivals = sample_photon_arrivals(
         photons_euv_pinholes,
         photon_shot_inverse_transform=photon_shot_inverse_transform,
+        noise=noise,
     )
 
     # Convert to electrons (detector response: QE, Fano noise, dark current, read noise)
     electrons = to_electrons(
         photon_arrivals, t_exp, det,
         dark_current_inverse_transform=dark_current_inverse_transform,
+        noise=noise,
     )
-    
+
     # Add visible stray light (with filter throughput)
-    electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel)
-    
+    electrons_stray = add_visible_stray_light(electrons, t_exp, det, sim, tel,
+                                              noise=noise)
+
     # Add visible light pinhole effects (if enabled)
     if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
-        electrons_pinholes = add_pinhole_visible_light(electrons_stray, t_exp, det, sim, tel)
+        electrons_pinholes = add_pinhole_visible_light(electrons_stray, t_exp,
+                                                       det, sim, tel, noise=noise)
     else:
         electrons_pinholes = electrons_stray
     

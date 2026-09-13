@@ -425,6 +425,11 @@ class Simulation:
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
     psf: bool = False
+    # With noise False every random draw in the detector chain is replaced by
+    # its own mean, so the run returns the signal the instrument would measure
+    # on average. Deterministic quantisation stays: DN are still rounded and
+    # still clip at the full well.
+    noise: bool = True
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)
