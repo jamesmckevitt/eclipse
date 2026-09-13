@@ -20,7 +20,6 @@ from pathlib import Path
 
 import numpy as np
 import astropy.units as u
-import dill
 
 from euvst_response.synthesis import (
     compute_goft_fiasco,
@@ -29,6 +28,7 @@ from euvst_response.synthesis import (
     create_line_cube,
     create_atmosphere_ndcube,
 )
+from euvst_response.io import save_results
 from euvst_response.utils import angle_to_distance
 
 INTENSITY_UNIT = u.erg / u.s / u.cm ** 2 / u.sr / u.cm
@@ -86,15 +86,13 @@ def main():
         for name, info in goft.items()
     }
 
-    out_path = Path("./run/input/dem_synth.pkl")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "wb") as f:
-        dill.dump({
-            "line_cubes": line_cubes,
-            "dynamic_mode": {"enabled": False},
-            "config": {"lines": lines,
-                       "abundance": "sun_coronal_2021_chianti"},
-        }, f)
+    out_path = Path("./run/input/dem_synth.asdf")
+    save_results(out_path, {
+        "line_cubes": line_cubes,
+        "dynamic_mode": {"enabled": False},
+        "config": {"lines": lines,
+                   "abundance": "sun_coronal_2021_chianti"},
+    })
 
 
 if __name__ == "__main__":
@@ -124,7 +122,7 @@ The pickle is in the normal synthesis format, so the [instrument response](instr
 ```yaml
 # configs/eis_si10.yaml
 instrument: EIS
-synthesis_file: ./run/input/dem_synth.pkl
+synthesis_file: ./run/input/dem_synth.asdf
 reference_line: Si10_258.3750   # selects the Si X 258 window
 
 n_iter: 500

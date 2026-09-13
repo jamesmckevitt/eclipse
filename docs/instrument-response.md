@@ -65,7 +65,7 @@ Here's a complete example configuration file:
 ```yaml
 # Input
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.pkl
+synthesis_file: ./run/input/synthesised_spectra.asdf
 reference_line: Fe12_195.1190
 
 # Global settings (apply to all combinations)
@@ -238,6 +238,10 @@ Both are keyword-only and both default to `False`. The distribution is the same,
 None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
 
 ## Output
+
+Results are written to `run/result/<config name>.asdf`.
+
+[ASDF](https://asdf-standard.readthedocs.io/) is a YAML tree with the arrays stored as binary blocks alongside it, so the metadata stays readable in a text editor, other languages can read it, and opening a file cannot run code the way unpickling can. Result files written before the change are still read: the format is taken from the file's own first bytes, not its name.
 
 Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
 
