@@ -163,3 +163,43 @@ def test_check_config_keys_passes_when_everything_is_known():
 
 def test_suggest_returns_none_when_nothing_is_close():
     assert suggest_config_key("zzzzqqq", {"alpha", "beta"}) is None
+
+
+# --- the documentation has to agree with the validator -----------------------
+
+def _doc_yaml_blocks():
+    """Every ```yaml block in the docs, with the page it came from."""
+    import re
+
+    from pathlib import Path
+
+    docs = Path(__file__).resolve().parent.parent / "docs"
+    blocks = []
+    for page in sorted(docs.glob("*.md")):
+        for match in re.finditer(r"```yaml\n(.*?)```", page.read_text(), re.S):
+            blocks.append((page.name, match.group(1)))
+    return blocks
+
+
+def test_every_config_example_in_the_docs_is_valid():
+    """Otherwise the docs teach a config the code refuses.
+
+    This is the check that would have caught an over-tight key list: the
+    examples are the closest thing to a corpus of configs people write.
+    """
+    import yaml
+
+    blocks = _doc_yaml_blocks()
+    assert len(blocks) > 5, "expected the docs to carry config examples"
+
+    for page, block in blocks:
+        config = yaml.safe_load(block)
+        if not isinstance(config, dict):
+            continue
+        instrument = str(config.get("instrument", "SWC")).upper()
+        try:
+            _validate_config_keys(config, instrument)
+        except ValueError as error:
+            raise AssertionError(
+                f"config example in docs/{page} is rejected:\n{error}"
+            ) from None
