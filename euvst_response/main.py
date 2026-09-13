@@ -23,9 +23,102 @@ from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
     _parse_section, _params_to_key, _extract_config_params, _SECTION_LIST_FIELDS,
-    rebin_slit_offchip,
+    rebin_slit_offchip, check_config_keys,
 )
+import dataclasses
 import numpy as np
+
+
+# Every key main() reads. Anything else in the file is not read at all, so it
+# is rejected rather than ignored.
+_TOP_LEVEL_KEYS = {
+    "instrument", "n_iter", "ncpu",
+    "uniform_intensity", "rest_wavelength", "thermal_width",
+    "synthesis_file", "reference_line",
+    "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral",
+    "offchip_bin_slit", "fit_signals",
+    "simulation", "detector", "telescope", "filter", "fitting",
+}
+
+# The Simulation dataclass has more fields than this, but main() builds its
+# Simulation objects itself and only takes these five from the section. The
+# rest (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys,
+# so writing one here would have been parsed and then dropped.
+_SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "enable_pinholes"}
+
+_FITTING_KEYS = {"components", "primary_component",
+                 "constrain_positive_intensity", "backend", "max_iter"}
+_FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
+                           "amplitude_greater_than"}
+
+
+def _dataclass_keys(cls) -> set:
+    """Constructor argument names of a config dataclass."""
+    return {f.name for f in dataclasses.fields(cls) if f.init}
+
+
+def _validate_config_keys(config: dict, instrument: str) -> None:
+    """
+    Reject any config key ECLIPSE does not read.
+
+    Checked before anything is loaded or computed, so a config written against
+    an older layout fails immediately rather than after an atmosphere load.
+
+    Parameters
+    ----------
+    config : dict
+        The whole parsed YAML config.
+    instrument : str
+        ``"SWC"`` or ``"EIS"``; the two have different detector and telescope
+        parameters.
+    """
+    det_keys = _dataclass_keys(Detector_EIS if instrument == "EIS"
+                               else Detector_SWC)
+    tel_keys = _dataclass_keys(Telescope_EIS if instrument == "EIS"
+                               else Telescope_EUVST)
+    fil_keys = _dataclass_keys(AluminiumFilter)
+
+    # 'filter' is a Telescope_EUVST field, but main() builds the filter from
+    # the top-level 'filter:' section and drops whatever is here, so it must
+    # not look settable.
+    tel_keys.discard("filter")
+    if instrument == "EIS":
+        # Warned about and ignored explicitly further down, so not a surprise.
+        tel_keys.add("microroughness_sigma")
+
+    sections = {
+        "simulation": _SIMULATION_KEYS,
+        "detector": det_keys,
+        "telescope": tel_keys,
+        "filter": fil_keys,
+    }
+    # Where else a name could have been meant, used for the suggestions. The
+    # top level is included so that a section key written at the wrong depth
+    # is named as such.
+    elsewhere = {"": _TOP_LEVEL_KEYS, **sections}
+
+    check_config_keys(config, _TOP_LEVEL_KEYS, "top-level", sections)
+
+    for name, allowed in sections.items():
+        section = config.get(name)
+        if section is None:
+            continue
+        if not isinstance(section, dict):
+            raise ValueError(
+                f"The '{name}:' section must be a mapping of parameter names "
+                f"to values, got {type(section).__name__}."
+            )
+        others = {k: v for k, v in elsewhere.items() if k != name}
+        check_config_keys(section, allowed, f"'{name}' section", others)
+
+    fitting = config.get("fitting")
+    if isinstance(fitting, dict):
+        check_config_keys(fitting, _FITTING_KEYS, "'fitting' section")
+        components = fitting.get("components") or []
+        for idx, component in enumerate(components):
+            if isinstance(component, dict):
+                check_config_keys(component, _FITTING_COMPONENT_KEYS,
+                                  f"'fitting.components[{idx}]'")
 
 
 @debug_on_error
@@ -86,6 +179,16 @@ def main() -> None:
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
+    # An empty file parses to None, which would otherwise fail later with an
+    # AttributeError rather than saying the config is empty.
+    if config is None:
+        raise ValueError(f"Config file is empty: {args.config}")
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"Config file must be a mapping of keys to values, got "
+            f"{type(config).__name__}: {args.config}"
+        )
+
     # Top-level scalar settings
     if "instrument" in config.get("simulation", {}):
         raise ValueError(
@@ -95,6 +198,11 @@ def main() -> None:
             "read and then ignored."
         )
     instrument = config.get("instrument", "SWC").upper()
+
+    # Before anything is loaded, so that a config written against an older
+    # layout fails here rather than after the atmosphere load.
+    _validate_config_keys(config, instrument)
+
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
 
