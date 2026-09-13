@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from .io import load_results
 from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma
 
 
@@ -51,8 +51,7 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
         - summed_cube: NDCube with summed line intensities
         - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
     """
-    with open(pkl_file, "rb") as f:
-        tmp = dill.load(f)
+    tmp = load_results(pkl_file)
     
     # Handle new synthesis format
     if "line_cubes" not in tmp:

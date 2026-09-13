@@ -9,7 +9,6 @@ import sys
 import warnings
 from itertools import product as itertools_product
 from pathlib import Path
-import dill
 import yaml
 import astropy.units as u
 import gzip
@@ -18,6 +17,7 @@ import h5py
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
 from .fitting import fit_cube_gauss, FitConfig, FitComponent
+from .io import save_results
 from .monte_carlo import monte_carlo
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
@@ -130,7 +130,7 @@ def main() -> None:
         print(f"  Rest wavelength: {uniform_rest_wavelength}")
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
     else:
-        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
+        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.asdf")
         reference_line = config.get("reference_line", "Fe12_195.1190")
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(
@@ -617,7 +617,7 @@ def main() -> None:
         git_commit_id = get_git_commit_id()
         software_version = _get_software_version()
 
-        output_file = Path(f"run/result/{Path(args.config).stem}.pkl")
+        output_file = Path(f"run/result/{Path(args.config).stem}.asdf")
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         print(f"\nSaving results to {output_file}")
@@ -631,8 +631,7 @@ def main() -> None:
             "software_version": software_version,
         }
 
-        with open(output_file, "wb") as f:
-            dill.dump(save_data, f)
+        output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
