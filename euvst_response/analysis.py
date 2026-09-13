@@ -13,6 +13,7 @@ import sunpy.map
 import h5py
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
@@ -393,6 +394,86 @@ def summary_table(results: Dict[str, Any]) -> None:
             print(f"  {dim}: {vals}")
 
 
+def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
+    """
+    Settle on the observation date to write into the maps.
+
+    A synthetic scene has no intrinsic date, so there are only two honest
+    sources: one the caller gives, or the date an EIS run was calibrated
+    against, which is a real observing date the user already chose.  Without
+    either, sunpy would fall back to the current time, which makes the maps
+    different on every run and silently wrong to anything that uses the date.
+
+    Parameters
+    ----------
+    combination_results : dict
+        Results for one parameter combination.
+    date_obs : str, datetime.datetime, datetime.date or None
+        The caller's date, if any.
+
+    Returns
+    -------
+    str
+        An ISO-8601 date string for the ``DATE-OBS`` keyword.
+    """
+    if date_obs is not None:
+        if isinstance(date_obs, (datetime, date)):
+            return date_obs.isoformat()
+        return str(date_obs)
+
+    telescope = combination_results.get("config_objects", {}).get("telescope")
+    calibration_date = getattr(telescope, "date", None)
+    if calibration_date:
+        return str(calibration_date)
+
+    raise ValueError(
+        "These maps have no observation date. A synthesised scene does not "
+        "carry one, and sunpy would otherwise stamp the maps with the time "
+        "the code happened to run, so they would differ between runs and "
+        "mislead anything that uses the date. Pass date_obs, for example "
+        "date_obs='2024-03-20T00:00:00'. An EIS run configured with a "
+        "time-dependent calibration uses that calibration date instead."
+    )
+
+
+def _map_header(wcs_2d, date_obs: str, bunit: str):
+    """
+    FITS header for one output map: the WCS, the unit, and the vantage point.
+
+    The observer keywords are not a guess.  The whole radiometric chain works
+    at exactly one astronomical unit (``photons_to_pixel_counts`` divides the
+    pixel area by ``const.au ** 2``), and the cubes are laid out about disc
+    centre, so that is the vantage point the data already describes.  Writing
+    it down stops sunpy assuming an Earth-based observer, which is close for a
+    low-Earth-orbit mission but is an assumption sunpy makes silently and
+    which no longer matches the data if the chain's distance ever changes.
+
+    Parameters
+    ----------
+    wcs_2d : astropy.wcs.WCS
+        The 2D celestial WCS for the map.
+    date_obs : str
+        Observation date, from :func:`_resolve_date_obs`.
+    bunit : str
+        Unit string for the map data.
+
+    Returns
+    -------
+    astropy.io.fits.Header
+    """
+    header = wcs_2d.to_header()
+    header["DATE-OBS"] = date_obs
+    header["BUNIT"] = bunit
+    # Heliographic Stonyhurst position of the observer: on the Sun-disc-centre
+    # line, one au out. Latitude and longitude are zero for the same reason
+    # the WCS reference is disc centre - ECLIPSE models no B0 angle.
+    header["HGLN_OBS"] = 0.0
+    header["HGLT_OBS"] = 0.0
+    header["DSUN_OBS"] = const.au.to_value(u.m)
+    header["RSUN_REF"] = const.R_sun.to_value(u.m)
+    return header
+
+
 def create_sunpy_maps_from_combo(
     combination_results: Dict[str, Any],
     cube_reb=None,
@@ -401,6 +482,7 @@ def create_sunpy_maps_from_combo(
     precision_requirement: u.Quantity = 2.0 * u.km / u.s,
     exposure_time_results: List[Dict[str, Any]] | None = None,
     fit_config=None,
+    date_obs=None,
 ) -> Dict[str, Any]:
     """
     Create SunPy maps from combination results using the new fit statistics structure.
@@ -424,7 +506,13 @@ def create_sunpy_maps_from_combo(
     fit_config : FitConfig, optional
         Multi-component fitting configuration. When provided, the primary-
         component indices are used to extract centre and width parameters.
-        
+    date_obs : str or datetime, optional
+        Observation date written to every map. A synthesised scene has no
+        date of its own, so this has to come from the caller. An EIS run
+        configured with a time-dependent calibration uses that calibration
+        date when this is not given; anything else raises rather than let
+        sunpy stamp the maps with the time the code ran.
+
     Returns
     -------
     dict
@@ -441,6 +529,8 @@ def create_sunpy_maps_from_combo(
         - 'exposure_time': Minimum exposure time required to reach precision (if exposure_time_results provided)
     """
     
+    date_obs = _resolve_date_obs(combination_results, date_obs)
+
     # Handle optional exposure time analysis
     if exposure_time_results is not None:
         # Create analysis_per_exp from the list
@@ -477,16 +567,15 @@ def create_sunpy_maps_from_combo(
     total_photons_data = first_photon_signal.data.sum(axis=2)  # Sum along wavelength
     total_photons_unit = first_photon_signal.unit * u.pix
 
-    maps['total_photons'] = sunpy.map.Map(total_photons_data.T, wcs_2d)
-    # 25/07/2025 SunPy failing to pass "unit" keyword to give the map units, so performing manually throughout this function.
-    maps['total_photons'].meta['bunit'] = str(total_photons_unit)
+    maps['total_photons'] = sunpy.map.Map(
+        total_photons_data.T, _map_header(wcs_2d, date_obs, str(total_photons_unit)))
 
     # --- Total DN map (after detector effects) ---
     total_dn_data = first_dn_signal.data.sum(axis=2)  # Sum along wavelength
     total_dn_unit = first_dn_signal.unit * u.pix
 
-    maps['total_dn'] = sunpy.map.Map(total_dn_data.T, wcs_2d)
-    maps['total_dn'].meta['bunit'] = str(total_dn_unit)
+    maps['total_dn'] = sunpy.map.Map(
+        total_dn_data.T, _map_header(wcs_2d, date_obs, str(total_dn_unit)))
     
     # Determine parameter indices for the primary component
     if fit_config is not None and not fit_config.is_single:
@@ -514,21 +603,21 @@ def create_sunpy_maps_from_combo(
 
     v_first = centers_to_velocity(center_first_data, center_first_unit, rest_wavelength)
 
-    maps['velocity_from_fit'] = sunpy.map.Map(v_first.value.T, wcs_2d)
-    maps['velocity_from_fit'].meta['bunit'] = str(v_first.unit)
+    maps['velocity_from_fit'] = sunpy.map.Map(
+        v_first.value.T, _map_header(wcs_2d, date_obs, str(v_first.unit)))
     
-    maps['velocity_mean'] = sunpy.map.Map(analysis["v_mean"].value.T, wcs_2d)
-    maps['velocity_mean'].meta['bunit'] = str(analysis["v_mean"].unit)
+    maps['velocity_mean'] = sunpy.map.Map(
+        analysis["v_mean"].value.T, _map_header(wcs_2d, date_obs, str(analysis["v_mean"].unit)))
 
-    maps['velocity_std'] = sunpy.map.Map(analysis["v_std"].value.T, wcs_2d)
-    maps['velocity_std'].meta['bunit'] = str(analysis["v_std"].unit)
+    maps['velocity_std'] = sunpy.map.Map(
+        analysis["v_std"].value.T, _map_header(wcs_2d, date_obs, str(analysis["v_std"].unit)))
 
-    maps['velocity_true'] = sunpy.map.Map(analysis["v_true"].value.T, wcs_2d)
-    maps['velocity_true'].meta['bunit'] = str(analysis["v_true"].unit)
+    maps['velocity_true'] = sunpy.map.Map(
+        analysis["v_true"].value.T, _map_header(wcs_2d, date_obs, str(analysis["v_true"].unit)))
     
     # Velocity error (truth - mean)
-    maps['velocity_err'] = sunpy.map.Map(analysis["v_err"].value.T, wcs_2d)
-    maps['velocity_err'].meta['bunit'] = str(analysis["v_err"].unit)
+    maps['velocity_err'] = sunpy.map.Map(
+        analysis["v_err"].value.T, _map_header(wcs_2d, date_obs, str(analysis["v_err"].unit)))
 
     # --- Line width maps ---
     # Line width from first fit (primary component sigma)
@@ -540,22 +629,22 @@ def create_sunpy_maps_from_combo(
     # Convert to Angstroms and extract value for SunPy Map
     width_data_clean = width_quantity.to(u.AA).value
     
-    maps['line_width_from_fit'] = sunpy.map.Map(width_data_clean.T, wcs_2d)
-    maps['line_width_from_fit'].meta['bunit'] = str(u.AA)
+    maps['line_width_from_fit'] = sunpy.map.Map(
+        width_data_clean.T, _map_header(wcs_2d, date_obs, str(u.AA)))
     
     # Mean line width across all iterations
     # Handle line width data properly
     w_mean = analysis["w_mean"]
     w_mean_data_clean = w_mean.to(u.AA).value
 
-    maps['line_width_mean'] = sunpy.map.Map(w_mean_data_clean.T, wcs_2d)
-    maps['line_width_mean'].meta['bunit'] = str(u.AA)
+    maps['line_width_mean'] = sunpy.map.Map(
+        w_mean_data_clean.T, _map_header(wcs_2d, date_obs, str(u.AA)))
 
     # Line width standard deviation (uncertainty)
     w_std = analysis["w_std"]
     w_std_data_clean = w_std.to(u.AA).value
-    maps['line_width_std'] = sunpy.map.Map(w_std_data_clean.T, wcs_2d)
-    maps['line_width_std'].meta['bunit'] = str(u.AA)
+    maps['line_width_std'] = sunpy.map.Map(
+        w_std_data_clean.T, _map_header(wcs_2d, date_obs, str(u.AA)))
     
     # --- Exposure time map (minimum required for precision) ---
     if analysis_per_exp is not None:
@@ -582,8 +671,8 @@ def create_sunpy_maps_from_combo(
         # Create normalization with proper boundaries to handle values 0 to nlevels-1, with nlevels as "over"
         norm = BoundaryNorm(np.arange(-0.5, nlevels + 0.5, 1), nlevels)
 
-        maps['exposure_time'] = sunpy.map.Map(best_exp.T, wcs_2d)
-        maps['exposure_time'].meta['bunit'] = 's'
+        maps['exposure_time'] = sunpy.map.Map(
+            best_exp.T, _map_header(wcs_2d, date_obs, 's'))
         maps['exposure_time'].plot_settings.update(dict(cmap=cmap, norm=norm))
         
         # Store exposure time information for custom colorbar formatting
