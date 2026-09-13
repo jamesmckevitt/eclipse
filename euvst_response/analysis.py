@@ -5,7 +5,6 @@ This module provides functions for loading, analyzing, and visualizing
 instrument response simulation results.
 """
 
-import dill
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -17,6 +16,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
+
+from .io import load_results
 
 
 
@@ -76,8 +77,7 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     dict
         Dictionary containing all results and metadata with reconstructed signals.
     """
-    with open(filepath, "rb") as f:
-        data = dill.load(f)
+    data = load_results(filepath)
     
     for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
         # Reconstruct signal NDCubes

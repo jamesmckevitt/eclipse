@@ -13,9 +13,9 @@ import psutil
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from mendeleev import element
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
+from .io import save_results
 from .utils import angle_to_distance
 
 ##############################################################################
@@ -1186,7 +1186,7 @@ def parse_arguments():
                        help="Directory containing simulation data")
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
-    parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
+    parser.add_argument("--output-name", type=str, default="synthesised_spectra.asdf",
                        help="Output filename")
     
     # Line / abundance specification (fiasco)
@@ -1621,9 +1621,8 @@ def main(args=None) -> None:
         }
     }
     
-    with open(output_file, "wb") as f:
-        dill.dump(results_data, f)
-    
+    output_file = save_results(output_file, results_data)
+
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
     print("Synthesis complete!")
 
