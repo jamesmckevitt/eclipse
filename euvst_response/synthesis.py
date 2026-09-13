@@ -24,24 +24,82 @@ from .utils import angle_to_distance
 # ---------------------------------------------------------------------------
 ##############################################################################
 
+def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
+    """
+    Check that *values* is an increasing, evenly spaced 1D grid.
+
+    Both the velocity binning and the wavelength WCS take a single spacing
+    from the start of the grid and apply it everywhere, so an uneven grid is
+    not approximated, it is silently misread.  A decreasing grid is worse: the
+    bin edges come out in descending order and every ``>= low & < high`` test
+    fails, so the emission measure is zero everywhere.
+
+    Parameters
+    ----------
+    values : np.ndarray or u.Quantity
+        1D grid of bin centres.
+    name : str
+        Name to use in the error message.
+    rtol : float, optional
+        Allowed spread in the spacing, relative to the mean spacing.  The
+        default admits the rounding in ``np.arange`` and ``np.linspace``
+        without admitting a grid anyone built unevenly on purpose.
+
+    Returns
+    -------
+    float
+        The uniform spacing, in the units of *values*.
+    """
+    plain = np.asarray(getattr(values, "value", values), dtype=float)
+
+    if plain.ndim != 1:
+        raise ValueError(f"{name} must be 1D, got {plain.ndim} dimensions.")
+    if plain.size < 2:
+        raise ValueError(f"{name} must have at least 2 elements, "
+                         f"got {plain.size}.")
+
+    diffs = np.diff(plain)
+    mean_step = float(diffs.mean())
+
+    if mean_step <= 0.0:
+        raise ValueError(
+            f"{name} must increase. Bin edges are built by stepping out from "
+            f"the first spacing, so a decreasing grid produces edges in "
+            f"descending order and every bin ends up empty."
+        )
+
+    spread = float(np.ptp(diffs))
+    if spread > rtol * mean_step:
+        worst = int(np.argmax(np.abs(diffs - mean_step)))
+        raise ValueError(
+            f"{name} must be evenly spaced. Spacing ranges from "
+            f"{diffs.min():.6g} to {diffs.max():.6g}, first differing at "
+            f"index {worst}. ECLIPSE takes one spacing from the start of the "
+            f"grid and uses it for every bin edge and for the wavelength "
+            f"CDELT, so an uneven grid puts emission in the wrong bins and "
+            f"writes wrong wavelength coordinates. Resample onto a uniform "
+            f"grid first."
+        )
+
+    return mean_step
+
+
 def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
     """
     Convert velocity grid centers to bin edges.
-    
+
     Parameters
     ----------
     vel_grid : np.ndarray
-        1D array of velocity centers.
-        
+        1D array of velocity centers.  Must be evenly spaced and increasing.
+
     Returns
     -------
     np.ndarray
         1D array of velocity bin edges (length = len(vel_grid) + 1).
     """
-    if len(vel_grid) < 2:
-        raise ValueError("vel_grid must have at least 2 elements")
-    
-    dv = vel_grid[1] - vel_grid[0]
+    dv = require_uniform_grid(vel_grid, "vel_grid")
+
     return np.concatenate([
         [vel_grid[0] - 0.5 * dv],
         vel_grid[:-1] + 0.5 * dv,
@@ -1024,6 +1082,11 @@ def synthesise_spectra(
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
 
+    # The wavelength grid built below is the velocity grid mapped through
+    # lambda_0 (1 + v/c), and create_line_cube writes its CDELT from the first
+    # step alone, so an uneven velocity grid becomes a wrong wavelength axis.
+    require_uniform_grid(vel_grid, "vel_grid")
+
     for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
         wl0 = data["wl0"].cgs.value  # cm
         
@@ -1083,6 +1146,12 @@ def create_line_cube(
         Cube with proper WCS and metadata.
     """
     cube_data = line_data["si"]  # Shape depends on integration_axis
+
+    # The WCS below carries a single linear CDELT taken from the first
+    # wavelength step, so the grid has to be uniform for that to describe it.
+    # Checked here as well as in synthesise_spectra because this is a public
+    # entry point: the DEM and VDEM routes call it directly.
+    require_uniform_grid(line_data["wl_grid"], "wl_grid")
     
     # Get spatial coordinate information from the reference cube
     if integration_axis == "x":

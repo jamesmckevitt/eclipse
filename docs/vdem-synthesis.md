@@ -52,7 +52,7 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 **Bin centres, not edges.** Both `logT` and `vel_grid` hold bin centres.
 
-**Use a uniformly spaced velocity grid.** Non-uniform spacing is not supported. Bin edges are derived by applying the *first* spacing to the whole grid, and the output cube's WCS is written with a single linear `CDELT` taken from the first wavelength step. An unevenly spaced grid therefore gets both its bin widths and its wavelength coordinates silently wrong.
+**Use a uniformly spaced velocity grid.** Non-uniform spacing is not supported. Bin edges are derived by applying the *first* spacing to the whole grid, and the output cube's WCS is written with a single linear `CDELT` taken from the first wavelength step. An unevenly spaced grid would get both its bin widths and its wavelength coordinates wrong, so it is rejected rather than used. The grid also has to increase: a descending one puts the bin edges in descending order, and nothing falls inside them.
 
 **Grid alignment.** As on the DEM page, force the `G(T)` grid to match your temperature grid by passing `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, and make sure they agree.
 
