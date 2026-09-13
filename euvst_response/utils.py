@@ -4,6 +4,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 
 from __future__ import annotations
 import contextlib
+import difflib
 import dataclasses
 import subprocess
 from pathlib import Path
@@ -482,3 +483,113 @@ def tqdm_joblib(tqdm_object):
 def _fwhm_to_sigma(fwhm: float) -> float:
     """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
     return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+
+
+# Keys that moved or were renamed, so that a config written against an older
+# layout gets told where the setting went rather than just that it is unknown.
+_RENAMED_CONFIG_KEYS = {
+    "aluminium_thickness": "filter.al_thickness",
+    "slit_bin_pairs": "offchip_bin_slit",
+    "exposure": "simulation.expos",
+}
+
+
+def _describe_key(key: str, where: str) -> str:
+    """Phrase naming *key* in section *where* ('' meaning the top level)."""
+    if where:
+        return f"'{key}' in the '{where}:' section"
+    return f"'{key}' at the top level"
+
+
+def suggest_config_key(key: str, allowed, elsewhere: dict | None = None):
+    """
+    Best guess at what an unrecognised config key was meant to be.
+
+    Looks for a rename first, then for the same name in another section, then
+    for a near miss.  The section lookup is the one that matters in practice:
+    the old flat config layout put parameters like ``expos`` and
+    ``ccd_temperature`` at the top level, and they are perfectly valid names,
+    just at the wrong depth.
+
+    Parameters
+    ----------
+    key : str
+        The unrecognised key.
+    allowed : iterable of str
+        Keys that are valid where this one appeared.
+    elsewhere : dict, optional
+        ``{section_name: valid_keys}`` for the other places a key could live.
+        A section name of ``''`` means the top level.
+
+    Returns
+    -------
+    str or None
+        A phrase naming the suggestion, or None if nothing looks close.
+    """
+    if key in _RENAMED_CONFIG_KEYS:
+        return f"'{_RENAMED_CONFIG_KEYS[key]}'"
+
+    for where, fields in (elsewhere or {}).items():
+        if key in fields:
+            return _describe_key(key, where)
+
+    close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.7)
+    if close:
+        return f"'{close[0]}'"
+
+    for where, fields in (elsewhere or {}).items():
+        close = difflib.get_close_matches(key, sorted(fields), n=1, cutoff=0.8)
+        if close:
+            return _describe_key(close[0], where)
+
+    return None
+
+
+def check_config_keys(provided, allowed, context: str,
+                      elsewhere: dict | None = None) -> None:
+    """
+    Raise if *provided* holds any key that is not in *allowed*.
+
+    A key ECLIPSE does not read is not a harmless typo: the run continues on
+    the default value, produces plausible output, and says nothing.  A sweep
+    written at the wrong depth is the worst version, because it still returns
+    results, they are just identical across every combination.
+
+    Parameters
+    ----------
+    provided : iterable of str
+        Keys found in the config.
+    allowed : iterable of str
+        Keys that are valid here.
+    context : str
+        Where this is, for the error message, e.g. ``"top-level"``.
+    elsewhere : dict, optional
+        Passed to :func:`suggest_config_key`.
+
+    Raises
+    ------
+    ValueError
+        If any key is unrecognised, listing each one with a suggestion.
+    """
+    allowed = set(allowed)
+    unknown = [k for k in provided if k not in allowed]
+    if not unknown:
+        return
+
+    lines = []
+    for key in sorted(unknown, key=str):
+        guess = suggest_config_key(str(key), allowed, elsewhere)
+        if guess:
+            lines.append(f"  {key!r}: did you mean {guess}?")
+        else:
+            lines.append(f"  {key!r}")
+
+    visible = sorted(k for k in allowed if not k.startswith("_"))
+    plural = "keys" if len(unknown) > 1 else "key"
+    raise ValueError(
+        f"Unrecognised {context} config {plural}:\n"
+        + "\n".join(lines)
+        + f"\n\nECLIPSE never reads these, so the run would have used the "
+        f"default for whatever each was meant to set.\n"
+        f"Valid {context} keys: {', '.join(visible)}"
+    )
