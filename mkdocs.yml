@@ -32,8 +32,9 @@ nav:
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument: instrument-response.md
-  - Analysing the results: tutorial.ipynb
-  - Reproducing a published run: reproducing-mckevitt-2026.md
+  - Tutorials:
+      - Basic results analysis: tutorial.ipynb
+      - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
   - Advanced topics:
       - Pinhole stray light: pinholes.md
   - Acknowledgements: acknowledgements.md
