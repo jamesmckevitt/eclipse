@@ -116,5 +116,5 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
-- [Analysing the results](tutorial.ipynb) - worked notebook example
-- [Reproducing a published run](reproducing-mckevitt-2026.md) - the whole pipeline end to end, from the public simulation data to the maps in McKevitt et al. (2026)
+- [Basic results analysis](tutorial.ipynb) - worked notebook example
+- [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
