@@ -10,14 +10,18 @@ something absolute: where a known feature lands in the array, which WCS
 entry a physical pitch is written to, or which way a map comes out.
 """
 import astropy.units as u
+import dill
 import numpy as np
 import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.analysis import create_sunpy_maps_from_combo
+from euvst_response.analysis import (
+    create_sunpy_maps_from_combo,
+    load_instrument_response_results,
+)
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import create_uniform_intensity_cube
+from euvst_response.data_processing import create_uniform_intensity_cube, load_atmosphere
 from euvst_response.radiometric import apply_focusing_optics_psf
 from euvst_response.synthesis import (
     apply_cube_cropping,
@@ -84,8 +88,11 @@ def test_cropping_keeps_the_requested_world_box():
 
 
 def test_line_cube_is_row_column_wavelength():
-    """A feature at scene (row j, column i) must land at cube.data[j, i],
-    with X on FITS axis 2 of both the volume and the line cube.
+    """A feature at scene (row j, column i) must land at cube.data[j, i].
+
+    X is FITS axis 1 of the volume, which is (SOLX, SOLY, SOLZ), and FITS
+    axis 2 of the line cube, which is (WAVE, SOLX, SOLY) once Z has been
+    integrated out.
 
     Built through synthesise_spectra with a hand-made emission measure whose
     value encodes its own position, so the check reads the position back out
@@ -309,3 +316,93 @@ def test_maps_come_out_the_right_way_up():
     assert total.wcs.wcs.ctype[0].startswith("HPLN")
     assert total.scale[0].to_value(u.arcsec / u.pix) == pytest.approx(2.0)
     assert total.scale[1].to_value(u.arcsec / u.pix) == pytest.approx(0.5)
+
+
+def _line_cube_wcs(ctypes, n_spec):
+    """A line-cube WCS with the given FITS axis order, in synthesis units."""
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = list(ctypes)
+    wcs.wcs.cunit = ["cm", "Mm", "Mm"]
+    wcs.wcs.cdelt = [1.0e-11, 1.0, 1.0]
+    wcs.wcs.crpix = [(n_spec + 1) / 2, 1.0, 1.0]
+    wcs.wcs.crval = [REST.to_value(u.cm), 0.0, 0.0]
+    return wcs
+
+
+def _write_synthesis_file(path, ctypes, integration_axis):
+    n_spec = 4
+    cube = NDCube(
+        np.ones((3, 2, n_spec)),
+        wcs=_line_cube_wcs(ctypes, n_spec),
+        unit=u.erg / (u.s * u.cm**3 * u.sr),
+        meta={"rest_wav": REST, "integration_axis": integration_axis},
+    )
+    with open(path, "wb") as f:
+        dill.dump({"line_cubes": {"Fe12_195.1190": cube}}, f)
+    return path
+
+
+@pytest.mark.parametrize("axis, old_ctypes, new_ctypes", [
+    ("z", ["WAVE", "SOLY", "SOLX"], ["WAVE", "SOLX", "SOLY"]),
+    ("x", ["WAVE", "SOLZ", "SOLY"], ["WAVE", "SOLY", "SOLZ"]),
+    ("y", ["WAVE", "SOLZ", "SOLX"], ["WAVE", "SOLX", "SOLZ"]),
+])
+def test_old_synthesis_files_are_refused(tmp_path, axis, old_ctypes, new_ctypes):
+    """A pre-#12 synthesis file must raise, and a current one must load.
+
+    The old files are readable and differ only in which spatial axis comes
+    first, so without this guard they would load and come out transposed. Both
+    branches are checked for every integration axis, because each view writes a
+    different pair of spatial CTYPEs and only one of them moves.
+    """
+    old = _write_synthesis_file(tmp_path / f"old_{axis}.pkl", old_ctypes, axis)
+    with pytest.raises(ValueError, match="older ECLIPSE"):
+        load_atmosphere(str(old))
+
+    new = _write_synthesis_file(tmp_path / f"new_{axis}.pkl", new_ctypes, axis)
+    cube, _ = load_atmosphere(str(new))
+    assert cube.data.shape == (3, 2, 4)
+    assert list(cube.wcs.wcs.ctype) == new_ctypes
+
+
+def _write_results_file(path, ctypes):
+    n_spec = 4
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = list(ctypes)
+    wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
+    wcs.wcs.cdelt = [0.02, 1.0, 0.5]
+    wcs.wcs.crpix = [n_spec / 2.0, 1.0, 1.0]
+    wcs.wcs.crval = [REST.to_value(u.Angstrom), 0.0, 0.0]
+
+    data = np.ones((3, 2, n_spec))
+    combination = {
+        "parameters": {"offchip_bin_slit": 1},
+        "first_signal_wcs": wcs,
+        "first_dn_signal_data": data,
+        "first_dn_signal_unit": u.DN / u.pix,
+        "first_photon_signal_data": data,
+        "first_photon_signal_unit": u.photon / u.pix,
+    }
+    with open(path, "wb") as f:
+        dill.dump({"results": {"all_combinations": {"combo": combination}}}, f)
+    return path
+
+
+def test_old_results_files_are_refused(tmp_path):
+    """A pre-#12 results file must raise, and a current one must reconstruct.
+
+    The stored WCS is the only thing that tells the two apart: the old files
+    put HPLT on FITS axis 2 because the signal was (x, y, wavelength).
+    """
+    old = _write_results_file(tmp_path / "old.pkl",
+                              ["WAVE", "HPLT-TAN", "HPLN-TAN"])
+    with pytest.raises(ValueError, match="older ECLIPSE"):
+        load_instrument_response_results(str(old))
+
+    new = _write_results_file(tmp_path / "new.pkl",
+                              ["WAVE", "HPLN-TAN", "HPLT-TAN"])
+    results = load_instrument_response_results(str(new))
+    combination = results["results"]["all_combinations"]["combo"]
+    assert combination["first_dn_signal"].data.shape == (3, 2, 4)
+    assert combination["first_dn_signal"].unit == u.DN / u.pix
+    assert combination["first_photon_signal"].unit == u.photon / u.pix
