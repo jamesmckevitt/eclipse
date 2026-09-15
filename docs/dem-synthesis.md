@@ -6,7 +6,7 @@ This is the route used to study how EIS instrument effects bias FIP-bias measure
 
 ## How it fits together
 
-Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
+Internally the MHD path builds a `DEM(y, x, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
 
 - **No velocity information.** All the emission goes in the zero-velocity bin.
 - **No density information.** `G(T, n_e)` is evaluated at a single assumed electron density.
