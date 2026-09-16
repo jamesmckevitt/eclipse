@@ -80,13 +80,13 @@ def make_radiance_cube(value=RADIANCE, n_spec=N_SPEC, rest=REST):
     wcs = WCS(naxis=3)
     # WCS axis order is the reverse of the numpy order, so axis 0 here is the
     # last data axis, which is the spectral one.
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
     wcs.wcs.cdelt = [CDELT_ANGSTROM, 1.0, 1.0]
-    wcs.wcs.crpix = [n_spec / 2.0, N_SLIT / 2.0, 1.0]
+    wcs.wcs.crpix = [n_spec / 2.0, 1.0, N_SLIT / 2.0]
     wcs.wcs.crval = [rest.to_value(u.Angstrom), 0.0, 0.0]
     return NDCube(
-        np.full((N_SCAN, N_SLIT, n_spec), float(value)),
+        np.full((N_SLIT, N_SCAN, n_spec), float(value)),
         wcs=wcs,
         unit=RADIANCE_UNIT,
         meta={"rest_wav": rest},
@@ -358,7 +358,7 @@ def test_photon_arrival_sampling_preserves_the_mean():
 
     mean = 400.0
     wcs = make_radiance_cube().wcs
-    counts = NDCube(np.full((N_SCAN, N_SLIT, N_SPEC), mean),
+    counts = NDCube(np.full((N_SLIT, N_SCAN, N_SPEC), mean),
                     wcs=wcs, unit=u.photon / u.pix,
                     meta={"rest_wav": REST})
 
