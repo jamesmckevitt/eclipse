@@ -64,8 +64,35 @@ def test_uneven_grid_is_refused():
     with pytest.raises(ValueError, match="evenly spaced"):
         velocity_centers_to_edges(centres)
 
-    with pytest.raises(ValueError, match="index 3"):
+
+def test_error_points_at_the_first_uneven_spacing_not_the_worst():
+    """A small slip at elements 2 to 3 comes before a large gap at 4 to 5."""
+    centres = np.array([0.0, 5.0, 10.0, 16.0, 21.0, 40.0])
+    with pytest.raises(ValueError, match="between elements 2 and 3 is 6"):
         require_uniform_grid(centres, "vel_grid")
+
+
+def test_edges_use_the_first_spacing():
+    """Within the tolerance, the first spacing is the one applied everywhere.
+
+    The second spacing here is off by 5e-7 of a bin, which the check lets
+    through; the edges must still step out by exactly the first spacing.
+    """
+    centres = np.array([0.0, 1.0, 2.0 + 5e-7, 3.0 + 5e-7])
+    assert require_uniform_grid(centres, "vel_grid") == 1.0
+    assert velocity_centers_to_edges(centres)[0] == -0.5
+
+
+@pytest.mark.parametrize("centres", [
+    np.array([np.nan, 5.0, 10.0, 15.0]),
+    np.array([0.0, 5.0, np.nan, 15.0]),
+    np.array([0.0, 5.0, 10.0, np.inf]),
+    np.array([-np.inf, 5.0, 10.0, 15.0]),
+])
+def test_non_finite_grid_is_refused(centres):
+    """NaN compares false with everything, so it would otherwise pass."""
+    with pytest.raises(ValueError, match="must be finite"):
+        velocity_centers_to_edges(centres)
 
 
 def test_decreasing_grid_is_refused():
@@ -91,28 +118,28 @@ def _one_line_goft(n_rows, n_cols, n_temp):
 
 def test_synthesise_spectra_refuses_an_uneven_velocity_grid():
     """The wavelength axis is the velocity axis, so it inherits the problem."""
-    nx, ny, n_temp = 2, 2, 2
+    ny, nx, n_temp = 2, 3, 2
     logT_grid = np.array([6.0, 6.2])
     uneven = np.array([-50.0e5, 0.0, 10.0e5]) * (u.cm / u.s)
-    em_tv = np.zeros((nx, ny, n_temp, uneven.size))
+    em_tv = np.zeros((ny, nx, n_temp, uneven.size))
 
     with pytest.raises(ValueError, match="evenly spaced"):
-        synthesise_spectra(_one_line_goft(nx, ny, n_temp), em_tv, uneven,
+        synthesise_spectra(_one_line_goft(ny, nx, n_temp), em_tv, uneven,
                            logT_grid)
 
 
 def test_create_line_cube_refuses_an_uneven_wavelength_grid():
     """Checked here too, since the DEM and VDEM routes call it directly."""
-    nx, ny, n_lambda = 2, 2, 3
+    nz, ny, nx, n_lambda = 4, 2, 3, 3
     line_data = {
-        "si": np.ones((nx, ny, n_lambda)),
+        "si": np.ones((ny, nx, n_lambda)),
         "wl_grid": np.array([195.0, 195.1, 195.4]) * u.Angstrom,
         "wl0": REST.to(u.cm),
         "atom": 26,
         "ion": 12,
     }
     reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 2)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
+        np.zeros((nz, ny, nx)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
 
     with pytest.raises(ValueError, match="evenly spaced"):
         create_line_cube("Fe12_195.1190", line_data, reference,
@@ -121,21 +148,21 @@ def test_create_line_cube_refuses_an_uneven_wavelength_grid():
 
 def test_a_uniform_grid_still_synthesises_end_to_end():
     """The guard must not stand in the way of the grids people actually use."""
-    nx, ny, n_temp = 2, 2, 2
+    nz, ny, nx, n_temp = 4, 2, 3, 2
     logT_grid = np.array([6.0, 6.2])
     vel_grid = np.arange(-50.0, 50.0 + 25.0, 25.0) * u.km / u.s
-    em_tv = np.zeros((nx, ny, n_temp, vel_grid.size))
+    em_tv = np.zeros((ny, nx, n_temp, vel_grid.size))
     em_tv[:, :, 0, vel_grid.size // 2] = 1.0e27
 
-    goft = _one_line_goft(nx, ny, n_temp)
+    goft = _one_line_goft(ny, nx, n_temp)
     synthesise_spectra(goft, em_tv, vel_grid.to(u.cm / u.s), logT_grid)
 
     reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 2)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
+        np.zeros((nz, ny, nx)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
     cube = create_line_cube("Fe12_195.1190", goft["Fe12_195.1190"], reference,
                             INTENSITY_UNIT, integration_axis="z")
 
-    assert cube.data.shape == (nx, ny, vel_grid.size)
+    assert cube.data.shape == (ny, nx, vel_grid.size)
     assert np.all(np.isfinite(cube.data))
     # CDELT is the wavelength step the uniform velocity grid implies.
     expected = (REST * (25.0 * u.km / u.s) / const.c).to_value(u.cm)

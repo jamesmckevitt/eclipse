@@ -26,11 +26,11 @@ from .utils import angle_to_distance
 
 def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     """
-    Check that *values* is an increasing, evenly spaced 1D grid.
+    Check that *values* is a finite, increasing, evenly spaced 1D grid.
 
-    Both the velocity binning and the wavelength WCS take a single spacing
-    from the start of the grid and apply it everywhere, so an uneven grid is
-    not approximated, it is silently misread.  A decreasing grid is worse: the
+    Both the velocity binning and the wavelength WCS take the first spacing
+    of the grid and apply it everywhere, so an uneven grid is not
+    approximated, it is silently misread.  A decreasing grid is worse: the
     bin edges come out in descending order and every ``>= low & < high`` test
     fails, so the emission measure is zero everywhere.
 
@@ -41,14 +41,15 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     name : str
         Name to use in the error message.
     rtol : float, optional
-        Allowed spread in the spacing, relative to the mean spacing.  The
-        default admits the rounding in ``np.arange`` and ``np.linspace``
-        without admitting a grid anyone built unevenly on purpose.
+        How far any spacing may differ from the first spacing, relative to
+        the first spacing.  The default admits the rounding in ``np.arange``
+        and ``np.linspace`` without admitting a grid anyone built unevenly on
+        purpose.
 
     Returns
     -------
     float
-        The uniform spacing, in the units of *values*.
+        The first spacing, in the units of *values*.
     """
     plain = np.asarray(getattr(values, "value", values), dtype=float)
 
@@ -58,30 +59,38 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
         raise ValueError(f"{name} must have at least 2 elements, "
                          f"got {plain.size}.")
 
-    diffs = np.diff(plain)
-    mean_step = float(diffs.mean())
+    # Comparisons with NaN are always false, so a NaN or inf in the grid can
+    # slip past the spacing checks below and come back as the spacing.
+    non_finite = np.flatnonzero(~np.isfinite(plain))
+    if non_finite.size:
+        first_bad = int(non_finite[0])
+        raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
+                         f"at index {first_bad}.")
 
-    if mean_step <= 0.0:
+    diffs = np.diff(plain)
+    step = float(diffs[0])
+
+    if step <= 0.0:
         raise ValueError(
             f"{name} must increase. Bin edges are built by stepping out from "
             f"the first spacing, so a decreasing grid produces edges in "
             f"descending order and every bin ends up empty."
         )
 
-    spread = float(np.ptp(diffs))
-    if spread > rtol * mean_step:
-        worst = int(np.argmax(np.abs(diffs - mean_step)))
+    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
+    if uneven.size:
+        first_uneven = int(uneven[0])
         raise ValueError(
-            f"{name} must be evenly spaced. Spacing ranges from "
-            f"{diffs.min():.6g} to {diffs.max():.6g}, first differing at "
-            f"index {worst}. ECLIPSE takes one spacing from the start of the "
-            f"grid and uses it for every bin edge and for the wavelength "
-            f"CDELT, so an uneven grid puts emission in the wrong bins and "
-            f"writes wrong wavelength coordinates. Resample onto a uniform "
-            f"grid first."
+            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
+            f"but the spacing between elements {first_uneven} and "
+            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
+            f"the first spacing and uses it for every bin edge and for the "
+            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
+            f"bins and writes wrong wavelength coordinates. Resample onto a "
+            f"uniform grid first."
         )
 
-    return mean_step
+    return step
 
 
 def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
