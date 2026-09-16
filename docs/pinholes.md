@@ -1,6 +1,6 @@
 # Pinhole stray light
 
-A pinhole is a defect in the aluminium filter. It admits visible light the filter would otherwise block, and lets EUV through without the attenuation applied everywhere else. ECLIPSE models both, to support filter engineering rather than science runs. Pinholes are SWC only: setting `pinhole_sizes`, or `simulation.enable_pinholes: True`, raises an error for EIS.
+A pinhole is a defect in the aluminium filter. It admits visible light the filter would otherwise block, and lets EUV through without the attenuation applied everywhere else. ECLIPSE models both, to support filter engineering rather than science runs. Pinholes are SWC only: any pinhole setting raises an error for EIS.
 
 ## Configuration
 

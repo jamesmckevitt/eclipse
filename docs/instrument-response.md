@@ -13,7 +13,7 @@ Three things are specific to `SWC` and are handled as follows under `EIS`:
 
 - The `filter:` section describes the EUVST-SW aluminium filter. The EIS effective area comes from the instrument's own calibration tables, which already fold in its filters, so engineering values cannot be varied for it and the whole section is ignored with a warning for EIS. See [EIS effective area](#eis-effective-area) below.
 - `telescope.microroughness_sigma` is an engineering parameter specific to the EUVST-primary mirror. For EIS, it is ignored with a warning.
-- Pinhole effects are specific to EUVST-SW. Setting `pinhole_sizes`, or `simulation.enable_pinholes: True`, raises an error for EIS. Note that `pinhole_positions` on its own does not: without `pinhole_sizes` it is ignored for either instrument.
+- Pinhole effects are specific to EUVST-SW. Any pinhole setting, `enable_pinholes` or a `pinhole_*` list, raises an error for EIS.
 
 The EIS point spread function is not well characterised. ECLIPSE uses a symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
 
