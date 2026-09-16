@@ -306,9 +306,13 @@ def test_maps_come_out_the_right_way_up():
         },
     }
 
+    # date_obs is required since #40: a synthesised scene carries no
+    # observation time, and sunpy would otherwise stamp the maps with the
+    # moment the code happened to run.
     maps = create_sunpy_maps_from_combo(combination_results,
                                         rest_wavelength=REST,
-                                        data_type="dn")
+                                        data_type="dn",
+                                        date_obs="2024-03-20T00:00:00")
 
     total = maps["total_dn"]
     assert total.data.shape == (ny, nx)
