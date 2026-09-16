@@ -15,7 +15,7 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
+from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
 from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
@@ -26,28 +26,6 @@ from .utils import (
     rebin_slit_offchip,
 )
 import numpy as np
-
-
-def _check_fraction_list(values: list, name: str) -> None:
-    """Reject positions that do not lie in [0, 1].
-
-    Both position lists are a fraction of the way across the detector. Out of
-    range puts the pinhole off it, where it looks like a working pinhole whose
-    light merely happens to be missing.
-    """
-    for idx, value in enumerate(values):
-        try:
-            as_float = float(value)
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"{name}[{idx}] is {value!r}. Positions are a plain fraction "
-                f"of the detector, so they carry no units."
-            ) from None
-        if not 0.0 <= as_float <= 1.0:
-            raise ValueError(
-                f"{name}[{idx}] is {as_float}. Positions are a fraction of the "
-                f"way across the detector and must lie in [0, 1]."
-            )
 
 
 def _parse_pinhole_config(config: dict) -> tuple:
@@ -74,19 +52,6 @@ def _parse_pinhole_config(config: dict) -> tuple:
     if "pinhole_positions" in config:
         pinhole_positions = ensure_list(config["pinhole_positions"])
 
-    # Compared unconditionally. Guarding this on pinhole_sizes let a config
-    # carrying positions alone through, and the run then produced no pinholes
-    # and said nothing about it.
-    if len(pinhole_sizes) != len(pinhole_positions):
-        raise ValueError(
-            f"pinhole_sizes and pinhole_positions are a paired list, one entry "
-            f"per pinhole, so they must have the same length. Got "
-            f"{len(pinhole_sizes)} size(s) and {len(pinhole_positions)} "
-            f"position(s)."
-        )
-
-    _check_fraction_list(pinhole_positions, "pinhole_positions")
-
     # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
     # the detector's spectral width.  Omit to project every pinhole to the
     # centre of the spectral window, which is what ECLIPSE always did.
@@ -94,15 +59,9 @@ def _parse_pinhole_config(config: dict) -> tuple:
     if "pinhole_positions_spectral" in config:
         pinhole_positions_spectral = ensure_list(
             config["pinhole_positions_spectral"])
-        if len(pinhole_positions_spectral) != len(pinhole_sizes):
-            raise ValueError(
-                f"pinhole_positions_spectral, when given, must have the same "
-                f"length as pinhole_sizes. Got "
-                f"{len(pinhole_positions_spectral)} spectral position(s) and "
-                f"{len(pinhole_sizes)} size(s)."
-            )
-        _check_fraction_list(pinhole_positions_spectral,
-                             "pinhole_positions_spectral")
+
+    pinhole_positions, pinhole_positions_spectral = check_pinhole_lists(
+        pinhole_sizes, pinhole_positions, pinhole_positions_spectral)
 
     return pinhole_sizes, pinhole_positions, pinhole_positions_spectral
 

@@ -10,6 +10,7 @@ import sys
 import astropy.units as u
 import pytest
 
+from euvst_response.config import Simulation
 from euvst_response.main import _parse_pinhole_config
 
 VALID = {
@@ -92,6 +93,48 @@ def test_a_fully_specified_config_survives():
     sizes, positions, spectral = _parse_pinhole_config(config)
     assert len(sizes) == len(positions) == len(spectral) == 2
     assert spectral == [0.1, 0.8]
+
+
+def test_quoted_numbers_reach_the_pipeline_as_floats():
+    """A quoted '0.3' passed the range check but stayed a string, which the
+    diffraction code cannot do arithmetic with."""
+    config = dict(VALID, pinhole_positions=["0.3", "0.7"],
+                  pinhole_positions_spectral=["0.1", "0.8"])
+    _, positions, spectral = _parse_pinhole_config(config)
+    assert positions == [0.3, 0.7]
+    assert spectral == [0.1, 0.8]
+    assert all(type(v) is float for v in positions + spectral)
+
+
+# --- Simulation built directly, without a config file -----------------------
+#
+# main() is not the only way in, so the dataclass applies the same checks.
+
+def _pinhole_sim(**kwargs):
+    return Simulation(instrument="SWC", enable_pinholes=True, **kwargs)
+
+
+def test_simulation_rejects_positions_without_sizes():
+    with pytest.raises(ValueError, match="paired list"):
+        _pinhole_sim(pinhole_positions=[0.2])
+
+
+def test_simulation_rejects_positions_outside_the_detector():
+    with pytest.raises(ValueError, match=r"must lie in \[0, 1\]"):
+        _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=[1.5])
+
+
+def test_simulation_rejects_spectral_positions_that_do_not_match():
+    with pytest.raises(ValueError, match="same length as pinhole_sizes"):
+        _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=[0.3],
+                     pinhole_positions_spectral=[0.1, 0.2])
+
+
+def test_simulation_converts_quoted_positions_to_floats():
+    sim = _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=["0.3"],
+                       pinhole_positions_spectral=["0.6"])
+    assert sim.pinhole_positions == [0.3]
+    assert sim.pinhole_positions_spectral == [0.6]
 
 
 # --- the EIS guard, exercised through main() ---------------------------------
