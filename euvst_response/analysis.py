@@ -78,8 +78,19 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     """
     with open(filepath, "rb") as f:
         data = dill.load(f)
-    
+
     for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
+        # Refuse files written before the cube axis order was fixed (issue
+        # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
+        # WCS; the maps made from one here would come out transposed.
+        wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype
+        if str(wcs_ctype[1]).startswith("HPLT"):
+            raise ValueError(
+                f"{filepath} was written by an older ECLIPSE that stored "
+                "cubes as (x, y, wavelength). Cubes are now "
+                "(y, x, wavelength). Re-run the simulation with this "
+                "version to regenerate the file."
+            )
         # Reconstruct signal NDCubes
         combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
             combination_results["first_dn_signal_data"],
@@ -166,8 +177,8 @@ def analyse_fit_statistics(
     fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
     
     # Extract data and units
-    mean_data = fit_stats["mean_data"]      # Shape: (nx, ny, n_params)
-    std_data = fit_stats["std_data"]        # Shape: (nx, ny, n_params)
+    mean_data = fit_stats["mean_data"]      # Shape: (ny, nx, n_params)
+    std_data = fit_stats["std_data"]        # Shape: (ny, nx, n_params)
     units = fit_stats["units"]              # List of n_params astropy units
     
     # Get center statistics for the primary component
@@ -310,8 +321,8 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     -------
     dict
         Dictionary containing DEM data with keys:
-        - 'dem_map': DEM(T) map (numpy array, shape nx, ny, nT)
-        - 'em_tv': EM(T,v) map (numpy array, shape nx, ny, nT, nv)
+        - 'dem_map': DEM(T) map (numpy array, shape ny, nx, nT)
+        - 'em_tv': EM(T,v) map (numpy array, shape ny, nx, nT, nv)
         - 'logT_centres': Temperature bin centers (numpy array)
         - 'v_edges': Velocity bin edges (numpy array)
         - 'goft': Contribution function data (dict)
@@ -454,15 +465,18 @@ def create_sunpy_maps_from_combo(
     else:
         analysis_per_exp = None
     
-    # Extract 2D helioprojective WCS from the cube or stored signal WCS
+    # Extract 2D helioprojective WCS from the cube or stored signal WCS.
+    # The cubes are (ny, nx, nwave) against a (WAVE, HPLN, HPLT) WCS, so the
+    # celestial part is already in SunPy's (HPLN, HPLT) order and the data
+    # can go into the maps as it is.
     if cube_reb is not None:
-        wcs_2d = cube_reb.wcs.celestial.swapaxes(0, 1)
+        wcs_2d = cube_reb.wcs.celestial
     else:
-        wcs_2d = combination_results["first_signal_wcs"].celestial.swapaxes(0, 1)
-    
+        wcs_2d = combination_results["first_signal_wcs"].celestial
+
     # Get the data arrays - now only first iteration is saved
-    first_photon_signal = combination_results["first_photon_signal"]  # Shape: (nx, ny, nwave)
-    first_dn_signal = combination_results["first_dn_signal"]         # Shape: (nx, ny, nwave)
+    first_photon_signal = combination_results["first_photon_signal"]  # Shape: (ny, nx, nwave)
+    first_dn_signal = combination_results["first_dn_signal"]         # Shape: (ny, nx, nwave)
     fit_stats_key = f"{data_type}_fit_stats"
     fit_stats = combination_results[fit_stats_key]          # Contains first_fit_data, mean_data, std_data, units
     if fit_stats is None:
@@ -477,7 +491,7 @@ def create_sunpy_maps_from_combo(
     total_photons_data = first_photon_signal.data.sum(axis=2)  # Sum along wavelength
     total_photons_unit = first_photon_signal.unit * u.pix
 
-    maps['total_photons'] = sunpy.map.Map(total_photons_data.T, wcs_2d)
+    maps['total_photons'] = sunpy.map.Map(total_photons_data, wcs_2d)
     # 25/07/2025 SunPy failing to pass "unit" keyword to give the map units, so performing manually throughout this function.
     maps['total_photons'].meta['bunit'] = str(total_photons_unit)
 
@@ -485,7 +499,7 @@ def create_sunpy_maps_from_combo(
     total_dn_data = first_dn_signal.data.sum(axis=2)  # Sum along wavelength
     total_dn_unit = first_dn_signal.unit * u.pix
 
-    maps['total_dn'] = sunpy.map.Map(total_dn_data.T, wcs_2d)
+    maps['total_dn'] = sunpy.map.Map(total_dn_data, wcs_2d)
     maps['total_dn'].meta['bunit'] = str(total_dn_unit)
     
     # Determine parameter indices for the primary component
@@ -501,7 +515,7 @@ def create_sunpy_maps_from_combo(
 
     # --- Velocity maps ---
     # Velocity from first fit (primary component center)
-    first_fit_data = fit_stats["first_fit_data"]  # Shape: (nx, ny, n_params)
+    first_fit_data = fit_stats["first_fit_data"]  # Shape: (ny, nx, n_params)
     center_first_data = first_fit_data[..., idx_center]
     center_first_unit = fit_stats["units"][idx_center]
 
@@ -514,20 +528,20 @@ def create_sunpy_maps_from_combo(
 
     v_first = centers_to_velocity(center_first_data, center_first_unit, rest_wavelength)
 
-    maps['velocity_from_fit'] = sunpy.map.Map(v_first.value.T, wcs_2d)
+    maps['velocity_from_fit'] = sunpy.map.Map(v_first.value, wcs_2d)
     maps['velocity_from_fit'].meta['bunit'] = str(v_first.unit)
     
-    maps['velocity_mean'] = sunpy.map.Map(analysis["v_mean"].value.T, wcs_2d)
+    maps['velocity_mean'] = sunpy.map.Map(analysis["v_mean"].value, wcs_2d)
     maps['velocity_mean'].meta['bunit'] = str(analysis["v_mean"].unit)
 
-    maps['velocity_std'] = sunpy.map.Map(analysis["v_std"].value.T, wcs_2d)
+    maps['velocity_std'] = sunpy.map.Map(analysis["v_std"].value, wcs_2d)
     maps['velocity_std'].meta['bunit'] = str(analysis["v_std"].unit)
 
-    maps['velocity_true'] = sunpy.map.Map(analysis["v_true"].value.T, wcs_2d)
+    maps['velocity_true'] = sunpy.map.Map(analysis["v_true"].value, wcs_2d)
     maps['velocity_true'].meta['bunit'] = str(analysis["v_true"].unit)
     
     # Velocity error (truth - mean)
-    maps['velocity_err'] = sunpy.map.Map(analysis["v_err"].value.T, wcs_2d)
+    maps['velocity_err'] = sunpy.map.Map(analysis["v_err"].value, wcs_2d)
     maps['velocity_err'].meta['bunit'] = str(analysis["v_err"].unit)
 
     # --- Line width maps ---
@@ -540,7 +554,7 @@ def create_sunpy_maps_from_combo(
     # Convert to Angstroms and extract value for SunPy Map
     width_data_clean = width_quantity.to(u.AA).value
     
-    maps['line_width_from_fit'] = sunpy.map.Map(width_data_clean.T, wcs_2d)
+    maps['line_width_from_fit'] = sunpy.map.Map(width_data_clean, wcs_2d)
     maps['line_width_from_fit'].meta['bunit'] = str(u.AA)
     
     # Mean line width across all iterations
@@ -548,13 +562,13 @@ def create_sunpy_maps_from_combo(
     w_mean = analysis["w_mean"]
     w_mean_data_clean = w_mean.to(u.AA).value
 
-    maps['line_width_mean'] = sunpy.map.Map(w_mean_data_clean.T, wcs_2d)
+    maps['line_width_mean'] = sunpy.map.Map(w_mean_data_clean, wcs_2d)
     maps['line_width_mean'].meta['bunit'] = str(u.AA)
 
     # Line width standard deviation (uncertainty)
     w_std = analysis["w_std"]
     w_std_data_clean = w_std.to(u.AA).value
-    maps['line_width_std'] = sunpy.map.Map(w_std_data_clean.T, wcs_2d)
+    maps['line_width_std'] = sunpy.map.Map(w_std_data_clean, wcs_2d)
     maps['line_width_std'].meta['bunit'] = str(u.AA)
     
     # --- Exposure time map (minimum required for precision) ---
@@ -582,7 +596,7 @@ def create_sunpy_maps_from_combo(
         # Create normalization with proper boundaries to handle values 0 to nlevels-1, with nlevels as "over"
         norm = BoundaryNorm(np.arange(-0.5, nlevels + 0.5, 1), nlevels)
 
-        maps['exposure_time'] = sunpy.map.Map(best_exp.T, wcs_2d)
+        maps['exposure_time'] = sunpy.map.Map(best_exp, wcs_2d)
         maps['exposure_time'].meta['bunit'] = 's'
         maps['exposure_time'].plot_settings.update(dict(cmap=cmap, norm=norm))
         
