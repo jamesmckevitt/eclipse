@@ -23,9 +23,135 @@ from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
     _parse_section, _params_to_key, _extract_config_params, _SECTION_LIST_FIELDS,
-    rebin_slit_offchip,
+    rebin_slit_offchip, check_config_keys,
 )
+import dataclasses
 import numpy as np
+
+
+# Every key main() reads. Anything else in the file is not read at all, so it
+# is rejected rather than ignored.
+_TOP_LEVEL_KEYS = {
+    "instrument", "n_iter", "ncpu",
+    "uniform_intensity", "rest_wavelength", "thermal_width",
+    "synthesis_file", "reference_line",
+    "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral",
+    "offchip_bin_slit", "fit_signals",
+    "simulation", "detector", "telescope", "filter", "fitting",
+}
+
+# The Simulation dataclass has more fields than this, but main() builds its
+# Simulation objects itself and only takes these from the section. The rest
+# (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
+# writing one here would have been parsed and then dropped.
+_SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
+                    "noise", "enable_pinholes"}
+
+_FITTING_KEYS = {"components", "primary_component",
+                 "constrain_positive_intensity", "backend", "max_iter"}
+_FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
+                           "amplitude_greater_than"}
+
+
+def _dataclass_keys(cls) -> set:
+    """Constructor argument names of a config dataclass."""
+    return {f.name for f in dataclasses.fields(cls) if f.init}
+
+
+def _type_name(value) -> str:
+    """Type of a config value for an error message; an empty YAML entry is None."""
+    return "nothing" if value is None else type(value).__name__
+
+
+def _require_mapping(value, what: str) -> None:
+    """Raise unless a config section or fitting component is a mapping."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{what} must be a mapping of parameter names to values, "
+            f"got {_type_name(value)}."
+        )
+
+
+def _validate_config_keys(config: dict, instrument: str) -> None:
+    """
+    Reject any config key ECLIPSE does not read.
+
+    Checked before anything is loaded or computed, so a config written against
+    an older layout fails immediately rather than after an atmosphere load.
+
+    Parameters
+    ----------
+    config : dict
+        The whole parsed YAML config.
+    instrument : str
+        ``"SWC"`` or ``"EIS"``; the two have different detector and telescope
+        parameters.
+
+    Raises
+    ------
+    ValueError
+        If the instrument is not supported, a key is not read, or a section
+        that is present is not a mapping.
+    """
+    # Checked first because the valid keys depend on it, and main() treats
+    # anything other than SWC as EIS.
+    if instrument not in ("SWC", "EIS"):
+        raise ValueError(
+            f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'EIS'."
+        )
+
+    det_keys = _dataclass_keys(Detector_EIS if instrument == "EIS"
+                               else Detector_SWC)
+    tel_keys = _dataclass_keys(Telescope_EIS if instrument == "EIS"
+                               else Telescope_EUVST)
+    fil_keys = _dataclass_keys(AluminiumFilter)
+
+    # 'filter' is a Telescope_EUVST field, but main() builds the filter from
+    # the top-level 'filter:' section and drops whatever is here, so it must
+    # not look settable.
+    tel_keys.discard("filter")
+    if instrument == "EIS":
+        # Warned about and ignored explicitly further down, so not a surprise.
+        tel_keys.add("microroughness_sigma")
+
+    sections = {
+        "simulation": _SIMULATION_KEYS,
+        "detector": det_keys,
+        "telescope": tel_keys,
+        "filter": fil_keys,
+    }
+    # Where else a name could have been meant, used for the suggestions. The
+    # top level is included so that a section key written at the wrong depth
+    # is named as such.
+    elsewhere = {"": _TOP_LEVEL_KEYS, **sections}
+
+    check_config_keys(config, _TOP_LEVEL_KEYS, "top-level", sections)
+
+    # Sections are checked by presence, not value, so that a heading left
+    # empty (which parses to None) gets a message here rather than an
+    # AttributeError further on.
+    for name, allowed in sections.items():
+        if name not in config:
+            continue
+        _require_mapping(config[name], f"The '{name}:' section")
+        others = {k: v for k, v in elsewhere.items() if k != name}
+        check_config_keys(config[name], allowed, f"'{name}' section", others)
+
+    if "fitting" in config:
+        fitting = config["fitting"]
+        _require_mapping(fitting, "The 'fitting:' section")
+        check_config_keys(fitting, _FITTING_KEYS, "'fitting' section")
+        if "components" in fitting:
+            components = fitting["components"]
+            if not isinstance(components, list):
+                raise ValueError(
+                    f"'fitting.components' must be a list with one entry per "
+                    f"Gaussian component, got {_type_name(components)}."
+                )
+            for idx, component in enumerate(components):
+                where = f"'fitting.components[{idx}]'"
+                _require_mapping(component, where)
+                check_config_keys(component, _FITTING_COMPONENT_KEYS, where)
 
 
 def _parse_pinhole_config(config: dict) -> tuple:
@@ -124,8 +250,20 @@ def main() -> None:
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    # Top-level scalar settings
-    if "instrument" in config.get("simulation", {}):
+    # An empty file parses to None, which would otherwise fail later with an
+    # AttributeError rather than saying the config is empty.
+    if config is None:
+        raise ValueError(f"Config file is empty: {args.config}")
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"Config file must be a mapping of keys to values, got "
+            f"{type(config).__name__}: {args.config}"
+        )
+
+    # Top-level scalar settings. A 'simulation:' that is not a mapping is left
+    # for _validate_config_keys to report.
+    simulation_section = config.get("simulation")
+    if isinstance(simulation_section, dict) and "instrument" in simulation_section:
         raise ValueError(
             "Set the instrument with the top-level 'instrument:' key, not "
             "inside the 'simulation:' section. Both Simulation objects are "
@@ -133,6 +271,11 @@ def main() -> None:
             "read and then ignored."
         )
     instrument = config.get("instrument", "SWC").upper()
+
+    # Before anything is loaded, so that a config written against an older
+    # layout fails here rather than after the atmosphere load.
+    _validate_config_keys(config, instrument)
+
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
 

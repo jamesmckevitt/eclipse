@@ -113,7 +113,7 @@ For guidance on recommended values, see
 
 !!! warning "Parameters must go inside their section"
 
-    Only `simulation`, `detector`, `telescope`, and `filter` are read as sections. A parameter written at the top level instead - `expos:` or `ccd_temperature:` directly under the document root - is **silently ignored**, and the run proceeds with the default value. There is no warning. If a sweep produces suspiciously identical results across combinations, check the indentation first.
+    A parameter written at the top level instead - `expos:` or `ccd_temperature:` directly under the document root - stops the run with an error naming the section it belongs in. Any other key ECLIPSE does not read, such as a misspelt parameter name, is rejected the same way.
 
 By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
 
