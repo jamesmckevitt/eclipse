@@ -69,7 +69,7 @@ synthesise-spectra --help
 
 **Grid Parameters:**
 
-- `--cube-shape`: Cube dimensions as three integers (default: `512 768 256`)
+- `--cube-shape`: Cube dimensions as three integers in the order the file stores them, `(nx nz ny)`, so the vertical axis is the second one and not the last (default: `512 768 256`). The reader rearranges the cube after reading it, so `--voxel-dx`, `--voxel-dy` and `--voxel-dz` always name the physical axes whatever order is given here. Getting this the wrong way round still reshapes without error when the two sizes differ, and puts the simulation on a box of the wrong shape.
 - `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes with units (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
 
 **Velocity Grid:**
