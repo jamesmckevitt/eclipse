@@ -33,7 +33,7 @@ nav:
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument: instrument-response.md
   - Tutorials:
-      - Basic results analysis: tutorial.ipynb
+      - Basic results analysis: basic-results-analysis.ipynb
       - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
   - Advanced topics:
       - Pinhole stray light: pinholes.md

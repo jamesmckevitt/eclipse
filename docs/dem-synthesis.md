@@ -138,4 +138,4 @@ simulation:
 eclipse --config configs/eis_si10.yaml
 ```
 
-Then you can perform analysis, like the example in [analysis tutorial](tutorial.ipynb).
+Then you can perform analysis, like the example in [analysis tutorial](basic-results-analysis.ipynb).

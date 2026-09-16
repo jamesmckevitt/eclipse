@@ -60,4 +60,4 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 ## Running the instrument response
 
-The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [analysis tutorial](tutorial.ipynb).
+The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [analysis tutorial](basic-results-analysis.ipynb).

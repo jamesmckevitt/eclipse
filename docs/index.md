@@ -67,7 +67,7 @@ The first three run ECLIPSE's own synthesis, which is optically thin, and produc
 
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
 
-**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](tutorial.ipynb).
+**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](basic-results-analysis.ipynb).
 
 ## Instruments
 
@@ -116,5 +116,5 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
-- [Basic results analysis](tutorial.ipynb) - worked notebook example
+- [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
 - [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
