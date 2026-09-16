@@ -433,6 +433,11 @@ class Simulation:
     # zero-filled either way: the wavelength grid runs several sigma past the
     # line, so there is nothing at its ends to lose.
     psf_boundary: str = "replicate"
+    # With noise False every random draw in the detector chain is replaced by
+    # its own mean, so the run returns the signal the instrument would measure
+    # on average. Deterministic quantisation stays: DN are still rounded and
+    # still clip at the full well.
+    noise: bool = True
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)

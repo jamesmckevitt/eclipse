@@ -261,6 +261,7 @@ def main() -> None:
         "vis_sl": 0.0 * u.photon / (u.s * u.cm**2),
         "psf": False,
         "psf_boundary": "replicate",
+        "noise": True,
         "enable_pinholes": False,
     }
     _det_defaults = {
@@ -288,6 +289,15 @@ def main() -> None:
                 "a FWHM of 3 pixels from Ugarte-Urra (2016) EIS Software Note 2.",
                 UserWarning,
             )
+
+    noise_vals = list(sim_sweep.get("noise", [sim_fixed.get("noise", True)]))
+    if not all(noise_vals) and n_iter > 1:
+        warnings.warn(
+            f"noise is False, so every Monte Carlo iteration is identical. "
+            f"n_iter is {n_iter}; set it to 1 to avoid repeating the same "
+            f"deterministic run.",
+            UserWarning,
+        )
 
     enable_ph_vals = list(sim_sweep.get("enable_pinholes", [sim_fixed.get("enable_pinholes", False)]))
     if any(enable_ph_vals):
@@ -442,6 +452,7 @@ def main() -> None:
         vis_sl = all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2))
         psf = all_sim.get("psf", False)
         psf_boundary = all_sim.get("psf_boundary", "replicate")
+        noise = all_sim.get("noise", True)
         enable_pinholes = all_sim.get("enable_pinholes", False)
 
         # Build config objects
@@ -525,6 +536,7 @@ def main() -> None:
             vis_sl=vis_sl,
             psf=psf,
             psf_boundary=psf_boundary,
+            noise=noise,
             enable_pinholes=enable_pinholes,
             pinhole_sizes=pinhole_sizes if enable_pinholes else [],
             pinhole_positions=pinhole_positions if enable_pinholes else [],

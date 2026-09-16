@@ -183,6 +183,17 @@ simulation:
 
 Neither is measured, because nothing was observed out there. `replicate` is the better assumption of the two, but if you need the outer rows to be trustworthy, crop them.
 
+## Turning the noise off
+
+`noise: False` replaces every random draw in the detector chain with its mean:
+
+```yaml
+simulation:
+  noise: False
+
+n_iter: 1     # every iteration would be identical
+```
+
 ## Uniform intensity mode
 
 Setting `uniform_intensity` replaces the atmosphere with a single spectral line of known integrated intensity, and no `synthesis_file` is needed. See [synthesis from a single intensity](uniform-intensity.md).
