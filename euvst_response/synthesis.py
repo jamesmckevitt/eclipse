@@ -71,7 +71,8 @@ def load_cube(
     file_path : str | Path
         Path to the binary file.
     shape : Tuple[int, int, int]
-        The *full* cube dimensions in the file's own storage order.
+        The *full* cube dimensions in the file's own storage order, which is
+        ``(nx, nz, ny)`` - the vertical axis comes second, not last.
     unit : astropy.units.Unit, optional
         Astropy unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns
         a plain ndarray.
@@ -1233,7 +1234,7 @@ def parse_arguments():
     
     # Grid parameters
     parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
-                       help="Cube dimensions (nx ny nz)")
+                       help="Cube dimensions in the file's storage order (nx nz ny)")
     parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
                        help="Voxel size in x (e.g. '0.192 Mm')")
     parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
