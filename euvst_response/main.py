@@ -15,7 +15,7 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation
+from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
 from .fitting import fit_cube_gauss, FitConfig, FitComponent
 from .monte_carlo import monte_carlo
@@ -154,6 +154,44 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
                 check_config_keys(component, _FITTING_COMPONENT_KEYS, where)
 
 
+def _parse_pinhole_config(config: dict) -> tuple:
+    """
+    Read the pinhole lists from a YAML config and validate them.
+
+    The lists are paired, one entry per pinhole, so any of them without the
+    sizes describes no pinhole at all and is always a mistake.
+
+    Parameters
+    ----------
+    config : dict
+        The whole parsed YAML config.
+
+    Returns
+    -------
+    tuple
+        ``(pinhole_sizes, pinhole_positions, pinhole_positions_spectral)``.
+    """
+    pinhole_sizes = []
+    pinhole_positions = []
+    if "pinhole_sizes" in config:
+        pinhole_sizes = ensure_list(parse_yaml_input(config["pinhole_sizes"]))
+    if "pinhole_positions" in config:
+        pinhole_positions = ensure_list(config["pinhole_positions"])
+
+    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
+    # the detector's spectral width.  Omit to project every pinhole to the
+    # centre of the spectral window, which is what ECLIPSE always did.
+    pinhole_positions_spectral = []
+    if "pinhole_positions_spectral" in config:
+        pinhole_positions_spectral = ensure_list(
+            config["pinhole_positions_spectral"])
+
+    pinhole_positions, pinhole_positions_spectral = check_pinhole_lists(
+        pinhole_sizes, pinhole_positions, pinhole_positions_spectral)
+
+    return pinhole_sizes, pinhole_positions, pinhole_positions_spectral
+
+
 @debug_on_error
 def main() -> None:
     """Main function for running instrument response simulations."""
@@ -282,24 +320,8 @@ def main() -> None:
             )
 
     # Pinhole config (fixed paired lists, not swept)
-    pinhole_sizes = []
-    pinhole_positions = []
-    if "pinhole_sizes" in config:
-        pinhole_sizes = ensure_list(parse_yaml_input(config["pinhole_sizes"]))
-    if "pinhole_positions" in config:
-        pinhole_positions = ensure_list(config["pinhole_positions"])
-    if pinhole_sizes and len(pinhole_sizes) != len(pinhole_positions):
-        raise ValueError("pinhole_sizes and pinhole_positions must have the same length.")
-
-    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
-    # the detector's spectral width.  Omit to project every pinhole to the
-    # centre of the spectral window, which is what ECLIPSE always did.
-    pinhole_positions_spectral = []
-    if "pinhole_positions_spectral" in config:
-        pinhole_positions_spectral = ensure_list(config["pinhole_positions_spectral"])
-        if len(pinhole_positions_spectral) != len(pinhole_sizes):
-            raise ValueError("pinhole_positions_spectral, when given, must have "
-                             "the same length as pinhole_sizes.")
+    (pinhole_sizes, pinhole_positions,
+     pinhole_positions_spectral) = _parse_pinhole_config(config)
 
     # Parse config sections
     sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
@@ -323,8 +345,16 @@ def main() -> None:
                 )
                 tel_fixed.pop(key, None)
                 tel_sweep.pop(key, None)
-        if pinhole_sizes or sim_fixed.get("enable_pinholes") or sim_sweep.get("enable_pinholes"):
-            raise ValueError("Pinhole effects are not supported for EIS.")
+        # Any pinhole key at all, not just the sizes: a config carrying
+        # positions alone was accepted here and then silently ignored.
+        if (pinhole_sizes or pinhole_positions or pinhole_positions_spectral
+                or sim_fixed.get("enable_pinholes")
+                or any(sim_sweep.get("enable_pinholes", []))):
+            raise ValueError(
+                "Pinhole effects are not supported for EIS. Remove "
+                "enable_pinholes, pinhole_sizes, pinhole_positions and "
+                "pinhole_positions_spectral, or run this config against SWC."
+            )
 
     # Parse fitting configuration (multi-component Gaussian)
     fit_config = None
@@ -403,6 +433,7 @@ def main() -> None:
         "expos": 1.0 * u.s,
         "vis_sl": 0.0 * u.photon / (u.s * u.cm**2),
         "psf": False,
+        "psf_boundary": "replicate",
         "noise": True,
         "enable_pinholes": False,
     }
@@ -593,6 +624,7 @@ def main() -> None:
         expos = all_sim["expos"]
         vis_sl = all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2))
         psf = all_sim.get("psf", False)
+        psf_boundary = all_sim.get("psf_boundary", "replicate")
         noise = all_sim.get("noise", True)
         enable_pinholes = all_sim.get("enable_pinholes", False)
 
@@ -676,6 +708,7 @@ def main() -> None:
             instrument=instrument,
             vis_sl=vis_sl,
             psf=psf,
+            psf_boundary=psf_boundary,
             noise=noise,
             enable_pinholes=enable_pinholes,
             pinhole_sizes=pinhole_sizes if enable_pinholes else [],

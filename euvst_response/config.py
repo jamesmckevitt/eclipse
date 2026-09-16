@@ -99,6 +99,70 @@ def _interp_tr(wavelength_nm: float, wl_tab: np.ndarray, tr_tab: np.ndarray) -> 
     return float(f(wavelength_nm))
 
 
+def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[list, list]:
+    """
+    Validate the paired pinhole lists and return the positions as floats.
+
+    Configuration files and a directly built ``Simulation`` both go through
+    this, so they cannot disagree about what a valid pinhole is.
+
+    Parameters
+    ----------
+    sizes, positions : list
+        Pinhole diameters and positions along the slit, one entry per pinhole.
+    spectral : list
+        Positions along the spectral axis, one per pinhole, or empty to put
+        every pinhole at the centre of the spectral window.
+
+    Returns
+    -------
+    tuple of list
+        ``(positions, spectral)``, each entry converted to float.
+    """
+    # Compared unconditionally. Guarding this on the sizes let positions alone
+    # through, and the run then produced no pinholes and said nothing about it.
+    if len(sizes) != len(positions):
+        raise ValueError(
+            f"pinhole_sizes and pinhole_positions are a paired list, one entry "
+            f"per pinhole, so they must have the same length. Got "
+            f"{len(sizes)} size(s) and {len(positions)} position(s)."
+        )
+    if spectral and len(spectral) != len(sizes):
+        raise ValueError(
+            f"pinhole_positions_spectral, when given, must have the same "
+            f"length as pinhole_sizes. Got {len(spectral)} spectral "
+            f"position(s) and {len(sizes)} size(s)."
+        )
+    return (_fractions(positions, "pinhole_positions"),
+            _fractions(spectral, "pinhole_positions_spectral"))
+
+
+def _fractions(values: list, name: str) -> list:
+    """Return *values* as floats, rejecting any that do not lie in [0, 1].
+
+    Both position lists are a fraction of the way across the detector. Out of
+    range puts the pinhole off it, where it looks like a working pinhole whose
+    light merely happens to be missing. Converting also stops a quoted YAML
+    value such as '0.3' reaching the diffraction code as a string.
+    """
+    out = []
+    for idx, value in enumerate(values):
+        try:
+            as_float = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{name}[{idx}] is {value!r}. Positions are a plain fraction "
+                f"of the detector, so they carry no units."
+            ) from None
+        if not 0.0 <= as_float <= 1.0:
+            raise ValueError(
+                f"{name}[{idx}] is {as_float}. Positions are a fraction of the "
+                f"way across the detector and must lie in [0, 1]."
+            )
+        out.append(as_float)
+    return out
+
+
 @dataclass
 class AluminiumFilter:
     """Multi-layer EUV filter (Al + Al2O3 + C) in front of SWC detector."""
@@ -425,6 +489,14 @@ class Simulation:
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
     psf: bool = False
+    # What the spatial PSF convolution assumes lies beyond the ends of the
+    # slit. "replicate" continues the edge rows outward, which says the Sun
+    # goes on looking much as it does at the edge of the field. "zero" treats
+    # everything outside as dark, which is what ECLIPSE did before and which
+    # removes real signal from the outermost rows. The spectral direction is
+    # zero-filled either way: the wavelength grid runs several sigma past the
+    # line, so there is nothing at its ends to lose.
+    psf_boundary: str = "replicate"
     # With noise False every random draw in the detector chain is replaced by
     # its own mean, so the run returns the signal the instrument would measure
     # on average. Deterministic quantisation stays: DN are still rounded and
@@ -458,21 +530,16 @@ class Simulation:
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
 
+        if self.psf_boundary not in ("replicate", "zero"):
+            raise ValueError(
+                f"psf_boundary must be 'replicate' or 'zero', got "
+                f"{self.psf_boundary!r}."
+            )
+
         # The pinhole lists are paired, and both pipelines zip them together.
-        # zip stops at the shortest, so a mismatch would drop the trailing
-        # pinholes from the run without saying anything. main() checks this
-        # for configuration files, but Simulation is also constructed directly.
-        if self.pinhole_positions_spectral and (
-                len(self.pinhole_positions_spectral) != len(self.pinhole_sizes)):
-            raise ValueError(
-                "pinhole_positions_spectral, when given, needs one entry per "
-                f"pinhole: got {len(self.pinhole_positions_spectral)} for "
-                f"{len(self.pinhole_sizes)} pinhole_sizes."
-            )
-        if self.pinhole_sizes and (
-                len(self.pinhole_sizes) != len(self.pinhole_positions)):
-            raise ValueError(
-                "pinhole_sizes and pinhole_positions are paired and must be "
-                f"the same length: got {len(self.pinhole_sizes)} and "
-                f"{len(self.pinhole_positions)}."
-            )
+        # zip stops at the shortest, so a mismatch would drop pinholes from
+        # the run without saying anything. main() runs the same check on
+        # configuration files, but Simulation is also constructed directly.
+        self.pinhole_positions, self.pinhole_positions_spectral = check_pinhole_lists(
+            self.pinhole_sizes, self.pinhole_positions,
+            self.pinhole_positions_spectral)
