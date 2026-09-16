@@ -2,9 +2,7 @@
 
 If you already have a differential emission measure (DEM) - from an inversion of real observations, for example - you can feed it into ECLIPSE directly and forward model how the instrument would measure it.
 
-This is the route used to study how EIS instrument effects bias FIP-bias measurements: take observed DEMs, synthesise a low-FIP and a high-FIP line from each, and run the instrument response to see how well the ratio can be recovered.
-
-## How it fits together
+## How it works
 
 Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
 
