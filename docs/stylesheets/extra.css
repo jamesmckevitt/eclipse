@@ -1,9 +1,12 @@
 /* Notebook cell output.
-   The theme wraps long lines, which breaks up progress bars and tables from
-   the synthesis and instrument runs. Keep the lines intact and scroll the
-   block instead. */
+   mkdocs-jupyter ships `white-space: pre-wrap` with `word-break: break-all` at
+   the same specificity as anything written here, and later in the cascade, so
+   these need !important. Without them the progress bars and tables from the
+   synthesis and instrument runs are broken mid-word and become unreadable. */
 .jupyter-wrapper .jp-OutputArea-output pre,
 .jupyter-wrapper .jp-RenderedText pre {
-  white-space: pre;
+  white-space: pre !important;
+  word-break: normal !important;
+  word-wrap: normal !important;
   overflow-x: auto;
 }
