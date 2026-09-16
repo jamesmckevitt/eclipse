@@ -165,21 +165,47 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
     assert abs(2 * cells - full_cells) <= 2
 
 
-def test_dynamic_mode_downsamples_the_same_way(tmp_path, monkeypatch):
-    """Including an x extent that the factor does not divide."""
-    shape = (9, 8, 8)
-    root = tmp_path / "atmosphere"
+def _write_dynamic_atmosphere(root, shape):
+    """Two snapshots, with the header files dynamic mode reads times from."""
     for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
         _write_atmosphere(root, shape, suffix)
         header = root / "header" / f"Header.{suffix}"
         header.parent.mkdir(parents=True, exist_ok=True)
-        header.write_text(f"9 8 8 1e7 1.5e7 5e6 {time} 0.1 1e6\n")
-    dynamic = ["--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec"]
+        header.write_text(f"8 8 8 1e7 1.5e7 5e6 {time} 0.1 1e6\n")
 
-    full = _synthesise(tmp_path, monkeypatch, shape, 1, dynamic)
-    reduced = _synthesise(tmp_path, monkeypatch, shape, 2, dynamic)
+
+DYNAMIC = ["--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec"]
+
+
+def test_dynamic_mode_downsamples_the_same_way(tmp_path, monkeypatch):
+    shape = (8, 8, 8)
+    _write_dynamic_atmosphere(tmp_path / "atmosphere", shape)
+
+    full = _synthesise(tmp_path, monkeypatch, shape, 1, DYNAMIC)
+    reduced = _synthesise(tmp_path, monkeypatch, shape, 2, DYNAMIC)
 
     assert _cdelt(reduced)[0] == pytest.approx(2 * _cdelt(full)[0])
-    assert _intensity(reduced).shape[1] == 5
+    assert _intensity(reduced).shape[1] * _cdelt(reduced)[0] == pytest.approx(
+        _intensity(full).shape[1] * _cdelt(full)[0])
     assert _intensity(reduced) == pytest.approx(
         np.full(_intensity(reduced).shape, _intensity(full).mean()), rel=1e-6)
+
+
+def test_load_cube_refuses_a_factor_that_does_not_divide_the_cube(tmp_path):
+    """9 cells by 2 would keep 5 cells of 2 voxels each, a domain of 10."""
+    path = tmp_path / "eosT.0270000"
+    _write_cube(path, (9, 8, 8), 1.0)
+    with pytest.raises(ValueError, match="does not divide the cube shape"):
+        load_cube(path, shape=(9, 8, 8), unit=u.K, downsample=2,
+                  voxel_dx=VOXEL["dx"], voxel_dy=VOXEL["dy"],
+                  voxel_dz=VOXEL["dz"], create_ndcube=True)
+
+
+@pytest.mark.parametrize("mode", [[], DYNAMIC], ids=["static", "dynamic"])
+def test_synthesis_refuses_a_factor_that_does_not_divide_the_cube(
+        tmp_path, monkeypatch, mode):
+    """In either mode, rather than a domain and path length that are too large."""
+    shape = (8, 8, 9)
+    _write_dynamic_atmosphere(tmp_path / "atmosphere", shape)
+    with pytest.raises(ValueError, match="does not divide the cube shape"):
+        _synthesise(tmp_path, monkeypatch, shape, 2, mode)

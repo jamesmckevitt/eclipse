@@ -93,7 +93,7 @@ synthesise-spectra --help
 
 **Processing Options:**
 
-- `--downsample`: Downsampling factor (default: `1` = no downsampling)
+- `--downsample`: Downsampling factor, which must divide every dimension of `--cube-shape` (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
 - `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
 

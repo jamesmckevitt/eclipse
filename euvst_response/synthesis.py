@@ -115,6 +115,32 @@ def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
         [vel_grid[-1] + 0.5 * dv]
     ])
 
+def require_downsample_divides(shape: Tuple[int, ...], downsample: int) -> None:
+    """
+    Check that *downsample* divides every dimension of *shape*.
+
+    Downsampling keeps every *downsample*-th cell and gives each kept cell
+    *downsample* times the voxel size.  Where a dimension is not a multiple of
+    the factor, the last kept cell stands for fewer cells than that, so the
+    domain would come out too large, and so would the emission measure when
+    that axis is the line of sight.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Cube dimensions, in any order.
+    downsample : int
+        Downsampling factor.
+    """
+    uneven = [n for n in shape if n % downsample]
+    if uneven:
+        raise ValueError(
+            f"--downsample {downsample} does not divide the cube shape "
+            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
+            f"a factor that divides every dimension."
+        )
+
+
 def load_cube(
     file_path: str | Path,
     shape: Tuple[int, int, int] = (512, 768, 256),
@@ -160,6 +186,9 @@ def load_cube(
     ndarray, Quantity, or NDCube
         Array with shape (nz', ny', nx') or NDCube with proper coordinates.
     """
+    if downsample:
+        require_downsample_divides(shape, downsample)
+
     data = np.fromfile(file_path, dtype=np.float32).reshape(shape, order="F")
     data = data.transpose(1, 2, 0)  # (z,y,x)
 
@@ -1481,9 +1510,7 @@ def main(args=None) -> None:
         cube_shape_tuple = tuple(args.cube_shape)
         nx_mhd = cube_shape_tuple[0]
         if downsample:
-            # load_cube keeps every downsample-th slice from the first, which
-            # is ceil(nx / downsample) of them.
-            nx_mhd = -(-nx_mhd // downsample)
+            nx_mhd = nx_mhd // downsample
         
         # Prepare crop_x for slice mapping if specified
         crop_x_for_mapping = None
