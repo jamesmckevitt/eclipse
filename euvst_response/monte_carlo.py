@@ -221,7 +221,8 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
             photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
 
-            # .data shape is (n_scan, n_slit, n_lam); take first row -> (1, n_lam) for uniform mode
+            # .data shape is (n_slit, n_scan, n_lam); after binning both spatial
+            # axes are length 1, so [0] leaves the one spectrum as (1, n_lam)
             if do_dn:
                 dn_data_list.append(dn_binned.data[0])
             if do_photon:

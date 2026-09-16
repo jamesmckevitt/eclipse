@@ -4,7 +4,7 @@ If you already have a differential emission measure (DEM) - from an inversion of
 
 ## How it works
 
-Internally the MHD path builds a `DEM(x, y, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
+Internally the MHD path builds a `DEM(y, x, T)` map and then synthesises spectra from `EM(T, v) * G(T)`. An observed DEM is the same object, so it can be injected at that step. Two things differ from the MHD case:
 
 - **No velocity information.** All the emission goes in the zero-velocity bin.
 - **No density information.** `G(T, n_e)` is evaluated at a single assumed electron density.
@@ -45,7 +45,7 @@ def main():
 
     # 3. Lay the profile out as a small scene of independent pixels.
     nx, ny = 2, 2
-    em_scene = np.tile(em_bin, (nx, ny, 1))
+    em_scene = np.tile(em_bin, (ny, nx, 1))
 
     # 4. Contribution functions, on exactly the DEM temperature grid.
     lines = ["Si10_258.3750", "S10_264.2300"]
@@ -60,13 +60,13 @@ def main():
     assert np.allclose(logT_goft, logT, atol=1e-6)
 
     # 5. Evaluate G(T, n_e) at one assumed electron density.
-    ne_map = np.full((nx, ny, len(logT)), 10.0 ** 9.0)
+    ne_map = np.full((ny, nx, len(logT)), 10.0 ** 9.0)
     interpolate_g_on_dem(goft, ne_map, logT, logN_grid, logT_goft, np.float64)
 
     # 6. Put all the emission in the zero-velocity bin.
     vel_grid = np.arange(-300.0, 300.0 + 5.0, 5.0) * u.km / u.s
     iv0 = int(np.argmin(np.abs(vel_grid.value)))
-    em_tv = np.zeros((nx, ny, len(logT), len(vel_grid)))
+    em_tv = np.zeros((ny, nx, len(logT), len(vel_grid)))
     em_tv[:, :, :, iv0] = em_scene
 
     # 7. Synthesise.
@@ -76,7 +76,7 @@ def main():
     plate_scale = 1.0 * u.arcsec * (1.0 + 50.0 * np.finfo(float).eps)
     voxel = angle_to_distance(plate_scale).to(u.Mm)
     reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 1)) * u.K, voxel, voxel, voxel
+        np.zeros((1, ny, nx)) * u.K, voxel, voxel, voxel
     )
     line_cubes = {
         name: create_line_cube(name, info, reference, INTENSITY_UNIT,
