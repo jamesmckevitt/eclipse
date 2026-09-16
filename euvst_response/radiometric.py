@@ -181,8 +181,8 @@ def apply_focusing_optics_psf(
     Parameters
     ----------
     signal : NDCube
-        Input cube with shape (n_scan, n_slit, n_lambda).
-        The first axis is stepped by the raster scan.
+        Input cube with shape (n_slit, n_scan, n_lambda).
+        The middle axis is stepped by the raster scan.
     tel : Telescope_EUVST or Telescope_EIS
         Telescope configuration containing PSF parameters.
         psf_params = [spatial_fwhm, spectral_fwhm] in pixel units.
@@ -215,7 +215,7 @@ def apply_focusing_optics_psf(
         )
     data_in = signal.data
     unit = signal.unit
-    n_scan, n_slit, n_lambda = data_in.shape
+    n_slit, n_scan, n_lambda = data_in.shape
 
     psf_type = tel.psf_type.lower()
     psf_params = tel.psf_params
@@ -274,18 +274,18 @@ def apply_focusing_optics_psf(
     # Normalise
     psf /= psf.sum()
 
-    # Convolve each scan position. Padding the slit axis by half a kernel is
-    # exactly enough for every real row to see replicated rows rather than
-    # the zeros convolve2d assumes outside the array; the spectral axis is
-    # left to zero-fill, which is correct there.
+    # Convolve each scan position's detector frame (n_slit, n_lambda). Padding
+    # the slit axis by half a kernel is exactly enough for every real row to
+    # see replicated rows rather than the zeros convolve2d assumes outside the
+    # array; the spectral axis is left to zero-fill, which is correct there.
     pad = (ky // 2) if boundary == "replicate" else 0
     blurred = np.empty_like(data_in)
     for i in range(n_scan):
-        frame = data_in[i]
+        frame = data_in[:, i, :]
         if pad:
             frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
         convolved = convolve2d(frame, psf, mode="same")
-        blurred[i] = convolved[pad:pad + n_slit, :] if pad else convolved
+        blurred[:, i, :] = convolved[pad:pad + n_slit, :] if pad else convolved
 
     return NDCube(
         data=blurred,
@@ -592,7 +592,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         airy_peak_fraction_per_pixel, calculate_pinhole_diffraction_pattern)
     
     # Get detector and data properties
-    data_shape = electrons.data.shape  # Should be (n_scan, n_slit, n_spectral)
+    data_shape = electrons.data.shape  # Should be (n_slit, n_scan, n_spectral)
     
     # Visible light wavelength (typical)
     visible_wavelength = 600 * u.nm
@@ -617,7 +617,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
         
         # Calculate visible diffraction pattern - this shows how the pinhole photons spread
-        n_scan, n_slit, n_spectral = data_shape
+        n_slit, n_scan, n_spectral = data_shape
         vis_pattern = calculate_pinhole_diffraction_pattern(
             detector_shape=(n_slit, n_spectral),
             pixel_size=det.pix_size*u.pix,
@@ -663,7 +663,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
 
         # Add to all scan positions (visible light affects all equally)
         for scan_idx in range(n_scan):
-            additional_electrons[scan_idx] += vis_electrons_values
+            additional_electrons[:, scan_idx, :] += vis_electrons_values
 
     # Add pinhole contributions to original signal
     additional_electrons_quantity = additional_electrons * (u.electron / u.pixel)

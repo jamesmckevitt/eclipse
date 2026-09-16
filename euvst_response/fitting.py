@@ -602,7 +602,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     Parameters
     ----------
     signal_cube : NDCube
-        Data cube with shape (n_scan, n_slit, n_lambda).
+        Data cube with shape (n_slit, n_scan, n_lambda).
     n_jobs : int
         Joblib parallelism (-1 = all cores).
     fit_config : FitConfig, optional
@@ -612,14 +612,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     Returns
     -------
     data_array : ndarray
-        Shape ``(n_scan, n_slit, n_params)`` where *n_params* is 4 for a
+        Shape ``(n_slit, n_scan, n_params)`` where *n_params* is 4 for a
         single component (``[peak, centre, sigma, background]``) or
         ``3*N+1`` for *N* components
         (``[peak0, centre0, sigma0, ..., background]``).
     units_list : list of Unit
         One unit per parameter.
     """
-    n_scan, n_slit, _ = signal_cube.shape
+    n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
 
     # The iteration limit applies to every path. Without a fitting block there
@@ -634,9 +634,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 results[i] = _fit_one(wv.value, spec_block[i], max_iter)
             return results
 
-        with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks", leave=False)):
+        with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
             results = Parallel(n_jobs=n_jobs)(
-                delayed(_fit_block)(signal_cube.data[i]) for i in range(n_scan)
+                delayed(_fit_block)(signal_cube.data[i]) for i in range(n_slit)
             )
 
         data_array = np.stack(results, axis=0)
@@ -685,9 +685,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                                             parinfo_template, ratio_params)
             return results
 
-    with tqdm_joblib(tqdm(total=n_scan, desc="Fit chunks (multi)", leave=False)):
+    with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block_multi)(signal_cube.data[i]) for i in range(n_scan)
+            delayed(_fit_block_multi)(signal_cube.data[i]) for i in range(n_slit)
         )
 
     data_array = np.stack(results, axis=0)
@@ -709,7 +709,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
     elements are Quantities. Uses joblib.Parallel for speed.
     """
     idx = 1 if (fit_config is None or fit_config.is_single) else fit_config.idx_center
-    centres_raw = fit_arr[..., idx]  # (n_scan, n_slit)
+    centres_raw = fit_arr[..., idx]  # (n_slit, n_scan)
     # Ensure we have a pure Quantity array
     if isinstance(centres_raw, u.Quantity):
         centres = centres_raw.to(wl0.unit)
@@ -717,15 +717,15 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
         get_val = np.vectorize(lambda q: q.to_value(wl0.unit))
         centres = u.Quantity(get_val(centres_raw), wl0.unit)
 
-    n_scan = centres.shape[0]
+    n_rows = centres.shape[0]
 
     def _one_row(i):
         return ((centres[i] - wl0) / wl0 * const.c).to(u.cm / u.s).value
 
-    with tqdm_joblib(tqdm(total=n_scan, desc="Velocity calc", leave=False)):
+    with tqdm_joblib(tqdm(total=n_rows, desc="Velocity calc", leave=False)):
         v_val = np.array(
             Parallel(n_jobs=n_jobs)(
-                delayed(_one_row)(i) for i in range(n_scan)
+                delayed(_one_row)(i) for i in range(n_rows)
             )
         )
 
@@ -739,7 +739,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
     Extract fitted line widths (sigma) from fit results.
     """
     idx = 2 if (fit_config is None or fit_config.is_single) else fit_config.idx_sigma
-    widths_raw = fit_arr[..., idx]  # (n_scan, n_slit)
+    widths_raw = fit_arr[..., idx]  # (n_slit, n_scan)
     # Ensure we have a pure Quantity array
     if isinstance(widths_raw, u.Quantity):
         widths = widths_raw
