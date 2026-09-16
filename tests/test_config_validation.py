@@ -5,9 +5,14 @@ so it looks right, but nothing reads it and the run silently uses the default.
 A sweep written that way is worse still: it returns a full set of results that
 happen to be identical across every combination.
 """
+import sys
+
 import pytest
 
-from euvst_response.main import _validate_config_keys
+from euvst_response.main import (
+    _FITTING_COMPONENT_KEYS, _FITTING_KEYS, _SIMULATION_KEYS, _TOP_LEVEL_KEYS,
+    _validate_config_keys, main,
+)
 from euvst_response.utils import check_config_keys, suggest_config_key
 
 MINIMAL = {"instrument": "SWC", "uniform_intensity": "5000 erg / (s cm2 sr)"}
@@ -18,7 +23,7 @@ def test_a_valid_config_passes():
         MINIMAL,
         n_iter=10, ncpu=-1, offchip_bin_slit=[1, 2], fit_signals="dn",
         simulation={"slit_width": "0.2 arcsec", "expos": ["5 s", "20 s"],
-                    "psf": True, "vis_sl": "0 ph / (s cm2)",
+                    "psf": True, "vis_sl": "0 ph / (s cm2)", "noise": False,
                     "enable_pinholes": False},
         detector={"ccd_temperature": "-60 Celsius", "qe_euv": 0.76},
         telescope={"microroughness_sigma": "0.3 nm"},
@@ -130,9 +135,44 @@ def test_fitting_section_and_components_are_checked():
             "SWC")
 
 
-def test_a_section_that_is_not_a_mapping_is_rejected():
-    with pytest.raises(ValueError, match="must be a mapping"):
-        _validate_config_keys(dict(MINIMAL, simulation=["0.2 arcsec"]), "SWC")
+@pytest.mark.parametrize("value", [["0.2 arcsec"], None])
+@pytest.mark.parametrize(
+    "name", ["simulation", "detector", "telescope", "filter", "fitting"])
+def test_a_section_that_is_not_a_mapping_is_rejected(name, value):
+    """None is what a heading left empty parses to."""
+    with pytest.raises(ValueError, match=f"'{name}:' section must be a mapping"):
+        _validate_config_keys(dict(MINIMAL, **{name: value}), "SWC")
+
+
+def test_fitting_components_must_be_a_list_of_mappings():
+    """main() would otherwise fail on these with a TypeError, or skip fitting."""
+    with pytest.raises(ValueError, match="'fitting.components' must be a list"):
+        _validate_config_keys(
+            dict(MINIMAL, fitting={"components": {"wavelength": "195.119 AA"}}),
+            "SWC")
+
+    with pytest.raises(ValueError,
+                       match=r"'fitting\.components\[0\]' must be a mapping"):
+        _validate_config_keys(
+            dict(MINIMAL, fitting={"components": [
+                None, {"wavelength": "195.179 AA"}]}),
+            "SWC")
+
+
+def test_an_unknown_instrument_is_rejected():
+    """main() would build it as EIS; there are no valid keys to check against."""
+    with pytest.raises(ValueError, match="Unknown instrument 'FOO'"):
+        _validate_config_keys(dict(MINIMAL, instrument="FOO"), "FOO")
+
+
+def test_main_reports_a_simulation_section_that_is_not_a_mapping(
+        tmp_path, monkeypatch):
+    """The instrument check before validation must not fail on it first."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("simulation: 1\n")
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config_file)])
+    with pytest.raises(ValueError, match="'simulation:' section must be a mapping"):
+        main()
 
 
 def test_every_unknown_key_is_listed_at_once():
@@ -165,10 +205,70 @@ def test_suggest_returns_none_when_nothing_is_close():
     assert suggest_config_key("zzzzqqq", {"alpha", "beta"}) is None
 
 
+# --- the key lists have to agree with what main() reads ----------------------
+
+def _keys_main_reads(*names):
+    """String keys main() looks up in any of the dicts called *names*.
+
+    Covers ``d["key"]``, ``d.get("key")`` and ``"key" in d``.
+    """
+    import ast
+    import importlib
+
+    from pathlib import Path
+
+    source = Path(importlib.import_module("euvst_response.main").__file__)
+    tree = ast.parse(source.read_text())
+    main_def = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+
+    keys = set()
+    for node in ast.walk(main_def):
+        if isinstance(node, ast.Subscript):
+            target, key = node.value, node.slice
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "get" and node.args):
+            target, key = node.func.value, node.args[0]
+        elif (isinstance(node, ast.Compare) and len(node.ops) == 1
+              and isinstance(node.ops[0], (ast.In, ast.NotIn))):
+            target, key = node.comparators[0], node.left
+        else:
+            continue
+        if (isinstance(target, ast.Name) and target.id in names
+                and isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            keys.add(key.value)
+    return keys
+
+
+@pytest.mark.parametrize("names, accepted", [
+    (("config",), _TOP_LEVEL_KEYS),
+    (("all_sim", "sim_fixed", "sim_sweep"), _SIMULATION_KEYS),
+    (("fitting_cfg",), _FITTING_KEYS),
+    (("comp_dict",), _FITTING_COMPONENT_KEYS),
+], ids=["top-level", "simulation", "fitting", "fitting.components"])
+def test_the_key_lists_match_what_main_reads(names, accepted):
+    """The lists are written out by hand, so a new key can be missed.
+
+    simulation.noise is the example: main() reads it, and a key list written
+    before it existed would refuse every config that sets it.
+    """
+    read = _keys_main_reads(*names)
+    assert read - accepted == set(), (
+        f"main() reads {sorted(read - accepted)} but the validator rejects them")
+    assert accepted - read == set(), (
+        f"the validator accepts {sorted(accepted - read)} but main() never "
+        f"reads them from {', '.join(names)}")
+
+
 # --- the documentation has to agree with the validator -----------------------
 
 def _doc_yaml_blocks():
-    """Every ```yaml block in the docs, with the page it came from."""
+    """Every config example in the docs, with the page it came from.
+
+    That is each ```yaml block in a page, and each notebook cell that writes a
+    YAML file with %%writefile.
+    """
+    import json
     import re
 
     from pathlib import Path
@@ -178,6 +278,13 @@ def _doc_yaml_blocks():
     for page in sorted(docs.glob("*.md")):
         for match in re.finditer(r"```yaml\n(.*?)```", page.read_text(), re.S):
             blocks.append((page.name, match.group(1)))
+    for notebook in sorted(docs.glob("*.ipynb")):
+        for cell in json.loads(notebook.read_text())["cells"]:
+            source = "".join(cell["source"])
+            first_line, _, body = source.partition("\n")
+            if (cell["cell_type"] == "code"
+                    and re.fullmatch(r"%%writefile\s+\S+\.ya?ml\s*", first_line)):
+                blocks.append((notebook.name, body))
     return blocks
 
 
@@ -197,6 +304,8 @@ def test_every_config_example_in_the_docs_is_valid():
 
     blocks = _doc_yaml_blocks()
     assert len(blocks) > 5, "expected the docs to carry config examples"
+    assert any(page.endswith(".ipynb") for page, _ in blocks), (
+        "expected the config written by the reproduction notebook")
 
     for page, block in blocks:
         config = yaml.safe_load(block)

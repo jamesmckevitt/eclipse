@@ -41,10 +41,11 @@ _TOP_LEVEL_KEYS = {
 }
 
 # The Simulation dataclass has more fields than this, but main() builds its
-# Simulation objects itself and only takes these five from the section. The
-# rest (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys,
-# so writing one here would have been parsed and then dropped.
-_SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "enable_pinholes"}
+# Simulation objects itself and only takes these from the section. The rest
+# (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
+# writing one here would have been parsed and then dropped.
+_SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "noise",
+                    "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter"}
@@ -55,6 +56,20 @@ _FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
 def _dataclass_keys(cls) -> set:
     """Constructor argument names of a config dataclass."""
     return {f.name for f in dataclasses.fields(cls) if f.init}
+
+
+def _type_name(value) -> str:
+    """Type of a config value for an error message; an empty YAML entry is None."""
+    return "nothing" if value is None else type(value).__name__
+
+
+def _require_mapping(value, what: str) -> None:
+    """Raise unless a config section or fitting component is a mapping."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{what} must be a mapping of parameter names to values, "
+            f"got {_type_name(value)}."
+        )
 
 
 def _validate_config_keys(config: dict, instrument: str) -> None:
@@ -71,7 +86,20 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
     instrument : str
         ``"SWC"`` or ``"EIS"``; the two have different detector and telescope
         parameters.
+
+    Raises
+    ------
+    ValueError
+        If the instrument is not supported, a key is not read, or a section
+        that is present is not a mapping.
     """
+    # Checked first because the valid keys depend on it, and main() treats
+    # anything other than SWC as EIS.
+    if instrument not in ("SWC", "EIS"):
+        raise ValueError(
+            f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'EIS'."
+        )
+
     det_keys = _dataclass_keys(Detector_EIS if instrument == "EIS"
                                else Detector_SWC)
     tel_keys = _dataclass_keys(Telescope_EIS if instrument == "EIS"
@@ -99,26 +127,31 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
 
     check_config_keys(config, _TOP_LEVEL_KEYS, "top-level", sections)
 
+    # Sections are checked by presence, not value, so that a heading left
+    # empty (which parses to None) gets a message here rather than an
+    # AttributeError further on.
     for name, allowed in sections.items():
-        section = config.get(name)
-        if section is None:
+        if name not in config:
             continue
-        if not isinstance(section, dict):
-            raise ValueError(
-                f"The '{name}:' section must be a mapping of parameter names "
-                f"to values, got {type(section).__name__}."
-            )
+        _require_mapping(config[name], f"The '{name}:' section")
         others = {k: v for k, v in elsewhere.items() if k != name}
-        check_config_keys(section, allowed, f"'{name}' section", others)
+        check_config_keys(config[name], allowed, f"'{name}' section", others)
 
-    fitting = config.get("fitting")
-    if isinstance(fitting, dict):
+    if "fitting" in config:
+        fitting = config["fitting"]
+        _require_mapping(fitting, "The 'fitting:' section")
         check_config_keys(fitting, _FITTING_KEYS, "'fitting' section")
-        components = fitting.get("components") or []
-        for idx, component in enumerate(components):
-            if isinstance(component, dict):
-                check_config_keys(component, _FITTING_COMPONENT_KEYS,
-                                  f"'fitting.components[{idx}]'")
+        if "components" in fitting:
+            components = fitting["components"]
+            if not isinstance(components, list):
+                raise ValueError(
+                    f"'fitting.components' must be a list with one entry per "
+                    f"Gaussian component, got {_type_name(components)}."
+                )
+            for idx, component in enumerate(components):
+                where = f"'fitting.components[{idx}]'"
+                _require_mapping(component, where)
+                check_config_keys(component, _FITTING_COMPONENT_KEYS, where)
 
 
 @debug_on_error
@@ -189,8 +222,10 @@ def main() -> None:
             f"{type(config).__name__}: {args.config}"
         )
 
-    # Top-level scalar settings
-    if "instrument" in config.get("simulation", {}):
+    # Top-level scalar settings. A 'simulation:' that is not a mapping is left
+    # for _validate_config_keys to report.
+    simulation_section = config.get("simulation")
+    if isinstance(simulation_section, dict) and "instrument" in simulation_section:
         raise ValueError(
             "Set the instrument with the top-level 'instrument:' key, not "
             "inside the 'simulation:' section. Both Simulation objects are "
