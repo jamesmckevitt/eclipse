@@ -12,6 +12,7 @@ import astropy.constants as const
 import astropy.units as u
 import numpy as np
 import pytest
+import sunpy
 from astropy.wcs import WCS
 from ndcube import NDCube
 from sunpy.util.exceptions import SunpyMetadataWarning
@@ -85,9 +86,15 @@ def test_the_observer_survives_into_the_coordinate_frame():
 
 def test_no_sunpy_metadata_warnings_are_raised():
     """The warnings were the visible symptom, so they are worth asserting on."""
-    with warnings.catch_warnings():
+    maps = _make(date_obs=WHEN)
+    with warnings.catch_warnings(), sunpy.log.log_to_list() as messages:
         warnings.simplefilter("error", SunpyMetadataWarning)
-        _make(date_obs=WHEN)
+        for map_obj in maps.values():
+            # sunpy only looks for the date, observer and solar radius when
+            # something reads them, as plotting does, so building the maps
+            # alone would pass even with the keywords missing.
+            map_obj.wcs
+    assert [m.getMessage() for m in messages] == []
 
 
 def test_two_runs_produce_the_same_date():
