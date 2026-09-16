@@ -1,0 +1,9 @@
+/* Notebook cell output.
+   The theme wraps long lines, which breaks up progress bars and tables from
+   the synthesis and instrument runs. Keep the lines intact and scroll the
+   block instead. */
+.jupyter-wrapper .jp-OutputArea-output pre,
+.jupyter-wrapper .jp-RenderedText pre {
+  white-space: pre;
+  overflow-x: auto;
+}
