@@ -13,36 +13,54 @@ from ndcube import NDCube
 
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.monte_carlo import simulate_once
+from euvst_response.pinhole_diffraction import (
+    airy_peak_fraction_per_pixel,
+    calculate_pinhole_diffraction_pattern,
+)
 from euvst_response.radiometric import (
+    add_pinhole_visible_light,
     add_visible_stray_light,
     sample_photon_arrivals,
     to_electrons,
 )
 
 REST = 195.119 * u.Angstrom
-NSCAN, NSLIT, NWAVE = 2, 3, 8
+VISIBLE = 600 * u.nm
+NSLIT, NSCAN, NWAVE = 3, 2, 8
 
 
 def _wcs():
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [0.0169, 0.16, 0.2]
-    wcs.wcs.crpix = [NWAVE / 2.0, NSLIT / 2.0, 1.0]
+    wcs.wcs.cdelt = [0.0169, 0.2, 0.16]
+    wcs.wcs.crpix = [NWAVE / 2.0, 1.0, NSLIT / 2.0]
     wcs.wcs.crval = [REST.to_value(u.Angstrom), 0.0, 0.0]
     return wcs
 
 
 def _photon_cube(mean=500.0):
-    return NDCube(np.full((NSCAN, NSLIT, NWAVE), mean), wcs=_wcs(),
+    return NDCube(np.full((NSLIT, NSCAN, NWAVE), mean), wcs=_wcs(),
                   unit=u.photon / u.pix, meta={"rest_wav": REST})
+
+
+def _electron_cube():
+    return NDCube(np.zeros((NSLIT, NSCAN, NWAVE)), wcs=_wcs(),
+                  unit=u.electron / u.pix, meta={"rest_wav": REST})
+
+
+def _electrons_per_photon(det, wavelength):
+    """E_ph / w(T), the mean electrons one absorbed photon liberates."""
+    temp_k = det.ccd_temperature.to_value(u.K, equivalencies=u.temperature())
+    w_ev = 3.71 - 0.0006 * (temp_k - 300.0)
+    return (12398.419843320026 / wavelength.to_value(u.Angstrom)) / w_ev
 
 
 def _intensity_cube(peak=2.0e4):
     """A Gaussian line, in the units the synthesis stage emits."""
     lam = np.arange(NWAVE) - NWAVE / 2.0
     profile = peak * np.exp(-0.5 * (lam / 1.5) ** 2)
-    data = np.tile(profile, (NSCAN, NSLIT, 1))
+    data = np.tile(profile, (NSLIT, NSCAN, 1))
     return NDCube(data, wcs=_wcs(),
                   unit=u.erg / (u.cm**2 * u.s * u.sr * u.cm),
                   meta={"rest_wav": REST})
@@ -72,10 +90,7 @@ def test_electrons_are_qe_times_gain_exactly():
     photons = 500.0
     out = to_electrons(_photon_cube(photons), 1 * u.s, det, noise=False)
 
-    temp_k = det.ccd_temperature.to_value(u.K, equivalencies=u.temperature())
-    w_ev = 3.71 - 0.0006 * (temp_k - 300.0)
-    e_ph_ev = 12398.419843320026 / REST.to_value(u.Angstrom)
-    expected = photons * det.qe_euv * (e_ph_ev / w_ev)
+    expected = photons * det.qe_euv * _electrons_per_photon(det, REST)
 
     assert np.allclose(out.data, expected, rtol=1e-6)
     # and identical from one call to the next
@@ -105,15 +120,52 @@ def test_read_noise_is_dropped_not_averaged():
 
 
 def test_stray_light_contributes_its_mean():
+    """Flux * pixel area * t * qe * gain, with no filter in the way."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.qe_vis = 0.37  # the SWC default of 1 would hide a missing QE factor
     sim = Simulation(instrument="SWC",
                      vis_sl=1.0e6 * u.photon / (u.s * u.cm**2))
-    electrons = NDCube(np.zeros((NSCAN, NSLIT, NWAVE)), wcs=_wcs(),
-                       unit=u.electron / u.pix, meta={"rest_wav": REST})
+    t_exp = 10 * u.s
 
-    out = add_visible_stray_light(electrons, 10 * u.s, det, sim, noise=False)
-    assert np.all(out.data > 0)
-    again = add_visible_stray_light(electrons, 10 * u.s, det, sim, noise=False)
+    out = add_visible_stray_light(_electron_cube(), t_exp, det, sim, noise=False)
+
+    photons = (sim.vis_sl * (det.pix_size * u.pix) ** 2 * t_exp).to_value(u.photon)
+    expected = photons * det.qe_vis * _electrons_per_photon(det, VISIBLE)
+    assert np.allclose(out.data, expected, rtol=1e-6)
+    again = add_visible_stray_light(_electron_cube(), t_exp, det, sim, noise=False)
+    assert np.array_equal(out.data, again.data)
+
+
+def test_pinhole_light_contributes_its_mean():
+    """Photons through the hole * diffraction pattern * qe * gain, in every scan."""
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.qe_vis = 0.37
+    diameter = 50 * u.um
+    sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec,
+                     vis_sl=1.0e12 * u.photon / (u.s * u.cm**2),
+                     enable_pinholes=True, pinhole_sizes=[diameter],
+                     pinhole_positions=[0.25])
+    t_exp = 10 * u.s
+
+    out = add_pinhole_visible_light(_electron_cube(), t_exp, det, sim,
+                                    Telescope_EUVST(), noise=False)
+
+    through = (sim.vis_sl * np.pi * (diameter / 2) ** 2 * t_exp).to_value(u.photon)
+    pattern = calculate_pinhole_diffraction_pattern(
+        detector_shape=(NSLIT, NWAVE), pixel_size=det.pix_size * u.pix,
+        pinhole_diameter=diameter, pinhole_position_slit=0.25,
+        slit_width=sim.slit_width, plate_scale=det.plate_scale_angle,
+        distance=det.filter_distance, wavelength=VISIBLE)
+    peak = airy_peak_fraction_per_pixel(diameter, det.filter_distance, VISIBLE,
+                                        det.pix_size * u.pix)
+    expected = (through * peak * pattern * det.qe_vis
+                * _electrons_per_photon(det, VISIBLE))
+
+    assert np.all(expected > 0)
+    for scan in range(NSCAN):
+        assert np.allclose(out.data[:, scan, :], expected, rtol=1e-6)
+    again = add_pinhole_visible_light(_electron_cube(), t_exp, det, sim,
+                                      Telescope_EUVST(), noise=False)
     assert np.array_equal(out.data, again.data)
 
 

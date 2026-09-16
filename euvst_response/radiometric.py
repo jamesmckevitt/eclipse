@@ -296,7 +296,9 @@ def to_electrons(
     Parameters
     ----------
     photon_counts : NDCube
-        Discrete (Poisson-sampled) photon counts per pixel.  Values must be non-negative integers.
+        Photon counts per pixel, non-negative.  With *noise* True these must
+        be whole numbers, as from :func:`sample_photon_arrivals`; with it
+        False they may be the fractional expected counts.
     t_exp : Quantity
         Exposure time (used for dark current and read noise).
     det : Detector_SWC or Detector_EIS
