@@ -169,6 +169,17 @@ If you synthesised data in dynamic mode, your configuration must specify:
 offchip_bin_slit: [1, 2, 4]   # swept like any other list-valued parameter
 ```
 
+## Turning the noise off
+
+`noise: False` replaces every random draw in the detector chain with its mean:
+
+```yaml
+simulation:
+  noise: False
+
+n_iter: 1     # every iteration would be identical
+```
+
 ## Uniform intensity mode
 
 Setting `uniform_intensity` replaces the atmosphere with a single spectral line of known integrated intensity, and no `synthesis_file` is needed. See [synthesis from a single intensity](uniform-intensity.md).
