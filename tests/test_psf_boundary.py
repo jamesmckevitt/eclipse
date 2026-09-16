@@ -21,10 +21,10 @@ N_SCAN, N_SLIT, N_WAVE = 2, 24, 32
 
 def _cube(data):
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [0.0169, 0.16, 0.2]
-    wcs.wcs.crpix = [N_WAVE / 2.0, N_SLIT / 2.0, 1.0]
+    wcs.wcs.cdelt = [0.0169, 0.2, 0.16]
+    wcs.wcs.crpix = [N_WAVE / 2.0, 1.0, N_SLIT / 2.0]
     wcs.wcs.crval = [REST.to_value(u.Angstrom), 0.0, 0.0]
     return NDCube(data, wcs=wcs, unit=u.photon / u.pix,
                   meta={"rest_wav": REST})
@@ -34,7 +34,7 @@ def _uniform_slit_cube(value=100.0):
     """Uniform along the slit, a Gaussian in wavelength well inside the grid."""
     lam = np.arange(N_WAVE) - N_WAVE / 2.0
     profile = value * np.exp(-0.5 * (lam / 2.0) ** 2)
-    return _cube(np.tile(profile, (N_SCAN, N_SLIT, 1)))
+    return _cube(np.tile(profile, (N_SLIT, N_SCAN, 1)))
 
 
 TEL = Telescope_EUVST()
@@ -49,9 +49,9 @@ def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
     cube = _uniform_slit_cube()
     replicated = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
 
-    middle = replicated.data[0, N_SLIT // 2, :]
+    middle = replicated.data[N_SLIT // 2, 0, :]
     for row in range(N_SLIT):
-        assert np.allclose(replicated.data[0, row, :], middle, rtol=1e-12)
+        assert np.allclose(replicated.data[row, 0, :], middle, rtol=1e-12)
 
 
 def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
@@ -75,8 +75,8 @@ def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
 
     for row in range(4):
         lost = kernel[offsets < -row].sum()
-        ratio = (zero_filled.data[0, row, :].sum()
-                 / replicated.data[0, row, :].sum())
+        ratio = (zero_filled.data[row, 0, :].sum()
+                 / replicated.data[row, 0, :].sum())
         assert ratio == pytest.approx(1.0 - lost, abs=1e-6)
 
     # The edge row loses about a third of the kernel, as the issue reports.
@@ -86,21 +86,21 @@ def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
 def test_the_interior_is_untouched_by_the_choice():
     """Only rows within a kernel half-width of an edge can differ."""
     rng = np.random.RandomState(20260913)
-    cube = _cube(rng.uniform(10.0, 200.0, (N_SCAN, N_SLIT, N_WAVE)))
+    cube = _cube(rng.uniform(10.0, 200.0, (N_SLIT, N_SCAN, N_WAVE)))
 
     zero_filled = apply_focusing_optics_psf(cube, TEL, boundary="zero")
     replicated = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
 
     interior = slice(4, N_SLIT - 4)
-    assert np.allclose(zero_filled.data[:, interior, :],
-                       replicated.data[:, interior, :], rtol=1e-12)
+    assert np.allclose(zero_filled.data[interior, :, :],
+                       replicated.data[interior, :, :], rtol=1e-12)
     # and the edges really are different, or the test above proves nothing
-    assert not np.allclose(zero_filled.data[:, 0, :], replicated.data[:, 0, :])
+    assert not np.allclose(zero_filled.data[0, :, :], replicated.data[0, :, :])
 
 
 def test_the_spectral_axis_is_still_zero_filled():
     """Established in #44: there is no flux at the ends of the grid to lose."""
-    data = np.zeros((N_SCAN, N_SLIT, N_WAVE))
+    data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[:, :, 0] = 1000.0     # all the flux against the blue edge
     cube = _cube(data)
 
@@ -110,14 +110,14 @@ def test_the_spectral_axis_is_still_zero_filled():
 
 def test_replication_does_not_invent_flux_in_a_dark_field():
     """Continuing a dark edge outward must stay dark."""
-    data = np.zeros((N_SCAN, N_SLIT, N_WAVE))
-    data[:, N_SLIT // 2, N_WAVE // 2] = 1.0
+    data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
+    data[N_SLIT // 2, :, N_WAVE // 2] = 1.0
     out = apply_focusing_optics_psf(_cube(data), TEL, boundary="replicate")
 
     # A point source well inside the field keeps all of its flux, and none of
     # it appears at the edge rows the replication reaches.
     assert out.data.sum() == pytest.approx(data.sum(), rel=1e-9)
-    assert out.data[:, 0, :].sum() == pytest.approx(0.0, abs=1e-12)
+    assert out.data[0, :, :].sum() == pytest.approx(0.0, abs=1e-12)
 
 
 def test_the_uniform_intensity_path_is_unaffected():
@@ -146,7 +146,7 @@ def test_the_simulation_rejects_an_unknown_boundary():
 
 def test_scan_positions_stay_independent():
     """The PSF acts within one detector frame; exposures are taken in turn."""
-    data = np.zeros((N_SCAN, N_SLIT, N_WAVE))
-    data[0, N_SLIT // 2, N_WAVE // 2] = 1.0
+    data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
+    data[N_SLIT // 2, 0, N_WAVE // 2] = 1.0
     out = apply_focusing_optics_psf(_cube(data), TEL, boundary="replicate")
-    assert out.data[1].sum() == pytest.approx(0.0, abs=1e-12)
+    assert out.data[:, 1, :].sum() == pytest.approx(0.0, abs=1e-12)
