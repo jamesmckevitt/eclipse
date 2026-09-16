@@ -207,10 +207,15 @@ def test_suggest_returns_none_when_nothing_is_close():
 
 # --- the key lists have to agree with what main() reads ----------------------
 
+# main() and the helpers it hands the parsed config to.
+_CONFIG_READERS = ("main", "_parse_pinhole_config")
+
+
 def _keys_main_reads(*names):
     """String keys main() looks up in any of the dicts called *names*.
 
-    Covers ``d["key"]``, ``d.get("key")`` and ``"key" in d``.
+    Covers ``d["key"]``, ``d.get("key")`` and ``"key" in d``, in main() and in
+    the helpers listed in ``_CONFIG_READERS``.
     """
     import ast
     import importlib
@@ -219,11 +224,13 @@ def _keys_main_reads(*names):
 
     source = Path(importlib.import_module("euvst_response.main").__file__)
     tree = ast.parse(source.read_text())
-    main_def = next(node for node in tree.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+    readers = [node for node in tree.body
+               if isinstance(node, ast.FunctionDef)
+               and node.name in _CONFIG_READERS]
+    assert {node.name for node in readers} == set(_CONFIG_READERS)
 
     keys = set()
-    for node in ast.walk(main_def):
+    for node in (n for reader in readers for n in ast.walk(reader)):
         if isinstance(node, ast.Subscript):
             target, key = node.value, node.slice
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
