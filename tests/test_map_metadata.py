@@ -26,14 +26,14 @@ WHEN = "2024-03-20T09:30:00"
 def _combination_results(telescope=None):
     """A minimal results dict of the shape create_sunpy_maps_from_combo wants."""
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [0.02, 0.16, 0.2]
-    wcs.wcs.crpix = [NWAVE / 2.0, NY / 2.0, NX / 2.0]
+    wcs.wcs.cdelt = [0.02, 0.2, 0.16]
+    wcs.wcs.crpix = [NWAVE / 2.0, NX / 2.0, NY / 2.0]
     wcs.wcs.crval = [REST.to_value(u.Angstrom), 0.0, 0.0]
 
-    data = np.ones((NX, NY, NWAVE))
-    fits = np.zeros((NX, NY, 4))
+    data = np.ones((NY, NX, NWAVE))
+    fits = np.zeros((NY, NX, 4))
     fits[..., 0] = 1.0
     fits[..., 1] = REST.to_value(u.Angstrom)
     fits[..., 2] = 0.06
