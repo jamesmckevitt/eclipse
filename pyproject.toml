@@ -24,6 +24,8 @@ dependencies = [
     "numpy",
     "astropy",
     "ndcube",
+    "asdf",
+    "asdf-astropy",
     "specutils",
     "scipy",
     "matplotlib",

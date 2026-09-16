@@ -20,7 +20,7 @@ synthesise-spectra \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
   --output-dir ./run/input \
-  --output-name synthesised_spectra.pkl \
+  --output-name synthesised_spectra.asdf \
   --temp-file temp/eosT.0270000 \
   --rho-file rho/result_prim_0.0270000 \
   --vx-file vx/result_prim_1.0270000 \
@@ -50,7 +50,7 @@ synthesise-spectra --help
 
 - `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
 - `--output-dir`: Output directory for results (default: `./run/input`)
-- `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+- `--output-name`: Output filename (default: `synthesised_spectra.asdf`)
 
 **Line and Abundance Selection:**
 
@@ -158,11 +158,13 @@ synthesise-spectra \
 
 ## Output
 
-The synthesis produces a pickle file containing:
+The synthesis writes an ASDF file containing:
 
 - `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
 - `config`: Runtime configuration for reproducibility
 - Additional technical data for internal use
+
+Pickle files written by older versions still load.
 
 ## Performance tips
 
@@ -184,14 +186,13 @@ import euvst_response
 # The second argument is the reference line whose wavelength grid the other
 # lines are interpolated onto; omit it and the first line in the file is used.
 cube, dynamic_mode_info = euvst_response.load_atmosphere(
-    "./run/input/synthesised_spectra.pkl", "Fe12_195.1190"
+    "./run/input/synthesised_spectra.asdf", "Fe12_195.1190"
 )
 print(f"Combined cube shape: {cube.data.shape}")
 
 # Access individual line cubes if needed
-import dill
-with open("./run/input/synthesised_spectra.pkl", "rb") as f:
-    data = dill.load(f)
+from euvst_response.io import load_results
+data = load_results("./run/input/synthesised_spectra.asdf")
 
 # Access individual line cubes
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]

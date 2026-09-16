@@ -52,7 +52,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 **Top-level keys**:
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
-- `synthesis_file`: path to the synthesised spectra pickle file
+- `synthesis_file`: path to the synthesised spectra file (ASDF; pickle files from older versions also load)
 - `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
@@ -65,7 +65,7 @@ Here's a complete example configuration file:
 ```yaml
 # Input
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.pkl
+synthesis_file: ./run/input/synthesised_spectra.asdf
 reference_line: Fe12_195.1190
 
 # Global settings (apply to all combinations)
@@ -250,7 +250,11 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
+Results are written to `run/result/<config name>.asdf`.
+
+[ASDF](https://asdf-standard.readthedocs.io/) is a YAML tree with the arrays stored as binary blocks alongside it, so the metadata stays readable in a text editor, other languages can read it, and opening a file cannot run code the way unpickling can. Pickle result files from older versions still load: the format is taken from the file's own first bytes, not its name.
+
+The output includes:
 
 - Simulated detector signals (DN and photon counts)
 - Fitted spectral line parameters (intensity, velocity, width)

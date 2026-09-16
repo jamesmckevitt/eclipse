@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from .io import load_results
 from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma
 
 
@@ -30,7 +30,7 @@ def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
-    Load synthetic atmosphere cube from pickle file.
+    Load synthetic atmosphere cube from a synthesis file.
     
     Creates a summed cube from all line cubes in the synthesis results.
     All line cubes are interpolated onto the wavelength grid of the metadata_line
@@ -39,7 +39,8 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     Parameters
     ----------
     pkl_file : str
-        Path to the synthesized spectra pickle file.
+        Path to the synthesized spectra file: ASDF, or a pickle written by
+        an older version of ECLIPSE.
     metadata_line : str, optional
         Name of the line to use for metadata and wavelength grid reference. 
         If None, uses the first line.
@@ -51,8 +52,7 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
         - summed_cube: NDCube with summed line intensities
         - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
     """
-    with open(pkl_file, "rb") as f:
-        tmp = dill.load(f)
+    tmp = load_results(pkl_file)
     
     # Handle new synthesis format
     if "line_cubes" not in tmp:
