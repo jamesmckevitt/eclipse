@@ -5,17 +5,22 @@ went in, field by field, because a format change that loses something does
 not announce itself: the file still opens and the numbers still look like
 numbers.
 """
+import dataclasses
+import datetime
 import warnings
 
 import asdf
 import astropy.units as u
 import numpy as np
 import pytest
+import yaml
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import (AluminiumFilter, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST)
+from euvst_response import io
+from euvst_response.config import (AluminiumFilter, Detector_EIS,
+                                   Detector_SWC, Simulation, Telescope_EIS,
+                                   Telescope_EUVST)
 from euvst_response.fitting import FitComponent, FitConfig
 from euvst_response.io import is_asdf, load_results, save_results
 
@@ -23,11 +28,12 @@ REST = 195.119 * u.Angstrom
 
 
 def _wcs():
+    """The WCS of a (n_slit, n_scan, n_wavelength) = (2, 3, 4) cube."""
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [1.69e-11, 0.159, 0.2]
-    wcs.wcs.crpix = [4.0, 2.5, 1.0]
+    wcs.wcs.cdelt = [1.69e-11, 0.2, 0.159]
+    wcs.wcs.crpix = [2.5, 2.0, 1.5]
     wcs.wcs.crval = [1.95119e-06, 0.0, 0.0]
     return wcs
 
@@ -106,6 +112,20 @@ def test_scalars_and_strings_survive(tmp_path):
     assert out["config"]["simulation"]["expos"] == ["5 s", "20 s"]
 
 
+def test_an_unquoted_yaml_date_survives(tmp_path):
+    """The raw config is stored as read, dates included.
+
+    YAML reads an unquoted 2012-06-03 as a datetime.date, which is how an EIS
+    observation date usually arrives.
+    """
+    config = yaml.safe_load("telescope:\n  calibration: dz2025\n"
+                            "  date: 2012-06-03\n")
+    out = _round_trip(tmp_path, {"config": config})
+    date = out["config"]["telescope"]["date"]
+    assert type(date) is datetime.date
+    assert date == datetime.date(2012, 6, 3)
+
+
 def test_the_cube_comes_back_whole(tmp_path):
     out = _round_trip(tmp_path)
     original, restored = _cube(), out["cube_sim"]
@@ -127,7 +147,7 @@ def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
     out = _round_trip(tmp_path)
     restored = out["cube_sim"].wcs
 
-    assert list(restored.wcs.ctype) == ["WAVE", "HPLT-TAN", "HPLN-TAN"]
+    assert list(restored.wcs.ctype) == ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     assert [str(c) for c in restored.wcs.cunit] == ["cm", "arcsec", "arcsec"]
     assert restored.wcs.cdelt == pytest.approx(_wcs().wcs.cdelt, rel=1e-12)
     assert restored.wcs.crpix == pytest.approx(_wcs().wcs.crpix, rel=1e-12)
@@ -139,6 +159,20 @@ def test_the_wcs_describes_the_same_world_coordinates(tmp_path):
     before = _cube().axis_world_coords(2)[0].to_value(u.cm)
     after = out["cube_sim"].axis_world_coords(2)[0].to_value(u.cm)
     assert np.allclose(after, before, rtol=1e-12, atol=0.0)
+
+
+def test_saving_leaves_the_callers_wcs_alone(tmp_path):
+    """Writing a WCS as a header normalises it to SI in place.
+
+    Saving must not do that to the cube or WCS the caller still holds, or a
+    script that saves and then carries on would find its cdelt rescaled.
+    """
+    cube, wcs = _cube(), _wcs()
+    save_results(tmp_path / "out.asdf", {"cube_sim": cube, "wcs": wcs})
+
+    for held in (cube.wcs, wcs):
+        assert [str(c) for c in held.wcs.cunit] == ["cm", "arcsec", "arcsec"]
+        assert held.wcs.cdelt == pytest.approx(_wcs().wcs.cdelt, rel=1e-12)
 
 
 def test_tuple_keyed_dicts_survive(tmp_path):
@@ -187,6 +221,60 @@ def test_config_objects_come_back_as_the_right_classes(tmp_path):
     assert objects["telescope"].filter.al_thickness == 1500 * u.AA
 
 
+def _same(before, after):
+    """Equal in value and in type, looking inside dataclasses and lists."""
+    if type(after) is not type(before):
+        return False
+    if dataclasses.is_dataclass(before):
+        return all(_same(getattr(before, f.name), getattr(after, f.name))
+                   for f in dataclasses.fields(before))
+    if isinstance(before, list):
+        return (len(after) == len(before)
+                and all(_same(b, a) for b, a in zip(before, after)))
+    if isinstance(before, u.Quantity):
+        return after.unit == before.unit and np.array_equal(after.value,
+                                                            before.value)
+    return after == before
+
+
+@pytest.mark.parametrize("config_object", [
+    # Every field away from its default, so a field that is dropped on the
+    # way out cannot pass by being rebuilt from the default on the way in.
+    Simulation(expos=20 * u.s, n_iter=3, slit_width=0.4 * u.arcsec, ncpu=2,
+               instrument="SWC", vis_sl=10 * u.photon / (u.s * u.cm**2),
+               psf=True, noise=False, enable_pinholes=True,
+               pinhole_sizes=[5 * u.um, 10 * u.um],
+               pinhole_positions=[0.25, 0.75],
+               pinhole_positions_spectral=[0.1, 0.9]),
+    Simulation(instrument="EIS", slit_width=2 * u.arcsec, noise=False),
+    Detector_SWC(ccd_temperature=-40 * u.deg_C, qe_vis=0.9, qe_euv=0.7,
+                 read_noise_rms=8 * u.electron / u.pixel,
+                 gain_e_per_dn=3.0 * u.electron / u.DN,
+                 filter_distance=200 * u.mm),
+    Detector_EIS(ccd_temperature=-50 * u.deg_C, qe_euv=0.6,
+                 read_noise_rms=6 * u.electron / u.pixel),
+    Telescope_EUVST(D_ap=0.3 * u.m, microroughness_sigma=0.5 * u.nm,
+                    filter=AluminiumFilter(oxide_thickness=80 * u.AA,
+                                           c_thickness=20 * u.AA,
+                                           mesh_throughput=0.75),
+                    psf_params=[2.0 * u.pixel, 2.5 * u.pixel]),
+    Telescope_EIS(psf_params=[2.0 * u.pixel, 2.5 * u.pixel],
+                  calibration="dz2025", date="2012-06-03"),
+], ids=lambda obj: type(obj).__name__)
+def test_every_config_field_survives(tmp_path, config_object):
+    """Every field, Simulation.noise included, comes back unchanged.
+
+    A run with the noise off that read back with it on would be mistaken for
+    a noisy one.
+    """
+    restored = _round_trip(tmp_path, {"object": config_object})["object"]
+
+    for f in dataclasses.fields(config_object):
+        before = getattr(config_object, f.name)
+        after = getattr(restored, f.name)
+        assert _same(before, after), f"{f.name}: {before!r} -> {after!r}"
+
+
 def test_a_restored_detector_still_computes(tmp_path):
     """Rebuilt objects have to work, not merely have the right fields."""
     out = _round_trip(tmp_path)
@@ -198,6 +286,34 @@ def test_a_restored_detector_still_computes(tmp_path):
     assert area.to_value(u.cm**2) == pytest.approx(
         Telescope_EUVST(filter=AluminiumFilter(al_thickness=1500 * u.AA))
         .ea_and_throughput(REST).to_value(u.cm**2), rel=1e-12)
+
+
+def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
+                                                            monkeypatch):
+    """Package data is found in the reader's installation, not the writer's.
+
+    An absolute path to a throughput table names the installation that wrote
+    the file, which a colleague reading it elsewhere does not have.
+    """
+    telescope = Telescope_EUVST()
+    path = save_results(tmp_path / "out.asdf", {"telescope": telescope})
+
+    assert str(io._package_root()).encode() not in path.read_bytes()
+
+    elsewhere = tmp_path / "another_install" / "euvst_response"
+    monkeypatch.setattr(io, "_package_root", lambda: elsewhere)
+    restored = load_results(path)["telescope"]
+
+    tables = elsewhere / "data" / "throughput"
+    assert restored.pm_table == tables / telescope.pm_table.name
+    assert restored.grating_table == tables / telescope.grating_table.name
+    assert restored.filter.al_table == tables / telescope.filter.al_table.name
+
+
+def test_a_path_outside_the_package_is_kept_as_given(tmp_path):
+    table = tmp_path / "my_tables" / "aluminium.dat"
+    out = _round_trip(tmp_path, {"filter": AluminiumFilter(al_table=table)})
+    assert out["filter"].al_table == table
 
 
 def test_the_fit_config_survives(tmp_path):

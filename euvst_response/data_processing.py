@@ -30,7 +30,7 @@ def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
-    Load synthetic atmosphere cube from pickle file.
+    Load synthetic atmosphere cube from a synthesis file.
     
     Creates a summed cube from all line cubes in the synthesis results.
     All line cubes are interpolated onto the wavelength grid of the metadata_line
@@ -39,7 +39,8 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     Parameters
     ----------
     pkl_file : str
-        Path to the synthesized spectra pickle file.
+        Path to the synthesized spectra file: ASDF, or a pickle written by
+        an older version of ECLIPSE.
     metadata_line : str, optional
         Name of the line to use for metadata and wavelength grid reference. 
         If None, uses the first line.

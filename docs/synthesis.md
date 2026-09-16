@@ -158,11 +158,13 @@ synthesise-spectra \
 
 ## Output
 
-The synthesis produces a pickle file containing:
+The synthesis writes an ASDF file containing:
 
 - `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
 - `config`: Runtime configuration for reproducibility
 - Additional technical data for internal use
+
+Pickle files written by older versions still load.
 
 ## Performance tips
 

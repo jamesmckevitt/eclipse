@@ -4,7 +4,9 @@ The unit tests in test_io_asdf.py check the encoder against objects built for
 the purpose. These two run the real thing end to end, which is the only way
 to find out whether the tree ECLIPSE actually produces survives the trip.
 """
+import importlib
 import sys
+from pathlib import Path
 
 import astropy.units as u
 import numpy as np
@@ -76,6 +78,71 @@ def test_an_instrument_run_writes_asdf_and_reads_back(tmp_path, monkeypatch):
     # was built in. What has to survive is where the axis points.
     wavelengths = signal.axis_world_coords(-1)[0].to_value(u.Angstrom)
     assert wavelengths.min() < 195.119 < wavelengths.max()
+
+
+class _Loaded(Exception):
+    """Raised in place of loading the atmosphere, carrying the path given."""
+
+
+def _run_main_until_loading(tmp_path, monkeypatch, config, synthesis_files):
+    """Run main() in *tmp_path* up to the point it reads the synthesis file.
+
+    *synthesis_files* are created, empty, in ./run/input. Loading is replaced
+    by raising _Loaded, so nothing is simulated.
+    """
+    main_module = importlib.import_module("euvst_response.main")
+
+    for name in synthesis_files:
+        path = tmp_path / "run" / "input" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+
+    config_path = tmp_path / "run.yaml"
+    config_path.write_text(config)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config_path)])
+
+    def load_atmosphere(path, reference_line):
+        raise _Loaded(path)
+
+    monkeypatch.setattr(main_module, "load_atmosphere", load_atmosphere)
+    main_module.main()
+
+
+SYNTHESIS_CONFIG = """
+instrument: SWC
+n_iter: 1
+ncpu: 1
+"""
+
+
+def test_the_default_synthesis_file_falls_back_to_the_old_pickle(
+        tmp_path, monkeypatch):
+    """A config relying on the default still finds a pre-ASDF synthesis."""
+    with pytest.raises(_Loaded) as loaded:
+        _run_main_until_loading(tmp_path, monkeypatch, SYNTHESIS_CONFIG,
+                                ["synthesised_spectra.pkl"])
+    assert Path(loaded.value.args[0]) == Path(
+        "run/input/synthesised_spectra.pkl")
+
+
+def test_the_asdf_default_is_preferred_to_the_old_pickle(tmp_path,
+                                                         monkeypatch):
+    with pytest.raises(_Loaded) as loaded:
+        _run_main_until_loading(tmp_path, monkeypatch, SYNTHESIS_CONFIG,
+                                ["synthesised_spectra.asdf",
+                                 "synthesised_spectra.pkl"])
+    assert Path(loaded.value.args[0]) == Path(
+        "run/input/synthesised_spectra.asdf")
+
+
+def test_a_missing_synthesis_file_named_in_the_config_is_not_replaced(
+        tmp_path, monkeypatch):
+    """Only the default falls back; a path the user wrote is taken as meant."""
+    config = SYNTHESIS_CONFIG + "synthesis_file: ./run/input/mine.asdf\n"
+    with pytest.raises(FileNotFoundError, match="mine.asdf"):
+        _run_main_until_loading(tmp_path, monkeypatch, config,
+                                ["synthesised_spectra.pkl"])
 
 
 def test_a_synthesis_file_round_trips_through_load_atmosphere(tmp_path):

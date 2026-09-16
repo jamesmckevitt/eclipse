@@ -29,6 +29,11 @@ written as tagged mappings and rebuilt on the way back in:
     tuple of parameters that produced them, and ASDF only permits str, int
     and bool as mapping keys.
 
+``resource``
+    A path inside the installed package, such as a throughput table, stored
+    relative to the package and resolved against the reader's own copy. The
+    absolute path would name the installation that wrote the file.
+
 Files written by older versions are pickles. They still load: the reader
 picks the format from the file's own magic bytes rather than its name.
 """
@@ -38,6 +43,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import warnings
+from importlib.resources import files
 from pathlib import Path
 
 import asdf
@@ -72,6 +78,11 @@ def _dataclass_registry() -> dict:
     )}
 
 
+def _package_root() -> Path:
+    """The directory this installation of ECLIPSE keeps its package data in."""
+    return Path(os.fspath(files("euvst_response")))
+
+
 def _wcs_to_tree(wcs: WCS) -> dict:
     """A WCS as a FITS header, plus the units it was expressed in.
 
@@ -81,10 +92,11 @@ def _wcs_to_tree(wcs: WCS) -> dict:
     of ``wcs.wcs.cdelt`` are not, so the original units are recorded and put
     back on the way in.
     """
-    # Read the units first: to_header() normalises the WCS object in place,
-    # so afterwards wcs.wcs.cunit already reports the SI ones.
+    # Read the units from the caller's WCS: a copy already reports the SI
+    # ones. to_header() normalises the WCS it is called on in place, so it
+    # runs on a copy, and saving a cube leaves the caller's units alone.
     cunit = [str(c) for c in wcs.wcs.cunit]
-    header = wcs.to_header()
+    header = wcs.deepcopy().to_header()
     return {
         "header": {key: header[key] for key in header},
         "cunit": cunit,
@@ -149,9 +161,15 @@ def _encode(obj):
 
     # Path, and anything else that describes a filesystem location: the
     # throughput tables arrive as importlib.resources traversables, which are
-    # not always a pathlib.Path.
+    # not always a pathlib.Path. A path into the package is stored relative
+    # to it, because the absolute one names the writer's installation, which
+    # the reader need not have.
     if isinstance(obj, Path) or hasattr(obj, "__fspath__"):
-        return {TAG: "path", "value": os.fspath(obj)}
+        try:
+            relative = Path(os.fspath(obj)).relative_to(_package_root())
+        except ValueError:
+            return {TAG: "path", "value": os.fspath(obj)}
+        return {TAG: "resource", "value": relative.as_posix()}
 
     if isinstance(obj, tuple):
         return {TAG: "tuple", "items": [_encode(v) for v in obj]}
@@ -211,6 +229,9 @@ def _decode(obj):
 
         if tag == "path":
             return Path(obj["value"])
+
+        if tag == "resource":
+            return _package_root() / obj["value"]
 
         if tag == "tuple":
             return tuple(_decode(v) for v in obj["items"])

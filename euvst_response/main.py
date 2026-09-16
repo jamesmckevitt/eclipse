@@ -131,6 +131,14 @@ def main() -> None:
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
     else:
         synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.asdf")
+        # Synthesis runs from before the move to ASDF wrote a pickle under the
+        # old default name. load_atmosphere still reads one, so a config that
+        # relies on the default keeps working until the synthesis is re-run.
+        legacy_synthesis_file = "./run/input/synthesised_spectra.pkl"
+        if ("synthesis_file" not in config
+                and not Path(synthesis_file).is_file()
+                and Path(legacy_synthesis_file).is_file()):
+            synthesis_file = legacy_synthesis_file
         reference_line = config.get("reference_line", "Fe12_195.1190")
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(

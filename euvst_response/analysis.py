@@ -70,7 +70,8 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     Parameters
     ----------
     filepath : str or Path
-        Path to the pickled results file.
+        Path to the results file: ASDF, or a pickle written by an older
+        version of ECLIPSE.
         
     Returns
     -------
@@ -78,7 +79,7 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
         Dictionary containing all results and metadata with reconstructed signals.
     """
     data = load_results(filepath)
-    
+
     for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
         # Refuse files written before the cube axis order was fixed (issue
         # #12).  Those store signals as (x, y, wavelength) with an HPLT-first

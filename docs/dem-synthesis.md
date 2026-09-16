@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
 ## Running the instrument response
 
-The pickle is in the normal synthesis format, so the [instrument response](instrument-response.md) stage can use it. One run per spectral window:
+The file is in the normal synthesis format, so the [instrument response](instrument-response.md) stage can use it. One run per spectral window:
 
 ```yaml
 # configs/eis_si10.yaml
