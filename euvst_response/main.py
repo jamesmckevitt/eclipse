@@ -17,7 +17,7 @@ import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
-from .fitting import fit_cube_gauss, FitConfig, FitComponent
+from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
@@ -48,9 +48,10 @@ _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
                     "noise", "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
-                 "constrain_positive_intensity", "backend", "max_iter"}
+                 "constrain_positive_intensity", "backend", "max_iter",
+                 "bessel_correction", "save_iterations"}
 _FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
-                           "amplitude_greater_than"}
+                           "amplitude_greater_than", "name"}
 
 
 def _dataclass_keys(cls) -> set:
@@ -227,6 +228,7 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
             tie_center=comp_dict.get("tie_center", None),
             tie_width=comp_dict.get("tie_width", None),
             amplitude_greater_than=comp_dict.get("amplitude_greater_than", None),
+            name=comp_dict.get("name", None),
         ))
 
     return FitConfig(
@@ -236,6 +238,8 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
             "constrain_positive_intensity", False),
         backend=fitting_cfg.get("backend", None),
         max_iter=fitting_cfg.get("max_iter", FitConfig.max_iter),
+        bessel_correction=fitting_cfg.get("bessel_correction", False),
+        save_iterations=fitting_cfg.get("save_iterations", False),
     )
 
 
@@ -704,14 +708,19 @@ def main() -> None:
             cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
 
             print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
-            fit_truth_data, fit_truth_units = fit_cube_gauss(cube_reb_binned, n_jobs=ncpu, fit_config=fit_config)
-            rebin_cache[rebin_cache_key] = (cube_reb_binned, fit_truth_data, fit_truth_units)
+            ground_truth = ground_truth_summary(cube_reb_binned, fit_config, n_jobs=ncpu)
+            truth_failed = ground_truth["failed"]
+            if truth_failed.any():
+                print(f"  Ground truth fit failed in {np.count_nonzero(truth_failed)} "
+                      f"of {truth_failed.size} pixels; their true velocity and "
+                      f"width are NaN")
+            rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
             # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
             # multiple binning factors at fixed slit width all retain their cubes
             # (a single-key dict would silently keep only the first one).
             cube_reb_dict.setdefault((sampling_key[0], offchip_bin_slit), cube_reb_binned)
 
-        cube_reb_binned, fit_truth_data, fit_truth_units = rebin_cache[rebin_cache_key]
+        cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
         # Build Simulation object
         SIM = Simulation(
@@ -785,10 +794,7 @@ def main() -> None:
                 "first_signal_wcs": first_dn_signal.wcs,
                 "dn_fit_stats": dn_fit_stats,
                 "photon_fit_stats": photon_fit_stats,
-                "ground_truth": {
-                    "fit_truth_data": fit_truth_data,
-                    "fit_truth_units": fit_truth_units,
-                },
+                "ground_truth": ground_truth,
             }
 
             del first_dn_signal, first_photon_signal, dn_fit_stats, photon_fit_stats

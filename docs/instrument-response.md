@@ -133,7 +133,9 @@ fitting:
   max_iter: 1000                 # optimiser iterations before it gives up
   components:
     - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
+      name: Fe XII 195.119
     - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
+      name: Fe XII 195.179
       tie_center: 0
       tie_width: 0
 ```
@@ -145,10 +147,15 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `tie_center: <i>`: fit this component at the same velocity as component *i*. Centres are scaled by the ratio of the two rest wavelengths rather than offset by a fixed wavelength, so a single velocity is correct across the whole window.
 - `tie_width: <i>`: fit this component with the same line width as component *i*.
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
+- `name: <text>`: the component's name in the results. Defaults to its rest wavelength, e.g. `195.1190 Angstrom`.
 
 Without `components`, the block sets `max_iter` and `backend` for the single-Gaussian fit that runs when there are no components. A block needs either no components or at least two.
 
-`max_iter` limits how many iterations the optimiser may take on one spectrum. If it runs out it returns whatever it has reached. There is no warning.
+`max_iter` limits how many iterations the optimiser may take on one spectrum. A fit that runs out, or fails for any other reason, is left out of the mean and standard deviation, and the run prints how many fits failed and in how many pixels.
+
+`bessel_correction: true` divides the standard deviation over the Monte Carlo iterations by n - 1 rather than n. Dividing by n underestimates the spread when there are few iterations, by a factor of sqrt((n - 1) / n): 5 per cent for 10 iterations, 0.5 per cent for 100. It is off by default, so results stay comparable with earlier runs.
+
+`save_iterations: true` keeps every iteration's fitted parameters in the results as well as their statistics, which makes the results about `n_iter` times larger.
 
 !!! warning "The primary component must be present in the data"
 
@@ -253,10 +260,10 @@ None of this has a configuration key, so this needs to be done with the Python A
 Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
 
 - Simulated detector signals (DN and photon counts)
-- Fitted spectral line parameters (intensity, velocity, width)
+- For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel
 - Statistical analysis of velocity precision vs. exposure time
 - Ground truth comparisons
 - Full config objects (`Detector`, `Telescope`, `Simulation`) for each parameter combination
 - The git commit ID and software version used to produce the results
 
-Use `summary_table(results)` after loading to see all parameter combinations and the run metadata.
+Use `summary_table(results)` after loading to see all parameter combinations, the fitted components and the run metadata. `list_fit_components` gives the component names, and `analyse_fit_statistics` and `create_sunpy_maps_from_combo` take `component=` to choose one, defaulting to the primary component.

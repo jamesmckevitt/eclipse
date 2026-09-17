@@ -28,6 +28,14 @@ class FitComponent:
     tie_center: Optional[int] = None   # index of component whose centre this is tied to
     tie_width: Optional[int] = None    # index of component whose width this is tied to
     amplitude_greater_than: Optional[int] = None  # index of component this must be brighter than
+    # Label for this component in the results. Defaults to its rest
+    # wavelength, e.g. "195.1190 Angstrom".
+    name: Optional[str] = None
+
+
+def default_component_name(wavelength: u.Quantity) -> str:
+    """The name a component gets in the results when it is not given one."""
+    return f"{wavelength.to_value(u.AA):.4f} Angstrom"
 
 
 @dataclass
@@ -52,6 +60,13 @@ class FitConfig:
     # so that it does not quietly shrink as components are added. EISPAC uses
     # 2000 for the same job; fits here converge in tens.
     max_iter: int = 1000
+    # Divide by n - 1 rather than n in the standard deviation over Monte Carlo
+    # iterations (Bessel's correction). Off by default, which keeps results
+    # comparable with runs made before it existed.
+    bessel_correction: bool = False
+    # Keep every iteration's fitted parameters in the results, not only their
+    # statistics. The results grow by about n_iter times the fit arrays.
+    save_iterations: bool = False
 
     def __post_init__(self):
         if len(self.components) == 1:
@@ -72,12 +87,45 @@ class FitConfig:
                 f"fitting.max_iter must be a positive integer, got "
                 f"{self.max_iter!r}."
             )
+        for key in ("bessel_correction", "save_iterations"):
+            if not isinstance(getattr(self, key), bool):
+                raise ValueError(
+                    f"fitting.{key} must be true or false, got "
+                    f"{getattr(self, key)!r}."
+                )
         if self.components:
-            if not 0 <= self.primary_component < len(self.components):
+            n = len(self.components)
+            if not 0 <= self.primary_component < n:
                 raise ValueError(
                     f"fitting.primary_component is {self.primary_component}, "
-                    f"but there are {len(self.components)} components, "
-                    f"numbered from 0."
+                    f"but there are {n} components, numbered from 0."
+                )
+            for idx, comp in enumerate(self.components):
+                for key in ("tie_center", "tie_width", "amplitude_greater_than"):
+                    other = getattr(comp, key)
+                    if other is not None and (
+                            isinstance(other, bool)
+                            or not isinstance(other, (int, np.integer))
+                            or not 0 <= other < n or other == idx):
+                        raise ValueError(
+                            f"fitting.components[{idx}].{key} is {other!r}. It "
+                            f"has to be the index of another component, from "
+                            f"0 to {n - 1}."
+                        )
+                if comp.name is not None and (
+                        not isinstance(comp.name, str) or not comp.name.strip()):
+                    raise ValueError(
+                        f"fitting.components[{idx}].name must be a non-empty "
+                        f"string, got {comp.name!r}."
+                    )
+            names = [default_component_name(c.wavelength) if c.name is None
+                     else c.name for c in self.components]
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            if repeated:
+                raise ValueError(
+                    f"Fitted components need distinct names, because the "
+                    f"results are stored by name. Repeated: {repeated}. Give "
+                    f"the components a 'name'."
                 )
         else:
             # Neither setting has anything to act on without components, so
@@ -146,12 +194,15 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
 
 
 def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
-                   max_iter: int = FitConfig.max_iter) -> np.ndarray:
+                   max_iter: int = FitConfig.max_iter) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian, using mpfit.
 
     The same model, initial guess and fallback as :func:`_fit_one`, with the
     width held positive as on the multi-component mpfit path.  *max_iter* is
     passed to mpfit, which counts iterations directly.
+
+    Returns the parameters and whether the fit succeeded; see
+    :func:`_mpfit_succeeded`.
     """
     p0 = np.asarray(_guess_params(wv, prof), dtype=float)
     parinfo = [
@@ -165,20 +216,34 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
                        functkw=functkw, quiet=True, maxiter=max_iter)
         if result.status > 0:
-            return np.asarray(result.params, dtype=float)
+            params = np.asarray(result.params, dtype=float)
+            return params, _mpfit_succeeded(result.status, params)
     except Exception:
         pass
-    return p0
+    return p0, False
+
+
+def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
+    """Whether an mpfit result counts as a successful fit.
+
+    Status 5 means mpfit ran out of iterations.  scipy raises in that case
+    and the fit falls back to its initial guess, so it is counted as failed
+    here too, even though mpfit hands back wherever it had got to.
+    """
+    return status > 0 and status != 5 and bool(np.all(np.isfinite(params)))
 
 
 def _fit_one(wv: np.ndarray, prof: np.ndarray,
-             max_iter: int = FitConfig.max_iter) -> np.ndarray:
+             max_iter: int = FitConfig.max_iter) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian.
 
     *max_iter* is an iteration count.  curve_fit uses lm here, since there are
     no bounds, and lm counts every residual call against maxfev including the
     one per parameter that builds each finite-difference Jacobian, so an
     iteration costs len(p0) + 1 evaluations.
+
+    Returns the parameters and whether the fit succeeded.  A failed fit,
+    including one that runs out of iterations, returns the initial guess.
     """
     p0 = _guess_params(wv, prof)
     with warnings.catch_warnings():
@@ -186,9 +251,9 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
         try:
             popt, _ = curve_fit(gaussian, wv, prof, p0=p0,
                                 maxfev=max_iter * (len(p0) + 1))
-            return popt
+            return popt, bool(np.all(np.isfinite(popt)))
         except:
-            return np.array(p0)
+            return np.array(p0), False
 
 
 # ---------------------------------------------------------------------------
@@ -320,11 +385,14 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
                          model_func, free_to_full_A,
                          free_indices: list[int],
                          ratio_spec: dict, bounds,
-                         has_bounds: bool) -> np.ndarray:
+                         has_bounds: bool) -> tuple[np.ndarray, bool]:
     """Fit one spectrum with scipy curve_fit (multi-component, A scaling).
 
     *wv_cm* is the wavelength axis in **cm** (CGS).  The fit is performed
     in Angstrom internally, then the result is converted back to cm.
+
+    Returns the parameters and whether the fit succeeded.  A failed fit
+    returns the initial guess.
     """
     CM_TO_A = 1e8
 
@@ -390,8 +458,10 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
         try:
             popt_free_A, _ = curve_fit(model_func, wv_A, prof, p0=p0_free_A,
                                        bounds=bounds, **fit_kwargs)
+            succeeded = bool(np.all(np.isfinite(popt_free_A)))
         except Exception:
             popt_free_A = p0_free_A
+            succeeded = False
 
     # Reconstruct full A vector, then convert centres & sigmas back to cm
     full_A = free_to_full_A(popt_free_A)
@@ -400,7 +470,7 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
         full_cm[3 * i + 1] /= CM_TO_A  # centre
         full_cm[3 * i + 2] /= CM_TO_A  # sigma
 
-    return full_cm
+    return full_cm, succeeded
 
 
 # ---------------------------------------------------------------------------
@@ -614,11 +684,12 @@ def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
 def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
                    fit_config: FitConfig,
                    parinfo_template: list[dict],
-                   ratio_params: dict | None = None) -> np.ndarray:
+                   ratio_params: dict | None = None) -> tuple[np.ndarray, bool]:
     """Fit a single spectrum with mpfit.
 
     Returns the *full* parameter vector (length ``3*N + 1``) with
-    absolute amplitudes (ratio parameters are converted back).
+    absolute amplitudes (ratio parameters are converted back), and whether
+    the fit succeeded; see :func:`_mpfit_succeeded`.
     """
     p0 = _guess_multi_params(wv, prof, fit_config)
     p0_orig = p0.copy()
@@ -651,11 +722,11 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
             if ratio_params:
                 for child_idx, parent_idx in ratio_params.items():
                     out[child_idx] = out[parent_idx] * result.params[child_idx]
-            return out
+            return out, _mpfit_succeeded(result.status, out)
     except Exception:
         pass
 
-    return p0_orig  # fall back to initial guess (absolute amplitudes)
+    return p0_orig, False  # fall back to initial guess (absolute amplitudes)
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +734,8 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 # ---------------------------------------------------------------------------
 
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
-                   fit_config: FitConfig | None = None) -> tuple[np.ndarray, list[u.Unit]]:
+                   fit_config: FitConfig | None = None,
+                   return_failed: bool = False) -> tuple:
     """
     Fit Gaussian(s) to every (slit x wavelength) spectrum.
 
@@ -677,6 +749,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Fit configuration.  When *None* or without components, a single
         Gaussian is fitted, with the configuration's ``max_iter`` and
         ``backend`` when one is given.
+    return_failed : bool, optional
+        Also return which fits failed.  Default False.
 
     Returns
     -------
@@ -687,6 +761,11 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         (``[peak0, centre0, sigma0, ..., background]``).
     units_list : list of Unit
         One unit per parameter.
+    failed : ndarray of bool
+        Shape ``(n_slit, n_scan)``, True where the fit failed, including where
+        the optimiser ran out of ``max_iter``.  Those pixels hold the initial
+        guess (or, for mpfit, wherever it had got to).  Only returned when
+        *return_failed* is True.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
@@ -702,17 +781,21 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
         def _fit_block(spec_block):
             results = np.empty((spec_block.shape[0], 4))
+            succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i] = fit_one(wv.value, spec_block[i], max_iter)
-            return results
+                results[i], succeeded[i] = fit_one(wv.value, spec_block[i], max_iter)
+            return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(_fit_block)(signal_cube.data[i]) for i in range(n_slit)
             )
 
-        data_array = np.stack(results, axis=0)
+        data_array = np.stack([r[0] for r in results], axis=0)
+        failed = ~np.stack([r[1] for r in results], axis=0)
         units_list = [signal_cube.unit, wv.unit, wv.unit, signal_cube.unit]
+        if return_failed:
+            return data_array, units_list, failed
         return data_array, units_list
 
     # --- multi-component path ---
@@ -730,12 +813,13 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
         def _fit_block_multi(spec_block):
             results = np.empty((spec_block.shape[0], n_params))
+            succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i] = _fit_one_scipy_multi(
+                results[i], succeeded[i] = _fit_one_scipy_multi(
                     wv.value, spec_block[i], fit_config,
                     model_func, free_to_full, free_indices,
                     ratio_spec, bounds, has_bounds)
-            return results
+            return results, succeeded
 
     else:
         # mpfit with full parinfo (slower, supports hard bounds)
@@ -752,17 +836,20 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
         def _fit_block_multi(spec_block):
             results = np.empty((spec_block.shape[0], n_params))
+            succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i] = _fit_one_multi(wv.value, spec_block[i], fit_config,
-                                            parinfo_template, ratio_params)
-            return results
+                results[i], succeeded[i] = _fit_one_multi(
+                    wv.value, spec_block[i], fit_config,
+                    parinfo_template, ratio_params)
+            return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
             delayed(_fit_block_multi)(signal_cube.data[i]) for i in range(n_slit)
         )
 
-    data_array = np.stack(results, axis=0)
+    data_array = np.stack([r[0] for r in results], axis=0)
+    failed = ~np.stack([r[1] for r in results], axis=0)
 
     # Build units list: [signal, wl, wl, signal, wl, wl, ..., signal]
     units_list = []
@@ -770,7 +857,232 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         units_list.extend([signal_cube.unit, wv.unit, wv.unit])
     units_list.append(signal_cube.unit)  # background
 
+    if return_failed:
+        return data_array, units_list, failed
     return data_array, units_list
+
+
+# ---------------------------------------------------------------------------
+#  Results by component
+# ---------------------------------------------------------------------------
+
+def component_names(fit_config: FitConfig | None,
+                    rest_wavelength: u.Quantity) -> list[str]:
+    """
+    Names of the fitted components, in fit order.
+
+    Parameters
+    ----------
+    fit_config : FitConfig or None
+        The fit configuration.  A single-Gaussian fit has one component.
+    rest_wavelength : u.Quantity
+        Rest wavelength of the line, which names a single-Gaussian fit.
+
+    Returns
+    -------
+    list of str
+    """
+    if fit_config is None or fit_config.is_single:
+        return [default_component_name(rest_wavelength)]
+    return [default_component_name(c.wavelength) if c.name is None else c.name
+            for c in fit_config.components]
+
+
+def spectral_pixel_width(cube: NDCube) -> u.Quantity:
+    """Width of one spectral pixel of a cube with wavelength on its last axis."""
+    wavelength = u.Quantity(cube.axis_world_coords(2)[0]).to(u.cm)
+    return wavelength[1] - wavelength[0]
+
+
+def fit_quantities(fit_data: np.ndarray, units: list,
+                   wavelength_step: u.Quantity, rest_wavelength: u.Quantity,
+                   fit_config: FitConfig | None = None) -> dict:
+    """
+    Intensity, velocity and width of every fitted component, by name.
+
+    Parameters
+    ----------
+    fit_data : np.ndarray
+        Fitted parameters with the parameter axis last, as from
+        :func:`fit_cube_gauss`.
+    units : list of Unit
+        One unit per parameter, as from :func:`fit_cube_gauss`.
+    wavelength_step : u.Quantity
+        Width of one spectral pixel.
+    rest_wavelength : u.Quantity
+        Rest wavelength of a single-Gaussian fit.  With components, each uses
+        its own.
+    fit_config : FitConfig, optional
+        The fit configuration; None for a single Gaussian.
+
+    Returns
+    -------
+    dict
+        ``components`` maps each component name to ``intensity``,
+        ``velocity`` and ``width``, and ``background`` holds the fitted
+        background.  Each is a Quantity shaped like *fit_data* without its
+        last axis.  ``intensity`` is the fitted Gaussian summed over spectral
+        pixels, so it is in counts, like the total signal maps.  ``velocity``
+        is relative to that component's rest wavelength, and ``width`` is the
+        Gaussian sigma.
+    """
+    names = component_names(fit_config, rest_wavelength)
+    if fit_config is None or fit_config.is_single:
+        rest = [rest_wavelength]
+    else:
+        rest = [c.wavelength for c in fit_config.components]
+
+    components = {}
+    for i, (name, lam0) in enumerate(zip(names, rest)):
+        peak = fit_data[..., 3 * i] * units[3 * i]
+        centre = fit_data[..., 3 * i + 1] * units[3 * i + 1]
+        sigma = fit_data[..., 3 * i + 2] * units[3 * i + 2]
+        pixels = (sigma / wavelength_step).to(u.dimensionless_unscaled)
+        components[name] = {
+            "intensity": np.sqrt(2 * np.pi) * peak * pixels * u.pix,
+            "velocity": ((centre - lam0) / lam0 * const.c).to(u.km / u.s),
+            "width": sigma.to(u.AA),
+        }
+    return {"components": components,
+            "background": fit_data[..., -1] * units[-1]}
+
+
+def summarise_fits(fit_data: np.ndarray, failed: np.ndarray, units: list,
+                   wavelength_step: u.Quantity, rest_wavelength: u.Quantity,
+                   fit_config: FitConfig | None = None) -> dict:
+    """
+    Statistics of the Monte Carlo fits, per parameter and per component.
+
+    Failed fits are left out of every mean and standard deviation.  A pixel
+    whose fits all failed has NaN statistics.  The intensity statistics are
+    taken over each iteration's intensity, so they account for the peak and
+    width moving together, which the per-parameter statistics cannot.
+
+    Parameters
+    ----------
+    fit_data : np.ndarray
+        Shape ``(n_iter, n_slit, n_scan, n_params)``.
+    failed : np.ndarray of bool
+        Shape ``(n_iter, n_slit, n_scan)``, True where a fit failed.
+    units, wavelength_step, rest_wavelength, fit_config
+        As for :func:`fit_quantities`.  ``fit_config.bessel_correction``
+        makes the standard deviations divide by n - 1 rather than n, and
+        ``fit_config.save_iterations`` keeps *fit_data* and *failed*.
+
+    Returns
+    -------
+    dict
+        ``first_fit_data`` (the first iteration, failed or not),
+        ``mean_data``, ``std_data`` and ``units``, per parameter as before,
+        and:
+
+        - ``components``: for each component name, its ``rest_wavelength``,
+          ``tied`` (the names of the components its ``velocity`` and
+          ``width`` are tied to, or None), and ``intensity``, ``velocity``
+          and ``width``, each with ``first``, ``mean`` and ``std`` maps.
+          ``first`` is NaN where the first fit failed.
+        - ``background``: ``first``, ``mean`` and ``std`` maps.
+        - ``primary_component``: the primary component's name.
+        - ``failed_fits``: the number of failed fits in each pixel.
+        - ``n_iterations``: the number of fits in each pixel.
+        - ``bessel_correction``: whether the standard deviations divide by
+          n - 1.
+        - ``iterations``: ``fit_data`` and ``failed``, only when
+          ``fit_config.save_iterations`` is set.
+    """
+    bessel = fit_config is not None and fit_config.bessel_correction
+    ddof = 1 if bessel else 0
+
+    def _stats(values, leave_out):
+        kept = np.where(leave_out, np.nan, values)
+        with warnings.catch_warnings():
+            # A pixel with no successful fit, or only one under Bessel's
+            # correction, has no statistic, and NaN is the right answer.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return (kept[0], np.nanmean(kept, axis=0),
+                    np.nanstd(kept, axis=0, ddof=ddof))
+
+    _, mean_data, std_data = _stats(fit_data, failed[..., np.newaxis])
+
+    quantities = fit_quantities(fit_data, units, wavelength_step,
+                                rest_wavelength, fit_config)
+    names = list(quantities["components"])
+    configured = ([None] if fit_config is None or fit_config.is_single
+                  else fit_config.components)
+
+    def _summary(q):
+        first, mean, std = _stats(q.value, failed)
+        return {"first": first * q.unit, "mean": mean * q.unit,
+                "std": std * q.unit}
+
+    components = {}
+    for name, comp, values in zip(names, configured,
+                                  quantities["components"].values()):
+        components[name] = {
+            "rest_wavelength": rest_wavelength if comp is None else comp.wavelength,
+            "tied": {
+                "velocity": (None if comp is None or comp.tie_center is None
+                             else names[comp.tie_center]),
+                "width": (None if comp is None or comp.tie_width is None
+                          else names[comp.tie_width]),
+            },
+            **{key: _summary(values[key])
+               for key in ("intensity", "velocity", "width")},
+        }
+
+    summary = {
+        "first_fit_data": fit_data[0],
+        "mean_data": mean_data,
+        "std_data": std_data,
+        "units": units,
+        "components": components,
+        "background": _summary(quantities["background"]),
+        "primary_component": names[0 if fit_config is None or fit_config.is_single
+                                   else fit_config.primary_component],
+        "failed_fits": np.count_nonzero(failed, axis=0),
+        "n_iterations": fit_data.shape[0],
+        "bessel_correction": bessel,
+    }
+    if fit_config is not None and fit_config.save_iterations:
+        summary["iterations"] = {"fit_data": fit_data, "failed": failed}
+    return summary
+
+
+def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
+                         n_jobs: int = -1) -> dict:
+    """
+    Fit the noiseless cube, and give each component's velocity and width.
+
+    Parameters
+    ----------
+    cube : NDCube
+        The cube before the instrument, with ``rest_wav`` in its metadata.
+    fit_config : FitConfig, optional
+        The fit configuration; None for a single Gaussian.
+    n_jobs : int
+        Joblib parallelism.
+
+    Returns
+    -------
+    dict
+        ``fit_truth_data`` and ``fit_truth_units`` as from
+        :func:`fit_cube_gauss`, ``failed`` (True where the fit failed), and
+        ``components``: for each component name, ``velocity`` and ``width``
+        maps, NaN where the fit failed.  There is no intensity, because the
+        cube is in the units of the synthesis rather than in counts.
+    """
+    data, units, failed = fit_cube_gauss(cube, n_jobs=n_jobs,
+                                         fit_config=fit_config,
+                                         return_failed=True)
+    quantities = fit_quantities(data, units, spectral_pixel_width(cube),
+                                cube.meta["rest_wav"], fit_config)
+    components = {
+        name: {key: np.where(failed, np.nan, values[key].value) * values[key].unit
+               for key in ("velocity", "width")}
+        for name, values in quantities["components"].items()
+    }
+    return {"fit_truth_data": data, "fit_truth_units": units,
+            "failed": failed, "components": components}
 
 
 def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
