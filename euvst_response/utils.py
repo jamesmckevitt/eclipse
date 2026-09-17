@@ -19,6 +19,11 @@ from tqdm import tqdm
 # Global debug flag - can be set by command line or configuration
 DEBUG_MODE = False
 
+# Recorded in every synthesised line cube.  Files without it were written
+# before the simulation velocity was turned into a line-of-sight velocity for
+# an observer, so every velocity in them has the wrong sign.
+VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
+
 
 def _get_mpi_info():
     """Return (comm, rank, world_size) if MPI is active with multiple ranks.

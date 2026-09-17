@@ -14,7 +14,7 @@ from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma
+from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma, VELOCITY_CONVENTION
 
 
 def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
@@ -89,6 +89,18 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
         raise ValueError(
             f"{pkl_file} was written by an older ECLIPSE that stored cubes "
             "as (x, y, wavelength). Cubes are now (y, x, wavelength). "
+            "Re-run the synthesis with this version to regenerate the file."
+        )
+
+    # Refuse files written before the Doppler sign was fixed.  Those used the
+    # simulation velocity along the line of sight as it was, so an upflow seen
+    # from above came out redshifted, and every velocity is the wrong sign.
+    if (ref_cube.meta or {}).get("velocity_convention") != VELOCITY_CONVENTION:
+        raise ValueError(
+            f"{pkl_file} was written by an older ECLIPSE that used the "
+            "simulation velocity along the line of sight without turning it "
+            "into a velocity away from the observer, so every Doppler shift in "
+            "it has the wrong sign: upflows seen from above are redshifted. "
             "Re-run the synthesis with this version to regenerate the file."
         )
 

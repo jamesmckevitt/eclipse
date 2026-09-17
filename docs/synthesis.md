@@ -156,6 +156,22 @@ synthesise-spectra \
 - `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
 - `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
 
+## Velocity sign
+
+The velocity files hold the velocity along each axis of the simulation, positive towards increasing coordinate, so an upflow has a positive `vz`. ECLIPSE turns the velocity along the integration axis into the line-of-sight velocity for an observer on the side from which the synthesised maps come out the right way round:
+
+| `--integration-axis` | Observer | A flow towards increasing coordinate appears |
+|---|---|---|
+| `z` | above the box, at +z | blueshifted (an upflow) |
+| `x` | at +x | blueshifted |
+| `y` | at -y | redshifted |
+
+Positive line-of-sight velocity, in the synthesised spectra, the EM(T,v) cube and the fitted velocity maps, is a redshift: motion away from the observer.
+
+!!! warning "Synthesis files from ECLIPSE 0.8.0 and earlier"
+
+    Earlier versions used the velocity along the integration axis as the line-of-sight velocity without this change of sign. Every Doppler shift they synthesised from a simulation has the wrong sign, so in the top-down view upflows came out redshifted. ECLIPSE refuses those synthesis files and the results made from them; re-run the synthesis and then the simulation. Line intensities are unchanged. Velocity uncertainties are not changed by the sign itself, but can differ where something is not symmetric about the line, such as a blend on one side of it.
+
 ## Output
 
 The synthesis produces a pickle file containing:
