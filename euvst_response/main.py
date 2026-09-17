@@ -192,6 +192,53 @@ def _parse_pinhole_config(config: dict) -> tuple:
     return pinhole_sizes, pinhole_positions, pinhole_positions_spectral
 
 
+def _parse_fitting_config(config: dict) -> FitConfig | None:
+    """
+    Build the fit configuration from the ``fitting:`` block of a YAML config.
+
+    A block with no components configures the single-Gaussian fit, so its
+    ``max_iter`` and ``backend`` apply to that. FitConfig itself checks the
+    values, including that there are either no components or at least two.
+
+    Parameters
+    ----------
+    config : dict
+        The whole parsed YAML config.
+
+    Returns
+    -------
+    FitConfig or None
+        None when the config has no ``fitting:`` block.
+    """
+    fitting_cfg = config.get("fitting", None)
+    if fitting_cfg is None:
+        return None
+
+    components = []
+    for idx, comp_dict in enumerate(fitting_cfg.get("components", [])):
+        if "wavelength" not in comp_dict:
+            raise ValueError(
+                f"fitting.components[{idx}] is missing required field "
+                f"'wavelength' (rest wavelength of this Gaussian component, "
+                f"e.g. 'wavelength: 195.119 angstrom')."
+            )
+        components.append(FitComponent(
+            wavelength=parse_yaml_input(comp_dict["wavelength"]),
+            tie_center=comp_dict.get("tie_center", None),
+            tie_width=comp_dict.get("tie_width", None),
+            amplitude_greater_than=comp_dict.get("amplitude_greater_than", None),
+        ))
+
+    return FitConfig(
+        components=components,
+        primary_component=fitting_cfg.get("primary_component", 0),
+        constrain_positive_intensity=fitting_cfg.get(
+            "constrain_positive_intensity", False),
+        backend=fitting_cfg.get("backend", None),
+        max_iter=fitting_cfg.get("max_iter", FitConfig.max_iter),
+    )
+
+
 @debug_on_error
 def main() -> None:
     """Main function for running instrument response simulations."""
@@ -356,55 +403,22 @@ def main() -> None:
                 "pinhole_positions_spectral, or run this config against SWC."
             )
 
-    # Parse fitting configuration (multi-component Gaussian)
-    fit_config = None
-    fitting_cfg = config.get("fitting", None)
-    if fitting_cfg is not None:
-        raw_components = fitting_cfg.get("components", [])
-        if len(raw_components) >= 2:
-            components = []
-            for idx, comp_dict in enumerate(raw_components):
-                if "wavelength" not in comp_dict:
-                    raise ValueError(
-                        f"fitting.components[{idx}] is missing required field "
-                        f"'wavelength' (rest wavelength of this Gaussian component, "
-                        f"e.g. 'wavelength: 195.119 angstrom')."
-                    )
-                wl = parse_yaml_input(comp_dict["wavelength"])
-                tie_center = comp_dict.get("tie_center", None)
-                tie_width = comp_dict.get("tie_width", None)
-                amp_gt = comp_dict.get("amplitude_greater_than", None)
-                components.append(FitComponent(wavelength=wl,
-                                               tie_center=tie_center,
-                                               tie_width=tie_width,
-                                               amplitude_greater_than=amp_gt))
-            primary = fitting_cfg.get("primary_component", 0)
-            constrain_pos = fitting_cfg.get("constrain_positive_intensity", False)
-            backend_override = fitting_cfg.get("backend", None)
-            if backend_override is not None and backend_override not in ("scipy", "mpfit"):
-                raise ValueError(
-                    f"Unknown fitting backend '{backend_override}'. "
-                    f"Supported values: 'scipy', 'mpfit', or omit for auto."
-                )
-            max_iter = fitting_cfg.get("max_iter", FitConfig.max_iter)
-            if not isinstance(max_iter, int) or max_iter < 1:
-                raise ValueError(
-                    f"fitting.max_iter must be a positive integer, got "
-                    f"{max_iter!r}."
-                )
-            fit_config = FitConfig(components=components,
-                                   primary_component=primary,
-                                   constrain_positive_intensity=constrain_pos,
-                                   backend=backend_override,
-                                   max_iter=max_iter)
-            if backend_override == "mpfit":
-                backend_label = "mpfit (forced)"
-            elif backend_override == "scipy":
-                backend_label = "scipy (forced)"
-            else:
-                backend_label = "scipy (auto)"
+    # Parse fitting configuration
+    fit_config = _parse_fitting_config(config)
+    if fit_config is not None:
+        if fit_config.backend == "mpfit":
+            backend_label = "mpfit (forced)"
+        elif fit_config.backend == "scipy":
+            backend_label = "scipy (forced)"
+        else:
+            backend_label = "scipy (auto)"
+        if fit_config.is_single:
+            print(f"Single-Gaussian fitting: max_iter={fit_config.max_iter}, "
+                  f"backend={backend_label}")
+        else:
             print(f"Multi-component fitting enabled: {fit_config.n_components} components "
-                  f"(primary={primary}, {fit_config.n_full_params} params, "
+                  f"(primary={fit_config.primary_component}, "
+                  f"{fit_config.n_full_params} params, "
                   f"backend={backend_label})")
 
     # Parse off-chip slit binning (ground-based spatial binning along the slit)

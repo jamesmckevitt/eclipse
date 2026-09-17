@@ -146,7 +146,7 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `tie_width: <i>`: fit this component with the same line width as component *i*.
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 
-Omitting the `fitting` block fits a single Gaussian, with `max_iter` at its default.
+Without `components`, the block sets `max_iter` and `backend` for the single-Gaussian fit that runs when there are no components. A block needs either no components or at least two.
 
 `max_iter` limits how many iterations the optimiser may take on one spectrum. If it runs out it returns whatever it has reached. There is no warning.
 

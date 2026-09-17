@@ -32,10 +32,12 @@ class FitComponent:
 
 @dataclass
 class FitConfig:
-    """Configuration for multi-component Gaussian fitting.
+    """Configuration for Gaussian fitting.
 
-    When *components* is empty (or has one entry with no ties) the fitter
-    falls back to the fast single-Gaussian path.
+    With no *components* this configures the single-Gaussian fit, and only
+    ``max_iter`` and ``backend`` apply. Otherwise there must be at least two
+    components: one on its own is not a blend, and the fitter would ignore its
+    wavelength and ties and fit one free Gaussian.
 
     The ``primary_component`` index selects which component's centre and
     width are used for velocity/width analysis downstream.
@@ -50,6 +52,46 @@ class FitConfig:
     # so that it does not quietly shrink as components are added. EISPAC uses
     # 2000 for the same job; fits here converge in tens.
     max_iter: int = 1000
+
+    def __post_init__(self):
+        if len(self.components) == 1:
+            raise ValueError(
+                "fitting.components has one entry. Multi-component fitting "
+                "needs at least two; for a single Gaussian leave components "
+                "out, and max_iter and backend still apply."
+            )
+        if self.backend not in (None, "scipy", "mpfit"):
+            raise ValueError(
+                f"Unknown fitting backend '{self.backend}'. "
+                f"Supported values: 'scipy', 'mpfit', or omit for auto."
+            )
+        if (isinstance(self.max_iter, bool)
+                or not isinstance(self.max_iter, (int, np.integer))
+                or self.max_iter < 1):
+            raise ValueError(
+                f"fitting.max_iter must be a positive integer, got "
+                f"{self.max_iter!r}."
+            )
+        if self.components:
+            if not 0 <= self.primary_component < len(self.components):
+                raise ValueError(
+                    f"fitting.primary_component is {self.primary_component}, "
+                    f"but there are {len(self.components)} components, "
+                    f"numbered from 0."
+                )
+        else:
+            # Neither setting has anything to act on without components, so
+            # accepting them would look effective and change nothing.
+            if self.primary_component != 0:
+                raise ValueError(
+                    "fitting.primary_component picks one of the components, "
+                    "and there are none."
+                )
+            if self.constrain_positive_intensity:
+                raise ValueError(
+                    "fitting.constrain_positive_intensity is only applied to "
+                    "multi-component fits, and there are no components."
+                )
 
     @property
     def n_components(self) -> int:
@@ -101,6 +143,32 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
         else:
             sigma = (wv.max() - wv.min()) / 10
     return [peak, centre, sigma, back]
+
+
+def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
+                   max_iter: int = FitConfig.max_iter) -> np.ndarray:
+    """Fit single spectrum with Gaussian, using mpfit.
+
+    The same model, initial guess and fallback as :func:`_fit_one`, with the
+    width held positive as on the multi-component mpfit path.  *max_iter* is
+    passed to mpfit, which counts iterations directly.
+    """
+    p0 = np.asarray(_guess_params(wv, prof), dtype=float)
+    parinfo = [
+        {"value": p0[0]},
+        {"value": p0[1]},
+        {"value": p0[2], "limited": [1, 0], "limits": [1e-30, 0.0]},
+        {"value": p0[3]},
+    ]
+    functkw = {"x": wv, "y": prof, "n_components": 1}
+    try:
+        result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
+                       functkw=functkw, quiet=True, maxiter=max_iter)
+        if result.status > 0:
+            return np.asarray(result.params, dtype=float)
+    except Exception:
+        pass
+    return p0
 
 
 def _fit_one(wv: np.ndarray, prof: np.ndarray,
@@ -606,8 +674,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     n_jobs : int
         Joblib parallelism (-1 = all cores).
     fit_config : FitConfig, optional
-        Multi-component configuration.  When *None* or single-component,
-        the original single-Gaussian fitter is used.
+        Fit configuration.  When *None* or without components, a single
+        Gaussian is fitted, with the configuration's ``max_iter`` and
+        ``backend`` when one is given.
 
     Returns
     -------
@@ -628,10 +697,13 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
+        use_mpfit = fit_config is not None and fit_config.backend == "mpfit"
+        fit_one = _fit_one_mpfit if use_mpfit else _fit_one
+
         def _fit_block(spec_block):
             results = np.empty((spec_block.shape[0], 4))
             for i in range(spec_block.shape[0]):
-                results[i] = _fit_one(wv.value, spec_block[i], max_iter)
+                results[i] = fit_one(wv.value, spec_block[i], max_iter)
             return results
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
