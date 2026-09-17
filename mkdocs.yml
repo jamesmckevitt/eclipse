@@ -37,6 +37,7 @@ nav:
       - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
   - Advanced topics:
       - Pinhole stray light: pinholes.md
+      - Reading out without a shutter: readout.md
   - Acknowledgements: acknowledgements.md
 
 extra_css:
