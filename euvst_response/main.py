@@ -197,9 +197,9 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
     """
     Build the fit configuration from the ``fitting:`` block of a YAML config.
 
-    A block with no components configures the single-Gaussian fit, so its
-    ``max_iter`` and ``backend`` apply to that. FitConfig itself checks the
-    values, including that there are either no components or at least two.
+    A block with no components configures the single-Gaussian fit.
+    FitConfig itself checks the values, including that there are either no
+    components or at least two.
 
     Parameters
     ----------

@@ -244,6 +244,12 @@ def test_a_fit_that_runs_out_of_iterations_is_reported_as_failed():
     assert not ample.any()
 
 
+def test_return_failed_has_to_be_named():
+    """Keyword-only, so the two return shapes cannot be mixed up by position."""
+    with pytest.raises(TypeError):
+        fit_cube_gauss(_line_cube(), 1, None, True)
+
+
 def test_mpfit_running_out_of_iterations_counts_as_failed():
     """Status 5 is mpfit's out-of-iterations code; scipy raises instead."""
     params = np.array([1.0, 2.0, 3.0, 4.0])

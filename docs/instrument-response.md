@@ -149,7 +149,7 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 - `name: <text>`: the component's name in the results. Defaults to its rest wavelength, e.g. `195.1190 Angstrom`.
 
-Without `components`, the block sets `max_iter` and `backend` for the single-Gaussian fit that runs when there are no components. A block needs either no components or at least two.
+Without `components`, the block configures the single-Gaussian fit, and every setting except `primary_component` and `constrain_positive_intensity` applies to it. A block needs either no components or at least two.
 
 `max_iter` limits how many iterations the optimiser may take on one spectrum. A fit that runs out, or fails for any other reason, is left out of the mean and standard deviation, and the run prints how many fits failed and in how many pixels.
 

@@ -5,7 +5,7 @@ Spectral fitting functions for Gaussian line profile analysis.
 from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Literal, Optional, overload
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -42,8 +42,9 @@ def default_component_name(wavelength: u.Quantity) -> str:
 class FitConfig:
     """Configuration for Gaussian fitting.
 
-    With no *components* this configures the single-Gaussian fit, and only
-    ``max_iter`` and ``backend`` apply. Otherwise there must be at least two
+    With no *components* this configures the single-Gaussian fit, and every
+    setting applies except ``primary_component`` and
+    ``constrain_positive_intensity``. Otherwise there must be at least two
     components: one on its own is not a blend, and the fitter would ignore its
     wavelength and ties and fit one free Gaussian.
 
@@ -73,7 +74,7 @@ class FitConfig:
             raise ValueError(
                 "fitting.components has one entry. Multi-component fitting "
                 "needs at least two; for a single Gaussian leave components "
-                "out, and max_iter and backend still apply."
+                "out, and the other fitting settings still apply."
             )
         if self.backend not in (None, "scipy", "mpfit"):
             raise ValueError(
@@ -733,9 +734,23 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 #  Public fitting entry point
 # ---------------------------------------------------------------------------
 
+@overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
-                   fit_config: FitConfig | None = None,
-                   return_failed: bool = False) -> tuple:
+                   fit_config: FitConfig | None = None, *,
+                   return_failed: Literal[False] = False
+                   ) -> tuple[np.ndarray, list[u.Unit]]: ...
+
+
+@overload
+def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
+                   fit_config: FitConfig | None = None, *,
+                   return_failed: Literal[True]
+                   ) -> tuple[np.ndarray, list[u.Unit], np.ndarray]: ...
+
+
+def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
+                   fit_config: FitConfig | None = None, *,
+                   return_failed: bool = False):
     """
     Fit Gaussian(s) to every (slit x wavelength) spectrum.
 
@@ -750,7 +765,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Gaussian is fitted, with the configuration's ``max_iter`` and
         ``backend`` when one is given.
     return_failed : bool, optional
-        Also return which fits failed.  Default False.
+        Also return which fits failed.  Keyword-only.  Default False.
 
     Returns
     -------
