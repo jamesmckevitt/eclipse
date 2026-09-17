@@ -97,6 +97,16 @@ def test_configs_match_the_nasa_pdr_analysis(name, intensity, width, expos, slit
     assert (config["n_iter"], config["ncpu"], config["offchip_bin_slit"]) == (512, -1, [1, 2])
 
 
+@pytest.mark.parametrize("task, label, intensity", [
+    ("II-1-2", "C III 977.02", "1647325 erg / (s cm2 sr)"),
+    ("I-4-1", "C III 1176.0", "164.6 erg / (s cm2 sr)"),
+])
+def test_the_intensity_keeps_every_digit_of_the_table(task, label, intensity):
+    (case,) = [case for case in TABLE if case["task"] == task]
+    (line,) = [line for line in case["lines"] if sc.line_label(line) == label]
+    assert sc._config(case, line, "SWC", {})["uniform_intensity"] == intensity
+
+
 def test_a_written_config_reads_back_with_its_header(tmp_path):
     item = _by_name(sc.science_case_configs()[0])["1.1.1-nanoflares_events_fe12_195119"]
     text = item.to_yaml()
@@ -163,8 +173,12 @@ def test_base_settings_go_into_every_config():
     ({"rest_wavelength": "195.119 AA"}, "cannot set 'rest_wavelength'"),
     ({"instrument": "EIS"}, "cannot set 'instrument'"),
     ({"exposure": "5 s"}, "exposure"),
+    # An empty heading parses to None.
+    ({"simulation": None}, "'simulation:' section must be a mapping"),
+    ({"simulation": ["5 s"]}, "'simulation:' section must be a mapping"),
+    ({"telescope": None}, "'telescope:' section must be a mapping"),
 ])
-def test_base_settings_cannot_replace_the_line_or_add_unread_keys(base, message):
+def test_base_settings_cannot_replace_the_line_or_be_what_eclipse_does_not_read(base, message):
     with pytest.raises(ValueError, match=message):
         sc.science_case_configs(cases=["I-3-1"], base=base)
 
@@ -192,6 +206,16 @@ def test_the_command_lists_cases_and_what_can_be_simulated(capsys):
     assert out.startswith("I-1-1  1.1.1-nanoflares_events: Observe small scale heating events")
     assert "Fe XII 195.119         SWC" in out
     assert "Ne VIII 770.428        not simulated yet" in out
+
+
+@pytest.mark.parametrize("argv", [
+    ["--line", "Fe XII 195.5"],
+    ["--case", "I-3-1", "--line", "Fe XII"],
+])
+def test_the_list_refuses_a_line_choice_that_matches_nothing(argv, capsys):
+    with pytest.raises(ValueError, match="No line in the chosen cases matches"):
+        sc.main(["--list", *argv])
+    assert capsys.readouterr().out == ""
 
 
 def test_a_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):

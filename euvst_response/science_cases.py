@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from decimal import Decimal
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
@@ -165,15 +166,35 @@ def _select_cases(table: list[dict], selectors: list[str] | None) -> list[dict]:
             if any(s in (case["task"], case["name"]) for s in selectors)]
 
 
+def _chosen_lines(table: list[dict], cases: list[str] | None,
+                  lines: list[str] | None) -> list[tuple[dict, dict]]:
+    """The chosen ``(case, line)`` pairs, refusing a line choice that matches none."""
+    chosen, matched = [], set()
+    for case in _select_cases(table, cases):
+        for line in case["lines"]:
+            if lines:
+                picked = {s for s in lines if _line_matches(line, s)}
+                if not picked:
+                    continue
+                matched |= picked
+            chosen.append((case, line))
+    unmatched = [s for s in (lines or []) if s not in matched]
+    if unmatched:
+        raise ValueError(f"No line in the chosen cases matches {unmatched}.")
+    return chosen
+
+
 def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     """One line's configuration: defaults, then the case, then the base settings."""
     value, unit = line["intensity"].split(maxsplit=1)
-    intensity = float(value) * float(case["filling_factor"])
+    # In decimal, so the configuration has every digit of the table and no
+    # binary rounding, e.g. 823 x 0.2 is 164.6, not 164.60000000000002.
+    intensity = Decimal(value) * Decimal(str(case["filling_factor"]))
 
     settings = {**DEFAULT_SETTINGS, **base}
     config = {"instrument": instrument}
     config.update({k: v for k, v in settings.items() if not isinstance(v, dict)})
-    config["uniform_intensity"] = f"{intensity:.6g} {unit}"
+    config["uniform_intensity"] = f"{intensity.normalize():f} {unit}"
     config["rest_wavelength"] = line["wavelength"]
     config["thermal_width"] = f"{thermal_width(line).to_value(u.km / u.s):.2f} km/s"
     config["simulation"] = {
@@ -224,7 +245,7 @@ def science_case_configs(cases: list[str] | None = None,
     skipped : list of str
         Chosen lines ECLIPSE cannot simulate yet, as ``<task> <line>``.
     """
-    from .main import _validate_config_keys
+    from .main import _require_mapping, _validate_config_keys
 
     table = load_science_cases() if table is None else table
     base = {} if base is None else base
@@ -235,27 +256,22 @@ def science_case_configs(cases: list[str] | None = None,
                 f"takes it from its line."
             )
 
-    configs, skipped, matched = [], [], set()
-    for case in _select_cases(table, cases):
-        for line in case["lines"]:
-            if lines:
-                picked = {s for s in lines if _line_matches(line, s)}
-                if not picked:
-                    continue
-                matched |= picked
-            instrument = instrument_for(line)
-            if instrument is None:
-                skipped.append(f"{case['task']} {line_label(line)}")
-                continue
-            config = _config(case, line, instrument, base)
-            _validate_config_keys(config, instrument)
-            configs.append(ScienceCaseConfig(
-                name=f"{case['name']}_{line_id(line)}",
-                case=case, line=line, config=config))
+    # Merged with each case's settings, so it is checked here; the other
+    # sections are checked with the whole configuration.
+    if "simulation" in base:
+        _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 
-    unmatched = [s for s in (lines or []) if s not in matched]
-    if unmatched:
-        raise ValueError(f"No line in the chosen cases matches {unmatched}.")
+    configs, skipped = [], []
+    for case, line in _chosen_lines(table, cases, lines):
+        instrument = instrument_for(line)
+        if instrument is None:
+            skipped.append(f"{case['task']} {line_label(line)}")
+            continue
+        config = _config(case, line, instrument, base)
+        _validate_config_keys(config, instrument)
+        configs.append(ScienceCaseConfig(
+            name=f"{case['name']}_{line_id(line)}",
+            case=case, line=line, config=config))
     return configs, skipped
 
 
@@ -316,16 +332,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.list:
-        table = _select_cases(load_science_cases(), args.cases)
-        for case in table:
-            chosen = [line for line in case["lines"]
-                      if not args.lines or any(_line_matches(line, s) for s in args.lines)]
-            if not chosen:
-                continue
-            print(f"{case['task']}  {case['name']}: {case['description']}")
-            for line in chosen:
-                instrument = instrument_for(line) or "not simulated yet"
-                print(f"    {line_label(line):<22} {instrument}")
+        shown = None
+        for case, line in _chosen_lines(load_science_cases(), args.cases, args.lines):
+            if case is not shown:
+                print(f"{case['task']}  {case['name']}: {case['description']}")
+                shown = case
+            instrument = instrument_for(line) or "not simulated yet"
+            print(f"    {line_label(line):<22} {instrument}")
         return
 
     base = {}
