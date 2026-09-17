@@ -1,0 +1,19 @@
+# Science case I-2-1 (1.2.1-waves_detect_alfven): Detect Alfven waves
+# Target: quiet off limb. Observables: intensity, velocity. Source: WW2002
+# Line: Fe XII 195.12 Angstrom, log T_max = 6.20
+# Intensity: 1735 erg/(s cm2 sr) times filling factor 1
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 1735 erg / (s cm2 sr)
+rest_wavelength: 195.12 AA
+thermal_width: 15.36 km/s
+
+simulation:
+  expos: 2.5 s
+  slit_width: 0.8 arcsec
+  psf: True

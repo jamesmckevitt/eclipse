@@ -1,0 +1,19 @@
+# Science case II-1-1 (2.1.1-flare_reconnection): Probe flare reconnection
+# Target: flare. Observables: intensity, velocity, width. Source: warren2018
+# Line: Fe XXIV 192.03 Angstrom, log T_max = 7.25
+# Intensity: 52761 erg/(s cm2 sr) times filling factor 1
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 52761 erg / (s cm2 sr)
+rest_wavelength: 192.03 AA
+thermal_width: 51.45 km/s
+
+simulation:
+  expos: 3 s
+  slit_width: 0.4 arcsec
+  psf: True

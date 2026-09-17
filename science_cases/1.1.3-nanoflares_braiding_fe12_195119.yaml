@@ -1,0 +1,19 @@
+# Science case I-1-3 (1.1.3-nanoflares_braiding): Search for evidence of braiding
+# Target: active region. Observables: intensity, velocity, width. Source: VR78 AR + WWB12
+# Line: Fe XII 195.119 Angstrom, log T_max = 6.20
+# Intensity: 939 erg/(s cm2 sr) times filling factor 4
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 3756 erg / (s cm2 sr)
+rest_wavelength: 195.119 AA
+thermal_width: 15.36 km/s
+
+simulation:
+  expos: 5 s
+  slit_width: 0.4 arcsec
+  psf: True

@@ -1,0 +1,19 @@
+# Science case I-2-2 (1.2.2-waves_dissipation): Observe wave dissipation
+# Target: active region. Observables: intensity, velocity. Source: J-proposal
+# Line: Fe IX 171.073 Angstrom, log T_max = 5.85
+# Intensity: 1044 erg/(s cm2 sr) times filling factor 1
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 1044 erg / (s cm2 sr)
+rest_wavelength: 171.073 AA
+thermal_width: 10.27 km/s
+
+simulation:
+  expos: 2.5 s
+  slit_width: 0.8 arcsec
+  psf: True

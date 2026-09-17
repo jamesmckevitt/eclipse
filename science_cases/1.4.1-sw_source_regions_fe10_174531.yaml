@@ -1,0 +1,19 @@
+# Science case I-4-1 (1.4.1-sw_source_regions): Observe solar wind source regions
+# Target: active region outflows. Observables: intensity, velocity, width, temperature, density. Source: j-proposal
+# Line: Fe X 174.531 Angstrom, log T_max = 6.05
+# Intensity: 5320 erg/(s cm2 sr) times filling factor 0.2
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 1064 erg / (s cm2 sr)
+rest_wavelength: 174.531 AA
+thermal_width: 12.92 km/s
+
+simulation:
+  expos: 6 s
+  slit_width: 0.8 arcsec
+  psf: True

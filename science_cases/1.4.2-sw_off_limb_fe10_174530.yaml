@@ -1,0 +1,19 @@
+# Science case I-4-2 (1.4.2-sw_off_limb): Detect coronal Alfven waves
+# Target: coronal hole limb. Observables: intensity, velocity, width. Source: wh98
+# Line: Fe X 174.53 Angstrom, log T_max = 6.05
+# Intensity: 364 erg/(s cm2 sr) times filling factor 1
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 364 erg / (s cm2 sr)
+rest_wavelength: 174.53 AA
+thermal_width: 12.92 km/s
+
+simulation:
+  expos: 100 s
+  slit_width: 0.8 arcsec
+  psf: True

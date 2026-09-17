@@ -1,0 +1,19 @@
+# Science case II-1-2 (2.1.2-flare_ribbons): Probe flare ribbons in reconnection events
+# Target: flare. Observables: intensity, velocity, width. Source: chianti flare
+# Line: Ca XVII 192.85 Angstrom, log T_max = 6.75
+# Intensity: 64136 erg/(s cm2 sr) times filling factor 1
+# Thermal width: sqrt(k T / m) at T = T_max
+
+instrument: SWC
+n_iter: 512
+ncpu: -1
+offchip_bin_slit: [1, 2]
+
+uniform_intensity: 64136 erg / (s cm2 sr)
+rest_wavelength: 192.85 AA
+thermal_width: 34.16 km/s
+
+simulation:
+  expos: 0.5 s
+  slit_width: 0.4 arcsec
+  psf: True
