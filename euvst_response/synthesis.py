@@ -115,6 +115,32 @@ def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
         [vel_grid[-1] + 0.5 * dv]
     ])
 
+def require_downsample_divides(shape: Tuple[int, ...], downsample: int) -> None:
+    """
+    Check that *downsample* divides every dimension of *shape*.
+
+    Downsampling keeps every *downsample*-th cell and gives each kept cell
+    *downsample* times the voxel size.  Where a dimension is not a multiple of
+    the factor, the last kept cell stands for fewer cells than that, so the
+    domain would come out too large, and so would the emission measure when
+    that axis is the line of sight.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Cube dimensions, in any order.
+    downsample : int
+        Downsampling factor.
+    """
+    uneven = [n for n in shape if n % downsample]
+    if uneven:
+        raise ValueError(
+            f"--downsample {downsample} does not divide the cube shape "
+            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
+            f"a factor that divides every dimension."
+        )
+
+
 def load_cube(
     file_path: str | Path,
     shape: Tuple[int, int, int] = (512, 768, 256),
@@ -149,7 +175,9 @@ def load_cube(
     precision : type
         np.float32 or np.float64 for returned dtype.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity, optional
-        Voxel sizes for creating proper WCS coordinates. Required if create_ndcube=True.
+        Voxel sizes of the file, at full resolution. When *downsample* is
+        set, the returned cube's WCS uses them multiplied by it. Required if
+        create_ndcube=True.
     create_ndcube : bool, optional
         If True, return an NDCube with proper WCS coordinates.
 
@@ -158,14 +186,20 @@ def load_cube(
     ndarray, Quantity, or NDCube
         Array with shape (nz', ny', nx') or NDCube with proper coordinates.
     """
+    if downsample:
+        require_downsample_divides(shape, downsample)
+
     data = np.fromfile(file_path, dtype=np.float32).reshape(shape, order="F")
     data = data.transpose(1, 2, 0)  # (z,y,x)
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
-        voxel_dx *= downsample
-        voxel_dy *= downsample
-        voxel_dz *= downsample
+        # Each kept cell now stands for *downsample* cells of the file. New
+        # quantities, not *=, which would scale the caller's own voxel sizes
+        # and compound across calls.
+        voxel_dx, voxel_dy, voxel_dz = (
+            None if size is None else size * downsample
+            for size in (voxel_dx, voxel_dy, voxel_dz))
 
     data = data.astype(precision, copy=False)
     
@@ -565,7 +599,8 @@ def build_composite_cubes_mhd(
     cube_shape : tuple
         Original cube dimensions in the file's storage order.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
-        Voxel sizes.
+        Voxel sizes of the files, at full resolution; load_cube applies the
+        downsampling to them.
     downsample : int or bool
         Downsampling factor.
     precision : type
@@ -1405,15 +1440,18 @@ def main(args=None) -> None:
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
-    voxel_dz = u.Quantity(args.voxel_dz)
-    voxel_dx = u.Quantity(args.voxel_dx)
-    voxel_dy = u.Quantity(args.voxel_dy)
-    
-    if downsample:
-        voxel_dz *= downsample
-        voxel_dx *= downsample
-        voxel_dy *= downsample
-        
+    # Voxel sizes of the simulation files. load_cube scales these itself when
+    # it downsamples, so they are passed to it as given.
+    file_voxel_dz = u.Quantity(args.voxel_dz)
+    file_voxel_dx = u.Quantity(args.voxel_dx)
+    file_voxel_dy = u.Quantity(args.voxel_dy)
+
+    # Voxel sizes of the cubes as synthesised, for the path length along the
+    # line of sight, the dynamic-mode slice timing and the saved metadata.
+    voxel_dz = file_voxel_dz * (downsample or 1)
+    voxel_dx = file_voxel_dx * (downsample or 1)
+    voxel_dy = file_voxel_dy * (downsample or 1)
+
     mean_mol_wt = args.mean_mol_wt
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
     
@@ -1503,9 +1541,9 @@ def main(args=None) -> None:
             slice_mapping=slice_mapping,
             grouped_slices=grouped_slices,
             cube_shape=cube_shape_tuple,
-            voxel_dx=voxel_dx,
-            voxel_dy=voxel_dy,
-            voxel_dz=voxel_dz,
+            voxel_dx=file_voxel_dx,
+            voxel_dy=file_voxel_dy,
+            voxel_dz=file_voxel_dz,
             downsample=downsample,
             precision=precision,
         )
@@ -1580,20 +1618,20 @@ def main(args=None) -> None:
         temp_cube = load_cube(
             paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
             downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
-            create_ndcube=True
+            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
+            voxel_dz=file_voxel_dz, create_ndcube=True
         )
         rho_cube = load_cube(
             paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
             downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
-            create_ndcube=True
+            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
+            voxel_dz=file_voxel_dz, create_ndcube=True
         )
         vel_cube = load_cube(
             paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
             downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz, 
-            create_ndcube=True
+            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
+            voxel_dz=file_voxel_dz, create_ndcube=True
         )
 
         # Apply cropping if requested
