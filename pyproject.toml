@@ -66,6 +66,7 @@ eclipse = "euvst_response.cli:main"
 solarc-eclipse = "euvst_response.cli:main"
 synthesise-spectra = "euvst_response.synthesis_cli:main"
 synthesise_spectra = "euvst_response.synthesis_cli:main"
+eclipse-science-cases = "euvst_response.science_cases:main"
 
 [project.urls]
 Homepage = "https://github.com/jamesmckevitt/eclipse"

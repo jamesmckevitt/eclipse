@@ -1,0 +1,365 @@
+# Science cases from the Concept Study Report (CSR), with every line in each.
+# From the NRL observation files, version 01. Lines commented out there are
+# left out.
+#
+# Line intensities are before the filling factor. slit_width is the raster
+# step (step_dx) and exposure the exposure time (exp_time). raster_steps
+# (step_x), bin_x, bin_y, slit_length (slit_ny_arcsec), duration, sji_cadence
+# and sji_waves describe the observing programme and are not used by ECLIPSE.
+#
+# eclipse-science-cases writes ECLIPSE configurations from this file.
+
+- task: I-1-1
+  name: 1.1.1-nanoflares_events
+  description: Observe small scale heating events
+  target: active region
+  observables: [intensity]
+  source: VR78 AR + WWB12
+  filling_factor: 4
+  slit_width: 0.4 arcsec
+  exposure: 5 s
+  raster_steps: 1
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 1 h
+  sji_cadence: 5 s
+  sji_waves: 1
+  lines:
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 939 erg / (s cm2 sr)}
+    - {ion: Fe XIV, wavelength: 211.317 AA, log_t_max: 6.30, intensity: 1410 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
+    - {ion: Ca XIV, wavelength: 193.874 AA, log_t_max: 6.55, intensity: 281 erg / (s cm2 sr)}
+    - {ion: Fe XVIII, wavelength: 974.860 AA, log_t_max: 6.85, intensity: 79 erg / (s cm2 sr)}
+    - {ion: Fe XIX, wavelength: 1118.076 AA, log_t_max: 6.95, intensity: 6 erg / (s cm2 sr)}
+
+- task: I-1-2
+  name: 1.1.2-nanoflares_evaporation
+  description: Observe evaporative upflows
+  target: active region
+  observables: [intensity, velocity]
+  source: VR78 AR + WWB12
+  filling_factor: 4
+  slit_width: 0.4 arcsec
+  exposure: 5 s
+  raster_steps: 1
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 1 h
+  sji_cadence: 5 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 939 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
+    - {ion: Ca XIV, wavelength: 193.874 AA, log_t_max: 6.55, intensity: 281 erg / (s cm2 sr)}
+    - {ion: Fe XVIII, wavelength: 974.860 AA, log_t_max: 6.85, intensity: 79 erg / (s cm2 sr)}
+    - {ion: Fe XIX, wavelength: 1118.076 AA, log_t_max: 6.95, intensity: 6 erg / (s cm2 sr)}
+
+- task: I-1-3
+  name: 1.1.3-nanoflares_braiding
+  description: Search for evidence of braiding
+  target: active region
+  observables: [intensity, velocity, width]
+  source: VR78 AR + WWB12
+  filling_factor: 4
+  slit_width: 0.4 arcsec
+  exposure: 5 s
+  raster_steps: 8
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 1 h
+  sji_cadence: 5 s
+  sji_waves: 1
+  lines:
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 939 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
+    - {ion: Ca XIV, wavelength: 193.874 AA, log_t_max: 6.55, intensity: 281 erg / (s cm2 sr)}
+    - {ion: Fe XVIII, wavelength: 974.860 AA, log_t_max: 6.85, intensity: 79 erg / (s cm2 sr)}
+    - {ion: Fe XIX, wavelength: 1118.076 AA, log_t_max: 6.95, intensity: 6 erg / (s cm2 sr)}
+
+- task: I-2-1
+  name: 1.2.1-waves_detect_alfven
+  description: Detect Alfven waves
+  target: quiet off limb
+  observables: [intensity, velocity]
+  source: WW2002
+  filling_factor: 1
+  slit_width: 0.8 arcsec
+  exposure: 2.5 s
+  raster_steps: 4
+  bin_x: 4
+  bin_y: 2
+  slit_length: 280 arcsec
+  duration: 1 h
+  sji_cadence: 10 s
+  sji_waves: 1
+  lines:
+    - {ion: Fe XI, wavelength: 180.40 AA, log_t_max: 6.15, intensity: 2419 erg / (s cm2 sr)}
+    - {ion: Fe X, wavelength: 174.53 AA, log_t_max: 6.05, intensity: 1801 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.91 AA, log_t_max: 5.45, intensity: 69 erg / (s cm2 sr)}
+    - {ion: Fe X, wavelength: 177.24 AA, log_t_max: 6.05, intensity: 1016 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.12 AA, log_t_max: 6.20, intensity: 1735 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.07 AA, log_t_max: 5.85, intensity: 1007 erg / (s cm2 sr)}
+
+- task: I-2-2
+  name: 1.2.2-waves_dissipation
+  description: Observe wave dissipation
+  target: active region
+  observables: [intensity, velocity]
+  source: J-proposal
+  filling_factor: 1
+  slit_width: 0.8 arcsec
+  exposure: 2.5 s
+  raster_steps: 4
+  bin_x: 4
+  bin_y: 2
+  slit_length: 280 arcsec
+  duration: 1 h
+  sji_cadence: 10 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
+    - {ion: Ca XIV, wavelength: 193.874 AA, log_t_max: 6.55, intensity: 312 erg / (s cm2 sr)}
+    - {ion: Fe XVIII, wavelength: 974.860 AA, log_t_max: 6.85, intensity: 79 erg / (s cm2 sr)}
+
+- task: I-3-1
+  name: 1.3.1-spicule_evolution
+  description: Observe spicule heating
+  target: active region plage
+  observables: [intensity]
+  source: S2017
+  filling_factor: 1
+  slit_width: 0.4 arcsec
+  exposure: 2 s
+  raster_steps: 5
+  bin_x: 2
+  bin_y: 1
+  slit_length: 100 arcsec
+  duration: 1 h
+  sji_cadence: 2 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 65000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 8000 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 10000 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 1175.74 AA, log_t_max: 4.85, intensity: 790 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 92 erg / (s cm2 sr), note: "N V is 50% of VR so scale O IV by same amount"}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 860 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8000 erg / (s cm2 sr)}
+
+- task: I-4-1
+  name: 1.4.1-sw_source_regions
+  description: Observe solar wind source regions
+  target: active region outflows
+  observables: [intensity, velocity, width, temperature, density]
+  source: j-proposal
+  filling_factor: 0.2
+  slit_width: 0.8 arcsec
+  exposure: 6 s
+  raster_steps: 75
+  bin_x: 4
+  bin_y: 2
+  slit_length: 280 arcsec
+  duration: 1 h
+  sji_cadence: 24 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: He I, wavelength: 584.34 AA, log_t_max: 4.40, intensity: 5080 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.50, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C II, wavelength: 1036.340 AA, log_t_max: 4.55, intensity: 290 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.020 AA, log_t_max: 4.80, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 1176.0 AA, log_t_max: 4.80, intensity: 823 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 100 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.50, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.85, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.90, intensity: 8400 erg / (s cm2 sr)}
+    - {ion: Fe X, wavelength: 174.531 AA, log_t_max: 6.05, intensity: 5320 erg / (s cm2 sr)}
+    - {ion: Fe XI, wavelength: 180.408 AA, log_t_max: 6.15, intensity: 4380 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 3890 erg / (s cm2 sr)}
+
+- task: I-4-2
+  name: 1.4.2-sw_off_limb
+  description: Detect coronal Alfven waves
+  target: coronal hole limb
+  observables: [intensity, velocity, width]
+  source: wh98
+  filling_factor: 1
+  slit_width: 0.8 arcsec
+  exposure: 100 s
+  raster_steps: 5
+  bin_x: 4
+  bin_y: 2
+  slit_length: 280 arcsec
+  duration: 1 h
+  sji_cadence: 24 s
+  sji_waves: 1
+  lines:
+    - {ion: Ne VIII, wavelength: 770.43 AA, log_t_max: 5.80, intensity: 295 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.91 AA, log_t_max: 5.45, intensity: 113 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 177.59 AA, log_t_max: 5.85, intensity: 25 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.07 AA, log_t_max: 5.85, intensity: 1687 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1037.61 AA, log_t_max: 5.45, intensity: 56 erg / (s cm2 sr)}
+    - {ion: Fe X, wavelength: 174.53 AA, log_t_max: 6.05, intensity: 364 erg / (s cm2 sr)}
+    - {ion: Fe X, wavelength: 177.24 AA, log_t_max: 6.05, intensity: 206 erg / (s cm2 sr)}
+    - {ion: Si VIII, wavelength: 944.47 AA, log_t_max: 5.95, intensity: 8 erg / (s cm2 sr)}
+    - {ion: Fe VIII, wavelength: 185.21 AA, log_t_max: 5.65, intensity: 86 erg / (s cm2 sr)}
+    - {ion: Mg VIII, wavelength: 772.26 AA, log_t_max: 5.90, intensity: 8 erg / (s cm2 sr)}
+
+- task: II-1-1
+  name: 2.1.1-flare_reconnection
+  description: Probe flare reconnection
+  target: flare
+  observables: [intensity, velocity, width]
+  source: warren2018
+  filling_factor: 1
+  slit_width: 0.4 arcsec
+  exposure: 3 s
+  raster_steps: 12
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 24 h
+  sji_cadence: 30 s
+  sji_waves: 1
+  lines:
+    - {ion: Fe XXII, wavelength: 845.57 AA, log_t_max: 7.10, intensity: 3721 erg / (s cm2 sr)}
+    - {ion: Fe XXIV, wavelength: 192.03 AA, log_t_max: 7.25, intensity: 52761 erg / (s cm2 sr)}
+    - {ion: Fe XX, wavelength: 721.56 AA, log_t_max: 7.00, intensity: 601 erg / (s cm2 sr)}
+    - {ion: Fe XIX, wavelength: 1118.06 AA, log_t_max: 6.95, intensity: 154 erg / (s cm2 sr)}
+
+- task: II-1-2
+  name: 2.1.2-flare_ribbons
+  description: Probe flare ribbons in reconnection events
+  target: flare
+  observables: [intensity, velocity, width]
+  source: chianti flare
+  filling_factor: 1
+  slit_width: 0.4 arcsec
+  exposure: 0.5 s
+  raster_steps: 1
+  bin_x: 2
+  bin_y: 1
+  slit_length: 124 arcsec
+  duration: 1 h
+  sji_cadence: 1 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 300000 erg / (s cm2 sr), note: "a guess, 50% larger than AR"}
+    - {ion: He I, wavelength: 584.34 AA, log_t_max: 4.50, intensity: 140000 erg / (s cm2 sr), note: "a guess"}
+    - {ion: Si III, wavelength: 1206.50 AA, log_t_max: 4.70, intensity: 621722 erg / (s cm2 sr)}
+    - {ion: C II, wavelength: 1037.02 AA, log_t_max: 4.40, intensity: 98381 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 1647325 erg / (s cm2 sr)}
+    - {ion: O II, wavelength: 834.47 AA, log_t_max: 4.45, intensity: 150674 erg / (s cm2 sr)}
+    - {ion: O III, wavelength: 835.29 AA, log_t_max: 4.90, intensity: 323871 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.20 AA, log_t_max: 5.15, intensity: 294559 erg / (s cm2 sr)}
+    - {ion: O V, wavelength: 760.45 AA, log_t_max: 5.35, intensity: 104143 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.91 AA, log_t_max: 5.45, intensity: 118676 erg / (s cm2 sr)}
+    - {ion: N III, wavelength: 991.58 AA, log_t_max: 4.85, intensity: 100523 erg / (s cm2 sr)}
+    - {ion: N IV, wavelength: 765.15 AA, log_t_max: 5.15, intensity: 116647 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.43 AA, log_t_max: 5.80, intensity: 21921 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 122063 erg / (s cm2 sr)}
+    - {ion: Ca XVII, wavelength: 192.85 AA, log_t_max: 6.75, intensity: 64136 erg / (s cm2 sr)}
+    - {ion: Fe XVIII, wavelength: 974.86 AA, log_t_max: 6.85, intensity: 52775 erg / (s cm2 sr)}
+    - {ion: Fe XIX, wavelength: 1118.06 AA, log_t_max: 6.95, intensity: 49437 erg / (s cm2 sr)}
+    - {ion: Fe XX, wavelength: 721.56 AA, log_t_max: 7.00, intensity: 58935 erg / (s cm2 sr)}
+    - {ion: Fe XXII, wavelength: 845.57 AA, log_t_max: 7.10, intensity: 93856 erg / (s cm2 sr)}
+    - {ion: Fe XXIV, wavelength: 192.03 AA, log_t_max: 7.25, intensity: 864923 erg / (s cm2 sr)}
+
+- task: II-1-3
+  name: 2.1.3-chromospheric_reconnection
+  description: Probe reconnection in the chromosphere
+  target: active region
+  observables: [intensity, velocity, width]
+  source: j-proposal
+  filling_factor: 4
+  slit_width: 0.4 arcsec
+  exposure: 0.5 s
+  raster_steps: 12
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 1 h
+  sji_cadence: 3 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
+
+- task: II-2-1
+  name: 2.2.1-erupt_buildup
+  description: Energy buildup
+  target: active region
+  observables: [intensity, velocity, width]
+  source: AR
+  filling_factor: 4
+  slit_width: 1.6 arcsec
+  exposure: 0.5 s
+  raster_steps: 175
+  bin_x: 4
+  bin_y: 2
+  slit_length: 200 arcsec
+  duration: 24 h
+  sji_cadence: 90 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
+    - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 3890 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
+
+- task: II-2-2
+  name: 2.2.2-erupt_physics
+  description: Eruption physics
+  target: active region
+  observables: [intensity, velocity, width]
+  source: AR
+  filling_factor: 4
+  slit_width: 0.4 arcsec
+  exposure: 0.5 s
+  raster_steps: 50
+  bin_x: 2
+  bin_y: 1
+  slit_length: 140 arcsec
+  duration: 24 h
+  sji_cadence: 10 s
+  sji_waves: 1
+  lines:
+    - {ion: H I, wavelength: 1215.67 AA, log_t_max: 4.30, intensity: 220000 erg / (s cm2 sr)}
+    - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
+    - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
+    - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
+    - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
+    - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
