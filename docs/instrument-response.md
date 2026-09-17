@@ -149,11 +149,11 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
 - `name: <text>`: the component's name in the results. Defaults to its rest wavelength, e.g. `195.1190 Angstrom`.
 
-Without `components`, the block configures the single-Gaussian fit, and every setting except `primary_component` and `constrain_positive_intensity` applies to it. A block needs either no components or at least two.
+Without `components`, a single-Gaussian fit is used.
 
 `max_iter` limits how many iterations the optimiser may take on one spectrum. A fit that runs out, or fails for any other reason, is left out of the mean and standard deviation, and the run prints how many fits failed and in how many pixels.
 
-`bessel_correction: true` divides the standard deviation over the Monte Carlo iterations by n - 1 rather than n. Dividing by n underestimates the spread when there are few iterations, by a factor of sqrt((n - 1) / n): 5 per cent for 10 iterations, 0.5 per cent for 100. It is off by default, so results stay comparable with earlier runs.
+`bessel_correction: true` divides the standard deviation over the Monte Carlo iterations by n - 1 rather than n.
 
 `save_iterations: true` keeps every iteration's fitted parameters in the results as well as their statistics, which makes the results about `n_iter` times larger.
 
