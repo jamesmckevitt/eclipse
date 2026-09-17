@@ -14,8 +14,30 @@ from .radiometric import (
     add_pinhole_visible_light
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
-from .fitting import fit_cube_gauss
+from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
 from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
+
+
+def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
+                 units: list, signal: NDCube, rest_wavelength: u.Quantity,
+                 fit_config) -> dict:
+    """Statistics of one signal's fits, and a line saying how many failed."""
+    results = summarise_fits(fit_data, failed, units,
+                             spectral_pixel_width(signal), rest_wavelength,
+                             fit_config)
+    failed_fits = results["failed_fits"]
+    n_failed = np.count_nonzero(failed)
+    if n_failed:
+        line = (f"  {label} fits: {n_failed} of {failed.size} failed, in "
+                f"{np.count_nonzero(failed_fits)} of {failed_fits.size} pixels, "
+                f"and are left out of the statistics")
+        no_fit = np.count_nonzero(failed_fits == results["n_iterations"])
+        if no_fit:
+            line += f"; no fit succeeded in {no_fit} of them"
+    else:
+        line = f"  {label} fits: none of {failed.size} failed"
+    print(line)
+    return results
 
 
 def simulate_once(
@@ -183,15 +205,17 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     tuple
         (first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results)
         - first_dn_signal: First iteration DN signal (NDCube)
-        - dn_fit_results: Dict with fit data and units, or None if skipped
+        - dn_fit_results: Dict of fit statistics from
+          :func:`~euvst_response.fitting.summarise_fits`, or None if skipped
         - first_photon_signal: First iteration photon signal (NDCube)  
-        - photon_fit_results: Dict with fit data and units, or None if skipped
+        - photon_fit_results: The same for the photon signal, or None if skipped
     """
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")
 
     do_dn = fit_signals in ("both", "dn")
     do_photon = fit_signals in ("both", "photon")
+    rest_wavelength = I_cube.meta["rest_wav"]
 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
@@ -261,16 +285,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                                   unit=first_dn_signal.unit)
 
                 print(f"  Fitting {len(dn_data_list)} DN MC spectra in parallel...")
-                dn_fit_values, dn_fit_units = fit_cube_gauss(dn_batch, n_jobs=sim.ncpu, fit_config=fit_config)
-                # Reshape from (n_iter, 1, n_params) to (n_iter, 1, 1, n_params)
-                dn_fits_values = dn_fit_values[:, np.newaxis, :, :]
-
-                dn_fit_results = {
-                    "first_fit_data": dn_fits_values[0],
-                    "mean_data": dn_fits_values.mean(axis=0),
-                    "std_data": dn_fits_values.std(axis=0),
-                    "units": dn_fit_units,
-                }
+                dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
+                    dn_batch, n_jobs=sim.ncpu, fit_config=fit_config,
+                    return_failed=True)
+                # Reshape from (n_iter, 1, ...) to (n_iter, 1, 1, ...)
+                dn_fit_results = _fit_results(
+                    "DN", dn_fit_values[:, np.newaxis, :, :],
+                    dn_failed[:, np.newaxis, :], dn_fit_units,
+                    first_dn_signal, rest_wavelength, fit_config)
 
             if do_photon and photon_data_list:
                 photon_stacked = np.stack(photon_data_list, axis=0)
@@ -278,15 +300,13 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                                       unit=first_photon_signal.unit)
 
                 print(f"  Fitting {len(photon_data_list)} photon MC spectra in parallel...")
-                photon_fit_values, photon_fit_units = fit_cube_gauss(photon_batch, n_jobs=sim.ncpu, fit_config=fit_config)
-                photon_fits_values = photon_fit_values[:, np.newaxis, :, :]
-
-                photon_fit_results = {
-                    "first_fit_data": photon_fits_values[0],
-                    "mean_data": photon_fits_values.mean(axis=0),
-                    "std_data": photon_fits_values.std(axis=0),
-                    "units": photon_fit_units,
-                }
+                photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
+                    photon_batch, n_jobs=sim.ncpu, fit_config=fit_config,
+                    return_failed=True)
+                photon_fit_results = _fit_results(
+                    "Photon", photon_fit_values[:, np.newaxis, :, :],
+                    photon_failed[:, np.newaxis, :], photon_fit_units,
+                    first_photon_signal, rest_wavelength, fit_config)
 
     else:
         # -- Normal mode: fit each MC iteration separately ---------------
@@ -316,13 +336,17 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             # Off-chip slit binning (sum already noisy pixels)
             if do_dn:
                 dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
-                dn_fit_values, dn_fit_units = fit_cube_gauss(dn_binned, n_jobs=sim.ncpu, fit_config=fit_config)
-                dn_fit_values_list.append(dn_fit_values)
+                dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
+                    dn_binned, n_jobs=sim.ncpu, fit_config=fit_config,
+                    return_failed=True)
+                dn_fit_values_list.append((dn_fit_values, dn_failed))
 
             if do_photon:
                 photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
-                photon_fit_values, photon_fit_units = fit_cube_gauss(photon_binned, n_jobs=sim.ncpu, fit_config=fit_config)
-                photon_fit_values_list.append(photon_fit_values)
+                photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
+                    photon_binned, n_jobs=sim.ncpu, fit_config=fit_config,
+                    return_failed=True)
+                photon_fit_values_list.append((photon_fit_values, photon_failed))
 
         # --- MPI gather: collect fit arrays from all ranks on root -----------
         if world_size > 1:
@@ -341,21 +365,16 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
 
         if rank == 0:
             if do_dn and dn_fit_values_list:
-                dn_fits_values = np.stack(dn_fit_values_list)
-                dn_fit_results = {
-                    "first_fit_data": dn_fits_values[0],
-                    "mean_data": dn_fits_values.mean(axis=0),
-                    "std_data": dn_fits_values.std(axis=0),
-                    "units": dn_fit_units,
-                }
+                dn_fit_results = _fit_results(
+                    "DN", np.stack([v for v, _ in dn_fit_values_list]),
+                    np.stack([f for _, f in dn_fit_values_list]),
+                    dn_fit_units, first_dn_signal, rest_wavelength, fit_config)
 
             if do_photon and photon_fit_values_list:
-                photon_fits_values = np.stack(photon_fit_values_list)
-                photon_fit_results = {
-                    "first_fit_data": photon_fits_values[0],
-                    "mean_data": photon_fits_values.mean(axis=0),
-                    "std_data": photon_fits_values.std(axis=0),
-                    "units": photon_fit_units,
-                }
+                photon_fit_results = _fit_results(
+                    "Photon", np.stack([v for v, _ in photon_fit_values_list]),
+                    np.stack([f for _, f in photon_fit_values_list]),
+                    photon_fit_units, first_photon_signal, rest_wavelength,
+                    fit_config)
     
     return first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results

@@ -128,33 +128,145 @@ def get_parameter_combinations(results: Dict[str, Any]) -> List[Dict]:
     return [combo["parameters"] for combo in results["results"]["all_combinations"].values()]
 
 
+# Results files written before fitted components were stored by name hold
+# only the per-parameter arrays.
+_UNNAMED_FITS = (
+    "This results file was written before fitted components were stored by "
+    "name, so it only holds per-parameter statistics. Re-run the simulation "
+    "with this version to get them."
+)
+
+
+def _get_fit_stats(combination_results: Dict[str, Any], data_type: str) -> Dict[str, Any]:
+    """The fit statistics of one signal, or a clear error if there are none."""
+    fit_stats_key = f"{data_type}_fit_stats"
+    if fit_stats_key not in combination_results:
+        raise ValueError(f"No {fit_stats_key} found in combination results")
+    fit_stats = combination_results[fit_stats_key]
+    if fit_stats is None:
+        raise ValueError(
+            f"'{data_type}' signal was not fitted for this combination. "
+            f"Check the 'fit_signals' setting in your YAML config."
+        )
+    return fit_stats
+
+
+def list_fit_components(combination_results: Dict[str, Any],
+                        data_type: str = "dn") -> List[str]:
+    """
+    Names of the fitted components, in fit order.
+
+    Parameters
+    ----------
+    combination_results : dict
+        Results for a specific parameter combination.
+    data_type : str, optional
+        Either "dn" or "photon".
+
+    Returns
+    -------
+    list of str
+        The names to pass as ``component`` to :func:`analyse_fit_statistics`
+        and :func:`create_sunpy_maps_from_combo`.  The primary component's
+        name is in the fit statistics under ``primary_component``.
+    """
+    fit_stats = _get_fit_stats(combination_results, data_type)
+    if "components" not in fit_stats:
+        raise ValueError(_UNNAMED_FITS)
+    return list(fit_stats["components"])
+
+
 def analyse_fit_statistics(
     combination_results: Dict[str, Any],
-    rest_wavelength: u.Quantity,
+    rest_wavelength: u.Quantity | None = None,
     data_type: str = "dn",
     fit_config=None,
+    component: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Analyze fit statistics to compute velocity and line width statistics.
+    Velocity, line width and intensity statistics of one fitted component.
     
     Parameters
     ----------
     combination_results : dict
         Results for a specific parameter combination.
-    rest_wavelength : u.Quantity
-        Rest wavelength for velocity conversion.
+    rest_wavelength : u.Quantity, optional
+        The rest wavelength velocities are measured from.  Results files
+        record each component's own, and a value given here has to match
+        it.  Only files written before components were stored by name need
+        it.
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to analyze.
     fit_config : FitConfig, optional
-        Multi-component fitting configuration. When provided the primary-
-        component indices are used; otherwise indices 1 (centre) and
-        2 (sigma) are assumed (single-component default).
+        Only used for files written before components were stored by name,
+        to find the primary component's parameters.
+    component : str, optional
+        Name of the component to analyse, from :func:`list_fit_components`.
+        Defaults to the primary component.
         
     Returns
     -------
     dict
-        Dictionary containing velocity and width statistics.
+        ``v_first``, ``v_mean``, ``v_std``, ``v_true`` and ``v_err`` (truth
+        minus mean) for the velocity, and ``w_first``, ``w_mean`` and
+        ``w_std`` for the Gaussian width, where ``first`` is the first Monte
+        Carlo iteration.  Files with components stored by name also give
+        ``component``, ``rest_wavelength``, ``tied``, ``w_true``,
+        ``i_first``, ``i_mean`` and ``i_std`` for the intensity (the fitted
+        line's counts), ``failed_fits`` and ``n_iterations``.
     """
+    fit_stats = _get_fit_stats(combination_results, data_type)
+    ground_truth = combination_results["ground_truth"]
+    fit_truth_data = ground_truth["fit_truth_data"]
+    fit_truth_units = ground_truth["fit_truth_units"]
+
+    if "components" in fit_stats:
+        name = fit_stats["primary_component"] if component is None else component
+        if name not in fit_stats["components"]:
+            raise ValueError(
+                f"No fitted component is named {name!r}. The components are "
+                f"{list(fit_stats['components'])}."
+            )
+        comp = fit_stats["components"][name]
+        rest = comp["rest_wavelength"]
+        if rest_wavelength is not None and not u.isclose(rest_wavelength, rest,
+                                                         rtol=1e-6):
+            raise ValueError(
+                f"rest_wavelength is {rest_wavelength}, but component "
+                f"{name!r} was fitted at {rest}, and its velocities are "
+                f"measured from that. Leave rest_wavelength out, or choose a "
+                f"different component with component=."
+            )
+        truth = ground_truth["components"][name]
+        velocity, width, intensity = comp["velocity"], comp["width"], comp["intensity"]
+        return {
+            "component": name,
+            "rest_wavelength": rest,
+            "tied": comp["tied"],
+            "v_first": velocity["first"],
+            "v_mean": velocity["mean"],
+            "v_std": velocity["std"],
+            "v_err": truth["velocity"] - velocity["mean"],
+            "v_true": truth["velocity"],
+            "w_first": width["first"],
+            "w_mean": width["mean"],
+            "w_std": width["std"],
+            "w_true": truth["width"],
+            "i_first": intensity["first"],
+            "i_mean": intensity["mean"],
+            "i_std": intensity["std"],
+            "failed_fits": fit_stats["failed_fits"],
+            "n_iterations": fit_stats["n_iterations"],
+            "fit_stats": fit_stats,
+            "fit_truth_data": fit_truth_data,
+            "fit_truth_units": fit_truth_units,
+        }
+
+    if component is not None:
+        raise ValueError(f"component={component!r} cannot be chosen. {_UNNAMED_FITS}")
+    if rest_wavelength is None:
+        raise ValueError(f"rest_wavelength is needed for this file. {_UNNAMED_FITS}")
+
     # Determine parameter indices for the primary component
     if fit_config is not None and not fit_config.is_single:
         idx_center = fit_config.idx_center
@@ -163,40 +275,23 @@ def analyse_fit_statistics(
         idx_center = 1
         idx_sigma = 2
 
-    # Get fit statistics
-    fit_stats_key = f"{data_type}_fit_stats"
-    if fit_stats_key not in combination_results:
-        raise ValueError(f"No {fit_stats_key} found in combination results")
-    
-    fit_stats = combination_results[fit_stats_key]
-    if fit_stats is None:
-        raise ValueError(
-            f"'{data_type}' signal was not fitted for this combination. "
-            f"Check the 'fit_signals' setting in your YAML config."
-        )
-    fit_truth_data = combination_results["ground_truth"]["fit_truth_data"]
-    fit_truth_units = combination_results["ground_truth"]["fit_truth_units"]
-    
     # Extract data and units
-    mean_data = fit_stats["mean_data"]      # Shape: (ny, nx, n_params)
-    std_data = fit_stats["std_data"]        # Shape: (ny, nx, n_params)
-    units = fit_stats["units"]              # List of n_params astropy units
+    first_data = fit_stats["first_fit_data"]  # Shape: (ny, nx, n_params)
+    mean_data = fit_stats["mean_data"]        # Shape: (ny, nx, n_params)
+    std_data = fit_stats["std_data"]          # Shape: (ny, nx, n_params)
+    units = fit_stats["units"]                # List of n_params astropy units
     
     # Get center statistics for the primary component
-    center_mean_data = mean_data[..., idx_center]
-    center_std_data = std_data[..., idx_center]
     center_unit = units[idx_center]
+    center_first_q = first_data[..., idx_center] * center_unit
+    center_mean_q = mean_data[..., idx_center] * center_unit
+    center_std_q = std_data[..., idx_center] * center_unit
     
     # Get width statistics for the primary component
-    width_mean_data = mean_data[..., idx_sigma]
-    width_std_data = std_data[..., idx_sigma]
     width_unit = units[idx_sigma]
-    
-    # Create quantities
-    center_mean_q = center_mean_data * center_unit
-    center_std_q = center_std_data * center_unit
-    width_mean_q = width_mean_data * width_unit
-    width_std_q = width_std_data * width_unit
+    width_first_q = first_data[..., idx_sigma] * width_unit
+    width_mean_q = mean_data[..., idx_sigma] * width_unit
+    width_std_q = std_data[..., idx_sigma] * width_unit
     
     # Convert centers to velocities using simple formula
     # v = (lambda - lambda0) / lambda0 * c
@@ -206,6 +301,7 @@ def analyse_fit_statistics(
         return velocity
     
     # Convert to velocities
+    v_first = centers_to_velocity(center_first_q, rest_wavelength)
     v_mean = centers_to_velocity(center_mean_q, rest_wavelength)
     v_true = centers_to_velocity(fit_truth_data[..., idx_center] * fit_truth_units[idx_center], rest_wavelength)
     v_err = v_true - v_mean
@@ -215,10 +311,12 @@ def analyse_fit_statistics(
     v_std = (c * center_std_q / rest_wavelength).to(u.km / u.s)
     
     return {
+        "v_first": v_first,
         "v_mean": v_mean,
         "v_std": v_std,
         "v_err": v_err,
         "v_true": v_true,
+        "w_first": width_first_q,
         "w_mean": width_mean_q,
         "w_std": width_std_q,
         "fit_stats": fit_stats,
@@ -404,6 +502,17 @@ def summary_table(results: Dict[str, Any]) -> None:
         for dim, vals in sweep_dims.items():
             print(f"  {dim}: {vals}")
 
+    # The components are the same in every combination and for both signals.
+    first_combo = next(iter(all_combinations.values()))
+    fit_stats = first_combo.get("dn_fit_stats") or first_combo.get("photon_fit_stats")
+    if fit_stats and "components" in fit_stats:
+        print("\nFitted components:")
+        for name, comp in fit_stats["components"].items():
+            notes = ["primary"] if name == fit_stats["primary_component"] else []
+            notes += [f"{key} tied to {source}"
+                      for key, source in comp["tied"].items() if source is not None]
+            print(f"  {name}" + (f" ({', '.join(notes)})" if notes else ""))
+
 
 def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
     """
@@ -488,12 +597,13 @@ def _map_header(wcs_2d, date_obs: str, bunit: str):
 def create_sunpy_maps_from_combo(
     combination_results: Dict[str, Any],
     cube_reb=None,
-    rest_wavelength: u.Quantity = 195.119 * u.AA,
+    rest_wavelength: u.Quantity | None = None,
     data_type: str = "dn",
     precision_requirement: u.Quantity = 2.0 * u.km / u.s,
     exposure_time_results: List[Dict[str, Any]] | None = None,
     fit_config=None,
     date_obs=None,
+    component: str | None = None,
 ) -> Dict[str, Any]:
     """
     Create SunPy maps from combination results using the new fit statistics structure.
@@ -506,7 +616,10 @@ def create_sunpy_maps_from_combo(
         NDCube with helioprojective WCS to use for all maps.
         If not provided, the WCS stored in the combination results is used.
     rest_wavelength : u.Quantity, optional
-        Rest wavelength for velocity conversion (default: 195.119 A for Fe XII).
+        The rest wavelength velocities are measured from.  Results files
+        record each component's own, and a value given here has to match
+        it.  Files written before components were stored by name use it, and
+        default to 195.119 A (Fe XII).
     data_type : str, optional
         Either "dn" or "photon" to specify which fit statistics to use for velocity/width maps.
     precision_requirement : u.Quantity, optional
@@ -515,14 +628,17 @@ def create_sunpy_maps_from_combo(
         List of results from get_results_for_combination() for different exposure times.
         If provided, will create an exposure time map showing minimum exposure needed.
     fit_config : FitConfig, optional
-        Multi-component fitting configuration. When provided, the primary-
-        component indices are used to extract centre and width parameters.
+        Only used for files written before components were stored by name,
+        to find the primary component's centre and width.
     date_obs : str or datetime, optional
         Observation date written to every map. A synthesised scene has no
         date of its own, so this has to come from the caller. An EIS run
         configured with a time-dependent calibration uses that calibration
         date when this is not given; anything else raises rather than let
         sunpy stamp the maps with the time the code ran.
+    component : str, optional
+        Name of the fitted component to map, from
+        :func:`list_fit_components`.  Defaults to the primary component.
 
     Returns
     -------
@@ -537,10 +653,19 @@ def create_sunpy_maps_from_combo(
         - 'line_width_from_fit': Line width from first fit of first MC iteration  
         - 'line_width_mean': Mean line width across all MC iterations
         - 'line_width_std': Line width uncertainty (standard deviation)
+        - 'intensity_from_fit', 'intensity_mean', 'intensity_std': The same
+          for the fitted line's counts, and 'failed_fits': the number of
+          failed fits per pixel (files with components stored by name only)
         - 'exposure_time': Minimum exposure time required to reach precision (if exposure_time_results provided)
     """
     
     date_obs = _resolve_date_obs(combination_results, date_obs)
+
+    if rest_wavelength is None and "components" not in _get_fit_stats(
+            combination_results, data_type):
+        # Older files do not record the rest wavelength, and this was the
+        # default when they were written.
+        rest_wavelength = 195.119 * u.AA
 
     # Handle optional exposure time analysis
     if exposure_time_results is not None:
@@ -550,7 +675,8 @@ def create_sunpy_maps_from_combo(
             # Extract exposure time from parameters
             exposure_time = result["parameters"]["simulation.expos"].to_value(u.s)
             # Create analysis for this exposure
-            analysis = analyse_fit_statistics(result, rest_wavelength, data_type, fit_config=fit_config)
+            analysis = analyse_fit_statistics(result, rest_wavelength, data_type,
+                                              fit_config=fit_config, component=component)
             analysis_per_exp[exposure_time] = analysis
     else:
         analysis_per_exp = None
@@ -567,14 +693,6 @@ def create_sunpy_maps_from_combo(
     # Get the data arrays - now only first iteration is saved
     first_photon_signal = combination_results["first_photon_signal"]  # Shape: (ny, nx, nwave)
     first_dn_signal = combination_results["first_dn_signal"]         # Shape: (ny, nx, nwave)
-    fit_stats_key = f"{data_type}_fit_stats"
-    fit_stats = combination_results[fit_stats_key]          # Contains first_fit_data, mean_data, std_data, units
-    if fit_stats is None:
-        raise ValueError(
-            f"'{data_type}' signal was not fitted for this combination. "
-            f"Check the 'fit_signals' setting in your YAML config."
-        )
-    
     maps = {}
 
     # --- Total photons map (before detector effects) ---
@@ -591,74 +709,32 @@ def create_sunpy_maps_from_combo(
     maps['total_dn'] = sunpy.map.Map(
         total_dn_data, _map_header(wcs_2d, date_obs, str(total_dn_unit)))
     
-    # Determine parameter indices for the primary component
-    if fit_config is not None and not fit_config.is_single:
-        idx_center = fit_config.idx_center
-        idx_sigma = fit_config.idx_sigma
-    else:
-        idx_center = 1
-        idx_sigma = 2
-
-    # --- Get velocity and width analysis for this combination ---
-    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type, fit_config=fit_config)
+    # --- Get velocity, width and intensity analysis for this combination ---
+    analysis = analyse_fit_statistics(combination_results, rest_wavelength, data_type,
+                                      fit_config=fit_config, component=component)
 
     # --- Velocity maps ---
-    # Velocity from first fit (primary component center)
-    first_fit_data = fit_stats["first_fit_data"]  # Shape: (ny, nx, n_params)
-    center_first_data = first_fit_data[..., idx_center]
-    center_first_unit = fit_stats["units"][idx_center]
+    for key, name in [("v_first", "velocity_from_fit"), ("v_mean", "velocity_mean"),
+                      ("v_std", "velocity_std"), ("v_true", "velocity_true"),
+                      ("v_err", "velocity_err")]:
+        velocity = analysis[key].to(u.km / u.s)
+        maps[name] = sunpy.map.Map(
+            velocity.value, _map_header(wcs_2d, date_obs, str(velocity.unit)))
 
-    def centers_to_velocity(centers_data, centers_unit, lambda0):
-        """Convert wavelength centers to velocities"""
-        centers_quantity = centers_data * centers_unit
-        
-        velocity = ((centers_quantity - lambda0) / lambda0 * const.c).to(u.km / u.s)
-        return velocity
+    # --- Line width maps, in Angstrom ---
+    for key, name in [("w_first", "line_width_from_fit"), ("w_mean", "line_width_mean"),
+                      ("w_std", "line_width_std")]:
+        maps[name] = sunpy.map.Map(
+            analysis[key].to_value(u.AA), _map_header(wcs_2d, date_obs, str(u.AA)))
 
-    v_first = centers_to_velocity(center_first_data, center_first_unit, rest_wavelength)
-
-    maps['velocity_from_fit'] = sunpy.map.Map(
-        v_first.value, _map_header(wcs_2d, date_obs, str(v_first.unit)))
-    
-    maps['velocity_mean'] = sunpy.map.Map(
-        analysis["v_mean"].value, _map_header(wcs_2d, date_obs, str(analysis["v_mean"].unit)))
-
-    maps['velocity_std'] = sunpy.map.Map(
-        analysis["v_std"].value, _map_header(wcs_2d, date_obs, str(analysis["v_std"].unit)))
-
-    maps['velocity_true'] = sunpy.map.Map(
-        analysis["v_true"].value, _map_header(wcs_2d, date_obs, str(analysis["v_true"].unit)))
-    
-    # Velocity error (truth - mean)
-    maps['velocity_err'] = sunpy.map.Map(
-        analysis["v_err"].value, _map_header(wcs_2d, date_obs, str(analysis["v_err"].unit)))
-
-    # --- Line width maps ---
-    # Line width from first fit (primary component sigma)
-    width_first_data = first_fit_data[..., idx_sigma]
-    width_first_unit = fit_stats["units"][idx_sigma]
-
-    # Create quantity with proper units
-    width_quantity = width_first_data * width_first_unit
-    # Convert to Angstroms and extract value for SunPy Map
-    width_data_clean = width_quantity.to(u.AA).value
-    
-    maps['line_width_from_fit'] = sunpy.map.Map(
-        width_data_clean, _map_header(wcs_2d, date_obs, str(u.AA)))
-    
-    # Mean line width across all iterations
-    # Handle line width data properly
-    w_mean = analysis["w_mean"]
-    w_mean_data_clean = w_mean.to(u.AA).value
-
-    maps['line_width_mean'] = sunpy.map.Map(
-        w_mean_data_clean, _map_header(wcs_2d, date_obs, str(u.AA)))
-
-    # Line width standard deviation (uncertainty)
-    w_std = analysis["w_std"]
-    w_std_data_clean = w_std.to(u.AA).value
-    maps['line_width_std'] = sunpy.map.Map(
-        w_std_data_clean, _map_header(wcs_2d, date_obs, str(u.AA)))
+    # --- Intensity and failed-fit maps (files with components stored by name) ---
+    if "i_mean" in analysis:
+        for key, name in [("i_first", "intensity_from_fit"), ("i_mean", "intensity_mean"),
+                          ("i_std", "intensity_std")]:
+            maps[name] = sunpy.map.Map(
+                analysis[key].value, _map_header(wcs_2d, date_obs, str(analysis[key].unit)))
+        maps['failed_fits'] = sunpy.map.Map(
+            analysis["failed_fits"].astype(float), _map_header(wcs_2d, date_obs, ""))
     
     # --- Exposure time map (minimum required for precision) ---
     if analysis_per_exp is not None:
@@ -715,6 +791,11 @@ def create_sunpy_maps_from_combo(
     maps['line_width_from_fit'].plot_settings.update(dict(cmap="Purples"))
     maps['line_width_mean'].plot_settings.update(dict(cmap="Purples"))
     maps['line_width_std'].plot_settings.update(dict(cmap="Purples"))
+    if 'intensity_mean' in maps:
+        maps['intensity_from_fit'].plot_settings.update(dict(cmap="afmhot"))
+        maps['intensity_mean'].plot_settings.update(dict(cmap="afmhot"))
+        maps['intensity_std'].plot_settings.update(dict(cmap="magma", vmin=0))
+        maps['failed_fits'].plot_settings.update(dict(cmap="Greys", vmin=0))
     if 'exposure_time' in maps:
         maps['exposure_time'].plot_settings.update(dict(origin="lower"))
 
