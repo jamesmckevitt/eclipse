@@ -3,8 +3,9 @@
 Simulation velocities are positive towards increasing coordinate, so an upflow
 has a positive vz. Seen from above, it moves towards the observer and is
 blueshifted. ECLIPSE 0.8.0 and earlier used the velocity along the integration
-axis directly as the line-of-sight velocity, so upflows came out redshifted
-and every velocity map had the wrong sign.
+axis directly as the line-of-sight velocity. For views along z and x that gave
+every velocity the wrong sign, so upflows seen from above came out redshifted;
+for views along y, whose observer is at -y, it happened to be right.
 
 These run the real synthesis on small uniform atmospheres, with a flat
 contribution function standing in for fiasco, and measure where each line
@@ -165,9 +166,12 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
         -FLOW.value, abs=0.1)
 
 
-def test_synthesis_files_from_before_the_fix_are_refused(tmp_path, monkeypatch):
+@pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])
+def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wrong(
+        tmp_path, monkeypatch, axis, refused):
+    """Views along y kept their sign, so older ones are still right and still load."""
     _write_atmosphere(tmp_path / "atmosphere", {})
-    path = _synthesise(tmp_path, monkeypatch, "z")
+    path = _synthesise(tmp_path, monkeypatch, axis)
     cube, _ = load_atmosphere(str(path))
     assert cube.meta["velocity_convention"] == VELOCITY_CONVENTION
 
@@ -176,7 +180,10 @@ def test_synthesis_files_from_before_the_fix_are_refused(tmp_path, monkeypatch):
     old = tmp_path / "old.pkl"
     with open(old, "wb") as f:
         dill.dump(saved, f)
-    with pytest.raises(ValueError, match="wrong sign"):
+    if refused:
+        with pytest.raises(ValueError, match=f"view along {axis}.*wrong sign"):
+            load_atmosphere(str(old))
+    else:
         load_atmosphere(str(old))
 
 
@@ -189,17 +196,26 @@ def _write_results_file(path, meta):
     return path
 
 
-def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path):
-    old = _write_results_file(tmp_path / "old.pkl", {"integration_axis": "z"})
+@pytest.mark.parametrize("meta", [
+    {"integration_axis": "z"},
+    {"integration_axis": "x"},
+    {},  # written before the side views existed, so a view along z
+], ids=["z", "x", "no axis"])
+def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
+    old = _write_results_file(tmp_path / "old.pkl", meta)
     with pytest.raises(ValueError, match="wrong sign"):
         load_instrument_response_results(old)
     with pytest.warns(UserWarning, match="wrong sign"):
         load_instrument_response_results(old, allow_wrong_velocity_sign=True)
 
-    new = _write_results_file(tmp_path / "new.pkl",
-                              {"velocity_convention": VELOCITY_CONVENTION})
-    uniform = _write_results_file(tmp_path / "uniform.pkl", None)
+
+@pytest.mark.parametrize("meta", [
+    {"velocity_convention": VELOCITY_CONVENTION, "integration_axis": "z"},
+    {"integration_axis": "y"},
+    None,  # uniform intensity mode, with no synthesis file
+], ids=["current", "older view along y", "uniform intensity"])
+def test_results_whose_velocities_are_right_load_without_a_warning(tmp_path, meta):
+    path = _write_results_file(tmp_path / "results.pkl", meta)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        load_instrument_response_results(new)
-        load_instrument_response_results(uniform)
+        load_instrument_response_results(path)

@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
-from .utils import VELOCITY_CONVENTION
+from .utils import has_wrong_velocity_sign
 
 
 
@@ -79,10 +79,12 @@ def load_instrument_response_results(filepath: str | Path,
         Path to the pickled results file.
     allow_wrong_velocity_sign : bool, optional
         Load a results file made from a synthesis file that an older ECLIPSE
-        wrote, with a warning instead of an error.  Every velocity in such a
-        file has the wrong sign, and its spectra are mirrored in wavelength
-        about the rest wavelength of each line, so anything that interacts
-        with a blend or another feature on one side of a line can differ too.
+        wrote for a view along x or z, with a warning instead of an error.
+        Every velocity in such a file has the wrong sign, and its spectra are
+        mirrored in wavelength about the rest wavelength of each line, so
+        anything that interacts with a blend or another feature on one side
+        of a line can differ too.  Older views along y were already right and
+        load without it.
 
     Returns
     -------
@@ -93,17 +95,17 @@ def load_instrument_response_results(filepath: str | Path,
         data = dill.load(f)
 
     # Refuse results made from synthesis files written before the Doppler
-    # sign was fixed.  Uniform intensity runs have no synthesis file and no
-    # velocities, so they are unaffected.
+    # sign was fixed, for the views whose sign it changed.  Uniform intensity
+    # runs have no synthesis file and no velocities, so they are unaffected.
     cube_sim = data.get("cube_sim")
-    if (cube_sim is not None
-            and (cube_sim.meta or {}).get("velocity_convention") != VELOCITY_CONVENTION):
+    if cube_sim is not None and has_wrong_velocity_sign(cube_sim.meta):
+        axis = (cube_sim.meta or {}).get("integration_axis", "z")
         message = (
             f"{filepath} was made from a synthesis file written by an older "
             "ECLIPSE, which used the simulation velocity along the line of "
             "sight without turning it into a velocity away from the observer. "
-            "Every velocity in it has the wrong sign: upflows seen from above "
-            "are redshifted."
+            f"For this view along {axis}, every velocity in it has the wrong "
+            "sign: flows towards the observer are redshifted."
         )
         if not allow_wrong_velocity_sign:
             raise ValueError(
