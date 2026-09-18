@@ -205,6 +205,20 @@ def test_a_non_thermal_speed_adds_in_quadrature():
     assert hot == pytest.approx(np.sqrt(plain**2 + extra**2), rel=1e-6)
 
 
+def test_a_wavelength_the_telescope_cannot_see_is_an_error():
+    # NaN from a throughput table would otherwise spread to every row.
+    class TelescopeWithTables(StubTelescope):
+        def ea_and_throughput(self, wavelength):
+            inside = 170.0 <= wavelength.to_value(u.Angstrom) <= 214.0
+            return (EFFECTIVE_AREA if inside else np.nan) * u.cm**2
+
+    fp = FocalPlane_SWC()
+    with pytest.raises(ValueError, match="no effective area at 169.9000"):
+        photons_from_lines(fp, "left", TelescopeWithTables(), SLIT_WIDTH * u.arcsec,
+                           [169.9, 195.119] * u.Angstrom,
+                           [1.0, 1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.02, 0.02] * u.Angstrom)
+
+
 def test_a_line_list_must_be_consistent():
     fp = FocalPlane_SWC()
     with pytest.raises(ValueError, match="wavelength, an intensity and a width"):

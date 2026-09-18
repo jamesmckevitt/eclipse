@@ -61,9 +61,23 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None) -> np.ndarra
 
 
 def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
-    """Effective area in cm^2 at each wavelength, from the telescope model."""
-    return np.array([telescope.ea_and_throughput(w).cgs.value
-                     for w in np.atleast_1d(wavelength)])
+    """
+    Effective area in cm^2 at each wavelength, from the telescope model.
+
+    Outside its throughput tables the telescope has no effective area, and a
+    single such wavelength would turn every row of the frame to NaN through
+    the spectral blur, so that is an error here rather than a silent result.
+    """
+    wavelength = np.atleast_1d(wavelength)
+    area = np.array([telescope.ea_and_throughput(w).cgs.value for w in wavelength])
+    if not np.all(np.isfinite(area)):
+        outside = wavelength[~np.isfinite(area)].to_value(u.Angstrom)
+        raise ValueError(
+            f"The telescope has no effective area at {outside.min():.4f} to "
+            f"{outside.max():.4f} Angstrom ({outside.size} wavelengths); the "
+            f"spectrum must stay within its throughput tables."
+        )
+    return area
 
 
 def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
