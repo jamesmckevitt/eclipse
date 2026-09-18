@@ -92,12 +92,16 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # Calculate temperature-dependent energy per electron-hole pair
     w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
     
-    # Mean number of electrons per photon
-    mean_electrons_per_photon = photon_energy_ev / w_T
-    
+    # Mean number of electrons per photon.  The wavelength may be one value
+    # for the whole array, or an array that broadcasts against it (one per
+    # row, say, for a frame that spans the band); either way each pixel gets
+    # its own conversion.
+    mean_electrons_per_photon = np.broadcast_to(
+        np.asarray(photon_energy_ev / w_T, dtype=float), photon_counts.shape)[mask_positive]
+
     # Fano noise standard deviation per photon
     sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)
-    
+
     # Work only with positive photon counts
     positive_photons = photon_counts[mask_positive]
     

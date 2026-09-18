@@ -18,14 +18,20 @@ test_radiometric_chain.py.
 import astropy.units as u
 import numpy as np
 import pytest
+from astropy.wcs import WCS
+from ndcube import NDCube
 
+from euvst_response.config import Detector_SWC
 from euvst_response.frame import (
     apply_spectral_psf,
+    detect,
+    digitise,
     photons_from_lines,
     photons_from_spectrum,
     pixel_solid_angle,
     thermal_width,
 )
+from euvst_response.radiometric import to_electrons
 from euvst_response.readout import FocalPlane_SWC
 
 H_ERG_S = 6.62607015e-27
@@ -35,6 +41,15 @@ AU_CM = 1.495978707e13
 ARCSEC_RAD = np.pi / (180.0 * 3600.0)
 K_B_ERG_K = 1.380649e-16
 U_G = 1.66053906892e-24
+ERG_PER_EV = 1.602176634e-12
+
+# Energy to liberate one electron-hole pair in silicon at -60 C, the SWC
+# operating temperature: w(T) = 3.71 - 0.0006 (T - 300) eV.
+W_EV_AT_MINUS_60 = 3.71 - 0.0006 * (213.15 - 300.0)
+
+
+def photon_energy_ev(wavelength_angstrom):
+    return HC_ERG_CM / (wavelength_angstrom * 1e-8) / ERG_PER_EV
 
 PLATE_SCALE = 0.159          # arcsec per pixel along the slit
 SLIT_WIDTH = 0.4             # arcsec, science case 2.1.1
@@ -196,3 +211,73 @@ def test_a_line_list_must_be_consistent():
         photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
                            [195.119, 192.03] * u.Angstrom,
                            [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.02] * u.Angstrom)
+
+
+def test_each_row_converts_photons_at_its_own_energy():
+    # A 170 A photon liberates 212 / 170 times the electrons of a 212 A one.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.dark_current = 0 * u.electron / (u.pixel * u.s)
+    electrons = detect(np.full((2, 3), 100.0), [170.0, 212.0] * u.Angstrom, 1.0 * u.s,
+                       det, noise=False)
+    for row, wavelength in enumerate([170.0, 212.0]):
+        expected = 100.0 * det.qe_euv * photon_energy_ev(wavelength) / W_EV_AT_MINUS_60
+        assert electrons[row] == pytest.approx(expected, rel=1e-6)
+    assert electrons[0, 0] / electrons[1, 0] == pytest.approx(212.0 / 170.0, rel=1e-6)
+
+
+def test_a_pixel_can_carry_its_own_wavelength():
+    # Smear puts photons from other rows into a pixel; given per pixel, the
+    # wavelength converts each pixel at its own energy.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.dark_current = 0 * u.electron / (u.pixel * u.s)
+    wavelengths = np.array([[170.0, 212.0], [190.0, 200.0]])
+    electrons = detect(np.full((2, 2), 50.0), wavelengths * u.Angstrom, 1.0 * u.s,
+                       det, noise=False)
+    expected = 50.0 * det.qe_euv * photon_energy_ev(wavelengths) / W_EV_AT_MINUS_60
+    assert electrons == pytest.approx(expected, rel=1e-6)
+    with pytest.raises(ValueError, match="per row or per pixel"):
+        detect(np.zeros((2, 2)), [190.0, 191.0, 192.0] * u.Angstrom, 1.0 * u.s, det)
+
+
+def test_each_row_collects_dark_current_for_its_own_time():
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    dark = det.dark_current.to_value(u.electron / (u.pixel * u.s))
+    electrons = detect(np.zeros((3, 2)), [190.0, 191.0, 192.0] * u.Angstrom,
+                       [1.0, 2.0, 4.0] * u.s, det, noise=False)
+    assert electrons[:, 0] == pytest.approx(dark * np.array([1.0, 2.0, 4.0]), rel=1e-9)
+    assert electrons[:, 1] == pytest.approx(electrons[:, 0], rel=1e-12)
+
+
+def test_detect_agrees_with_the_cube_chain_at_one_wavelength():
+    # A frame whose rows all record one wavelength is the cube chain's case.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    photons = np.full((4, 5), 250.0)
+    mine = detect(photons, np.full(4, 195.119) * u.Angstrom, 2.0 * u.s, det, noise=False)
+    cube = NDCube(photons[np.newaxis], wcs=WCS(naxis=3), unit=u.photon / u.pix,
+                  meta={"rest_wav": 195.119 * u.Angstrom})
+    chain = to_electrons(cube, 2.0 * u.s, det, noise=False).data[0]
+    assert mine == pytest.approx(chain, rel=1e-12)
+
+
+def test_noise_draws_around_the_same_mean():
+    np.random.seed(20260918)
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    photons = np.full((200, 200), 400.0)
+    wavelengths = np.full(200, 192.03) * u.Angstrom
+    noisy = detect(photons, wavelengths, 3.0 * u.s, det)
+    clean = detect(photons, wavelengths, 3.0 * u.s, det, noise=False)
+    assert noisy.mean() == pytest.approx(clean.mean(), rel=2e-3)
+    assert noisy.std() > 0.0
+
+
+def test_whole_photons_are_required_with_noise_on():
+    det = Detector_SWC()
+    with pytest.raises(ValueError, match="whole numbers"):
+        detect(np.full((1, 1), 2.5), [192.0] * u.Angstrom, 1.0 * u.s, det)
+
+
+def test_digitise_divides_by_the_gain_and_clips():
+    # 2.78 electrons per DN, and nothing above 65535.
+    det = Detector_SWC()
+    dn = digitise(np.array([[0.0, 2.78, 2780.0, 1.0e9]]), det)
+    assert dn.tolist() == [[0.0, 1.0, 1000.0, 65535.0]]

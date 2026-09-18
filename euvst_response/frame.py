@@ -20,6 +20,11 @@ A line is spread over the rows by integrating a Gaussian between the row
 boundaries, so its flux is conserved whatever the sampling.  That Gaussian is
 the line as the Sun emits it; the instrument's own spectral response is a
 separate convolution, applied with :func:`apply_spectral_psf`.
+
+At the other end, :func:`detect` and :func:`digitise` take the photons a frame
+recorded through the detector stages of :mod:`euvst_response.radiometric`,
+with the two things a full-band frame needs that a cube does not: a photon
+energy for each row, and a dark current time for each row.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import astropy.units as u
 import numpy as np
 from scipy.special import erf
 
+from .radiometric import _vectorized_fano_noise
 from .readout import FocalPlane_SWC
 from .utils import angle_to_distance, _fwhm_to_sigma
 
@@ -220,3 +226,77 @@ def apply_spectral_psf(rows: u.Quantity, telescope) -> u.Quantity:
     values = np.asarray(rows.value if hasattr(rows, "value") else rows, dtype=float)
     padded = np.pad(values, half, mode="edge")
     return np.convolve(padded, kernel, mode="valid") * unit
+
+
+def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, det,
+           *, noise: bool = True) -> np.ndarray:
+    """
+    Electrons per pixel from the photons a frame recorded.
+
+    The stages are those of :func:`euvst_response.radiometric.to_electrons`:
+    the quantum efficiency, the electrons each photon liberates with their
+    Fano spread, the dark current, and the read noise.  A frame spans the
+    band, so each row has its own photon energy, and without a shutter each
+    row waits a different time for its read-out, so each has its own dark
+    current.
+
+    Parameters
+    ----------
+    photons : np.ndarray
+        Photons recorded per pixel, shaped (rows, columns).  With *noise* on
+        these must be whole numbers, as from a Poisson draw.
+    wavelength : u.Quantity
+        The wavelength of the photons in each row, one per row, or one per
+        pixel as an array the shape of *photons*.  Without a shutter a pixel
+        holds photons from every row its charge crossed, and the per-pixel
+        form takes the wavelength that carries their mean energy.
+    dark_time : u.Quantity
+        How long each row collects dark current, one per row or one for all.
+        :func:`euvst_response.readout.dark_current_time` gives it.
+    det : Detector_SWC
+        The detector.
+    noise : bool
+        With it off every random draw is replaced by its mean.
+
+    Returns
+    -------
+    np.ndarray
+        Electrons per pixel, the same shape as *photons*.
+    """
+    photons = np.asarray(photons, dtype=float)
+    if photons.ndim != 2:
+        raise ValueError(f"A frame has two axes, rows and columns, not {photons.ndim}.")
+    wavelength = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
+    if wavelength.ndim == 1 and wavelength.size == photons.shape[0]:
+        wavelength = wavelength[:, np.newaxis]
+    elif wavelength.shape != photons.shape:
+        raise ValueError(
+            f"One wavelength per row or per pixel: got {wavelength.shape} for a "
+            f"frame of {photons.shape}."
+        )
+    if noise:
+        if not np.all(np.mod(photons, 1) == 0):
+            raise ValueError("With noise on the photons must be whole numbers, as from a Poisson draw.")
+        detected = np.random.binomial(photons.astype(np.int64), det.qe_euv).astype(float)
+    else:
+        detected = photons * det.qe_euv
+    electrons = _vectorized_fano_noise(detected, wavelength * u.Angstrom, det, noise=noise)
+
+    dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
+    dark = np.broadcast_to(np.reshape(dark, (-1, 1)) if np.ndim(dark) else dark, photons.shape)
+    if noise:
+        electrons = (electrons + np.random.poisson(dark)
+                     + np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel),
+                                        photons.shape))
+    else:
+        electrons = electrons + dark
+    return np.maximum(electrons, 0.0)
+
+
+def digitise(electrons: np.ndarray, det) -> np.ndarray:
+    """
+    DN per pixel: the electrons divided by the gain, rounded, and clipped at
+    the detector's maximum, as :func:`euvst_response.radiometric.to_dn` does.
+    """
+    dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
+    return np.minimum(np.round(dn), det.max_dn.to_value(u.DN / u.pixel))
