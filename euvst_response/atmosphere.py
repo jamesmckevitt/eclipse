@@ -60,8 +60,10 @@ __all__ = [
     "edges_from_centres",
     "read_atmosphere",
     "write_atmosphere",
+    "describe_atmosphere_file",
     "mass_per_electron",
     "mass_per_electron_from_abundances",
+    "require_mass_per_electron",
 ]
 
 FORMAT_NAME = "eclipse-atmosphere"
@@ -258,6 +260,7 @@ class Atmosphere:
         """
         if self.electron_density is not None:
             return self.electron_density
+        require_mass_per_electron(mass_per_electron_amu)
         return (self.mass_density / (mass_per_electron_amu * const.u)).to(u.cm**-3)
 
     # ------------------------------------------------------------------
@@ -350,33 +353,54 @@ class Atmosphere:
 
     def describe(self) -> str:
         """A few lines saying what the atmosphere holds."""
-        lines = [f"  Shape (nz, ny, nx): {self.shape}"]
-        for axis in AXES:
-            edges = self.edges(axis).to(u.Mm)
-            extent = f"{edges[0]:.3f} to {edges[-1]:.3f}"
-            if self.is_uniform(axis):
-                lines.append(f"  {axis}: {extent}, cells of {self.spacing(axis).to(u.Mm):.4f}")
-            else:
-                thickness = self.cell_thickness(axis).to(u.Mm)
-                lines.append(f"  {axis}: {extent}, cells from {thickness.min():.4f} "
-                             f"to {thickness.max():.4f}")
-        densities = [name for name in ("mass_density", "electron_density")
-                     if getattr(self, name) is not None]
-        lines.append(f"  Density: {' and '.join(densities)}")
-        velocities = [axis for axis in AXES
-                      if getattr(self, f"velocity_{axis}") is not None]
-        lines.append(f"  Velocities: {', '.join(velocities) if velocities else 'none'}")
-        if self.time is not None:
-            lines.append(f"  Time: {self.time.to(u.s):.3f}")
-        if self.source:
-            lines.append(f"  Source: {self.source}")
-        return "\n".join(lines)
+        present = [name for name in CUBES if getattr(self, name) is not None]
+        return _describe({axis: self.edges(axis) for axis in AXES}, present,
+                         self.time, self.source)
 
 
 def _check_axis(axis: str) -> str:
     if axis not in AXES:
         raise ValueError(f"axis must be one of {AXES}, got {axis!r}.")
     return axis
+
+
+def _describe(edges: Dict[str, u.Quantity], cubes: Sequence[str],
+              time: Optional[u.Quantity], source: str) -> str:
+    """The description shared by an Atmosphere and a file on disk."""
+    shape = tuple(edges[axis].size - 1 for axis in ("z", "y", "x"))
+    lines = [f"  Shape (nz, ny, nx): {shape}"]
+    for axis in AXES:
+        axis_edges = edges[axis].to(u.Mm)
+        extent = f"{axis_edges[0]:.3f} to {axis_edges[-1]:.3f}"
+        thickness = np.diff(axis_edges)
+        try:
+            spacing = require_uniform_grid(axis_edges, EDGES[axis]) * u.Mm
+        except ValueError:
+            lines.append(f"  {axis}: {extent}, cells from {thickness.min():.4f} "
+                         f"to {thickness.max():.4f}")
+        else:
+            lines.append(f"  {axis}: {extent}, cells of {spacing:.4f}")
+    densities = [name for name in ("mass_density", "electron_density") if name in cubes]
+    lines.append(f"  Density: {' and '.join(densities)}")
+    velocities = [axis for axis in AXES if f"velocity_{axis}" in cubes]
+    lines.append(f"  Velocities: {', '.join(velocities) if velocities else 'none'}")
+    if time is not None:
+        lines.append(f"  Time: {time.to(u.s):.3f}")
+    if source:
+        lines.append(f"  Source: {source}")
+    return "\n".join(lines)
+
+
+def require_mass_per_electron(value) -> float:
+    """*value* as the mass per free electron in atomic mass units, which must be finite and positive."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = np.nan
+    if not np.isfinite(number) or number <= 0.0:
+        raise ValueError(f"The mass per electron must be a finite, positive number "
+                         f"of atomic mass units, got {value!r}.")
+    return number
 
 
 # ----------------------------------------------------------------------
@@ -454,6 +478,32 @@ def read_atmosphere(path: str | Path,
     return Atmosphere(source=str(source), **fields)
 
 
+def describe_atmosphere_file(path: str | Path) -> str:
+    """
+    What an atmosphere file holds, without loading any of its cubes.
+
+    Reads the attributes, the edges, the time and the cubes' names and
+    shapes, so it costs nothing on a file of many gigabytes.
+    """
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        _check_format(f, path)
+        edges = {axis: _read_dataset(f, EDGES[axis]) for axis in AXES}
+        shape = tuple(edges[axis].size - 1 for axis in ("z", "y", "x"))
+        cubes = [name for name in CUBES if name in f]
+        for name in cubes:
+            if f[name].shape != shape:
+                raise ValueError(f"{name} in {path} has shape {f[name].shape} but "
+                                 f"the edges bound (nz, ny, nx) = {shape} cells.")
+        if "temperature" not in cubes:
+            raise ValueError(f"{path} has no 'temperature' dataset.")
+        time = _read_dataset(f, "time") if "time" in f else None
+        source = f.attrs.get("source", "")
+        if isinstance(source, bytes):
+            source = source.decode()
+    return _describe(edges, cubes, time, str(source))
+
+
 def _check_format(f: h5py.File, path: Path) -> None:
     name = f.attrs.get("format")
     if isinstance(name, bytes):
@@ -463,10 +513,19 @@ def _check_format(f: h5py.File, path: Path) -> None:
             f"{path} is not an ECLIPSE atmosphere file: its 'format' "
             f"attribute is {name!r}, not {FORMAT_NAME!r}. See the "
             f"euvst_response.atmosphere documentation for the layout.")
-    version = int(f.attrs.get("version", 0))
-    if version > FORMAT_VERSION:
-        raise ValueError(f"{path} is atmosphere format version {version}, "
-                         f"newer than the {FORMAT_VERSION} this ECLIPSE reads.")
+    version = f.attrs.get("version")
+    if version is None:
+        raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "
+                         f"atmosphere file has version {FORMAT_VERSION}.")
+    try:
+        matches = np.ndim(version) == 0 and float(version) == FORMAT_VERSION
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
+        if isinstance(version, bytes):
+            version = version.decode()
+        raise ValueError(f"{path} is atmosphere format version {version}; "
+                         f"this ECLIPSE reads version {FORMAT_VERSION}.")
 
 
 def _read_dataset(f: h5py.File, name: str) -> u.Quantity:

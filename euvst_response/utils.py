@@ -703,6 +703,10 @@ def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
     downsample : int
         Downsampling factor.
     """
+    if (isinstance(downsample, bool) or not isinstance(downsample, (int, np.integer))
+            or downsample < 1):
+        raise ValueError(f"The downsampling factor must be a whole number of 1 or "
+                         f"more, got {downsample!r}.")
     uneven = [n for n in shape if n % downsample]
     if uneven:
         raise ValueError(

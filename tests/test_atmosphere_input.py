@@ -191,6 +191,90 @@ def test_the_reader_refuses_files_that_are_not_atmospheres(tmp_path):
         read_atmosphere(newer)
 
 
+def test_the_version_must_be_the_one_this_eclipse_reads(tmp_path):
+    for version, message in ((None, "no 'version'"), (1.5, "version 1.5"),
+                             (2, "version 2"), ("one", "version one")):
+        path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
+        with h5py.File(path, "a") as f:
+            if version is None:
+                del f.attrs["version"]
+            else:
+                f.attrs["version"] = version
+        with pytest.raises(ValueError, match=message):
+            read_atmosphere(path)
+
+
+def test_info_describes_a_file_without_loading_its_cubes(tmp_path, capsys):
+    """The cubes are the size of the simulation; the description must not need them."""
+    from euvst_response.atmosphere import describe_atmosphere_file
+    path = tmp_path / "huge.h5"
+    nz, ny, nx = SHAPE
+    with h5py.File(path, "w") as f:
+        f.attrs["format"] = "eclipse-atmosphere"
+        f.attrs["version"] = 1
+        f.attrs["source"] = "a box whose cubes are elsewhere"
+        for axis, edges in _edges().items():
+            dataset = f.create_dataset(axis, data=edges.value)
+            dataset.attrs["unit"] = str(edges.unit)
+        # A dataset whose bytes live in a file that does not exist: its shape
+        # and attributes read fine, its values cannot.
+        missing = f.create_dataset("temperature", shape=SHAPE, dtype="f4",
+                                   external=[(str(tmp_path / "missing.bin"), 0,
+                                              4 * nz * ny * nx)])
+        missing.attrs["unit"] = "K"
+        density = f.create_dataset("mass_density", data=np.ones(SHAPE, dtype="f4"))
+        density.attrs["unit"] = "g / cm3"
+
+    description = describe_atmosphere_file(path)
+    assert f"Shape (nz, ny, nx): {SHAPE}" in description
+    assert "Density: mass_density" in description
+    assert "Source: a box whose cubes are elsewhere" in description
+
+    muram.main(["info", str(path)])
+    assert f"Shape (nz, ny, nx): {SHAPE}" in capsys.readouterr().out
+
+    with pytest.raises((OSError, RuntimeError)):
+        read_atmosphere(path)
+
+
+def test_the_mass_per_electron_must_be_finite_and_positive(tmp_path, monkeypatch):
+    from euvst_response.atmosphere import require_mass_per_electron
+    for bad in (0.0, -1.0, float("nan"), float("inf"), "many"):
+        with pytest.raises(ValueError, match="finite, positive"):
+            require_mass_per_electron(bad)
+    assert require_mass_per_electron(1.16) == 1.16
+
+    atmosphere = _atmosphere()
+    with pytest.raises(ValueError, match="finite, positive"):
+        atmosphere.electron_density_from(0.0)
+    # Not needed, so not checked, when the electron density is given.
+    given = _atmosphere(mass_density=None,
+                        electron_density=np.ones(SHAPE) * ELECTRON_DENSITY)
+    assert given.electron_density_from(0.0) is given.electron_density
+
+    path = write_atmosphere(atmosphere, tmp_path / "box.h5")
+    for bad in ("0", "-1.2", "nan"):
+        with pytest.raises(ValueError, match="--mass-per-electron.*finite, positive"):
+            _synthesise(tmp_path, monkeypatch, "bad", "--atmosphere", str(path),
+                        "--mass-per-electron", bad)
+
+
+def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path, monkeypatch):
+    from euvst_response.utils import require_downsample_divides
+    for bad in (0, -2, 2.0, True):
+        with pytest.raises(ValueError, match="whole number of 1 or more"):
+            require_downsample_divides((4, 4, 4), bad)
+        if bad != 1:
+            with pytest.raises(ValueError, match="whole number of 1 or more"):
+                _atmosphere((4, 4, 4)).downsampled(bad)
+    require_downsample_divides((4, 4, 4), 2)
+
+    path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
+    with pytest.raises(ValueError, match="--downsample must be 1 or more"):
+        _synthesise(tmp_path, monkeypatch, "bad", "--atmosphere", str(path),
+                    "--downsample", "0")
+
+
 @pytest.mark.parametrize("field, value, message", [
     ("temperature", np.ones((4, 5, 6)) * u.K, "shape"),
     ("temperature", np.ones(SHAPE), "Quantity"),
@@ -604,6 +688,10 @@ def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monke
     with pytest.raises(ValueError, match="--voxel-dx.*--voxel-dz would not be used"):
         _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),
                     "--voxel-dx", "0.1 Mm", "--voxel-dz", "0.1 Mm")
+    # Typed at its default value it is still a MURaM option that goes unused.
+    with pytest.raises(ValueError, match="--data-dir.*--cube-shape would not be used"):
+        _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),
+                    "--data-dir", "data/atmosphere", "--cube-shape", "512", "768", "256")
     with pytest.raises(ValueError, match="Dynamic mode"):
         _synthesise(tmp_path, monkeypatch, "dynamic", "--atmosphere", str(path),
                     "--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec")

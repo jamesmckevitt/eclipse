@@ -22,7 +22,8 @@ from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse,
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
-from .atmosphere import Atmosphere, edges_from_centres, read_atmosphere, write_atmosphere
+from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centres,
+                         read_atmosphere, write_atmosphere)
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -49,6 +50,7 @@ __all__ = [
     "load_atmosphere",
     "create_uniform_intensity_cube",
     "Atmosphere",
+    "describe_atmosphere_file",
     "edges_from_centres",
     "read_atmosphere",
     "write_atmosphere",

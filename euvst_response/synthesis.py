@@ -18,7 +18,8 @@ from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
                     velocity_centers_to_edges)
-from .atmosphere import AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
+                         require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -1209,6 +1210,18 @@ MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file
                         "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
 
+class _NotedOption(argparse.Action):
+    """Stores the value and records that the option was given, at its default or not."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        given = getattr(namespace, "given_options", None)
+        if given is None:
+            given = set()
+            namespace.given_options = given
+        given.add(self.dest)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command line options of synthesise-spectra."""
     parser = argparse.ArgumentParser(
@@ -1223,6 +1236,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "It carries the cube shape and cell sizes, so it "
                             "replaces the MURaM file options.")
     parser.add_argument("--data-dir", type=str, default="data/atmosphere",
+                       action=_NotedOption,
                        help="Directory containing simulation data")
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
@@ -1245,24 +1259,33 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Simulation files
     parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
+                       action=_NotedOption,
                        help="Temperature file relative to data-dir")
     parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
+                       action=_NotedOption,
                        help="Density file relative to data-dir")
     parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
+                       action=_NotedOption,
                        help="Velocity x file relative to data-dir")
     parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
+                       action=_NotedOption,
                        help="Velocity y file relative to data-dir")
     parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
+                       action=_NotedOption,
                        help="Velocity z file relative to data-dir")
-    
+
     # Grid parameters
     parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
+                       action=_NotedOption,
                        help="Cube dimensions in the file's storage order (nx nz ny)")
     parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       action=_NotedOption,
                        help="Voxel size in x (e.g. '0.192 Mm')")
     parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       action=_NotedOption,
                        help="Voxel size in y (e.g. '0.192 Mm')")
     parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       action=_NotedOption,
                        help="Voxel size in z (e.g. '0.064 Mm')")
     
     # Integration direction
@@ -1351,9 +1374,10 @@ def check_atmosphere_options(args) -> None:
     """
     if not args.atmosphere:
         return
-    defaults = build_parser()
-    given = [name for name in MURAM_LAYOUT_OPTIONS
-             if getattr(args, name) != defaults.get_default(name)]
+    # The parser notes every layout option that appeared on the command
+    # line, so one typed at its default value is caught too.
+    noted = getattr(args, "given_options", ())
+    given = [name for name in MURAM_LAYOUT_OPTIONS if name in noted]
     if given:
         flags = ", ".join("--" + name.replace("_", "-") for name in given)
         raise ValueError(
@@ -1399,7 +1423,11 @@ def load_atmosphere_file(
 def resolve_mass_per_electron(args) -> Tuple[float, str]:
     """The mass per free electron to use, in atomic mass units, and where it came from."""
     if args.mass_per_electron is not None:
-        return args.mass_per_electron, "given on the command line"
+        try:
+            value = require_mass_per_electron(args.mass_per_electron)
+        except ValueError as error:
+            raise ValueError(f"--mass-per-electron: {error}") from None
+        return value, "given on the command line"
     value = mass_per_electron(args.abundance, getattr(args, "hdf5_dbase_root", None))
     return value, f"fully ionised plasma with {args.abundance} abundances"
 
@@ -1441,6 +1469,8 @@ def main(args=None) -> None:
     
     # ---------------- Configuration from arguments -----------------
     precision = np.float32 if args.precision == "float32" else np.float64
+    if args.downsample < 1:
+        raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)

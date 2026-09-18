@@ -21,7 +21,7 @@ from typing import Optional, Sequence
 import astropy.units as u
 import numpy as np
 
-from .atmosphere import AXES, Atmosphere, read_atmosphere, write_atmosphere
+from .atmosphere import AXES, Atmosphere, describe_atmosphere_file, write_atmosphere
 from .synthesis import load_cube, read_timestep_time
 
 # MURaM's files for each quantity, relative to the data directory and
@@ -171,9 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "info":
-        atmosphere = read_atmosphere(args.atmosphere)
         print(args.atmosphere)
-        print(atmosphere.describe())
+        print(describe_atmosphere_file(args.atmosphere))
         return
 
     data_dir = Path(args.data_dir)
