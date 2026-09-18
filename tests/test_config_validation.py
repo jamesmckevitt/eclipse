@@ -208,7 +208,7 @@ def test_suggest_returns_none_when_nothing_is_close():
 # --- the key lists have to agree with what main() reads ----------------------
 
 # main() and the helpers it hands the parsed config to.
-_CONFIG_READERS = ("main", "_parse_pinhole_config")
+_CONFIG_READERS = ("main", "_parse_pinhole_config", "_parse_fitting_config")
 
 
 def _keys_main_reads(*names):

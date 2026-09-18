@@ -46,6 +46,7 @@ setup(
             "solarc-eclipse=euvst_response.cli:main",
             "synthesise-spectra=euvst_response.synthesis_cli:main",
             "synthesise_spectra=euvst_response.synthesis_cli:main",
+            "eclipse-science-cases=euvst_response.science_cases:main",
         ],
     },
     include_package_data=True,
