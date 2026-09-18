@@ -99,6 +99,24 @@ The frame has `parallel_overscan_rows` more rows than the image area. With a shu
 
 `dark_current_time` gives how long each row accumulates dark current, from the clear to its own read-out. That is longer than the exposure whether or not there is a shutter, and longest for the rows read last.
 
+`detect` and `digitise` in `euvst_response.frame` take the frame through the detector stages of `radiometric`, to electrons and then DN, with two things a full-band frame needs: a photon energy for each row, since a 170 A photon liberates a fifth more electrons than a 212 A one, and a dark current time for each row.
+
+```python
+from euvst_response.config import Detector_SWC
+from euvst_response.frame import detect, digitise
+from euvst_response.readout import dark_current_time
+
+det = Detector_SWC()
+photons = np.random.poisson(frame)
+wavelength = fp.wavelength(np.arange(fp.n_rows), "left")
+wavelength = np.concatenate([wavelength, np.repeat(wavelength[-1:], sequence.parallel_overscan_rows)])
+
+electrons = detect(photons, wavelength, dark_current_time(1.0 * u.s, sequence, fp.n_rows), det)
+dn = digitise(electrons, det)
+```
+
+Without a shutter a pixel holds photons from every row its charge crossed, so `detect` also accepts a wavelength per pixel, for the one that carries the mean energy of what the pixel holds. `expose` is linear in the rate, so exposing the energy-weighted rate and dividing by the photons gives that mean.
+
 ## What is not modelled
 
 - **Blooming.** A saturated line spills along the column, which is the same axis as the smear. The full well is above 100 ke- and the CCDs have no anti-blooming, so this matters in a flare.
