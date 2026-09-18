@@ -5,6 +5,8 @@ This module provides functions for loading, analyzing, and visualizing
 instrument response simulation results.
 """
 
+import warnings
+
 import dill
 import numpy as np
 import astropy.units as u
@@ -18,6 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
+
+from .utils import has_wrong_velocity_sign
 
 
 
@@ -62,16 +66,26 @@ def _reconstruct_signal_with_units(signal_data, signal_unit, signal_wcs) -> NDCu
     return NDCube(signal_quantity, wcs=signal_wcs)
 
 
-def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
+def load_instrument_response_results(filepath: str | Path,
+                                     allow_wrong_velocity_sign: bool = False,
+                                     ) -> Dict[str, Any]:
     """
     Load instrument response results and reconstruct signals for compatibility.
     Fit statistics are kept with units separated.
-    
+
     Parameters
     ----------
     filepath : str or Path
         Path to the pickled results file.
-        
+    allow_wrong_velocity_sign : bool, optional
+        Load a results file made from a synthesis file that an older ECLIPSE
+        wrote for a view along x or z, with a warning instead of an error.
+        Every velocity in such a file has the wrong sign, and its spectra are
+        mirrored in wavelength about the rest wavelength of each line, so
+        anything that interacts with a blend or another feature on one side
+        of a line can differ too.  Older views along y were already right and
+        load without it.
+
     Returns
     -------
     dict
@@ -79,6 +93,27 @@ def load_instrument_response_results(filepath: str | Path) -> Dict[str, Any]:
     """
     with open(filepath, "rb") as f:
         data = dill.load(f)
+
+    # Refuse results made from synthesis files written before the Doppler
+    # sign was fixed, for the views whose sign it changed.  Uniform intensity
+    # runs have no synthesis file and no velocities, so they are unaffected.
+    cube_sim = data.get("cube_sim")
+    if cube_sim is not None and has_wrong_velocity_sign(cube_sim.meta):
+        axis = (cube_sim.meta or {}).get("integration_axis", "z")
+        message = (
+            f"{filepath} was made from a synthesis file written by an older "
+            "ECLIPSE, which used the simulation velocity along the line of "
+            "sight without turning it into a velocity away from the observer. "
+            f"For this view along {axis}, every velocity in it has the wrong "
+            "sign: flows towards the observer are redshifted."
+        )
+        if not allow_wrong_velocity_sign:
+            raise ValueError(
+                message + " Re-run the synthesis and then the simulation with "
+                "this version, or pass allow_wrong_velocity_sign=True to load "
+                "it anyway."
+            )
+        warnings.warn(message, stacklevel=2)
 
     for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
         # Refuse files written before the cube axis order was fixed (issue

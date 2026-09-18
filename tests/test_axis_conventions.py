@@ -30,7 +30,7 @@ from euvst_response.synthesis import (
     load_cube,
     synthesise_spectra,
 )
-from euvst_response.utils import rebin_slit_offchip
+from euvst_response.utils import VELOCITY_CONVENTION, rebin_slit_offchip
 
 REST = 195.119 * u.Angstrom
 
@@ -339,7 +339,8 @@ def _write_synthesis_file(path, ctypes, integration_axis):
         np.ones((3, 2, n_spec)),
         wcs=_line_cube_wcs(ctypes, n_spec),
         unit=u.erg / (u.s * u.cm**3 * u.sr),
-        meta={"rest_wav": REST, "integration_axis": integration_axis},
+        meta={"rest_wav": REST, "integration_axis": integration_axis,
+              "velocity_convention": VELOCITY_CONVENTION},
     )
     with open(path, "wb") as f:
         dill.dump({"line_cubes": {"Fe12_195.1190": cube}}, f)
