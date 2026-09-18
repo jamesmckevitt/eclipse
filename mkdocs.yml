@@ -28,6 +28,7 @@ nav:
   - Quick start: quickstart.md
   - Synthesising an atmosphere:
       - From an MHD simulation: synthesis.md
+      - Atmosphere files: atmosphere-files.md
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
