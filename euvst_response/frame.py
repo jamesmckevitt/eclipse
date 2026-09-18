@@ -1,0 +1,222 @@
+"""
+Laying a spectrum onto the SW detectors.
+
+:mod:`euvst_response.readout` says which wavelength each CCD row records and
+what a frame collects while it is clocked out.  This module fills in the step
+before: how much light each row receives in the first place, given a spectrum
+of the Sun and the telescope in front of the detectors.
+
+The arithmetic is the standard radiometric equation, the same one
+:mod:`euvst_response.radiometric` applies to a synthesis cube::
+
+    photons per second per pixel = I * Omega_pix * A_eff / E_photon
+
+with the spectral radiance ``I`` integrated over the wavelengths the row
+covers, rather than multiplied by a fixed pixel bandwidth.  That matters here
+because the rows are not evenly spaced in wavelength and a frame spans the
+whole band, where the effective area changes by a factor of several.
+
+A line is spread over the rows by integrating a Gaussian between the row
+boundaries, so its flux is conserved whatever the sampling.  That Gaussian is
+the line as the Sun emits it; the instrument's own spectral response is a
+separate convolution, applied with :func:`apply_spectral_psf`.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import astropy.constants as const
+import astropy.units as u
+import numpy as np
+from scipy.special import erf
+
+from .readout import FocalPlane_SWC
+from .utils import angle_to_distance, _fwhm_to_sigma
+
+
+def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.Quantity:
+    """
+    The patch of Sun one pixel sees, in steradian.
+
+    A pixel covers the plate scale along the slit and the slit width across it,
+    which is what the raster steps by.
+    """
+    along_slit = angle_to_distance(focal_plane.plate_scale)
+    across = angle_to_distance(u.Quantity(slit_width))
+    return ((along_slit * across).cgs / const.au.cgs ** 2).value * u.sr
+
+
+def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None) -> np.ndarray:
+    """Row boundaries in Angstrom, sorted so that the first is the shorter."""
+    edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
+    return np.column_stack([np.minimum(edges[:-1], edges[1:]),
+                            np.maximum(edges[:-1], edges[1:])])
+
+
+def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
+    """Effective area in cm^2 at each wavelength, from the telescope model."""
+    return np.array([telescope.ea_and_throughput(w).cgs.value
+                     for w in np.atleast_1d(wavelength)])
+
+
+def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
+                       slit_width: u.Quantity, wavelengths: u.Quantity,
+                       intensities: u.Quantity, widths: u.Quantity,
+                       column=None, lit_only: bool = True) -> u.Quantity:
+    """
+    Photons per second in each row of one CCD from a list of emission lines.
+
+    Parameters
+    ----------
+    focal_plane : FocalPlane_SWC
+        Which wavelength each row records.
+    ccd : str
+        ``'left'`` or ``'right'``.
+    telescope : Telescope_EUVST
+        Supplies the effective area at each wavelength.
+    slit_width : u.Quantity
+        The slit the light came through, as an angle.
+    wavelengths : u.Quantity
+        Rest wavelengths of the lines.
+    intensities : u.Quantity
+        Spectrally integrated radiance of each line, in erg / (s cm2 sr).
+    widths : u.Quantity
+        Gaussian 1-sigma width of each line, as a wavelength.  This is the line
+        as emitted: thermal plus any non-thermal broadening, without the
+        instrument's spectral response.
+    column : int, optional
+        Which column along the slit, for a focal plane whose lines drift along
+        it.  Ignored otherwise.
+    lit_only : bool
+        Zero the rows the baffle keeps dark.  They still pass charge, so the
+        smear model needs them present but empty.
+
+    Returns
+    -------
+    u.Quantity
+        Photons per second per pixel, one value per row.
+    """
+    wavelengths = np.atleast_1d(u.Quantity(wavelengths).to(u.Angstrom))
+    intensities = np.atleast_1d(u.Quantity(intensities).to(u.erg / (u.s * u.cm**2 * u.sr)))
+    widths = np.atleast_1d(u.Quantity(widths).to(u.Angstrom))
+    if not (len(wavelengths) == len(intensities) == len(widths)):
+        raise ValueError(
+            f"Each line needs a wavelength, an intensity and a width, got "
+            f"{len(wavelengths)}, {len(intensities)} and {len(widths)}."
+        )
+    if np.any(widths.value <= 0):
+        raise ValueError("Line widths must be positive.")
+
+    solid_angle = pixel_solid_angle(focal_plane, slit_width)
+    energy = (const.h * const.c / wavelengths).to(u.erg)
+    area = _collecting(telescope, wavelengths) * u.cm**2
+    # Photons per second per pixel the line would give if all of it landed in
+    # one row; the Gaussian below shares that out between the rows it covers.
+    total = (intensities * solid_angle * area / energy).to(1 / u.s)
+
+    bounds = _row_bounds(focal_plane, ccd, column)
+    rows = np.zeros(focal_plane.n_rows)
+    scale = np.sqrt(2.0) * widths.to_value(u.Angstrom)
+    centre = wavelengths.to_value(u.Angstrom)
+    for i, weight in enumerate(total.value):
+        if weight == 0:
+            continue
+        # Fraction of the line between each pair of row boundaries.
+        low = erf((bounds[:, 0] - centre[i]) / scale[i])
+        high = erf((bounds[:, 1] - centre[i]) / scale[i])
+        rows += weight * 0.5 * (high - low)
+
+    if lit_only:
+        first, last = focal_plane.lit_rows(ccd, column)
+        rows[:first] = 0.0
+        rows[last + 1:] = 0.0
+    return rows / u.s
+
+
+def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
+                          slit_width: u.Quantity, wavelength: u.Quantity,
+                          radiance: u.Quantity, column=None,
+                          lit_only: bool = True) -> u.Quantity:
+    """
+    Photons per second in each row of one CCD from a continuous spectrum.
+
+    Use this for a continuum, or for anything already sampled on a wavelength
+    grid.  The grid has to be finer than a row, since the radiance is
+    integrated between the row boundaries by trapezium rule on it.
+
+    Parameters
+    ----------
+    wavelength : u.Quantity
+        Grid the spectrum is sampled on, increasing.
+    radiance : u.Quantity
+        Spectral radiance per unit wavelength, in erg / (s cm2 sr Angstrom).
+
+    Returns
+    -------
+    u.Quantity
+        Photons per second per pixel, one value per row.
+    """
+    wavelength = u.Quantity(wavelength).to(u.Angstrom)
+    radiance = u.Quantity(radiance).to(u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom))
+    if wavelength.size != radiance.size:
+        raise ValueError(
+            f"The spectrum needs one radiance per wavelength, got "
+            f"{radiance.size} for {wavelength.size}."
+        )
+    if np.any(np.diff(wavelength.value) <= 0):
+        raise ValueError("The wavelength grid must increase.")
+
+    solid_angle = pixel_solid_angle(focal_plane, slit_width)
+    energy = (const.h * const.c / wavelength).to(u.erg)
+    area = _collecting(telescope, wavelength) * u.cm**2
+    # Photons per second per pixel per Angstrom, on the input grid.
+    density = (radiance * solid_angle * area / energy).to(1 / (u.s * u.Angstrom)).value
+
+    grid = wavelength.to_value(u.Angstrom)
+    cumulative = np.concatenate([[0.0], np.cumsum(np.diff(grid) * (density[1:] + density[:-1]) / 2)])
+    bounds = _row_bounds(focal_plane, ccd, column)
+    rows = (np.interp(bounds[:, 1], grid, cumulative, left=cumulative[0], right=cumulative[-1])
+            - np.interp(bounds[:, 0], grid, cumulative, left=cumulative[0], right=cumulative[-1]))
+
+    if lit_only:
+        first, last = focal_plane.lit_rows(ccd, column)
+        rows[:first] = 0.0
+        rows[last + 1:] = 0.0
+    return rows / u.s
+
+
+def thermal_width(wavelength: u.Quantity, temperature: u.Quantity,
+                  atomic_weight: u.Quantity,
+                  non_thermal: Optional[u.Quantity] = None) -> u.Quantity:
+    """
+    Gaussian 1-sigma width of a line, as a wavelength.
+
+    Thermal motion at *temperature* for an ion of *atomic_weight*, with an
+    optional non-thermal speed added in quadrature.
+    """
+    speed = np.sqrt(const.k_B * u.Quantity(temperature) / u.Quantity(atomic_weight).to(u.g))
+    if non_thermal is not None:
+        speed = np.sqrt(speed**2 + u.Quantity(non_thermal).to(u.cm / u.s)**2)
+    return (u.Quantity(wavelength) * speed / const.c).to(u.Angstrom)
+
+
+def apply_spectral_psf(rows: u.Quantity, telescope) -> u.Quantity:
+    """
+    Blur a frame's rows with the instrument's spectral response.
+
+    The point spread function is the Gaussian ``telescope.psf_params[1]`` gives,
+    in pixels, which along the dispersion is rows.  Flux is conserved: the
+    kernel is normalised and the ends are padded by repeating the edge value,
+    which is right here because a frame covers the whole band rather than a
+    window with empty edges.
+    """
+    sigma = _fwhm_to_sigma(telescope.psf_params[1].to_value(u.pixel))
+    half = max(3, int(np.ceil(3 * sigma)))
+    offsets = np.arange(-half, half + 1)
+    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    kernel /= kernel.sum()
+    unit = rows.unit if hasattr(rows, "unit") else 1
+    values = np.asarray(rows.value if hasattr(rows, "value") else rows, dtype=float)
+    padded = np.pad(values, half, mode="edge")
+    return np.convolve(padded, kernel, mode="valid") * unit

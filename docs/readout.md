@@ -64,14 +64,33 @@ A frame is cleared, exposed, then read row by row. Rows inside a window go throu
 
 ## Putting light on it
 
-`expose` takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together. Feed the result to the detector stages in `radiometric` in place of the exposure-only photon count.
+`euvst_response.frame` turns a spectrum into the photons per second each row receives. It is the radiometric equation `radiometric` applies to a synthesis cube, with the radiance integrated between the row boundaries instead of multiplied by one pixel bandwidth, which matters here because the rows are not evenly spaced and a frame spans the whole band.
+
+```python
+from euvst_response.config import Telescope_EUVST
+from euvst_response.frame import apply_spectral_psf, photons_from_lines, thermal_width
+
+telescope = Telescope_EUVST()
+width = thermal_width(192.030 * u.Angstrom, 1.8e7 * u.K, 55.845 * u.u)     # Fe XXIV where it forms
+
+rows = photons_from_lines(fp, "left", telescope, 0.4 * u.arcsec,
+                          [192.030] * u.Angstrom,
+                          [5.3e4] * u.erg / (u.s * u.cm**2 * u.sr), [width])
+rows = apply_spectral_psf(rows, telescope)      # the instrument's spectral response
+```
+
+- `photons_from_lines`: a list of lines, each a Gaussian of the given 1-sigma width as the Sun emits it, integrated between the row boundaries so that its flux is conserved wherever it falls.
+- `photons_from_spectrum`: a spectrum already on a wavelength grid, such as a continuum, integrated between the row boundaries by trapezium rule.
+- Both zero the rows the baffle keeps dark unless `lit_only=False`, and take a `column` for a focal plane with the slit image tilt switched on.
+- `apply_spectral_psf`: blurs the rows with the spectral point spread function in `telescope.psf_params`, conserving flux.
+
+`expose` then takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together. Feed the result to the detector stages in `radiometric` in place of the exposure-only photon count.
 
 ```python
 import numpy as np
 from euvst_response.readout import expose
 
-rate = np.zeros((fp.n_rows, fp.n_columns))      # photons per second per pixel, one CCD
-rate[1679] = 3.0e3                              # Fe XXIV 192.030 in a flare
+rate = np.repeat(rows.value[:, np.newaxis], fp.n_columns, axis=1)   # the same along the slit
 
 frame = expose(rate, 1.0 * u.s, sequence)       # photons, including the parallel overscan rows
 ```
