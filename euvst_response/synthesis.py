@@ -1607,11 +1607,16 @@ def main(args=None) -> None:
             crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
         print(atmosphere.describe())
 
-        temp_cube = atmosphere.to_ndcube(atmosphere.temperature)
-        vel_cube = atmosphere.to_ndcube(atmosphere.velocity(integration_axis))
-        rho = atmosphere.mass_density
+        # The file may hold float32; the run works in its own precision, as
+        # the MURaM route does from the moment it reads its files.
+        temp_cube = atmosphere.to_ndcube(atmosphere.temperature.astype(precision))
+        vel_cube = atmosphere.to_ndcube(
+            atmosphere.velocity(integration_axis).astype(precision))
+        rho = None
+        if atmosphere.mass_density is not None:
+            rho = atmosphere.mass_density.astype(precision)
         if atmosphere.electron_density is not None:
-            ne_values = atmosphere.electron_density.to_value(u.cm**-3)
+            ne_values = atmosphere.electron_density.astype(precision).to_value(u.cm**-3)
         los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
 

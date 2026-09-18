@@ -110,7 +110,7 @@ With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free el
 
 ## Cropping and downsampling
 
-`--crop-x`, `--crop-y` and `--crop-z` are ranges in the file's own coordinates, and keep every cell that any part of the range touches. `--downsample` keeps every n-th cell along each axis and gives each kept cell the boundaries of the block of cells it stands for, on an even grid and a stretched one alike, so the box keeps its extent and the columns their depth.
+`--crop-x`, `--crop-y` and `--crop-z` are ranges in the file's own coordinates, and keep every cell that any part of the range covers; a bound that falls on a cell boundary does not keep the cell beyond it. `--downsample` keeps every n-th cell along each axis and gives each kept cell the boundaries of the block of cells it stands for, on an even grid and a stretched one alike, so the box keeps its extent and the columns their depth.
 
 ## What the synthesis file records
 

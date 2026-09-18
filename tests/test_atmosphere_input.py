@@ -283,6 +283,17 @@ def test_cropping_a_stretched_axis_keeps_every_cell_the_range_touches():
         atmosphere.cropped(z=("1 Mm", "0 Mm"))
 
 
+def test_a_bound_on_a_cell_boundary_does_not_keep_that_cell_on_rounding():
+    """Round bounds land on round grids; rounding noise must not decide the cell."""
+    nudged = _edges()["x_edges"] + 1e-13 * u.Mm
+    atmosphere = _atmosphere(x_edges=nudged)
+    cropped = atmosphere.cropped(x=("-0.1 Mm", "0.1 Mm"))
+    assert cropped.shape[2] == 2
+    assert np.allclose(cropped.x_edges.to_value(u.Mm), [-0.1, 0.0, 0.1])
+    other_way = _atmosphere(x_edges=_edges()["x_edges"] - 1e-13 * u.Mm)
+    assert other_way.cropped(x=("-0.1 Mm", "0.1 Mm")).shape[2] == 2
+
+
 def test_downsampling_keeps_the_extent_of_the_box():
     # y has 5 cells, which 2 does not divide.
     with pytest.raises(ValueError, match="does not divide"):

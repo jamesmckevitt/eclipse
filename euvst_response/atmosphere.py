@@ -269,7 +269,8 @@ class Atmosphere:
 
         Each range is ``(low, high)`` in the coordinates of the file. A cell
         is kept when any part of it lies inside the range, which is what
-        NDCube's own cropping keeps on an even grid.
+        NDCube's own cropping keeps on an even grid; a bound that falls on a
+        cell boundary does not keep the cell beyond it.
         """
         item = [slice(None)] * 3
         edges = {}
@@ -282,7 +283,13 @@ class Atmosphere:
                 raise ValueError(f"The {axis} range must have low < high, got "
                                  f"{bounds}.")
             values = all_edges.value
-            inside = np.flatnonzero((values[1:] > low) & (values[:-1] < high))
+            # A bound often lands on a cell boundary, as round numbers do on
+            # a round grid. Whether that boundary cell is kept must not turn
+            # on rounding, so a cell counts as inside only when more than a
+            # millionth of it is.
+            tolerance = 1e-6 * np.diff(values).min()
+            inside = np.flatnonzero((values[1:] - low > tolerance)
+                                    & (high - values[:-1] > tolerance))
             if inside.size == 0:
                 raise ValueError(
                     f"No cells lie within {axis} = {bounds}; the atmosphere "
