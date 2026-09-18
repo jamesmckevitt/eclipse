@@ -1293,7 +1293,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Mass of the plasma per free electron, in atomic mass "
                             "units, which turns a mass density into an electron "
                             "density. By default it is worked out from --abundance "
-                            "for a fully ionised plasma, about 1.17 for coronal "
+                            "for a fully ionised plasma, about 1.16 for coronal "
                             "abundances. --mean-mol-wt is the old name; ECLIPSE "
                             "0.8.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
@@ -1607,11 +1607,14 @@ def main(args=None) -> None:
             crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
         print(atmosphere.describe())
 
-        # The file may hold float32; the run works in its own precision, as
-        # the MURaM route does from the moment it reads its files.
-        temp_cube = atmosphere.to_ndcube(atmosphere.temperature.astype(precision))
+        # The file may hold float32 in any units; the run works in its own
+        # precision, as the MURaM route does from the moment it reads its
+        # files, and the processing below takes the cubes' values as K and
+        # cm/s, so they are converted here.
+        temp_cube = atmosphere.to_ndcube(
+            atmosphere.temperature.astype(precision).to(u.K))
         vel_cube = atmosphere.to_ndcube(
-            atmosphere.velocity(integration_axis).astype(precision))
+            atmosphere.velocity(integration_axis).astype(precision).to(u.cm / u.s))
         rho = None
         if atmosphere.mass_density is not None:
             rho = atmosphere.mass_density.astype(precision)

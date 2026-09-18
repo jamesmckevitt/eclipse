@@ -44,7 +44,7 @@ synthesise-spectra \
   --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
-  --mass-per-electron 1.17
+  --mass-per-electron 1.16
 
 # Show all available options
 synthesise-spectra --help
@@ -102,7 +102,7 @@ synthesise-spectra --help
 
 - `--downsample`: Downsampling factor, which must divide every dimension of `--cube-shape` (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
-- `--mass-per-electron`: Mass of the plasma per free electron in atomic mass units, which turns the simulation's mass density into the electron density. By default it is worked out from `--abundance` for a fully ionised plasma, about 1.17 for coronal abundances; see [Electron density](atmosphere-files.md#electron-density). Not used when an atmosphere file gives the electron density itself. `--mean-mol-wt` is the old name for this option; ECLIPSE 0.8.0 and earlier defaulted it to 1.29, the value for a neutral gas.
+- `--mass-per-electron`: Mass of the plasma per free electron in atomic mass units, which turns the simulation's mass density into the electron density. By default it is worked out from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](atmosphere-files.md#electron-density). Not used when an atmosphere file gives the electron density itself. `--mean-mol-wt` is the old name for this option; ECLIPSE 0.8.0 and earlier defaulted it to 1.29, the value for a neutral gas.
 
 ## Naming spectral lines
 

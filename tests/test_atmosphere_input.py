@@ -407,6 +407,35 @@ def test_a_converted_muram_snapshot_synthesises_like_the_raw_files(tmp_path, mon
         SPACING["z"].to_value(u.Mm))
 
 
+def test_the_units_in_the_file_do_not_matter(tmp_path, monkeypatch):
+    """The same atmosphere in SI units gives the same spectra, flows included."""
+    atmosphere = _structured_atmosphere()
+    cgs = write_atmosphere(atmosphere, tmp_path / "cgs.h5")
+    si = write_atmosphere(Atmosphere(
+        temperature=atmosphere.temperature.to(u.MK),
+        mass_density=atmosphere.mass_density.to(u.kg / u.m**3),
+        velocity_z=atmosphere.velocity_z.to(u.m / u.s),
+        x_edges=atmosphere.x_edges.to(u.km), y_edges=atmosphere.y_edges.to(u.m),
+        z_edges=atmosphere.z_edges.to(u.km)), tmp_path / "si.h5")
+
+    from_cgs = _synthesise(tmp_path, monkeypatch, "cgs", "--atmosphere", str(cgs),
+                           "--mass-per-electron", str(MASS_PER_ELECTRON))
+    from_si = _synthesise(tmp_path, monkeypatch, "si", "--atmosphere", str(si),
+                          "--mass-per-electron", str(MASS_PER_ELECTRON))
+
+    cgs_cube = from_cgs["line_cubes"][LINE]
+    si_cube = from_si["line_cubes"][LINE]
+    assert np.all(_intensity(from_cgs) > 0)
+    # The flows shift the lines, so the spectra only agree if the velocities
+    # were read in the right unit; the summed intensity would not tell.
+    assert not np.allclose(cgs_cube.data[0, 0], cgs_cube.data[0, -1])
+    assert si_cube.data == pytest.approx(cgs_cube.data, rel=1e-6)
+    for k in range(3):
+        assert np.allclose(si_cube.axis_world_coords(k)[0].value,
+                           cgs_cube.axis_world_coords(k)[0].value)
+    assert from_si["dem_map"] == pytest.approx(from_cgs["dem_map"], rel=1e-6)
+
+
 def test_the_converter_command_writes_a_file_the_synthesis_reads(tmp_path, capsys):
     atmosphere = _structured_atmosphere()
     _write_muram_files(tmp_path / "muram", atmosphere)

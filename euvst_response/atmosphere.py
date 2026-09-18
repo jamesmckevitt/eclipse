@@ -521,7 +521,7 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
     density of its own. It assumes every element is fully ionised, which
     holds where the EUV lines ECLIPSE synthesises form. Cooler cells get an
     electron density higher than they have, but they emit none of those
-    lines. It is about 1.17 for coronal abundances, against 1.29 for a
+    lines. It is about 1.16 for coronal abundances, against 1.29 for a
     neutral gas, so an atmosphere read with the neutral value has about 20
     per cent too little emission measure.
 

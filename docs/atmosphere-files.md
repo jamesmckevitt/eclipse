@@ -98,11 +98,51 @@ eclipse-atmosphere from-muram \
 
 `synthesise-spectra` still reads the raw MURaM files directly, so nothing has to change for a MURaM run.
 
+## A worked example: Bifrost from the Hinode SDC Europe
+
+The [Hinode Science Data Centre Europe](https://sdc.uio.no/search/simulations) publishes Bifrost and MURaM snapshots as FITS files, one variable per file, in SI units, with `lg` variables as base-10 logarithms and the non-uniform z grid in a FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5). This builds an atmosphere file from the enhanced-network run `en024048_hion`, which has a stretched vertical grid and its own electron density:
+
+```python
+import astropy.units as u
+import numpy as np
+from astropy.io import fits
+from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+
+def variable(name, snapshot=385):
+    with fits.open(f"BIFROST_en024048_hion_{name}_{snapshot}.fits") as hdul:
+        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
+
+lgtg, header, z = variable("lgtg")
+lgr, _, _ = variable("lgr")
+lgne, _, _ = variable("lgne")
+uz, _, _ = variable("uz")
+
+nz, ny, nx = lgtg.shape
+x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
+y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
+
+atmosphere = Atmosphere(
+    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
+    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
+    electron_density=10.0 ** lgne.astype(np.float64) * u.m**-3,
+    velocity_z=uz * u.m / u.s,
+    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
+    z_edges=edges_from_centres(z * u.Mm),
+    time=header["ELAPSED"] * u.s,
+    source="Bifrost en024048_hion snapshot 385, Hinode SDC Europe",
+)
+write_atmosphere(atmosphere, "bifrost_385.h5")
+```
+
+The files put z increasing upwards, so `uz` is positive upwards as ECLIPSE expects; the granulation confirms it, with hot cells rising at the surface. The box starts 2.4 Mm below the surface, so `--crop-z "0 Mm" "20 Mm"` keeps the part that emits.
+
 ## Electron density
 
 The contribution functions need the electron density. A code that carries one, for instance from non-equilibrium hydrogen ionisation, should write `electron_density`, and it is used as given.
 
-With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free electron. By default that is worked out from the abundance set the synthesis uses (`--abundance`) for a fully ionised plasma, which is what the EUV lines ECLIPSE synthesises form in: about 1.17 atomic mass units per electron for coronal abundances. Cells too cool to be fully ionised come out with too high an electron density, but they emit none of those lines. `--mass-per-electron` sets a value by hand instead.
+With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free electron. By default that is worked out from the abundance set the synthesis uses (`--abundance`) for a fully ionised plasma, which is what the EUV lines ECLIPSE synthesises form in: about 1.16 atomic mass units per electron for coronal abundances. Cells too cool to be fully ionised come out with too high an electron density, but they emit none of those lines. `--mass-per-electron` sets a value by hand instead.
+
+The public Bifrost snapshot described below carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, while the old 1.29 was 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
 
 !!! warning "Changed from ECLIPSE 0.8.0"
 
