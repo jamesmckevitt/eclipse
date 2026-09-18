@@ -142,7 +142,7 @@ The contribution functions need the electron density. A code that carries one, f
 
 With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free electron. By default that is worked out from the abundance set the synthesis uses (`--abundance`) for a fully ionised plasma, which is what the EUV lines ECLIPSE synthesises form in: about 1.16 atomic mass units per electron for coronal abundances. Cells too cool to be fully ionised come out with too high an electron density, but they emit none of those lines. `--mass-per-electron` sets a value by hand instead.
 
-The public Bifrost snapshot described below carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, while the old 1.29 was 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
+The public Bifrost snapshot of the worked example above carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, while the old 1.29 was 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
 
 !!! warning "Changed from ECLIPSE 0.8.0"
 
