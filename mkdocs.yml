@@ -35,7 +35,8 @@ nav:
   - Simulating the instrument: instrument-response.md
   - Tutorials:
       - Basic results analysis: basic-results-analysis.ipynb
-      - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
+      - Observing a MURaM flare: observing-a-muram-flare.ipynb
+      - Observing a Bifrost quiet Sun: observing-a-bifrost-quiet-sun.ipynb
   - Advanced topics:
       - Science cases: science-cases.md
       - Pinhole stray light: pinholes.md

@@ -116,4 +116,5 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
-- [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
+- [Observing a MURaM flare](observing-a-muram-flare.ipynb) - the whole pipeline end to end, from the public MURaM flare simulation to intensity, velocity and precision maps in four lines
+- [Observing a Bifrost quiet Sun](observing-a-bifrost-quiet-sun.ipynb) - the same from a code ECLIPSE has no reader for, through an atmosphere file built from the public Bifrost data
