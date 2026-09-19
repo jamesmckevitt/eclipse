@@ -624,3 +624,125 @@ def check_config_keys(provided, allowed, context: str,
         f"default for whatever each was meant to set.\n"
         f"Valid {context} keys: {', '.join(visible)}"
     )
+
+
+def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
+    """
+    Check that *values* is a finite, increasing, evenly spaced 1D grid.
+
+    Both the velocity binning and the wavelength WCS take the first spacing
+    of the grid and apply it everywhere, so an uneven grid is not
+    approximated, it is silently misread.  A decreasing grid is worse: the
+    bin edges come out in descending order and every ``>= low & < high`` test
+    fails, so the emission measure is zero everywhere.
+
+    Parameters
+    ----------
+    values : np.ndarray or u.Quantity
+        1D grid of bin centres.
+    name : str
+        Name to use in the error message.
+    rtol : float, optional
+        How far any spacing may differ from the first spacing, relative to
+        the first spacing.  The default admits the rounding in ``np.arange``
+        and ``np.linspace`` without admitting a grid anyone built unevenly on
+        purpose.
+
+    Returns
+    -------
+    float
+        The first spacing, in the units of *values*.
+    """
+    plain = np.asarray(getattr(values, "value", values), dtype=float)
+
+    if plain.ndim != 1:
+        raise ValueError(f"{name} must be 1D, got {plain.ndim} dimensions.")
+    if plain.size < 2:
+        raise ValueError(f"{name} must have at least 2 elements, "
+                         f"got {plain.size}.")
+
+    # Comparisons with NaN are always false, so a NaN or inf in the grid can
+    # slip past the spacing checks below and come back as the spacing.
+    non_finite = np.flatnonzero(~np.isfinite(plain))
+    if non_finite.size:
+        first_bad = int(non_finite[0])
+        raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
+                         f"at index {first_bad}.")
+
+    diffs = np.diff(plain)
+    step = float(diffs[0])
+
+    if step <= 0.0:
+        raise ValueError(
+            f"{name} must increase. Bin edges are built by stepping out from "
+            f"the first spacing, so a decreasing grid produces edges in "
+            f"descending order and every bin ends up empty."
+        )
+
+    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
+    if uneven.size:
+        first_uneven = int(uneven[0])
+        raise ValueError(
+            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
+            f"but the spacing between elements {first_uneven} and "
+            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
+            f"the first spacing and uses it for every bin edge and for the "
+            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
+            f"bins and writes wrong wavelength coordinates. Resample onto a "
+            f"uniform grid first."
+        )
+
+    return step
+
+
+def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
+    """
+    Convert velocity grid centers to bin edges.
+
+    Parameters
+    ----------
+    vel_grid : np.ndarray
+        1D array of velocity centers.  Must be evenly spaced and increasing.
+
+    Returns
+    -------
+    np.ndarray
+        1D array of velocity bin edges (length = len(vel_grid) + 1).
+    """
+    dv = require_uniform_grid(vel_grid, "vel_grid")
+
+    return np.concatenate([
+        [vel_grid[0] - 0.5 * dv],
+        vel_grid[:-1] + 0.5 * dv,
+        [vel_grid[-1] + 0.5 * dv]
+    ])
+
+def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
+    """
+    Check that *downsample* divides every dimension of *shape*.
+
+    Downsampling keeps every *downsample*-th cell and gives each kept cell
+    *downsample* times the voxel size.  Where a dimension is not a multiple of
+    the factor, the last kept cell stands for fewer cells than that, so the
+    domain would come out too large, and so would the emission measure when
+    that axis is the line of sight.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Cube dimensions, in any order.
+    downsample : int
+        Downsampling factor.
+    """
+    if (isinstance(downsample, bool) or not isinstance(downsample, (int, np.integer))
+            or downsample < 1):
+        raise ValueError(f"The downsampling factor must be a whole number of 1 or "
+                         f"more, got {downsample!r}.")
+    uneven = [n for n in shape if n % downsample]
+    if uneven:
+        raise ValueError(
+            f"--downsample {downsample} does not divide the cube shape "
+            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
+            f"a factor that divides every dimension."
+        )
+
