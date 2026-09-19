@@ -57,8 +57,8 @@ flowchart LR
 
 | Starting point | Page | Use it when |
 | --- | --- | --- |
-| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. |
-| A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity, or it comes from a code ECLIPSE cannot yet read directly. |
+| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. MURaM output is read directly; any other code's output goes in as an [atmosphere file](atmosphere-files.md). |
+| A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
 | Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
@@ -80,7 +80,6 @@ The instrument is chosen with a single top-level `instrument:` key in the config
 ## Coming soon
 
 - **The long wavelength channel**, completing EUVST alongside the short wavelength channel already modelled.
-- **More MHD codes.** Synthesis currently reads MURaM output. Support for other MHD codes is being added.
 - **Spectra from any other synthesis code.** ECLIPSE will read the spectra produced by codes like [Lightweaver](https://github.com/Goobley/Lightweaver) or [RH1.5D](https://rh15d.readthedocs.io/).
 
 ## Installation
@@ -117,4 +116,5 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
-- [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
+- [Observing a MURaM flare](observing-a-muram-flare.ipynb) - the whole pipeline end to end, from the public MURaM flare simulation to intensity, velocity and precision maps in four lines
+- [Observing a Bifrost quiet Sun](observing-a-bifrost-quiet-sun.ipynb) - the same from a code ECLIPSE has no reader for, through an atmosphere file built from the public Bifrost data
