@@ -59,6 +59,8 @@ __all__ = [
     "Atmosphere",
     "edges_from_centres",
     "read_atmosphere",
+    "read_time",
+    "read_edges",
     "write_atmosphere",
     "describe_atmosphere_file",
     "mass_per_electron",
@@ -175,10 +177,9 @@ class Atmosphere:
         for axis in AXES:
             name = EDGES[axis]
             edges = _quantity(getattr(self, name), name, ndim=1)
-            if edges.size < 3:
-                raise ValueError(f"{name} must bound at least 2 cells, so have "
-                                 f"at least 3 values, got {edges.size}: a "
-                                 f"single cell has nothing to integrate over.")
+            if edges.size < 2:
+                raise ValueError(f"{name} must bound at least 1 cell, so have "
+                                 f"at least 2 values, got {edges.size}.")
             if np.any(np.diff(edges.value) <= 0):
                 raise ValueError(f"{name} must increase; ECLIPSE's cubes are "
                                  f"(z, y, x) with every axis ascending.")
@@ -444,7 +445,8 @@ def _write_dataset(f: h5py.File, name: str, quantity: u.Quantity,
 
 
 def read_atmosphere(path: str | Path,
-                    velocities: Optional[Sequence[str]] = None) -> Atmosphere:
+                    velocities: Optional[Sequence[str]] = None,
+                    columns: Optional[slice] = None) -> Atmosphere:
     """
     Read an ECLIPSE atmosphere file.
 
@@ -455,20 +457,34 @@ def read_atmosphere(path: str | Path,
         Which velocity components to read, e.g. ``("z",)`` for a view along
         z. None reads every component the file has. A component asked for
         that the file lacks raises.
+    columns : slice, optional
+        Which cells along x to read, as a slice of the x index. Only those
+        columns of every cube are read from the file, so a few columns of a
+        large box cost a few columns. None reads them all.
     """
     path = Path(path)
     with h5py.File(path, "r") as f:
         _check_format(f, path)
         fields = {EDGES[axis]: _read_dataset(f, EDGES[axis]) for axis in AXES}
-        fields["temperature"] = _read_dataset(f, "temperature")
-        for name in ("mass_density", "electron_density", "time"):
+        if columns is not None:
+            nx = fields[EDGES["x"]].size - 1
+            first, last, step = columns.indices(nx)
+            if step != 1 or last <= first:
+                raise ValueError(f"columns must select a contiguous, non-empty "
+                                 f"range of the {nx} cells along x, got {columns}.")
+            fields[EDGES["x"]] = fields[EDGES["x"]][first:last + 1]
+            columns = slice(first, last)
+        fields["temperature"] = _read_dataset(f, "temperature", columns)
+        for name in ("mass_density", "electron_density"):
             if name in f:
-                fields[name] = _read_dataset(f, name)
+                fields[name] = _read_dataset(f, name, columns)
+        if "time" in f:
+            fields["time"] = _read_dataset(f, "time")
         wanted = AXES if velocities is None else tuple(velocities)
         for axis in wanted:
             name = f"velocity_{_check_axis(axis)}"
             if name in f:
-                fields[name] = _read_dataset(f, name)
+                fields[name] = _read_dataset(f, name, columns)
             elif velocities is not None:
                 raise ValueError(f"{path} has no {name}, which a line of sight "
                                  f"along {axis} needs.")
@@ -476,6 +492,22 @@ def read_atmosphere(path: str | Path,
         if isinstance(source, bytes):
             source = source.decode()
     return Atmosphere(source=str(source), **fields)
+
+
+def read_time(path: str | Path) -> Optional[u.Quantity]:
+    """The snapshot time recorded in an atmosphere file, or None if it has none."""
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        _check_format(f, path)
+        return _read_dataset(f, "time") if "time" in f else None
+
+
+def read_edges(path: str | Path) -> Dict[str, u.Quantity]:
+    """The cell boundaries of an atmosphere file, keyed by axis, without reading a cube."""
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        _check_format(f, path)
+        return {axis: _read_dataset(f, EDGES[axis]) for axis in AXES}
 
 
 def describe_atmosphere_file(path: str | Path) -> str:
@@ -528,7 +560,9 @@ def _check_format(f: h5py.File, path: Path) -> None:
                          f"this ECLIPSE reads version {FORMAT_VERSION}.")
 
 
-def _read_dataset(f: h5py.File, name: str) -> u.Quantity:
+def _read_dataset(f: h5py.File, name: str,
+                  columns: Optional[slice] = None) -> u.Quantity:
+    """A dataset with its unit; *columns* reads only that slice of a cube's x axis."""
     if name not in f:
         raise ValueError(f"{f.filename} has no '{name}' dataset.")
     dataset = f[name]
@@ -539,7 +573,8 @@ def _read_dataset(f: h5py.File, name: str) -> u.Quantity:
                          f"'{UNITS[name]}'.")
     if isinstance(unit, bytes):
         unit = unit.decode()
-    return u.Quantity(dataset[()], u.Unit(unit))
+    values = dataset[()] if columns is None else dataset[:, :, columns]
+    return u.Quantity(values, u.Unit(unit))
 
 
 # ----------------------------------------------------------------------

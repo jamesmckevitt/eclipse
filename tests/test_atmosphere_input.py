@@ -281,7 +281,7 @@ def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path,
     ("temperature", np.ones(SHAPE) * u.m, "convertible"),
     ("mass_density", None, "needs a mass_density or an electron_density"),
     ("z_edges", np.arange(SHAPE[0] + 1)[::-1] * u.Mm, "must increase"),
-    ("x_edges", np.arange(2) * u.Mm, "at least 2 cells"),
+    ("x_edges", np.arange(1) * u.Mm, "at least 1 cell"),
     ("time", np.arange(2) * u.s, "0 dimensions"),
 ])
 def test_an_atmosphere_checks_what_it_is_given(field, value, message):
@@ -692,9 +692,6 @@ def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monke
     with pytest.raises(ValueError, match="--data-dir.*--cube-shape would not be used"):
         _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),
                     "--data-dir", "data/atmosphere", "--cube-shape", "512", "768", "256")
-    with pytest.raises(ValueError, match="Dynamic mode"):
-        _synthesise(tmp_path, monkeypatch, "dynamic", "--atmosphere", str(path),
-                    "--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec")
 
 
 def test_the_line_cube_refuses_a_stretched_image_axis_whatever_calls_it():

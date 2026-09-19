@@ -62,6 +62,7 @@ flowchart LR
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
 | Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
+| A time series of simulation snapshots | [A time series, observed](time-series.md) | You want the raster or sit-and-stare observed as the instrument would make it, each exposure seeing the atmosphere at its own time. |
 
 The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The last has no synthesis step at all and is set directly in the instrument configuration.
 
@@ -114,6 +115,7 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a DEM](dem-synthesis.md) - start from an observed DEM instead of an MHD cube
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
+- [A time series, observed](time-series.md) - a raster or sit-and-stare over a series of atmosphere files
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
 - [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper

@@ -54,7 +54,7 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 
-- `--atmosphere`: An [atmosphere file](atmosphere-files.md) to synthesise from. It carries the cube shape and cell sizes, so it replaces `--data-dir`, the simulation file options and the grid parameters below, and giving any of those with it is refused. Dynamic mode still reads MURaM files.
+- `--atmosphere`: An [atmosphere file](atmosphere-files.md) to synthesise from. It carries the cube shape and cell sizes, so it replaces `--data-dir`, the simulation file options and the grid parameters below, and giving any of those with it is refused.
 - `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
@@ -126,42 +126,6 @@ that ion in CHIANTI and prints both the requested and matched wavelengths:
 Check that line. A large difference means the transition you meant is not in the
 database for that ion, and a neighbouring one was picked up instead. A name that
 does not match the pattern at all raises `ValueError` immediately.
-
-## Dynamic mode (time-varying atmospheres)
-
-For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
-
-```bash
-synthesise-spectra \
-  --data-dir ./data/atmosphere \
-  --lines Fe12_195.1190 \
-  --abundance sun_coronal_2021_chianti \
-  --output-dir ./run/input \
-  --slit-rest-time "40 s" \
-  --slit-width "0.2 arcsec" \
-  --temp-dir temp \
-  --temp-filename eosT \
-  --rho-dir rho \
-  --rho-filename result_prim_0 \
-  --vz-dir vz \
-  --vz-filename result_prim_2 \
-  --time-dir time \
-  --time-filename tau_slice_0.100 \
-  --cube-shape 512 768 256 \
-  --voxel-dx "0.192 Mm" \
-  --voxel-dy "0.192 Mm" \
-  --voxel-dz "0.064 Mm" \
-  --vel-res "5.0 km/s" \
-  --vel-lim "300.0 km/s" \
-  --integration-axis z
-```
-
-**Dynamic Mode Options:**
-
-- `--slit-rest-time`: Slit rest time per position - enables dynamic mode
-- `--slit-width`: Slit width
-- `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
-- `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
 
 ## Output
 

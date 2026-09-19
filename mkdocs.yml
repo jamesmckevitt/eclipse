@@ -32,6 +32,7 @@ nav:
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
+      - A time series, observed: time-series.md
   - Simulating the instrument: instrument-response.md
   - Tutorials:
       - Basic results analysis: basic-results-analysis.ipynb
