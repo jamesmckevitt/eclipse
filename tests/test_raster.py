@@ -244,24 +244,29 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
 
     series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
     synthesiser = RasterSynthesiser(series, _settings())
-    plan = RasterPlan(start=0 * u.s, steps=4, centre=1 * u.Mm)
+    plan = RasterPlan(start=0 * u.s, steps=4, centre=0.5 * CELL)
     cube = synthesiser.summed_cube(plan, 0.4 * u.arcsec, 2 * u.s, LINE)
     rebinned = rebin_atmosphere(cube, Detector_SWC(),
                                 Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1))
 
     assert rebinned.data.shape[1] == 4
     expected = distance_to_angle(cube.meta["positions"]).to_value(u.arcsec)
+    # The two sky axes are coupled, so the coordinates come as a grid; every
+    # row has the same scan positions.
     scan = rebinned.axis_world_coords(1)[0]
-    assert scan.Tx.to_value(u.arcsec) == pytest.approx(expected, abs=1e-6)
+    assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
 
-    # A strip cropped to one row along the slit is smaller than a detector
-    # pixel, which the rebinning says rather than producing nothing.
+    # A strip cropped to one row along the slit, 0.2 arcsec, is smaller than
+    # an EIS pixel of 1 arcsec, which the rebinning says rather than producing
+    # nothing. Two 1 arcsec slit positions keep the raster inside the box.
+    from euvst_response.config import Detector_EIS
     one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
-    narrow = one_row.summed_cube(plan, 0.4 * u.arcsec, 2 * u.s, LINE)
+    narrow = one_row.summed_cube(RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL),
+                                 1 * u.arcsec, 2 * u.s, LINE)
     assert narrow.data.shape[0] == 1
     with pytest.raises(ValueError, match="smaller than one detector pixel"):
-        rebin_atmosphere(narrow, Detector_SWC(),
-                         Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1))
+        rebin_atmosphere(narrow, Detector_EIS(),
+                         Simulation(instrument="EIS", slit_width=1 * u.arcsec, ncpu=1))
 
 
 def test_a_static_atmosphere_one_cell_wide_synthesises(tmp_path, monkeypatch):
@@ -349,7 +354,7 @@ def _config(tmp_path, series_glob, **extra):
         "fit_signals": "dn",
         "synthesis": {"lines": [LINE]},
         "raster": {"start": "0 s", "steps": 2, "repeats": 2},
-        "simulation": {"slit_width": "0.4 arcsec", "expos": ["5 s", "20 s"], "psf": False},
+        "simulation": {"slit_width": "0.4 arcsec", "expos": ["5 s", "10 s"], "psf": False},
         **extra,
     }
     path = tmp_path / "series.yaml"
@@ -375,15 +380,18 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     assert [str(p) for p in raster["series"]] == sorted(str(p) for p in raster["series"])
     assert raster["times"].to_value(u.s) == pytest.approx([0.0, 10.0, 20.0, 30.0])
     keys = sorted(raster["cubes"])
-    assert [(k[1], k[2]) for k in keys] == [(5.0, 0), (5.0, 1), (20.0, 0), (20.0, 1)]
-    # A 20 s exposure from t = 0 spans the first two snapshots; a 5 s one only
-    # the first, so the first column differs between the two.
+    assert [(k[1], k[2]) for k in keys] == [(5.0, 0), (5.0, 1), (10.0, 0), (10.0, 1)]
+    # The second exposure of the 10 s raster, from 10 to 20 s, sees the
+    # second snapshot; that of the 5 s raster, from 5 to 10 s, still the
+    # first, so the second column is brighter at 10 s.
     short, long = (raster["cubes"][k].data.sum(axis=(0, 2)) for k in (keys[0], keys[2]))
-    assert long[0] > short[0]
+    assert long[1] > short[1]
+    assert long[0] == pytest.approx(short[0], rel=1e-6)
     # The second raster of the 5 s sweep starts 10 s in and sees the second snapshot.
     second = raster["cubes"][keys[1]]
     assert second.meta["repeat"] == 1
     assert second.meta["starts"].to_value(u.s) == pytest.approx([10.0, 15.0])
+    assert second.data.sum() > raster["cubes"][keys[0]].data.sum()
     assert saved["cube_sim"].meta["raster"] is True
 
     from euvst_response import get_results_for_combination, load_instrument_response_results

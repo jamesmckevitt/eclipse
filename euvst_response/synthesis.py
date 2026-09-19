@@ -836,6 +836,24 @@ def synthesise_cubes(
     return lines, dem_map, em_tv
 
 
+def _cell_size_mm(cube: NDCube, pixel_axis: int) -> float:
+    """The world distance across one pixel of *cube* along *pixel_axis*, in Mm.
+
+    Measured between the two edges of the first pixel, so it needs no second
+    pixel and no access to a CDELT, which a cropped cube's WCS does not have.
+    """
+    # A cropped cube wraps its WCS in a high-level object; the pixel-to-world
+    # conversion of plain numbers is on the low-level one underneath.
+    wcs = getattr(cube.wcs, "low_level_wcs", cube.wcs)
+    low = [0.0] * wcs.pixel_n_dim
+    high = [0.0] * wcs.pixel_n_dim
+    low[pixel_axis], high[pixel_axis] = -0.5, 0.5
+    world_low = wcs.pixel_to_world_values(*low)
+    world_high = wcs.pixel_to_world_values(*high)
+    unit = u.Unit(wcs.world_axis_units[pixel_axis])
+    return ((world_high[pixel_axis] - world_low[pixel_axis]) * unit).to_value(u.Mm)
+
+
 def _world_at(coords: u.Quantity, crpix: float) -> float:
     """
     The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
@@ -898,10 +916,9 @@ def create_line_cube(
     cube_data = line_data["si"]
 
     # The cell size of each axis comes from the reference cube's own WCS, so
-    # that an axis a single cell wide has one too.
-    reference_wcs = spatial_cube.wcs.wcs
-    cell_size = [(reference_wcs.cdelt[i] * u.Unit(reference_wcs.cunit[i])).to_value(u.Mm)
-                 for i in range(3)]
+    # that an axis a single cell wide has one too. It is read as the world
+    # distance across one pixel, which any WCS answers, cropped ones included.
+    cell_size = [_cell_size_mm(spatial_cube, pixel_axis) for pixel_axis in range(3)]
 
     # The WCS below carries a single linear CDELT taken from the first
     # wavelength step, so the grid has to be uniform for that to describe it.
