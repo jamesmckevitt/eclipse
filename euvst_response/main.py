@@ -725,6 +725,18 @@ def main() -> None:
             total_combinations *= len(v)
         print(f"\nUpdated to {total_combinations} parameter combination(s) (including offchip_bin_slit sweep).")
 
+    # Each raster of a time series is observed on its own, so a plan of several
+    # rasters is a sweep over them, and a sit-and-stare a sweep over its
+    # exposures.
+    if raster_mode and raster_plan.repeats > 1:
+        sweep_dims["raster.repeat"] = list(range(raster_plan.repeats))
+        dim_names = list(sweep_dims.keys())
+        dim_values = [sweep_dims[n] for n in dim_names]
+        total_combinations = 1
+        for v in dim_values:
+            total_combinations *= len(v)
+        print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
+
     product_iter = itertools_product(*dim_values) if dim_names else [()]
 
     for combination_idx, combo_values in enumerate(product_iter, start=1):
@@ -732,6 +744,7 @@ def main() -> None:
 
         # Extract offchip_bin_slit from combo if present
         offchip_bin_slit = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
+        raster_repeat = combo.pop("raster.repeat", 0)
 
         # Merge sweep values with fixed values for this combination
         all_sim = {
@@ -788,7 +801,7 @@ def main() -> None:
         if uniform_intensity_mode:
             cube_reb_key = (*sampling_key, offchip_bin_slit)
         elif raster_mode:
-            cube_reb_key = (*sampling_key, expos.to_value(u.s))
+            cube_reb_key = (*sampling_key, expos.to_value(u.s), raster_repeat)
         else:
             cube_reb_key = sampling_key
         rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
@@ -796,7 +809,8 @@ def main() -> None:
         if raster_mode and cube_reb_key not in cube_reb_cache:
             print(f"\nSynthesising the time series as observed "
                   f"(slit_width={slit_width}, expos={expos})...")
-            cube_sim = raster.summed_cube(raster_plan, slit_width, expos, reference_line)
+            cube_sim = raster.summed_cube(raster_plan, slit_width, expos, reference_line,
+                                          repeat=raster_repeat)
             raster_summed[cube_reb_key] = cube_sim
             print(f"  {cube_sim.data.shape[1]} exposures, {raster.strips_synthesised} "
                   f"strips synthesised so far")
@@ -847,7 +861,7 @@ def main() -> None:
             # multiple binning factors at fixed slit width all retain their cubes
             # (a single-key dict would silently keep only the first one). A
             # time series adds the exposure time, which changes the cube too.
-            cube_key = ((sampling_key[0], expos.to_value(u.s), offchip_bin_slit)
+            cube_key = ((sampling_key[0], expos.to_value(u.s), raster_repeat, offchip_bin_slit)
                         if raster_mode else (sampling_key[0], offchip_bin_slit))
             cube_reb_dict.setdefault(cube_key, cube_reb_binned)
             if raster_mode:
@@ -879,7 +893,9 @@ def main() -> None:
             print(f"  {k}: {v}")
         if offchip_bin_slit > 1:
             print(f"  offchip_bin_slit: {offchip_bin_slit}")
-        if not combo and offchip_bin_slit == 1:
+        if raster_mode and raster_plan.repeats > 1:
+            print(f"  raster.repeat: {raster_repeat}")
+        if not combo and offchip_bin_slit == 1 and not (raster_mode and raster_plan.repeats > 1):
             print("  (single combination - all parameters fixed)")
         print(f"  Calculated dark current: {DET.dark_current:.2e}")
         if instrument == "SWC":
@@ -910,6 +926,8 @@ def main() -> None:
             parameters.update(_extract_config_params(TEL, "telescope"))
             # Add offchip_bin_slit to the parameters dict
             parameters["offchip_bin_slit"] = offchip_bin_slit
+            if raster_mode:
+                parameters["raster.repeat"] = raster_repeat
 
             param_key = _params_to_key(parameters)
 
@@ -949,6 +967,7 @@ def main() -> None:
                     else {}
                 ),
                 "offchip_bin_slit": offchip_bin_slits[0] if len(offchip_bin_slits) == 1 else None,
+                **({"raster.repeat": 0} if raster_mode and raster_plan.repeats == 1 else {}),
             },
             "fit_config": fit_config,
             "fit_signals": fit_signals,

@@ -285,8 +285,13 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     x_angle = distance_to_angle(dx)
     y_angle = distance_to_angle(dy)
 
-    crval_x_hc = wcs_hc.wcs.crval[1] * u.Unit(wcs_hc.wcs.cunit[1])
-    crval_y_hc = wcs_hc.wcs.crval[2] * u.Unit(wcs_hc.wcs.cunit[2])
+    # The reference pixel goes to the middle of each spatial axis below, so
+    # the reference value has to be the input's coordinate there, wherever
+    # the input kept its own reference pixel.
+    crval_x_hc = (wcs_hc.wcs.crval[1] + ((nx + 1) / 2 - wcs_hc.wcs.crpix[1])
+                  * wcs_hc.wcs.cdelt[1]) * u.Unit(wcs_hc.wcs.cunit[1])
+    crval_y_hc = (wcs_hc.wcs.crval[2] + ((ny + 1) / 2 - wcs_hc.wcs.crpix[2])
+                  * wcs_hc.wcs.cdelt[2]) * u.Unit(wcs_hc.wcs.cunit[2])
     crval_x_hp = distance_to_angle(crval_x_hc).to_value(u.arcsec)
     crval_y_hp = distance_to_angle(crval_y_hc).to_value(u.arcsec)
 
@@ -310,6 +315,12 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     pitch_y = det.plate_scale_angle
     nx_out = nx_in if raster else int(np.floor((fov_x / pitch_x).decompose().value))
     ny_out = int(np.floor((fov_y / pitch_y).decompose().value))
+    if nx_out < 1 or ny_out < 1:
+        raise ValueError(
+            f"The field of view, {fov_x.to(u.arcsec):.3f} by {fov_y.to(u.arcsec):.3f}, "
+            f"is smaller than one detector pixel ({pitch_x.to(u.arcsec):.3f} along the "
+            f"scan, {(pitch_y * u.pix).to(u.arcsec):.3f} along the slit), so nothing "
+            f"would be left after rebinning.")
     shape_out = [ny_out, nx_out, nl_in]
 
     crpix_spec = (nl_in + 1) / 2

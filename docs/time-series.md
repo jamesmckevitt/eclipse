@@ -65,6 +65,8 @@ The `raster:` section is the observing plan:
 
 Exposures run in order: the slit steps from the leftmost position to the rightmost, then the next raster begins. Exposure *i* starts at `start + i * cadence` and lasts the exposure time. A cadence shorter than the exposure is refused.
 
+Each raster is observed and fitted on its own. With `repeats` above 1 the run adds a sweep dimension, `raster.repeat`, so the results hold one cube and one set of maps per raster, selected like any other swept parameter (`get_results_for_combination(results, **{"raster.repeat": 2, ...})`). A sit-and-stare of many exposures is therefore many results of one column each, in time order.
+
 ## What an exposure collects
 
 The columns under the slit are averaged over the slit, each weighted by how much of the slit it covers. When an exposure spans more than one snapshot, the spectra from each are averaged, weighted by the time each covers. Emission is averaged, not the atmosphere: nothing is interpolated between snapshots, so no plasma is invented that neither snapshot holds.
@@ -73,7 +75,7 @@ Every column of every snapshot is synthesised the first time an exposure needs i
 
 ## The cube the instrument sees
 
-Each combination of slit width and exposure gets its own cube, with one column per exposure. Along a raster the columns sit at the slit positions; the instrument run keeps that scan axis as it is and puts only the slit axis on the plate scale. In a sit-and-stare every column is the same strip at a later time, and the maps' scan axis is then exposure number rather than position; the cube's metadata records each exposure's position, start and end.
+Each combination of slit width, exposure and raster gets its own cube, with one column per exposure of that raster, at the slit positions; the instrument run keeps that scan axis as it is and puts only the slit axis on the plate scale. A sit-and-stare's cube is one column, as wide as the slit. The cube's metadata records each exposure's position, start and end.
 
 The results file records the plan, the synthesis settings, the files and their times, and the cube each combination saw, under `raster`.
 

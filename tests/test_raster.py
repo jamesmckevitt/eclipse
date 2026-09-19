@@ -136,19 +136,28 @@ def test_an_exposure_is_shared_between_the_snapshots_it_spans(tmp_path):
 # ----------------------------------------------------------------------
 def test_a_plan_places_its_exposures_in_space_and_time():
     plan = RasterPlan(start=100 * u.s, steps=3, repeats=2, cadence=5 * u.s)
-    exposures = plan.exposures(0.4 * u.arcsec, 2 * u.s, atmosphere_centre=0 * u.Mm)
-    assert len(exposures) == 6
     step = angle_to_distance(0.4 * u.arcsec).to_value(u.Mm)
-    assert [e.position.to_value(u.Mm) for e in exposures] == pytest.approx(
-        [-step, 0.0, step, -step, 0.0, step])
-    assert [e.start.to_value(u.s) for e in exposures] == pytest.approx([100, 105, 110, 115, 120, 125])
-    assert all((e.end - e.start).to_value(u.s) == pytest.approx(2.0) for e in exposures)
+    # Each raster is its own set of exposures; the second follows the first.
+    for repeat, starts in ((0, [100, 105, 110]), (1, [115, 120, 125])):
+        exposures = plan.exposures(0.4 * u.arcsec, 2 * u.s, atmosphere_centre=0 * u.Mm,
+                                   repeat=repeat)
+        assert [e.position.to_value(u.Mm) for e in exposures] == pytest.approx([-step, 0.0, step])
+        assert [e.start.to_value(u.s) for e in exposures] == pytest.approx(starts)
+        assert all((e.end - e.start).to_value(u.s) == pytest.approx(2.0) for e in exposures)
+        assert [e.index for e in exposures] == [3 * repeat + i for i in range(3)]
+    with pytest.raises(ValueError, match="say which one"):
+        plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm)
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm, repeat=2)
 
-    # The step and the cadence default to the slit width and the exposure.
+    # The step and the cadence default to the slit width and the exposure,
+    # and a sit-and-stare's exposures are rasters of one position.
     stare = RasterPlan(start=0 * u.s, repeats=3)
-    exposures = stare.exposures(0.4 * u.arcsec, 10 * u.s, atmosphere_centre=1 * u.Mm)
-    assert [e.position.to_value(u.Mm) for e in exposures] == pytest.approx([1.0, 1.0, 1.0])
-    assert [e.start.to_value(u.s) for e in exposures] == pytest.approx([0, 10, 20])
+    for repeat in range(3):
+        exposures = stare.exposures(0.4 * u.arcsec, 10 * u.s, atmosphere_centre=1 * u.Mm,
+                                    repeat=repeat)
+        assert [e.position.to_value(u.Mm) for e in exposures] == pytest.approx([1.0])
+        assert [e.start.to_value(u.s) for e in exposures] == pytest.approx([10 * repeat])
 
     with pytest.raises(ValueError, match="overlap"):
         RasterPlan(start=0 * u.s, cadence=1 * u.s).exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm)
@@ -213,6 +222,69 @@ def test_a_flow_seen_from_above_is_blueshifted_in_the_exposure(tmp_path, flat_go
     assert velocity == pytest.approx(-20.0, abs=0.1)
 
 
+def test_every_snapshot_must_share_the_first_ones_grid(tmp_path, flat_goft):
+    """The slit's columns are chosen on the first file's x grid, so the others must match it."""
+    shifted = _snapshot(10.0)
+    shifted = Atmosphere(**{**{k: getattr(shifted, k) for k in ("temperature", "electron_density",
+                                                                "velocity_z", "time")},
+                            "x_edges": shifted.x_edges + 0.5 * CELL,
+                            "y_edges": shifted.y_edges, "z_edges": shifted.z_edges})
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), shifted]))
+    synthesiser = RasterSynthesiser(series, _settings())
+    exposure = raster_module.Exposure(0, 0 * u.Mm, 5 * u.s, 15 * u.s)
+    with pytest.raises(ValueError, match="different x grid"):
+        synthesiser.exposure_spectra(exposure, 0.4 * u.arcsec)
+
+
+def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
+    """Through the instrument's spatial rebinning, the columns stay at their slit positions."""
+    from euvst_response.config import Detector_SWC, Simulation
+    from euvst_response.data_processing import rebin_atmosphere
+    from euvst_response.utils import distance_to_angle
+
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
+    synthesiser = RasterSynthesiser(series, _settings())
+    plan = RasterPlan(start=0 * u.s, steps=4, centre=1 * u.Mm)
+    cube = synthesiser.summed_cube(plan, 0.4 * u.arcsec, 2 * u.s, LINE)
+    rebinned = rebin_atmosphere(cube, Detector_SWC(),
+                                Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1))
+
+    assert rebinned.data.shape[1] == 4
+    expected = distance_to_angle(cube.meta["positions"]).to_value(u.arcsec)
+    scan = rebinned.axis_world_coords(1)[0]
+    assert scan.Tx.to_value(u.arcsec) == pytest.approx(expected, abs=1e-6)
+
+    # A strip cropped to one row along the slit is smaller than a detector
+    # pixel, which the rebinning says rather than producing nothing.
+    one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
+    narrow = one_row.summed_cube(plan, 0.4 * u.arcsec, 2 * u.s, LINE)
+    assert narrow.data.shape[0] == 1
+    with pytest.raises(ValueError, match="smaller than one detector pixel"):
+        rebin_atmosphere(narrow, Detector_SWC(),
+                         Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1))
+
+
+def test_a_static_atmosphere_one_cell_wide_synthesises(tmp_path, monkeypatch):
+    """A single column has a size from its edges, so the line cube can still carry a WCS."""
+    from euvst_response import synthesis
+    column = Atmosphere(temperature=np.full((4, 6, 1), TEMPERATURE.value) * u.K,
+                        electron_density=np.full((4, 6, 1), ELECTRON_DENSITY.value) / u.cm**3,
+                        velocity_z=np.zeros((4, 6, 1)) * u.km / u.s,
+                        x_edges=np.array([-0.5, 0.5]) * CELL, y_edges=(np.arange(7) - 3) * CELL,
+                        z_edges=np.arange(5) * 0.1 * u.Mm)
+    path = write_atmosphere(column, tmp_path / "column.h5")
+    monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(path),
+                                      "--lines", LINE, "--output-dir", str(tmp_path / "out"),
+                                      "--output-name", "column.pkl"])
+    monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
+    synthesis.main()
+    with open(tmp_path / "out" / "column.pkl", "rb") as f:
+        cube = dill.load(f)["line_cubes"][LINE]
+    assert cube.data.shape[:2] == (6, 1)
+    assert cube.wcs.wcs.cdelt[1] == pytest.approx(CELL.value)
+    assert cube.axis_world_coords(1)[0].to_value(u.Mm) == pytest.approx([0.0])
+
+
 def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, flat_goft):
     snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
     series = AtmosphereSeries(_series(tmp_path, snapshots))
@@ -237,10 +309,26 @@ def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, f
     assert summed.data == pytest.approx(cube.data)
     assert summed.meta["combined_lines"] == [LINE]
 
-    stare = synthesiser.line_cubes(RasterPlan(start=0 * u.s, repeats=2), 0.4 * u.arcsec, 10 * u.s)[LINE]
-    assert stare.data.shape[1] == 2
-    assert stare.wcs.wcs.cdelt[1] == pytest.approx(step)
-    assert stare.meta["positions"].to_value(u.Mm) == pytest.approx([0.0, 0.0])
+    # The reference pixel sits at the middle of the raster, with the
+    # coordinate the grid has there, like a static line cube's.
+    assert cube.wcs.wcs.crpix[1] == pytest.approx(2.0)
+    assert cube.wcs.wcs.crval[1] == pytest.approx(0.0)
+    assert cube.wcs.wcs.crpix[2] == pytest.approx((SHAPE[1] + 1) / 2)
+    y = cube.axis_world_coords(0)[0].to_value(u.Mm)
+    assert y == pytest.approx(synthesiser.series.y_edges.to_value(u.Mm)[:-1] + CELL.value / 2)
+
+    # A sit-and-stare of two exposures is two cubes of one column each, at
+    # the same position, one exposure apart.
+    stare = RasterPlan(start=0 * u.s, repeats=2)
+    for repeat in range(2):
+        one = synthesiser.line_cubes(stare, 0.4 * u.arcsec, 10 * u.s, repeat=repeat)[LINE]
+        assert one.data.shape[1] == 1
+        assert one.wcs.wcs.cdelt[1] == pytest.approx(step)
+        assert one.axis_world_coords(1)[0].to_value(u.Mm) == pytest.approx([0.0])
+        assert one.meta["starts"].to_value(u.s) == pytest.approx([10.0 * repeat])
+        assert one.meta["repeat"] == repeat
+    with pytest.raises(ValueError, match="say which one"):
+        synthesiser.line_cubes(stare, 0.4 * u.arcsec, 10 * u.s)
 
     with pytest.raises(ValueError, match="outside the series"):
         synthesiser.line_cubes(RasterPlan(start=35 * u.s), 0.4 * u.arcsec, 10 * u.s)
@@ -260,7 +348,7 @@ def _config(tmp_path, series_glob, **extra):
         "ncpu": 1,
         "fit_signals": "dn",
         "synthesis": {"lines": [LINE]},
-        "raster": {"start": "0 s", "steps": 2},
+        "raster": {"start": "0 s", "steps": 2, "repeats": 2},
         "simulation": {"slit_width": "0.4 arcsec", "expos": ["5 s", "20 s"], "psf": False},
         **extra,
     }
@@ -280,18 +368,30 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
 
     with open(tmp_path / "run" / "result" / "series.pkl", "rb") as f:
         saved = dill.load(f)
-    assert len(saved["results"]["all_combinations"]) == 2
+    # Two exposure times and two rasters: four observations.
+    assert len(saved["results"]["all_combinations"]) == 4
     raster = saved["raster"]
     assert raster["plan"].steps == 2
     assert [str(p) for p in raster["series"]] == sorted(str(p) for p in raster["series"])
     assert raster["times"].to_value(u.s) == pytest.approx([0.0, 10.0, 20.0, 30.0])
     keys = sorted(raster["cubes"])
-    assert [k[1] for k in keys] == pytest.approx([5.0, 20.0])
+    assert [(k[1], k[2]) for k in keys] == [(5.0, 0), (5.0, 1), (20.0, 0), (20.0, 1)]
     # A 20 s exposure from t = 0 spans the first two snapshots; a 5 s one only
     # the first, so the first column differs between the two.
-    short, long = (raster["cubes"][k].data.sum(axis=(0, 2)) for k in keys)
+    short, long = (raster["cubes"][k].data.sum(axis=(0, 2)) for k in (keys[0], keys[2]))
     assert long[0] > short[0]
+    # The second raster of the 5 s sweep starts 10 s in and sees the second snapshot.
+    second = raster["cubes"][keys[1]]
+    assert second.meta["repeat"] == 1
+    assert second.meta["starts"].to_value(u.s) == pytest.approx([10.0, 15.0])
     assert saved["cube_sim"].meta["raster"] is True
+
+    from euvst_response import get_results_for_combination, load_instrument_response_results
+    results = load_instrument_response_results(tmp_path / "run" / "result" / "series.pkl")
+    chosen = get_results_for_combination(results, **{
+        "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 5 * u.s,
+        "offchip_bin_slit": 1, "raster.repeat": 1})
+    assert chosen["parameters"]["raster.repeat"] == 1
 
 
 def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft):

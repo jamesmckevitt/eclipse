@@ -64,7 +64,7 @@ flowchart LR
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
 | A time series of simulation snapshots | [A time series, observed](time-series.md) | You want the raster or sit-and-stare observed as the instrument would make it, each exposure seeing the atmosphere at its own time. |
 
-The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The last has no synthesis step at all and is set directly in the instrument configuration.
+The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The single intensity has no synthesis step at all and is set directly in the instrument configuration. The time series runs ECLIPSE's synthesis too, but inside the instrument run, one exposure at a time.
 
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
 

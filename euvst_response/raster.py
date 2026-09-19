@@ -11,10 +11,13 @@ snapshot in full.
 
 The observing plan is a :class:`RasterPlan`: when the first exposure starts,
 how many slit positions a raster has, how far apart they are, how often the
-exposures start, and how many rasters follow. The slit width and the
-exposure time are instrument settings and can be swept, so the cubes are
-built per combination inside the instrument run, and the columns each
-snapshot has already given are kept for the next combination.
+exposures start, and how many rasters follow. Each raster is observed on
+its own, as one cube whose columns are its slit positions; a sit-and-stare
+is a raster of one position, so each of its exposures is a cube of one
+column. The slit width and the exposure time are instrument settings and
+can be swept, so the cubes are built per combination inside the instrument
+run, and the columns each snapshot has already given are kept for the next
+combination.
 
 An exposure that spans more than one snapshot gets the average of their
 spectra, weighted by how much of the exposure each covers. A snapshot stands
@@ -172,9 +175,10 @@ class RasterPlan:
             raise ValueError(f"centre must be a length, got {self.centre!r}.")
 
     def exposures(self, slit_width: u.Quantity, expos: u.Quantity,
-                  atmosphere_centre: u.Quantity) -> List[Exposure]:
+                  atmosphere_centre: u.Quantity,
+                  repeat: Optional[int] = None) -> List[Exposure]:
         """
-        Every exposure of the plan for one slit width and exposure time.
+        The exposures of one raster of the plan, for one slit width and exposure time.
 
         Parameters
         ----------
@@ -185,9 +189,20 @@ class RasterPlan:
         atmosphere_centre : u.Quantity
             The heliocentric x of the middle of the atmosphere; the raster's
             centre when none was given.
+        repeat : int, optional
+            Which raster, counting from 0. A plan of one raster needs none;
+            a plan of several needs one, since each raster is observed on
+            its own.
         """
         if expos <= 0:
             raise ValueError(f"The exposure time must be positive, got {expos}.")
+        if repeat is None:
+            if self.repeats > 1:
+                raise ValueError(f"The plan has {self.repeats} rasters; say which one "
+                                 f"with repeat=0 to {self.repeats - 1}.")
+            repeat = 0
+        if not 0 <= repeat < self.repeats:
+            raise ValueError(f"repeat must be between 0 and {self.repeats - 1}, got {repeat}.")
         cadence = expos if self.cadence is None else self.cadence
         if cadence < expos:
             raise ValueError(f"The cadence, {cadence}, is shorter than the exposure, "
@@ -196,11 +211,10 @@ class RasterPlan:
         centre = (atmosphere_centre if self.centre is None else self.centre).to(u.Mm)
         first = centre - (self.steps - 1) / 2 * step
         exposures = []
-        for repeat in range(self.repeats):
-            for position in range(self.steps):
-                index = repeat * self.steps + position
-                start = self.start + index * cadence
-                exposures.append(Exposure(index, first + position * step, start, start + expos))
+        for position in range(self.steps):
+            index = repeat * self.steps + position
+            start = self.start + index * cadence
+            exposures.append(Exposure(index, first + position * step, start, start + expos))
         return exposures
 
 
@@ -300,6 +314,7 @@ class RasterSynthesiser:
         self._columns: Dict[Tuple[int, int], Dict[str, np.ndarray]] = {}
         self._wl_grids: Dict[str, u.Quantity] = {}
         self._rows: Optional[u.Quantity] = None
+        self._row_pitch: Optional[u.Quantity] = None
         self.strips_synthesised = 0
 
     # ------------------------------------------------------------------
@@ -352,8 +367,12 @@ class RasterSynthesiser:
         settings = self.settings
         strip = read_atmosphere(self.series.paths[snapshot], velocities=("z",),
                                 columns=slice(first, last))
-        for axis, edges in (("y", self.series.y_edges), ("z", self.series.z_edges)):
-            if not np.allclose(strip.edges(axis).to_value(u.Mm), edges.to_value(u.Mm)):
+        expected = {"x": self.series.x_edges[first:last + 1], "y": self.series.y_edges,
+                    "z": self.series.z_edges}
+        for axis, edges in expected.items():
+            found = strip.edges(axis)
+            if found.size != edges.size or not np.allclose(found.to_value(u.Mm),
+                                                           edges.to_value(u.Mm)):
                 raise ValueError(f"{self.series.paths[snapshot]} has a different {axis} grid "
                                  f"from {self.series.paths[0]}; a series must share one grid.")
         if settings.crop_y or settings.crop_z:
@@ -375,9 +394,9 @@ class RasterSynthesiser:
             self.logT_grid, self.logN_grid, self.vel_grid, "z", precision)
         self.strips_synthesised += 1
 
-        rows = strip.coordinate("y")
         if self._rows is None:
-            self._rows = rows
+            self._rows = strip.coordinate("y")
+            self._row_pitch = strip.spacing("y")
             self._wl_grids = {name: info["wl_grid"] for name, info in lines.items()}
         for offset in range(last - first):
             self._columns[(snapshot, first + offset)] = {
@@ -407,24 +426,25 @@ class RasterSynthesiser:
         return spectra
 
     def line_cubes(self, plan: RasterPlan, slit_width: u.Quantity,
-                   expos: u.Quantity) -> Dict[str, NDCube]:
+                   expos: u.Quantity, repeat: Optional[int] = None) -> Dict[str, NDCube]:
         """
-        One cube per line for the whole plan: ``(rows, exposures, wavelength)``.
+        One cube per line for one raster of the plan: ``(rows, exposures, wavelength)``.
 
-        The columns are the exposures in order. Their coordinate is the slit
-        position, which advances by the step along a raster; in a
-        sit-and-stare it is the same for every exposure, and the columns
-        are then successive exposures of one strip, at the times the
-        metadata records.
+        The columns are the raster's exposures in order, at the slit
+        positions, which advance by the step. A sit-and-stare is a raster of
+        one exposure, so its cube has one column, as wide as the slit; its
+        repeats are separate cubes, one per exposure.
         """
-        exposures = plan.exposures(slit_width, expos, self.atmosphere_centre())
+        exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
         collected = [self.exposure_spectra(exposure, slit_width) for exposure in exposures]
         positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
         pitch = (positions[1] - positions[0] if plan.steps > 1
                  else angle_to_distance(slit_width).to(u.Mm))
         rows = self._rows.to(u.Mm)
+        row_pitch = self._row_pitch.to(u.Mm)
         meta_raster = {
             "raster": True,
+            "repeat": 0 if repeat is None else repeat,
             "positions": positions,
             "starts": u.Quantity([e.start for e in exposures]).to(u.s),
             "ends": u.Quantity([e.end for e in exposures]).to(u.s),
@@ -433,17 +453,22 @@ class RasterSynthesiser:
             "slit_width": slit_width,
             "expos": expos,
         }
+        n_columns, n_rows = positions.size, rows.size
         cubes = {}
         for name in self.settings.lines:
             data = np.stack([c[name] for c in collected], axis=1)
             wl_grid = self._wl_grids[name].to(u.cm)
+            # The reference pixel sits at the middle of each spatial axis, as
+            # the line cubes of a static synthesis have it, with the value
+            # the grid has there.
             wcs = WCS(naxis=3)
             wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
             wcs.wcs.cunit = ["cm", "Mm", "Mm"]
-            wcs.wcs.crpix = [1, 1, 1]
-            wcs.wcs.crval = [wl_grid[0].value, positions[0].value, rows[0].value]
-            wcs.wcs.cdelt = [(wl_grid[1] - wl_grid[0]).value, pitch.value,
-                             (rows[1] - rows[0]).value]
+            wcs.wcs.crpix = [1, (n_columns + 1) / 2, (n_rows + 1) / 2]
+            wcs.wcs.crval = [wl_grid[0].value,
+                             positions[0].value + (n_columns - 1) / 2 * pitch.value,
+                             rows[0].value + (n_rows - 1) / 2 * row_pitch.value]
+            wcs.wcs.cdelt = [(wl_grid[1] - wl_grid[0]).value, pitch.value, row_pitch.value]
             info = self.goft[name]
             cubes[name] = NDCube(data, wcs=wcs, unit=INTENSITY_UNIT, meta={
                 "line_name": name,
@@ -457,9 +482,9 @@ class RasterSynthesiser:
         return cubes
 
     def summed_cube(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
-                    reference_line: str) -> NDCube:
+                    reference_line: str, repeat: Optional[int] = None) -> NDCube:
         """The lines summed onto the reference line's grid, as the instrument run takes it."""
         if reference_line not in self.settings.lines:
             raise ValueError(f"The reference line {reference_line!r} is not among the "
                              f"synthesised lines {list(self.settings.lines)}.")
-        return sum_line_cubes(self.line_cubes(plan, slit_width, expos), reference_line)
+        return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat), reference_line)

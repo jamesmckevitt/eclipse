@@ -844,6 +844,8 @@ def _world_at(coords: u.Quantity, crpix: float) -> float:
     there is an even number of them, so the reference value has to be read
     off the grid there rather than taken from the pixel below.
     """
+    if coords.size == 1:
+        return coords[0].value
     step = (coords[1] - coords[0]).value
     return coords[0].value + (crpix - 1) * step
 
@@ -895,6 +897,12 @@ def create_line_cube(
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
 
+    # The cell size of each axis comes from the reference cube's own WCS, so
+    # that an axis a single cell wide has one too.
+    reference_wcs = spatial_cube.wcs.wcs
+    cell_size = [(reference_wcs.cdelt[i] * u.Unit(reference_wcs.cunit[i])).to_value(u.Mm)
+                 for i in range(3)]
+
     # The WCS below carries a single linear CDELT taken from the first
     # wavelength step, so the grid has to be uniform for that to describe it.
     # Checked here as well as in synthesise_spectra because this is a public
@@ -913,8 +921,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[1],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
@@ -933,8 +941,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
@@ -953,8 +961,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[1],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
