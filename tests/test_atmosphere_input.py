@@ -261,12 +261,12 @@ def test_the_mass_per_electron_must_be_finite_and_positive(tmp_path, monkeypatch
 
 def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path, monkeypatch):
     from euvst_response.utils import require_downsample_divides
+    # True is equal to 1, so it has to be refused before any shortcut for 1.
     for bad in (0, -2, 2.0, True):
         with pytest.raises(ValueError, match="whole number of 1 or more"):
             require_downsample_divides((4, 4, 4), bad)
-        if bad != 1:
-            with pytest.raises(ValueError, match="whole number of 1 or more"):
-                _atmosphere((4, 4, 4)).downsampled(bad)
+        with pytest.raises(ValueError, match="whole number of 1 or more"):
+            _atmosphere((4, 4, 4)).downsampled(bad)
     require_downsample_divides((4, 4, 4), 2)
 
     path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
@@ -276,6 +276,7 @@ def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path,
 
 
 @pytest.mark.parametrize("field, value, message", [
+    ("temperature", None, "needs a temperature"),
     ("temperature", np.ones((4, 5, 6)) * u.K, "shape"),
     ("temperature", np.ones(SHAPE), "Quantity"),
     ("temperature", np.ones(SHAPE) * u.m, "convertible"),

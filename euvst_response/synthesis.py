@@ -787,7 +787,7 @@ def compute_goft_fiasco(
 def compute_dem(
     logT_cube: np.ndarray,
     logN_cube: np.ndarray,
-    voxel_dh_cm: float,
+    voxel_dh_cm: float | np.ndarray,
     logT_grid: np.ndarray,
     integration_axis: str = "z",
 ) -> Tuple[np.ndarray, np.ndarray]:
