@@ -1099,6 +1099,18 @@ def synthesise_spectra(
         data["si"] = spec_map / (4 * np.pi)
 
 
+def _world_at(coords: u.Quantity, crpix: float) -> float:
+    """
+    The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
+
+    A reference pixel at the middle of an axis falls between two pixels when
+    there is an even number of them, so the reference value has to be read
+    off the grid there rather than taken from the pixel below.
+    """
+    step = (coords[1] - coords[0]).value
+    return coords[0].value + (crpix - 1) * step
+
+
 def create_line_cube(
     line_name: str,
     line_data: dict,
@@ -1169,8 +1181,8 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            y_coords[ny//2].to(u.Mm).value,  # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1189,8 +1201,8 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1209,9 +1221,9 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
-            y_coords[ny//2].to(u.Mm).value   # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[2]),
         ]
 
     wcs = WCS(naxis=3)
