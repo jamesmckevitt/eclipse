@@ -174,6 +174,8 @@ class Atmosphere:
     source: str = ""
 
     def __post_init__(self):
+        if self.temperature is None:
+            raise ValueError("An atmosphere needs a temperature.")
         for axis in AXES:
             name = EDGES[axis]
             edges = _quantity(getattr(self, name), name, ndim=1)
@@ -314,9 +316,9 @@ class Atmosphere:
         of *factor* cells it stands for, so the box keeps its extent and the
         column its depth.
         """
+        require_downsample_divides(self.shape, factor)
         if factor == 1:
             return self
-        require_downsample_divides(self.shape, factor)
         item = (slice(None, None, factor),) * 3
         edges = {EDGES[axis]: self.edges(axis)[::factor] for axis in AXES}
         cubes = {name: None if getattr(self, name) is None
