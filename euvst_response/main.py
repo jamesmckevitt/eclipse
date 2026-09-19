@@ -17,6 +17,7 @@ import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
 from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
+from .raster import AtmosphereSeries, RasterSynthesiser
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
 from .utils import (
@@ -35,10 +36,18 @@ _TOP_LEVEL_KEYS = {
     "instrument", "n_iter", "ncpu",
     "uniform_intensity", "rest_wavelength", "thermal_width",
     "synthesis_file", "reference_line",
+    "atmosphere_series", "synthesis", "raster",
     "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral",
     "offchip_bin_slit", "fit_signals",
     "simulation", "detector", "telescope", "filter", "fitting",
 }
+
+# What a time series of atmosphere files is synthesised with, and how it is
+# observed. The synthesis keys are those of synthesise-spectra; the raster
+# keys are the observing plan of euvst_response.raster.RasterPlan.
+_SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
+                   "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers"}
+_RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
 
 # The Simulation dataclass has more fields than this, but main() builds its
 # Simulation objects itself and only takes these from the section. The rest
@@ -138,6 +147,11 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
         others = {k: v for k, v in elsewhere.items() if k != name}
         check_config_keys(config[name], allowed, f"'{name}' section", others)
 
+    for name, allowed in (("synthesis", _SYNTHESIS_KEYS), ("raster", _RASTER_KEYS)):
+        if name in config:
+            _require_mapping(config[name], f"The '{name}:' section")
+            check_config_keys(config[name], allowed, f"'{name}' section")
+
     if "fitting" in config:
         fitting = config["fitting"]
         _require_mapping(fitting, "The 'fitting:' section")
@@ -153,6 +167,112 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
                 where = f"'fitting.components[{idx}]'"
                 _require_mapping(component, where)
                 check_config_keys(component, _FITTING_COMPONENT_KEYS, where)
+
+
+def _quantity_or_none(section: dict, key: str, unit, what: str):
+    """A quantity of the kind *unit* from a config section, or None if absent."""
+    if key not in section or section[key] is None:
+        return None
+    value = parse_yaml_input(section[key])
+    if not isinstance(value, u.Quantity) or not value.unit.is_equivalent(unit):
+        raise ValueError(f"'{what}.{key}' must be {unit.physical_type} with units, "
+                         f"e.g. '{section[key]}' is not; got {section[key]!r}.")
+    return value
+
+
+def _range_or_none(section: dict, key: str, what: str):
+    """A ``[low, high]`` range of lengths from a config section, or None."""
+    if key not in section or section[key] is None:
+        return None
+    bounds = section[key]
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        raise ValueError(f"'{what}.{key}' must be a list of two lengths with units, "
+                         f"e.g. ['0 Mm', '20 Mm'], got {bounds!r}.")
+    low, high = (parse_yaml_input(b) for b in bounds)
+    for value in (low, high):
+        if not isinstance(value, u.Quantity) or not value.unit.is_equivalent(u.Mm):
+            raise ValueError(f"'{what}.{key}' must hold lengths with units, got {bounds!r}.")
+    return (low, high)
+
+
+def _parse_synthesis_settings(config: dict):
+    """The 'synthesis:' section as the settings a time series is synthesised with."""
+    from .raster import SynthesisSettings
+
+    section = config.get("synthesis")
+    if section is None:
+        raise ValueError("An 'atmosphere_series' needs a 'synthesis:' section naming at "
+                         "least the 'lines' to synthesise.")
+    lines = section.get("lines")
+    if isinstance(lines, str):
+        lines = [lines]
+    if not isinstance(lines, list) or not lines or not all(isinstance(l, str) for l in lines):
+        raise ValueError("'synthesis.lines' must be a list of line names such as "
+                         "['Fe12_195.1190'].")
+    settings = {"lines": tuple(lines)}
+    if "abundance" in section:
+        settings["abundance"] = str(section["abundance"])
+    for key in ("vel_res", "vel_lim"):
+        value = _quantity_or_none(section, key, u.km / u.s, "synthesis")
+        if value is not None:
+            settings[key] = value
+    for key in ("crop_y", "crop_z"):
+        settings[key] = _range_or_none(section, key, "synthesis")
+    if "precision" in section:
+        precision = str(section["precision"])
+        if precision not in ("float32", "float64"):
+            raise ValueError(f"'synthesis.precision' must be 'float32' or 'float64', "
+                             f"got {precision!r}.")
+        settings["precision"] = np.float32 if precision == "float32" else np.float64
+    if section.get("mass_per_electron") is not None:
+        settings["mass_per_electron"] = float(section["mass_per_electron"])
+    if section.get("hdf5_dbase_root") is not None:
+        settings["hdf5_dbase_root"] = str(section["hdf5_dbase_root"])
+    if section.get("n_workers") is not None:
+        settings["n_workers"] = int(section["n_workers"])
+    return SynthesisSettings(**settings)
+
+
+def _parse_raster_plan(config: dict):
+    """The 'raster:' section as an observing plan."""
+    from .raster import RasterPlan
+
+    section = config.get("raster")
+    if section is None:
+        raise ValueError("An 'atmosphere_series' needs a 'raster:' section saying at "
+                         "least when the observation starts ('start').")
+    start = _quantity_or_none(section, "start", u.s, "raster")
+    if start is None:
+        raise ValueError("'raster.start' is needed: the simulation time at which the "
+                         "first exposure starts, with units, e.g. '3850 s'.")
+    plan = {"start": start}
+    for key in ("steps", "repeats"):
+        if section.get(key) is not None:
+            plan[key] = section[key]
+    plan["step"] = _quantity_or_none(section, "step", u.arcsec, "raster")
+    plan["cadence"] = _quantity_or_none(section, "cadence", u.s, "raster")
+    plan["centre"] = _quantity_or_none(section, "centre", u.Mm, "raster")
+    return RasterPlan(**plan)
+
+
+def _atmosphere_series_paths(config: dict) -> list:
+    """The files of 'atmosphere_series': a list of paths, or a glob pattern."""
+    import glob
+
+    value = config["atmosphere_series"]
+    if isinstance(value, str):
+        paths = sorted(glob.glob(value))
+        if not paths:
+            raise FileNotFoundError(f"'atmosphere_series' matches no file: {value}")
+        return paths
+    if isinstance(value, list) and value and all(isinstance(p, str) for p in value):
+        missing = [p for p in value if not Path(p).is_file()]
+        if missing:
+            raise FileNotFoundError(f"'atmosphere_series' names files that do not exist: "
+                                    f"{missing}")
+        return list(value)
+    raise ValueError("'atmosphere_series' must be a glob pattern or a list of atmosphere "
+                     "files, e.g. './data/bifrost/*.h5'.")
 
 
 def _parse_pinhole_config(config: dict) -> tuple:
@@ -348,8 +468,32 @@ def main() -> None:
 
     # Simulation mode
     uniform_intensity_mode = "uniform_intensity" in config
+    raster_mode = "atmosphere_series" in config
+    if raster_mode and uniform_intensity_mode:
+        raise ValueError("Give 'atmosphere_series' or 'uniform_intensity', not both.")
+    if raster_mode and "synthesis_file" in config:
+        raise ValueError("Give 'atmosphere_series' or 'synthesis_file', not both: a time "
+                        "series is synthesised in this run, a synthesis file beforehand.")
+    if not raster_mode:
+        for key in ("synthesis", "raster"):
+            if key in config:
+                raise ValueError(f"The '{key}:' section belongs to an 'atmosphere_series' "
+                                 f"run and would not be read here.")
 
-    if uniform_intensity_mode:
+    if raster_mode:
+        series_paths = _atmosphere_series_paths(config)
+        synthesis_settings = _parse_synthesis_settings(config)
+        raster_plan = _parse_raster_plan(config)
+        reference_line = config.get("reference_line", synthesis_settings.lines[0])
+        if reference_line not in synthesis_settings.lines:
+            raise ValueError(f"'reference_line' {reference_line!r} is not one of "
+                             f"'synthesis.lines' {list(synthesis_settings.lines)}.")
+        print("TIME SERIES MODE")
+        print(f"  Atmosphere files: {len(series_paths)}")
+        print(f"  Lines: {list(synthesis_settings.lines)}, reference {reference_line}")
+        print(f"  Raster: {raster_plan.steps} step(s), {raster_plan.repeats} repeat(s), "
+              f"starting at {raster_plan.start}")
+    elif uniform_intensity_mode:
         uniform_intensity = parse_yaml_input(config["uniform_intensity"])
         if not hasattr(uniform_intensity, "unit"):
             raise ValueError(
@@ -534,63 +678,33 @@ def main() -> None:
             print(f"  {dim}: {vals}")
 
     # Load or create input cube
+    raster = None
+    raster_summed = {}
+    raster_cubes = {}
     if uniform_intensity_mode:
         cube_sim = None
-        is_dynamic_mode = False
         print("\nSkipping atmosphere loading (uniform intensity mode).")
+    elif raster_mode:
+        # The cubes are synthesised per combination inside the loop, since
+        # the slit width and the exposure time decide what the slit sees.
+        cube_sim = None
+        print("\nReading the atmosphere series...")
+        series = AtmosphereSeries(series_paths)
+        print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
+        raster = RasterSynthesiser(series, synthesis_settings)
+        print(f"  CHIANTI database: {raster.goft_dbase_root}")
     else:
         print("\nLoading atmosphere...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
         cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
-
-        is_dynamic_mode = dynamic_mode_info.get("enabled", False)
-        if is_dynamic_mode:
-            print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
-            print(f"  Slit width: {dynamic_mode_info['slit_width']}")
-            print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
-            print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
-
-            synth_slit_width = dynamic_mode_info["slit_width"]
-            synth_rest_time = dynamic_mode_info["slit_rest_time"]
-
-            slit_width_vals = sweep_dims.get(
-                "simulation.slit_width", [sim_fixed["slit_width"]]
+        if dynamic_mode_info.get("enabled", False):
+            raise ValueError(
+                f"{synthesis_file} was synthesised in the old dynamic mode, which fixed "
+                f"the slit width and exposure at synthesis and has been replaced. Write "
+                f"the snapshots as atmosphere files and observe them with "
+                f"'atmosphere_series' and a 'raster:' section in this configuration, "
+                f"where the slit width and exposure can be swept."
             )
-            expos_vals = sweep_dims.get(
-                "simulation.expos", [sim_fixed["expos"]]
-            )
-
-            if len(slit_width_vals) != 1:
-                raise ValueError(
-                    f"Dynamic mode synthesis requires exactly one slit width. "
-                    f"Config specifies {len(slit_width_vals)}: {slit_width_vals}. "
-                    f"Please provide only the synthesis slit width: {synth_slit_width}"
-                )
-            if not np.isclose(
-                slit_width_vals[0].to_value(u.arcsec),
-                synth_slit_width.to_value(u.arcsec),
-                rtol=1e-6,
-            ):
-                raise ValueError(
-                    f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
-                    f"but config specifies {slit_width_vals[0]}."
-                )
-            if len(expos_vals) != 1:
-                raise ValueError(
-                    f"Dynamic mode synthesis requires exactly one exposure time. "
-                    f"Config specifies {len(expos_vals)}: {expos_vals}. "
-                    f"Please provide only the synthesis slit rest time: {synth_rest_time}"
-                )
-            if not np.isclose(
-                expos_vals[0].to_value(u.s),
-                synth_rest_time.to_value(u.s),
-                rtol=1e-6,
-            ):
-                raise ValueError(
-                    f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
-                    f"but config specifies {expos_vals[0]}."
-                )
-            print("  Dynamic mode parameters validated successfully!")
 
     # Main sweep loop
     all_results = {}
@@ -611,6 +725,18 @@ def main() -> None:
             total_combinations *= len(v)
         print(f"\nUpdated to {total_combinations} parameter combination(s) (including offchip_bin_slit sweep).")
 
+    # Each raster of a time series is observed on its own, so a plan of several
+    # rasters is a sweep over them, and a sit-and-stare a sweep over its
+    # exposures.
+    if raster_mode and raster_plan.repeats > 1:
+        sweep_dims["raster.repeat"] = list(range(raster_plan.repeats))
+        dim_names = list(sweep_dims.keys())
+        dim_values = [sweep_dims[n] for n in dim_names]
+        total_combinations = 1
+        for v in dim_values:
+            total_combinations *= len(v)
+        print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
+
     product_iter = itertools_product(*dim_values) if dim_names else [()]
 
     for combination_idx, combo_values in enumerate(product_iter, start=1):
@@ -618,6 +744,7 @@ def main() -> None:
 
         # Extract offchip_bin_slit from combo if present
         offchip_bin_slit = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
+        raster_repeat = combo.pop("raster.repeat", 0)
 
         # Merge sweep values with fixed values for this combination
         all_sim = {
@@ -670,8 +797,23 @@ def main() -> None:
         # In uniform-intensity mode the cube is built with one slit pixel per binning
         # factor, so that rebin_slit_offchip has independent noise realisations to sum.
         # The cube therefore does depend on offchip_bin_slit, and the key must say so.
-        cube_reb_key = (*sampling_key, offchip_bin_slit) if uniform_intensity_mode else sampling_key
-        rebin_cache_key = (*sampling_key, offchip_bin_slit)
+        # A time series is synthesised per exposure time as well as per slit width.
+        if uniform_intensity_mode:
+            cube_reb_key = (*sampling_key, offchip_bin_slit)
+        elif raster_mode:
+            cube_reb_key = (*sampling_key, expos.to_value(u.s), raster_repeat)
+        else:
+            cube_reb_key = sampling_key
+        rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
+
+        if raster_mode and cube_reb_key not in cube_reb_cache:
+            print(f"\nSynthesising the time series as observed "
+                  f"(slit_width={slit_width}, expos={expos})...")
+            cube_sim = raster.summed_cube(raster_plan, slit_width, expos, reference_line,
+                                          repeat=raster_repeat)
+            raster_summed[cube_reb_key] = cube_sim
+            print(f"  {cube_sim.data.shape[1]} exposures, {raster.strips_synthesised} "
+                  f"strips synthesised so far")
 
         if cube_reb_key not in cube_reb_cache:
             print(
@@ -717,8 +859,13 @@ def main() -> None:
             rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
             # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
             # multiple binning factors at fixed slit width all retain their cubes
-            # (a single-key dict would silently keep only the first one).
-            cube_reb_dict.setdefault((sampling_key[0], offchip_bin_slit), cube_reb_binned)
+            # (a single-key dict would silently keep only the first one). A
+            # time series adds the exposure time, which changes the cube too.
+            cube_key = ((sampling_key[0], expos.to_value(u.s), raster_repeat, offchip_bin_slit)
+                        if raster_mode else (sampling_key[0], offchip_bin_slit))
+            cube_reb_dict.setdefault(cube_key, cube_reb_binned)
+            if raster_mode:
+                raster_cubes[cube_key] = raster_summed[cube_reb_key]
 
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
@@ -746,7 +893,9 @@ def main() -> None:
             print(f"  {k}: {v}")
         if offchip_bin_slit > 1:
             print(f"  offchip_bin_slit: {offchip_bin_slit}")
-        if not combo and offchip_bin_slit == 1:
+        if raster_mode and raster_plan.repeats > 1:
+            print(f"  raster.repeat: {raster_repeat}")
+        if not combo and offchip_bin_slit == 1 and not (raster_mode and raster_plan.repeats > 1):
             print("  (single combination - all parameters fixed)")
         print(f"  Calculated dark current: {DET.dark_current:.2e}")
         if instrument == "SWC":
@@ -777,6 +926,8 @@ def main() -> None:
             parameters.update(_extract_config_params(TEL, "telescope"))
             # Add offchip_bin_slit to the parameters dict
             parameters["offchip_bin_slit"] = offchip_bin_slit
+            if raster_mode:
+                parameters["raster.repeat"] = raster_repeat
 
             param_key = _params_to_key(parameters)
 
@@ -816,6 +967,7 @@ def main() -> None:
                     else {}
                 ),
                 "offchip_bin_slit": offchip_bin_slits[0] if len(offchip_bin_slits) == 1 else None,
+                **({"raster.repeat": 0} if raster_mode and raster_plan.repeats == 1 else {}),
             },
             "fit_config": fit_config,
             "fit_signals": fit_signals,
@@ -838,6 +990,17 @@ def main() -> None:
             "git_commit_id": git_commit_id,
             "software_version": software_version,
         }
+        if raster_mode:
+            # What the series was observed with, and the cube each combination
+            # saw; cube_sim is the last combination's.
+            save_data["raster"] = {
+                "plan": raster_plan,
+                "settings": synthesis_settings,
+                "series": [str(p) for p in series.paths],
+                "times": series.times,
+                "hdf5_dbase_root": raster.goft_dbase_root,
+                "cubes": raster_cubes,
+            }
 
         with open(output_file, "wb") as f:
             dill.dump(save_data, f)

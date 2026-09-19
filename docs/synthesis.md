@@ -6,14 +6,20 @@ The output is a synthesis file, which is the input to the [instrument response](
 
 !!! note "Which simulations are supported"
 
-    The reader currently expects MURaM output: separate binary files for temperature, density, and velocity, with the cube shape given on the command line. Support for other MHD codes is being added; until then, reducing your simulation to a [VDEM](vdem-synthesis.md) is the best way to use it.
+    Any code's output, through an [atmosphere file](atmosphere-files.md): one HDF5 file holding the temperature, density, velocity and cell boundaries with their units, which you write from your own data and pass with `--atmosphere`. MURaM output is also read directly, as separate binary files for temperature, density and velocity with the cube shape given on the command line, which is what the options below describe.
 
     Synthesis here is optically thin. If you need optically thick lines, synthesise them with a code such as Lightweaver or RH1.5D, and bring the spectra in at the [instrument response](instrument-response.md) stage instead of this one. Reading externally synthesised spectra is coming soon.
 
 ## Basic usage
 
 ```bash
-# Example using all available command line options
+# From an atmosphere file, which carries the cube shape and cell sizes itself
+synthesise-spectra \
+  --atmosphere ./data/atmosphere_0270000.h5 \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --output-dir ./run/input
+
+# From MURaM's own files, using all available command line options
 synthesise-spectra \
   --data-dir ./data/atmosphere \
   --lines Fe12_195.1190 Fe12_195.1790 \
@@ -38,7 +44,7 @@ synthesise-spectra \
   --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
-  --mean-mol-wt 1.29
+  --mass-per-electron 1.16
 
 # Show all available options
 synthesise-spectra --help
@@ -48,6 +54,7 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 
+- `--atmosphere`: An [atmosphere file](atmosphere-files.md) to synthesise from. It carries the cube shape and cell sizes, so it replaces `--data-dir`, the simulation file options and the grid parameters below, and giving any of those with it is refused.
 - `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
@@ -95,7 +102,7 @@ synthesise-spectra --help
 
 - `--downsample`: Downsampling factor, which must divide every dimension of `--cube-shape` (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
-- `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
+- `--mass-per-electron`: Mass of the plasma per free electron in atomic mass units, which turns the simulation's mass density into the electron density. By default it is worked out from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](atmosphere-files.md#electron-density). Not used when an atmosphere file gives the electron density itself. `--mean-mol-wt` is the old name for this option; ECLIPSE 0.8.0 and earlier defaulted it to 1.29, the value for a neutral gas.
 
 ## Naming spectral lines
 
@@ -119,42 +126,6 @@ that ion in CHIANTI and prints both the requested and matched wavelengths:
 Check that line. A large difference means the transition you meant is not in the
 database for that ion, and a neighbouring one was picked up instead. A name that
 does not match the pattern at all raises `ValueError` immediately.
-
-## Dynamic mode (time-varying atmospheres)
-
-For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
-
-```bash
-synthesise-spectra \
-  --data-dir ./data/atmosphere \
-  --lines Fe12_195.1190 \
-  --abundance sun_coronal_2021_chianti \
-  --output-dir ./run/input \
-  --slit-rest-time "40 s" \
-  --slit-width "0.2 arcsec" \
-  --temp-dir temp \
-  --temp-filename eosT \
-  --rho-dir rho \
-  --rho-filename result_prim_0 \
-  --vz-dir vz \
-  --vz-filename result_prim_2 \
-  --time-dir time \
-  --time-filename tau_slice_0.100 \
-  --cube-shape 512 768 256 \
-  --voxel-dx "0.192 Mm" \
-  --voxel-dy "0.192 Mm" \
-  --voxel-dz "0.064 Mm" \
-  --vel-res "5.0 km/s" \
-  --vel-lim "300.0 km/s" \
-  --integration-axis z
-```
-
-**Dynamic Mode Options:**
-
-- `--slit-rest-time`: Slit rest time per position - enables dynamic mode
-- `--slit-width`: Slit width
-- `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
-- `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
 
 ## Output
 

@@ -35,7 +35,6 @@ MEAN_MOL_WT = 1.29
 VELOCITY_FILES = {"x": "vx/result_prim_1", "y": "vy/result_prim_3",
                   "z": "vz/result_prim_2"}
 UNIT_VECTORS = {"SOLX": (1, 0, 0), "SOLY": (0, 1, 0), "SOLZ": (0, 0, 1)}
-DYNAMIC = ["--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec"]
 
 
 def _write_cube(path, data):
@@ -151,19 +150,6 @@ def test_the_observer_is_where_the_map_is_the_right_way_round(
     away_from_observer = -np.dot(flow_vector, towards_observer)
     assert away_from_observer != 0
     assert _doppler_velocity(cube) == pytest.approx(away_from_observer, abs=0.1)
-
-
-def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
-    for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
-        _write_atmosphere(tmp_path / "atmosphere",
-                          {"z": np.full(SHAPE, FLOW.to_value(u.cm / u.s))},
-                          suffix=suffix, time=time)
-
-    saved = _load(_synthesise(tmp_path, monkeypatch, "z", DYNAMIC))
-
-    assert saved["dynamic_mode"]["enabled"]
-    assert _doppler_velocity(saved["line_cubes"][LINE]) == pytest.approx(
-        -FLOW.value, abs=0.1)
 
 
 @pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])

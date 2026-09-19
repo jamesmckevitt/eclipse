@@ -16,130 +16,16 @@ from mendeleev import element
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import angle_to_distance, VELOCITY_CONVENTION
+from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
+                    velocity_centers_to_edges, VELOCITY_CONVENTION)
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
+                         require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
 #  I/O helpers
 # ---------------------------------------------------------------------------
 ##############################################################################
-
-def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
-    """
-    Check that *values* is a finite, increasing, evenly spaced 1D grid.
-
-    Both the velocity binning and the wavelength WCS take the first spacing
-    of the grid and apply it everywhere, so an uneven grid is not
-    approximated, it is silently misread.  A decreasing grid is worse: the
-    bin edges come out in descending order and every ``>= low & < high`` test
-    fails, so the emission measure is zero everywhere.
-
-    Parameters
-    ----------
-    values : np.ndarray or u.Quantity
-        1D grid of bin centres.
-    name : str
-        Name to use in the error message.
-    rtol : float, optional
-        How far any spacing may differ from the first spacing, relative to
-        the first spacing.  The default admits the rounding in ``np.arange``
-        and ``np.linspace`` without admitting a grid anyone built unevenly on
-        purpose.
-
-    Returns
-    -------
-    float
-        The first spacing, in the units of *values*.
-    """
-    plain = np.asarray(getattr(values, "value", values), dtype=float)
-
-    if plain.ndim != 1:
-        raise ValueError(f"{name} must be 1D, got {plain.ndim} dimensions.")
-    if plain.size < 2:
-        raise ValueError(f"{name} must have at least 2 elements, "
-                         f"got {plain.size}.")
-
-    # Comparisons with NaN are always false, so a NaN or inf in the grid can
-    # slip past the spacing checks below and come back as the spacing.
-    non_finite = np.flatnonzero(~np.isfinite(plain))
-    if non_finite.size:
-        first_bad = int(non_finite[0])
-        raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
-                         f"at index {first_bad}.")
-
-    diffs = np.diff(plain)
-    step = float(diffs[0])
-
-    if step <= 0.0:
-        raise ValueError(
-            f"{name} must increase. Bin edges are built by stepping out from "
-            f"the first spacing, so a decreasing grid produces edges in "
-            f"descending order and every bin ends up empty."
-        )
-
-    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
-    if uneven.size:
-        first_uneven = int(uneven[0])
-        raise ValueError(
-            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
-            f"but the spacing between elements {first_uneven} and "
-            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
-            f"the first spacing and uses it for every bin edge and for the "
-            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
-            f"bins and writes wrong wavelength coordinates. Resample onto a "
-            f"uniform grid first."
-        )
-
-    return step
-
-
-def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
-    """
-    Convert velocity grid centers to bin edges.
-
-    Parameters
-    ----------
-    vel_grid : np.ndarray
-        1D array of velocity centers.  Must be evenly spaced and increasing.
-
-    Returns
-    -------
-    np.ndarray
-        1D array of velocity bin edges (length = len(vel_grid) + 1).
-    """
-    dv = require_uniform_grid(vel_grid, "vel_grid")
-
-    return np.concatenate([
-        [vel_grid[0] - 0.5 * dv],
-        vel_grid[:-1] + 0.5 * dv,
-        [vel_grid[-1] + 0.5 * dv]
-    ])
-
-def require_downsample_divides(shape: Tuple[int, ...], downsample: int) -> None:
-    """
-    Check that *downsample* divides every dimension of *shape*.
-
-    Downsampling keeps every *downsample*-th cell and gives each kept cell
-    *downsample* times the voxel size.  Where a dimension is not a multiple of
-    the factor, the last kept cell stands for fewer cells than that, so the
-    domain would come out too large, and so would the emission measure when
-    that axis is the line of sight.
-
-    Parameters
-    ----------
-    shape : tuple of int
-        Cube dimensions, in any order.
-    downsample : int
-        Downsampling factor.
-    """
-    uneven = [n for n in shape if n % downsample]
-    if uneven:
-        raise ValueError(
-            f"--downsample {downsample} does not divide the cube shape "
-            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
-            f"a factor that divides every dimension."
-        )
-
 
 def load_cube(
     file_path: str | Path,
@@ -287,223 +173,6 @@ def read_timestep_time(file_path: Path) -> float:
         return float(values[6])
 
 
-def discover_timesteps(
-    time_dir: Path,
-    time_filename: str,
-) -> Dict[str, float]:
-    """
-    Discover all available timesteps and their simulation times.
-    
-    Parameters
-    ----------
-    time_dir : Path
-        Directory containing header files.
-    time_filename : str
-        Filename prefix before the timestep suffix (e.g., "Header").
-        
-    Returns
-    -------
-    dict
-        Mapping of timestep suffix to simulation time in seconds.
-        E.g., {"0270000": 26729.535, "0280000": 27571.395, ...}
-    """
-    if not time_dir.is_dir():
-        raise FileNotFoundError(f"Time directory not found: {time_dir}")
-    
-    timesteps = {}
-    
-    for file_path in sorted(time_dir.iterdir()):
-        if file_path.is_file() and file_path.name.startswith(time_filename):
-            # Extract suffix after the filename prefix
-            suffix = file_path.name[len(time_filename):]
-            if suffix.startswith('.'):
-                suffix = suffix[1:]  # Remove leading dot
-            
-            try:
-                sim_time = read_timestep_time(file_path)
-                timesteps[suffix] = sim_time
-            except Exception as e:
-                warnings.warn(f"Could not read time from {file_path}: {e}")
-    
-    if not timesteps:
-        raise ValueError(f"No valid timestep files found in {time_dir} with prefix '{time_filename}'")
-    
-    return timesteps
-
-
-def get_file_for_timestep(
-    directory: Path,
-    filename: str,
-    suffix: str,
-) -> Path:
-    """
-    Get the file path for a specific timestep.
-    
-    Parameters
-    ----------
-    directory : Path
-        Directory containing the data files.
-    filename : str
-        Filename prefix before the suffix (e.g., "eosT").
-    suffix : str
-        Timestep suffix (e.g., "0270000").
-        
-    Returns
-    -------
-    Path
-        Full path to the file.
-    """
-    file_path = directory / f"{filename}.{suffix}"
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    return file_path
-
-
-def compute_slice_timestep_mapping_mhd(
-    nx_mhd: int,
-    voxel_dx: u.Quantity,
-    slit_width: u.Quantity,
-    slit_rest_time: u.Quantity,
-    timestep_times: Dict[str, float],
-    crop_x: Optional[Tuple[u.Quantity, u.Quantity]] = None,
-) -> Tuple[List[str], Dict[str, List[int]]]:
-    """
-    Compute which timestep suffix to use for each MHD X-slice.
-    
-    The spectrometer scans from right to left (high X to low X).
-    Each slit position covers a physical width (slit_width converted to Mm).
-    Determine which slit position each MHD slice belongs to, then find
-    the appropriate timestep based on observation time.
-    
-    If crop_x is specified, the observation timing is calculated as if the
-    scan starts at the right edge of the crop region. Slices to the right
-    of the crop region are filled with the first timestep.
-    
-    To avoid error accumulation, calculate the observation time for each
-    MHD slice based on its absolute physical position.
-    
-    Parameters
-    ----------
-    nx_mhd : int
-        Number of MHD X-slices.
-    voxel_dx : u.Quantity
-        MHD voxel size in X direction (physical units, e.g., Mm).
-    slit_width : u.Quantity
-        Slit width in angular units (e.g., arcsec).
-    slit_rest_time : u.Quantity
-        Slit rest time per position.
-    timestep_times : dict
-        Mapping of timestep suffix to simulation time in seconds.
-    crop_x : tuple of u.Quantity, optional
-        If provided, (x_min, x_max) crop boundaries. Observation timing starts
-        at x_max (right edge of crop). Slices outside crop on the right use
-        the first timestep.
-        
-    Returns
-    -------
-    slice_mapping : list
-        List of timestep suffixes, one per MHD X-slice.
-    grouped : dict
-        Dictionary mapping each unique timestep suffix to list of MHD slice indices.
-    """
-    rest_time_sec = slit_rest_time.to_value(u.s)
-    
-    # Convert slit width from angular to physical distance
-    slit_physical = angle_to_distance(slit_width).to(u.Mm)
-    voxel_physical = voxel_dx.to(u.Mm)
-    
-    # Sort timesteps by simulation time
-    sorted_timesteps = sorted(timestep_times.items(), key=lambda x: x[1])
-    suffixes = [s for s, t in sorted_timesteps]
-    times = np.array([t for s, t in sorted_timesteps])
-    first_suffix = suffixes[0]
-    
-    # Check if observation time range extends beyond available MHD time range
-    t0 = times[0]
-    t_final = times[-1]
-    mhd_duration = t_final - t0
-    
-    # Total physical extent of the full domain
-    total_extent = nx_mhd * voxel_physical
-    
-    # Determine the effective scan start position (right edge)
-    # If crop_x is specified, scan starts at the crop boundary
-    if crop_x is not None:
-        x_min_crop = crop_x[0].to(u.Mm)
-        x_max_crop = crop_x[1].to(u.Mm)
-        
-        # The domain is centered at 0, so convert to absolute position
-        # WCS has X centered, so x=0 is at nx/2
-        domain_center = total_extent / 2
-        scan_start_position = domain_center + x_max_crop  # Right edge of crop in absolute coords
-        scan_end_position = domain_center + x_min_crop    # Left edge of crop in absolute coords
-        
-        # Calculate observation duration for just the cropped region
-        crop_extent = x_max_crop - x_min_crop
-        n_slit_positions_crop = int(np.ceil((crop_extent / slit_physical).decompose().value))
-        observation_duration = n_slit_positions_crop * rest_time_sec
-        
-        print(f"  Crop region: X = [{x_min_crop:.3f}, {x_max_crop:.3f}]")
-        print(f"  Observation starts at X = {x_max_crop:.3f} (right edge of crop)")
-    else:
-        scan_start_position = total_extent  # Right edge of full domain
-        scan_end_position = 0 * u.Mm
-        n_slit_positions_crop = int(np.ceil((total_extent / slit_physical).decompose().value))
-        observation_duration = n_slit_positions_crop * rest_time_sec
-    
-    if observation_duration > mhd_duration:
-        print(f"  WARNING: Observation duration ({observation_duration:.1f} s) exceeds MHD time range ({mhd_duration:.1f} s)")
-        print(f"  Slices observed after t={t_final:.1f} s will use the last available timestep")
-    
-    slice_mapping = []
-    
-    # For each MHD X-slice, calculate which slit position it belongs to
-    # Scanning right to left: scan_start_position is observed first (at t=t0)
-    for mhd_slice_idx in range(nx_mhd):
-        # Physical position of this slice (center of voxel) in absolute coords
-        x_physical = (mhd_slice_idx + 0.5) * voxel_physical
-        
-        # Distance from the scan start position (right edge of observation region)
-        distance_from_scan_start = scan_start_position - x_physical
-        
-        if distance_from_scan_start < 0:
-            # This slice is to the right of the scan start (outside crop on right)
-            # Use the first timestep for these slices
-            slice_mapping.append(first_suffix)
-            continue
-        
-        # Which slit position does this belong to?
-        # slit_position = 0 is at scan_start_position
-        slit_position = int(np.floor((distance_from_scan_start / slit_physical).decompose().value))
-        
-        # Observation time for this slit position
-        observation_time = t0 + slit_position * rest_time_sec
-        
-        # Find the latest timestep that doesn't exceed observation_time
-        idx = np.searchsorted(times, observation_time, side='right') - 1
-        # Clamp to valid range (0 to len(times)-1)
-        idx = max(0, min(idx, len(times) - 1))
-        slice_mapping.append(suffixes[idx])
-    
-    # Group slices by timestep for efficient processing
-    grouped = {}
-    for slice_idx, suffix in enumerate(slice_mapping):
-        if suffix not in grouped:
-            grouped[suffix] = []
-        grouped[suffix].append(slice_idx)
-    
-    # Print statistics
-    if crop_x is not None:
-        print(f"  Cropped region extent: {crop_extent:.3f}")
-    else:
-        print(f"  Physical domain extent: {total_extent:.3f}")
-    print(f"  Slit physical width: {slit_physical:.3f}")
-    print(f"  Number of slit positions: {n_slit_positions_crop}")
-    print(f"  Total raster time: {observation_duration:.1f} s")
-    
-    return slice_mapping, grouped
-
-
 def apply_cube_cropping(
     temp_cube: NDCube,
     rho_cube: NDCube,
@@ -557,122 +226,6 @@ def apply_cube_cropping(
     vel_cube = vel_cube.crop(point1, point2)
     
     return temp_cube, rho_cube, vel_cube
-
-
-def build_composite_cubes_mhd(
-    base_dir: Path,
-    temp_dir: str,
-    temp_filename: str,
-    rho_dir: str,
-    rho_filename: str,
-    vel_dir: str,
-    vel_filename: str,
-    slice_mapping: List[str],
-    grouped_slices: Dict[str, List[int]],
-    cube_shape: Tuple[int, int, int],
-    voxel_dx: u.Quantity,
-    voxel_dy: u.Quantity,
-    voxel_dz: u.Quantity,
-    downsample: int | bool,
-    precision: type,
-) -> Tuple[NDCube, NDCube, NDCube]:
-    """
-    Build composite temp, rho, vel cubes from multiple timesteps at MHD resolution.
-    
-    Each MHD X-slice comes from the appropriate timestep per slice_mapping.
-    No spatial rebinning is performed - output is at full MHD resolution.
-    
-    Parameters
-    ----------
-    base_dir : Path
-        Base directory for atmosphere data.
-    temp_dir, temp_filename : str
-        Directory and filename prefix for temperature files.
-    rho_dir, rho_filename : str
-        Directory and filename prefix for density files.
-    vel_dir, vel_filename : str
-        Directory and filename prefix for velocity files.
-    slice_mapping : list
-        Timestep suffix for each MHD X-slice.
-    grouped_slices : dict
-        Slices grouped by timestep for efficient processing.
-    cube_shape : tuple
-        Original cube dimensions in the file's storage order.
-    voxel_dx, voxel_dy, voxel_dz : u.Quantity
-        Voxel sizes of the files, at full resolution; load_cube applies the
-        downsampling to them.
-    downsample : int or bool
-        Downsampling factor.
-    precision : type
-        Numerical precision.
-        
-    Returns
-    -------
-    tuple
-        (temp_composite, rho_composite, vel_composite) NDCubes at MHD resolution.
-    """
-    nx_mhd = len(slice_mapping)
-    
-    # Load first timestep to determine dimensions and get reference WCS
-    first_suffix = list(grouped_slices.keys())[0]
-    temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, first_suffix)
-    temp_cube_ref = load_cube(
-        temp_file, shape=cube_shape, unit=u.K,
-        downsample=downsample, precision=precision,
-        voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
-        create_ndcube=True
-    )
-    
-    nz, ny, nx = temp_cube_ref.data.shape
-    reference_wcs = temp_cube_ref.wcs
-
-    # Verify dimensions match slice mapping
-    if nx != nx_mhd:
-        raise ValueError(f"Cube X dimension ({nx}) doesn't match slice mapping ({nx_mhd})")
-
-    # Initialise composite arrays
-    temp_composite = np.zeros((nz, ny, nx), dtype=precision)
-    rho_composite = np.zeros((nz, ny, nx), dtype=precision)
-    vel_composite = np.zeros((nz, ny, nx), dtype=precision)
-    
-    # Process each timestep
-    for suffix, slice_indices in tqdm(grouped_slices.items(), desc="Loading timesteps", unit="timestep"):
-        # Load cubes for this timestep
-        temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, suffix)
-        rho_file = get_file_for_timestep(base_dir / rho_dir, rho_filename, suffix)
-        vel_file = get_file_for_timestep(base_dir / vel_dir, vel_filename, suffix)
-        
-        temp_cube = load_cube(
-            temp_file, shape=cube_shape, unit=u.K,
-            downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
-            create_ndcube=True
-        )
-        rho_cube = load_cube(
-            rho_file, shape=cube_shape, unit=u.g/u.cm**3,
-            downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
-            create_ndcube=True
-        )
-        vel_cube = load_cube(
-            vel_file, shape=cube_shape, unit=u.cm/u.s,
-            downsample=downsample, precision=precision,
-            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
-            create_ndcube=True
-        )
-        
-        # Copy relevant slices to composite (no rebinning - direct copy)
-        for slice_idx in slice_indices:
-            temp_composite[:, :, slice_idx] = temp_cube.data[:, :, slice_idx]
-            rho_composite[:, :, slice_idx] = rho_cube.data[:, :, slice_idx]
-            vel_composite[:, :, slice_idx] = vel_cube.data[:, :, slice_idx]
-    
-    # Create NDCubes with proper WCS (at MHD resolution)
-    temp_ndcube = NDCube(temp_composite * u.K, wcs=reference_wcs, meta={"source": "composite_dynamic"})
-    rho_ndcube = NDCube(rho_composite * (u.g/u.cm**3), wcs=reference_wcs, meta={"source": "composite_dynamic"})
-    vel_ndcube = NDCube(vel_composite * (u.cm/u.s), wcs=reference_wcs, meta={"source": "composite_dynamic"})
-    
-    return temp_ndcube, rho_ndcube, vel_ndcube
 
 
 def _compute_single_ion(args):
@@ -901,7 +454,7 @@ def compute_goft_fiasco(
 def compute_dem(
     logT_cube: np.ndarray,
     logN_cube: np.ndarray,
-    voxel_dh_cm: float,
+    voxel_dh_cm: float | np.ndarray,
     logT_grid: np.ndarray,
     integration_axis: str = "z",
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -915,8 +468,9 @@ def compute_dem(
         3D array of log10(T/K) values.
     logN_cube : np.ndarray  
         3D array of log10(n_e/cm^3) values.
-    voxel_dh_cm : float
-        Voxel depth in cm along integration axis.
+    voxel_dh_cm : float or np.ndarray
+        Depth of the cells along the integration axis in cm: one value for
+        every cell, or one value per cell along that axis.
     logT_grid : np.ndarray
         1D array of temperature bin centers for DEM calculation.
     integration_axis : str
@@ -960,8 +514,9 @@ def compute_dem(
     ])
 
     ne = 10.0 ** logN_cube.astype(np.float64)
-    w2 = ne**2  # weights for EM
-    w3 = ne**3  # weights for EM*n_e
+    dh = along_line_of_sight(voxel_dh_cm, integration_axis)
+    w2 = ne**2 * dh  # weights for EM
+    w3 = ne**3 * dh  # weights for EM*n_e
 
     dem = np.zeros(output_shape)
     avg_ne = np.zeros_like(dem)
@@ -971,8 +526,8 @@ def compute_dem(
         mask = (logT_cube >= lo) & (logT_cube < hi)  # (nz,ny,nx)
 
         # Integrate along the specified axis
-        em = np.sum(w2 * mask, axis=integration_axis_idx) * voxel_dh_cm    # cm^-5
-        em_n = np.sum(w3 * mask, axis=integration_axis_idx) * voxel_dh_cm  # cm^-5 * n_e
+        em = np.sum(w2 * mask, axis=integration_axis_idx)    # cm^-5
+        em_n = np.sum(w3 * mask, axis=integration_axis_idx)  # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
         avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
@@ -1211,6 +766,108 @@ def synthesise_spectra(
         data["si"] = spec_map / (4 * np.pi)
 
 
+def synthesise_cubes(
+    temperature: np.ndarray,
+    electron_density: np.ndarray,
+    los_velocity: np.ndarray,
+    dh_cm,
+    goft: Dict[str, dict],
+    logT_grid: np.ndarray,
+    logN_grid: np.ndarray,
+    vel_grid: u.Quantity,
+    integration_axis: str,
+    precision: type,
+) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
+    """
+    The spectra of every line from one set of cubes: a whole box or a strip of it.
+
+    Parameters
+    ----------
+    temperature : np.ndarray
+        Temperature of every cell in K, ``(nz, ny, nx)``.
+    electron_density : np.ndarray
+        Electron density of every cell in cm^-3, the same shape.
+    los_velocity : np.ndarray
+        Velocity away from the observer in cm/s, the same shape.
+    dh_cm : float or np.ndarray
+        Depth of the cells along the line of sight in cm, one value for all
+        or one per cell along that axis.
+    goft : dict
+        Contribution functions from :func:`compute_goft_fiasco`, on the
+        temperature grid *logT_grid* and density grid *logN_grid*. Not
+        modified: the entries are copied before the interpolated function
+        and the spectra are added to them.
+    logT_grid, logN_grid : np.ndarray
+        The grids the contribution functions are tabulated on; the DEM uses
+        the same temperature grid.
+    vel_grid : u.Quantity
+        Velocity bin centres, evenly spaced.
+    integration_axis : str
+        ``"x"``, ``"y"`` or ``"z"``.
+    precision : type
+        np.float32 or np.float64.
+
+    Returns
+    -------
+    lines : dict
+        A copy of *goft* whose entries also hold ``"g"``, the contribution
+        function on the DEM, ``"wl_grid"`` and ``"si"``, the specific
+        intensity ``(rows, columns, wavelength)``.
+    dem_map : np.ndarray
+        As :func:`compute_dem` returns it.
+    em_tv : np.ndarray
+        As :func:`build_em_tv` returns it.
+    """
+    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
+                         out=np.zeros_like(electron_density)).astype(precision)
+    logT_cube = np.log10(temperature, where=temperature > 0.0,
+                         out=np.zeros_like(temperature)).astype(precision)
+
+    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
+
+    lines = {name: dict(info) for name, info in goft.items()}
+    interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
+
+    ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
+                * along_line_of_sight(dh_cm, integration_axis))
+    em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis)
+
+    synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+    return lines, dem_map, em_tv
+
+
+def _cell_size_mm(cube: NDCube, pixel_axis: int) -> float:
+    """The world distance across one pixel of *cube* along *pixel_axis*, in Mm.
+
+    Measured between the two edges of the first pixel, so it needs no second
+    pixel and no access to a CDELT, which a cropped cube's WCS does not have.
+    """
+    # A cropped cube wraps its WCS in a high-level object; the pixel-to-world
+    # conversion of plain numbers is on the low-level one underneath.
+    wcs = getattr(cube.wcs, "low_level_wcs", cube.wcs)
+    low = [0.0] * wcs.pixel_n_dim
+    high = [0.0] * wcs.pixel_n_dim
+    low[pixel_axis], high[pixel_axis] = -0.5, 0.5
+    world_low = wcs.pixel_to_world_values(*low)
+    world_high = wcs.pixel_to_world_values(*high)
+    unit = u.Unit(wcs.world_axis_units[pixel_axis])
+    return ((world_high[pixel_axis] - world_low[pixel_axis]) * unit).to_value(u.Mm)
+
+
+def _world_at(coords: u.Quantity, crpix: float) -> float:
+    """
+    The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
+
+    A reference pixel at the middle of an axis falls between two pixels when
+    there is an even number of them, so the reference value has to be read
+    off the grid there rather than taken from the pixel below.
+    """
+    if coords.size == 1:
+        return coords[0].value
+    step = (coords[1] - coords[0]).value
+    return coords[0].value + (crpix - 1) * step
+
+
 def create_line_cube(
     line_name: str,
     line_data: dict,
@@ -1243,9 +900,25 @@ def create_line_cube(
         array that plots the right way up, and slicing out the celestial WCS
         gives one a SunPy map accepts directly.
     """
+    # An axis whose cells differ in size has no one CDELT. Only the line of
+    # sight may be such an axis, and that is the one integrated out here.
+    nonuniform = (spatial_cube.meta or {}).get("nonuniform_axes", [])
+    stretched = [axis for axis in AXES
+                 if axis != integration_axis and axis in nonuniform]
+    if stretched:
+        raise ValueError(
+            f"The {', '.join(stretched)} axis of the atmosphere is not evenly "
+            f"spaced, so it cannot be an image axis of a view along "
+            f"{integration_axis}. Only the line of sight may be stretched.")
+
     # The simulation cubes are (z, y, x), so integrating one axis out leaves
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
+
+    # The cell size of each axis comes from the reference cube's own WCS, so
+    # that an axis a single cell wide has one too. It is read as the world
+    # distance across one pixel, which any WCS answers, cropped ones included.
+    cell_size = [_cell_size_mm(spatial_cube, pixel_axis) for pixel_axis in range(3)]
 
     # The WCS below carries a single linear CDELT taken from the first
     # wavelength step, so the grid has to be uniform for that to describe it.
@@ -1265,13 +938,13 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[1],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            y_coords[ny//2].to(u.Mm).value,  # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1285,13 +958,13 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1305,14 +978,14 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[1],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
-            y_coords[ny//2].to(u.Mm).value   # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[2]),
         ]
 
     wcs = WCS(naxis=3)
@@ -1345,15 +1018,40 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-def parse_arguments():
-    """Parse command line arguments for spectrum synthesis."""
+# The options that say where MURaM's files are and how they are laid out. An
+# atmosphere file carries all of this itself, so giving both is a
+# contradiction rather than a choice.
+MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
+                        "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
+
+
+class _NotedOption(argparse.Action):
+    """Stores the value and records that the option was given, at its default or not."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        given = getattr(namespace, "given_options", None)
+        if given is None:
+            given = set()
+            namespace.given_options = given
+        given.add(self.dest)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line options of synthesise-spectra."""
     parser = argparse.ArgumentParser(
         description="Synthesise solar spectra from 3D MHD simulation data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     # Input/Output paths
+    parser.add_argument("--atmosphere", type=str, default=None,
+                       help="An ECLIPSE atmosphere file (HDF5) to synthesise from, "
+                            "written by eclipse-atmosphere or by your own code. "
+                            "It carries the cube shape and cell sizes, so it "
+                            "replaces the MURaM file options.")
     parser.add_argument("--data-dir", type=str, default="data/atmosphere",
+                       action=_NotedOption,
                        help="Directory containing simulation data")
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
@@ -1376,24 +1074,33 @@ def parse_arguments():
     
     # Simulation files
     parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
+                       action=_NotedOption,
                        help="Temperature file relative to data-dir")
     parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
+                       action=_NotedOption,
                        help="Density file relative to data-dir")
     parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
+                       action=_NotedOption,
                        help="Velocity x file relative to data-dir")
     parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
+                       action=_NotedOption,
                        help="Velocity y file relative to data-dir")
     parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
+                       action=_NotedOption,
                        help="Velocity z file relative to data-dir")
-    
+
     # Grid parameters
     parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
+                       action=_NotedOption,
                        help="Cube dimensions in the file's storage order (nx nz ny)")
     parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       action=_NotedOption,
                        help="Voxel size in x (e.g. '0.192 Mm')")
     parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       action=_NotedOption,
                        help="Voxel size in y (e.g. '0.192 Mm')")
     parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       action=_NotedOption,
                        help="Voxel size in z (e.g. '0.064 Mm')")
     
     # Integration direction
@@ -1419,54 +1126,111 @@ def parse_arguments():
                        help="Downsampling factor (1 = no downsampling)")
     parser.add_argument("--precision", choices=["float32", "float64"], default="float64",
                        help="Numerical precision")
-    parser.add_argument("--mean-mol-wt", type=float, default=1.29,
-                       help="Mean molecular weight")
+    parser.add_argument("--mass-per-electron", "--mean-mol-wt",
+                       dest="mass_per_electron", type=float, default=None,
+                       help="Mass of the plasma per free electron, in atomic mass "
+                            "units, which turns a mass density into an electron "
+                            "density. By default it is worked out from --abundance "
+                            "for a fully ionised plasma, about 1.16 for coronal "
+                            "abundances. --mean-mol-wt is the old name; ECLIPSE "
+                            "0.8.0 and earlier used 1.29, the value for a neutral gas. "
+                            "Not used when the atmosphere gives an electron density.")
     
-    # Dynamic atmosphere mode (time-varying synthesis)
-    dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
-        "Options for synthesising with time-varying atmosphere (raster scanning)")
-    dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
-                       help="Slit rest time per position (e.g. '40 s'). "
-                            "Enables dynamic mode when specified.")
-    dynamic_group.add_argument("--slit-width", type=str, default=None,
-                       help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
-    
-    # Directory arguments for dynamic mode
-    dynamic_group.add_argument("--temp-dir", type=str, default=None,
-                       help="Directory containing temperature files (for dynamic mode)")
-    dynamic_group.add_argument("--temp-filename", type=str, default="eosT",
-                       help="Temperature filename prefix before timestep suffix")
-    dynamic_group.add_argument("--rho-dir", type=str, default=None,
-                       help="Directory containing density files (for dynamic mode)")
-    dynamic_group.add_argument("--rho-filename", type=str, default="result_prim_0",
-                       help="Density filename prefix before timestep suffix")
-    dynamic_group.add_argument("--vx-dir", type=str, default=None,
-                       help="Directory containing vx files (for dynamic mode)")
-    dynamic_group.add_argument("--vx-filename", type=str, default="result_prim_1",
-                       help="Vx filename prefix before timestep suffix")
-    dynamic_group.add_argument("--vy-dir", type=str, default=None,
-                       help="Directory containing vy files (for dynamic mode)")
-    dynamic_group.add_argument("--vy-filename", type=str, default="result_prim_3",
-                       help="Vy filename prefix before timestep suffix")
-    dynamic_group.add_argument("--vz-dir", type=str, default=None,
-                       help="Directory containing vz files (for dynamic mode)")
-    dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
-                       help="Vz filename prefix before timestep suffix")
-    dynamic_group.add_argument("--time-dir", type=str, default="header",
-                       help="Directory containing header files (for dynamic mode)")
-    dynamic_group.add_argument("--time-filename", type=str, default="Header",
-                       help="Header filename prefix before timestep suffix")
-    
-    return parser.parse_args()
+    return parser
+
+
+def parse_arguments(argv=None):
+    """Parse command line arguments for spectrum synthesis."""
+    return build_parser().parse_args(argv)
+
+
+def check_atmosphere_options(args) -> None:
+    """
+    Refuse --atmosphere alongside options it makes meaningless.
+
+    The MURaM layout options describe files the atmosphere route never
+    reads, so one given explicitly would be ignored without a word.
+    """
+    if not args.atmosphere:
+        return
+    # The parser notes every layout option that appeared on the command
+    # line, so one typed at its default value is caught too.
+    noted = getattr(args, "given_options", ())
+    given = [name for name in MURAM_LAYOUT_OPTIONS if name in noted]
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(
+            f"--atmosphere carries the cube shape, cell sizes and data itself, "
+            f"so {flags} would not be used. Give one or the other.")
+
+
+def load_atmosphere_file(
+    path: str | Path,
+    integration_axis: str,
+    downsample: int | bool = False,
+    crop_x=None, crop_y=None, crop_z=None,
+) -> Atmosphere:
+    """
+    Read an atmosphere file with the velocity a view along *integration_axis* needs.
+
+    Downsampling and cropping are applied here, in the atmosphere's own
+    coordinates, and the two axes that become the image are checked to be
+    evenly spaced, since the image WCS can only describe an even grid. The
+    line of sight may be stretched: the emission measure uses the true size
+    of each cell along it.
+    """
+    atmosphere = read_atmosphere(path, velocities=(integration_axis,))
+    if downsample:
+        atmosphere = atmosphere.downsampled(downsample)
+    if crop_x or crop_y or crop_z:
+        atmosphere = atmosphere.cropped(x=crop_x, y=crop_y, z=crop_z)
+    for axis in AXES:
+        if axis != integration_axis and not atmosphere.is_uniform(axis):
+            raise ValueError(
+                f"The {axis} axis of {path} is not evenly spaced, and with the "
+                f"line of sight along {integration_axis} it would become an "
+                f"image axis, whose coordinates must be even. Only the axis "
+                f"along the line of sight may be stretched; resample the "
+                f"others onto an even grid first.")
+    return atmosphere
+
+
+def resolve_mass_per_electron(args) -> Tuple[float, str]:
+    """The mass per free electron to use, in atomic mass units, and where it came from."""
+    if args.mass_per_electron is not None:
+        try:
+            value = require_mass_per_electron(args.mass_per_electron)
+        except ValueError as error:
+            raise ValueError(f"--mass-per-electron: {error}") from None
+        return value, "given on the command line"
+    value = mass_per_electron(args.abundance, getattr(args, "hdf5_dbase_root", None))
+    return value, f"fully ionised plasma with {args.abundance} abundances"
+
+
+def along_line_of_sight(values, integration_axis: str) -> np.ndarray:
+    """
+    *values*, one per cell along the line of sight, shaped to broadcast over a (z, y, x) cube.
+
+    A single value comes back as it is, so one cell size applies everywhere.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.ndim == 0:
+        return values
+    if values.ndim != 1:
+        raise ValueError(f"Expected one value per cell along the line of sight, "
+                         f"got an array of shape {values.shape}.")
+    shape = [1, 1, 1]
+    shape[NUMPY_AXIS[integration_axis]] = values.size
+    return values.reshape(shape)
 
 
 def main(args=None) -> None:
     """
     Main workflow for synthesising solar spectra from 3D MHD simulations.
-    
-    Supports two modes:
-    - Static mode: Single timestep synthesis
-    - Dynamic mode: Time-varying synthesis with raster scanning
+
+    Synthesises one snapshot, from an atmosphere file (--atmosphere) or from
+    MURaM's own files. A time series is observed by the instrument run
+    instead, from a series of atmosphere files (see euvst_response.raster).
     
     Parameters
     ----------
@@ -1478,6 +1242,8 @@ def main(args=None) -> None:
     
     # ---------------- Configuration from arguments -----------------
     precision = np.float32 if args.precision == "float32" else np.float64
+    if args.downsample < 1:
+        raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
@@ -1488,12 +1254,11 @@ def main(args=None) -> None:
     file_voxel_dy = u.Quantity(args.voxel_dy)
 
     # Voxel sizes of the cubes as synthesised, for the path length along the
-    # line of sight, the dynamic-mode slice timing and the saved metadata.
+    # line of sight and the saved metadata.
     voxel_dz = file_voxel_dz * (downsample or 1)
     voxel_dx = file_voxel_dx * (downsample or 1)
     voxel_dy = file_voxel_dy * (downsample or 1)
 
-    mean_mol_wt = args.mean_mol_wt
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
     
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
@@ -1501,121 +1266,73 @@ def main(args=None) -> None:
 
     base_dir = Path(args.data_dir)
     integration_axis = args.integration_axis.lower()
-    
-    # Determine if we're in dynamic mode
-    dynamic_mode = args.slit_rest_time is not None
-    
-    if dynamic_mode:
-        # Validate dynamic mode requirements
-        if args.slit_width is None:
-            raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
-        
-        # Parse slit rest time and slit width
-        slit_rest_time = u.Quantity(args.slit_rest_time)
-        slit_width = u.Quantity(args.slit_width)
-        
-        # Determine which velocity direction to use
-        if integration_axis == "x":
-            vel_dir = args.vx_dir or "vx"
-            vel_filename = args.vx_filename
-            voxel_dh = voxel_dx
-        elif integration_axis == "y":
-            vel_dir = args.vy_dir or "vy"
-            vel_filename = args.vy_filename
-            voxel_dh = voxel_dy
-        else:  # "z"
-            vel_dir = args.vz_dir or "vz"
-            vel_filename = args.vz_filename
-            voxel_dh = voxel_dz
-        
-        # Set directory defaults
-        temp_dir = args.temp_dir or "temp"
-        rho_dir = args.rho_dir or "rho"
-        
-        print(f"DYNAMIC MODE - Time-varying synthesis at MHD resolution")
-        print(f"  Slit width: {slit_width}")
-        print(f"  Slit rest time: {slit_rest_time}")
-        print(f"  Voxel dx: {voxel_dx}")
-        print()
-        
-        # Discover available timesteps
-        time_dir = base_dir / args.time_dir
-        print(f"Discovering timesteps from {time_dir}...")
-        timestep_times = discover_timesteps(time_dir, args.time_filename)
-        print(f"  Found {len(timestep_times)} timesteps")
-        for suffix, sim_time in sorted(timestep_times.items(), key=lambda x: x[1]):
-            print(f"    {suffix}: {sim_time:.3f} s")
-        print()
-        
-        # Calculate MHD cube dimensions
-        cube_shape_tuple = tuple(args.cube_shape)
-        nx_mhd = cube_shape_tuple[0]
-        if downsample:
-            nx_mhd = nx_mhd // downsample
-        
-        # Prepare crop_x for slice mapping if specified
-        crop_x_for_mapping = None
-        if args.crop_x:
-            crop_x_for_mapping = (u.Quantity(args.crop_x[0]), u.Quantity(args.crop_x[1]))
-        
-        # Compute slice-to-timestep mapping at MHD resolution
-        print(f"Computing slice-to-timestep mapping at MHD resolution...")
-        slice_mapping, grouped_slices = compute_slice_timestep_mapping_mhd(
-            nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times,
-            crop_x=crop_x_for_mapping
-        )
-        print(f"  MHD slices per timestep:")
-        for suffix, indices in sorted(grouped_slices.items(), key=lambda x: min(x[1])):
-            print(f"    {suffix}: {len(indices)} slices (indices {min(indices)}-{max(indices)})")
-        print()
-        
-        # Build composite cubes at MHD resolution
-        print(f"Building composite atmosphere cubes at MHD resolution ({print_mem()})...")
-        temp_cube, rho_cube, vel_cube = build_composite_cubes_mhd(
-            base_dir=base_dir,
-            temp_dir=temp_dir,
-            temp_filename=args.temp_filename,
-            rho_dir=rho_dir,
-            rho_filename=args.rho_filename,
-            vel_dir=vel_dir,
-            vel_filename=vel_filename,
-            slice_mapping=slice_mapping,
-            grouped_slices=grouped_slices,
-            cube_shape=cube_shape_tuple,
-            voxel_dx=file_voxel_dx,
-            voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz,
-            downsample=downsample,
-            precision=precision,
-        )
-        print(f"  Composite cube shape: {temp_cube.data.shape}")
-        
-        # Apply cropping if requested in dynamic mode
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"Applying cropping ({print_mem()})")
-            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
-                temp_cube, rho_cube, vel_cube,
-                args.crop_x, args.crop_y, args.crop_z
-            )
-            print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
-        
-        reference_cube = temp_cube
-        
-        # Dynamic mode metadata for output (no spatial rebinning in synthesis)
-        dynamic_mode_metadata = {
-            "enabled": True,
-            "slit_width": slit_width,
-            "slit_rest_time": slit_rest_time,
-            "scan_direction": "right_to_left",
-            "slice_timesteps": slice_mapping,
-            "available_timesteps": timestep_times,
-            "spatially_rebinned": False,  # Output is at MHD resolution
-        }
-        
-    else:
-        # Static mode (original behavior)
+    check_atmosphere_options(args)
+
+    # What the common processing below needs from whichever route reads the
+    # atmosphere. Only an atmosphere file can give the electron density
+    # directly or a different size for every cell along the line of sight;
+    # the MURaM routes give a mass density and one cell size.
+    ne_values = None
+    los_thickness = None
+    atmosphere_metadata = None
+
+    if args.atmosphere:
+        # Static mode from an atmosphere file, which brings its own layout
         dynamic_mode_metadata = {"enabled": False}
-        
+
+        print("STATIC MODE - Synthesis from an atmosphere file")
+        print(f"  Atmosphere: {args.atmosphere}")
+        print(f"  Integration axis: {integration_axis}")
+        print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
+        print(f"  Precision: {precision}")
+        if downsample:
+            print(f"  Downsampling: {downsample}x")
+        print(f"  Lines: {args.lines}")
+        print(f"  Abundance: {args.abundance}")
+        if args.crop_x or args.crop_y or args.crop_z:
+            print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
+        print()
+
+        print(f"Reading the atmosphere ({print_mem()})")
+        atmosphere = load_atmosphere_file(
+            args.atmosphere, integration_axis, downsample=downsample,
+            crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        print(atmosphere.describe())
+
+        # The file may hold float32 in any units; the run works in its own
+        # precision, as the MURaM route does from the moment it reads its
+        # files, and the processing below takes the cubes' values as K and
+        # cm/s, so they are converted here.
+        temp_cube = atmosphere.to_ndcube(
+            atmosphere.temperature.astype(precision).to(u.K))
+        vel_cube = atmosphere.to_ndcube(
+            atmosphere.velocity(integration_axis).astype(precision).to(u.cm / u.s))
+        rho = None
+        if atmosphere.mass_density is not None:
+            rho = atmosphere.mass_density.astype(precision)
+        if atmosphere.electron_density is not None:
+            ne_values = atmosphere.electron_density.astype(precision).to_value(u.cm**-3)
+        los_thickness = atmosphere.cell_thickness(integration_axis)
+        reference_cube = temp_cube
+
+        # The cell sizes stand in for the MURaM voxel sizes in what is saved;
+        # a stretched axis has no single size.
+        voxel_dx, voxel_dy, voxel_dz = (
+            atmosphere.spacing(axis) if atmosphere.is_uniform(axis) else None
+            for axis in AXES)
+        atmosphere_metadata = {
+            "path": str(Path(args.atmosphere).resolve()),
+            "source": atmosphere.source,
+            "time": atmosphere.time,
+            "shape": atmosphere.shape,
+            "nonuniform_axes": atmosphere.nonuniform_axes(),
+            "electron_density_given": atmosphere.electron_density is not None,
+        }
+
+    else:
+        # Static mode from MURaM files
+        dynamic_mode_metadata = {"enabled": False}
+
         files = {
             "T": args.temp_file,
             "rho": args.rho_file,
@@ -1685,7 +1402,8 @@ def main(args=None) -> None:
             print(f"Cropped cubes to shape: {temp_cube.data.shape}")
 
         reference_cube = temp_cube
-    
+        rho = u.Quantity(rho_cube.data, rho_cube.unit)
+
     # ---------------- Common processing (both modes) -----------------
     
     # Build velocity grid
@@ -1695,13 +1413,18 @@ def main(args=None) -> None:
         vel_res.to(u.cm / u.s).value
     ) * (u.cm / u.s)
 
-    # Convert to log10 temperature and density
-    ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
-    logN_cube = np.log10(ne_arr.data, where=ne_arr.data > 0.0, 
-                        out=np.zeros_like(ne_arr.data)).astype(precision)
-    logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0, 
-                        out=np.zeros_like(temp_cube.data)).astype(precision)
-    
+    # The electron density: the atmosphere's own where it gives one, otherwise
+    # the mass density over the mass per free electron.
+    if ne_values is None:
+        mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
+        print(f"Electron density from the mass density with "
+              f"{mass_per_electron_amu:.4f} u per electron ({mass_per_electron_source})")
+        ne_values = (rho / (mass_per_electron_amu * const.u)).to_value(u.cm**-3)
+    else:
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
+        print("Electron density taken from the atmosphere")
+
     # The velocity files hold the velocity along each axis; the Doppler shift
     # needs the velocity away from the observer.
     vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
@@ -1724,31 +1447,18 @@ def main(args=None) -> None:
 
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
-    
-    # Determine voxel_dh based on integration axis
-    if integration_axis == "x":
-        voxel_dh = voxel_dx
-    elif integration_axis == "y":
-        voxel_dh = voxel_dy
-    else:
-        voxel_dh = voxel_dz
-    dh_cm = voxel_dh.to(u.cm).value
 
-    # ---------------- Calculate DEM -----------------
-    print(f"Calculating DEM and average density per bin ({print_mem()})")
-    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
+    # The size of each cell along the line of sight. MURaM's files have one
+    # size; an atmosphere file may give every cell its own.
+    if los_thickness is None:
+        los_thickness = {"x": voxel_dx, "y": voxel_dy, "z": voxel_dz}[integration_axis]
+    dh_cm = los_thickness.to_value(u.cm)
 
-    print(f"Interpolating contribution function on the DEM ({print_mem()})")
-    interpolate_g_on_dem(goft, avg_ne_map, logT_grid, logN_grid, logT_goft, precision)
-
-    # ---------------- Build EM(T,v) cube -----------------
-    ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
-    print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
-    em_tv = build_em_tv(logT_cube, vel_data, logT_grid, vel_grid, ne_sq_dh, integration_axis)
-
-    # ---------------- Synthesise spectra -----------------
-    print(f"Synthesising spectra ({print_mem()})")
-    synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
+    # ---------------- DEM, EM(T,v) and spectra -----------------
+    print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
+    goft, dem_map, em_tv = synthesise_cubes(
+        temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
+        vel_grid, integration_axis, precision)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
@@ -1757,7 +1467,7 @@ def main(args=None) -> None:
         line_cubes[name] = create_line_cube(
             name, info, reference_cube, intensity_unit, integration_axis
         )
-    
+
     print(f"Built {len(line_cubes)} line cubes")
 
     # ---------------- Save results -----------------
@@ -1776,15 +1486,18 @@ def main(args=None) -> None:
         "goft": goft,
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "dynamic_mode": dynamic_mode_metadata,
+        "atmosphere": atmosphere_metadata,
         "config": {
             "precision": precision.__name__,
             "downsample": downsample,
             "vel_res": vel_res,
             "vel_lim": vel_lim,
-            "mean_mol_wt": mean_mol_wt,
+            "mass_per_electron": mass_per_electron_amu,
+            "mass_per_electron_source": mass_per_electron_source,
             "intensity_unit": str(intensity_unit),
-            "cube_shape": args.cube_shape,
-            "data_dir": str(base_dir),
+            "atmosphere": args.atmosphere,
+            "cube_shape": None if args.atmosphere else args.cube_shape,
+            "data_dir": None if args.atmosphere else str(base_dir),
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,

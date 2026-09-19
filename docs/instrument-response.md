@@ -59,6 +59,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only), covered in [pinhole stray light](pinholes.md)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
+- `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [observing a time series](time-series.md)
 
 Here's a complete example configuration file:
 
