@@ -57,7 +57,7 @@ flowchart LR
 
 | Starting point | Page | Use it when |
 | --- | --- | --- |
-| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. MURaM output is read directly; any other code's output goes in as an [atmosphere file](atmosphere-files.md). |
+| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. Any code's output goes in as an [atmosphere file](atmosphere-files.md), which MURaM's own files are converted into with one command. |
 | A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
 | Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |

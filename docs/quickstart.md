@@ -5,8 +5,11 @@
 After installation, you can run ECLIPSE from the command line:
 
 ```bash
+# Write a MURaM snapshot as an atmosphere file (other codes write their own)
+eclipse-atmosphere from-muram --data-dir ./data/atmosphere --snapshot 0270000 --output ./data/atmosphere_0270000.h5
+
 # Run synthesis script (convert 3D MHD data to synthetic spectra)
-synthesise-spectra --data-dir ./data/atmosphere --lines Fe12_195.1190 --output-dir ./run/input
+synthesise-spectra --atmosphere ./data/atmosphere_0270000.h5 --lines Fe12_195.1190 --output-dir ./run/input
 
 # Run instrument response simulation
 eclipse --config ./run/input/config.yaml
@@ -18,6 +21,7 @@ eclipse --help
 
 That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
 spectra, `eclipse` puts them through the instrument. See
+[Atmosphere files](atmosphere-files.md) for writing one from any code,
 [From an MHD simulation](synthesis.md) and
 [Simulating the instrument](instrument-response.md) for the full set of options.
 

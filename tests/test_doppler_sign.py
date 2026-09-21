@@ -24,7 +24,9 @@ from ndcube import NDCube
 
 from euvst_response import synthesis
 from euvst_response.analysis import load_instrument_response_results
+from euvst_response.atmosphere import write_atmosphere
 from euvst_response.data_processing import load_atmosphere
+from euvst_response.muram import read_muram
 from euvst_response.utils import VELOCITY_CONVENTION
 
 LINE = "Fe12_195.1190"
@@ -44,7 +46,7 @@ def _write_cube(path, data):
     np.asarray(data, dtype=np.float32).ravel(order="F").tofile(path)
 
 
-def _write_atmosphere(root, velocity, suffix="0270000", time=None):
+def _write_muram_files(root, velocity, suffix="0270000", time=None):
     """Uniform coronal plasma, with *velocity* mapping an axis to its cube."""
     density = (1.0e9 / u.cm**3 * MEAN_MOL_WT * const.u).to_value(u.g / u.cm**3)
     _write_cube(root / "temp" / f"eosT.{suffix}", np.full(SHAPE, 1.0e6))
@@ -72,20 +74,33 @@ def _flat_goft(lines, **kwargs):
     return goft, logT_grid, logN_grid
 
 
+def _atmosphere_file(tmp_path, axis, suffix="0270000"):
+    """The MURaM files above as the atmosphere file the synthesis reads."""
+    atmosphere = read_muram(tmp_path / "atmosphere", suffix, shape=SHAPE,
+                            voxel_dx=0.1 * u.Mm, voxel_dy=0.15 * u.Mm,
+                            voxel_dz=0.05 * u.Mm, velocities=(axis,))
+    return write_atmosphere(atmosphere, tmp_path / f"atmosphere_{axis}.h5")
+
+
 def _synthesise(tmp_path, monkeypatch, axis, extra=()):
     """Run synthesis main() and return the path it saved to."""
     argv = [
         "synthesise-spectra",
-        "--data-dir", str(tmp_path / "atmosphere"),
         "--output-dir", str(tmp_path / "out"),
         "--output-name", f"{axis}.pkl",
         "--lines", LINE,
-        "--cube-shape", *[str(n) for n in SHAPE],
-        "--voxel-dx", "0.1 Mm", "--voxel-dy", "0.15 Mm", "--voxel-dz", "0.05 Mm",
         "--mean-mol-wt", str(MEAN_MOL_WT),
         "--integration-axis", axis,
         *extra,
     ]
+    if "--slit-rest-time" in extra:
+        # Dynamic mode reads the MURaM files themselves.
+        argv += ["--data-dir", str(tmp_path / "atmosphere"),
+                 "--cube-shape", *[str(n) for n in SHAPE],
+                 "--voxel-dx", "0.1 Mm", "--voxel-dy", "0.15 Mm",
+                 "--voxel-dz", "0.05 Mm"]
+    else:
+        argv += ["--atmosphere", str(_atmosphere_file(tmp_path, axis))]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
@@ -113,7 +128,7 @@ def test_an_upflow_seen_from_above_is_blueshifted(tmp_path, monkeypatch):
     half = SHAPE[0] // 2
     vz[:half] = FLOW.to_value(u.cm / u.s)
     vz[half:] = -FLOW.to_value(u.cm / u.s)
-    _write_atmosphere(tmp_path / "atmosphere", {"z": vz})
+    _write_muram_files(tmp_path / "atmosphere", {"z": vz})
 
     saved = _load(_synthesise(tmp_path, monkeypatch, "z"))
 
@@ -140,8 +155,8 @@ def test_the_observer_is_where_the_map_is_the_right_way_round(
     own WCS, not from ECLIPSE's table of observers.
     """
     flow_vector = FLOW.value * np.array(UNIT_VECTORS[f"SOL{axis.upper()}"])
-    _write_atmosphere(tmp_path / "atmosphere",
-                      {axis: np.full(SHAPE, FLOW.to_value(u.cm / u.s))})
+    _write_muram_files(tmp_path / "atmosphere",
+                       {axis: np.full(SHAPE, FLOW.to_value(u.cm / u.s))})
 
     cube = _load(_synthesise(tmp_path, monkeypatch, axis))["line_cubes"][LINE]
 
@@ -155,9 +170,9 @@ def test_the_observer_is_where_the_map_is_the_right_way_round(
 
 def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
     for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
-        _write_atmosphere(tmp_path / "atmosphere",
-                          {"z": np.full(SHAPE, FLOW.to_value(u.cm / u.s))},
-                          suffix=suffix, time=time)
+        _write_muram_files(tmp_path / "atmosphere",
+                           {"z": np.full(SHAPE, FLOW.to_value(u.cm / u.s))},
+                           suffix=suffix, time=time)
 
     saved = _load(_synthesise(tmp_path, monkeypatch, "z", DYNAMIC))
 
@@ -170,7 +185,7 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
 def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wrong(
         tmp_path, monkeypatch, axis, refused):
     """Views along y kept their sign, so older ones are still right and still load."""
-    _write_atmosphere(tmp_path / "atmosphere", {})
+    _write_muram_files(tmp_path / "atmosphere", {})
     path = _synthesise(tmp_path, monkeypatch, axis)
     cube, _ = load_atmosphere(str(path))
     assert cube.meta["velocity_convention"] == VELOCITY_CONVENTION

@@ -1,12 +1,12 @@
 # Atmosphere files
 
-`synthesise-spectra` can read the atmosphere it synthesises from one HDF5 file, whatever code produced it. The file holds the few things the synthesis needs, each with its units, so there is no reader to write for a new code: write the file from your own data with any HDF5 library, then
+`synthesise-spectra` reads the atmosphere it synthesises from one HDF5 file, whatever code produced it. The file holds the few things the synthesis needs, each with its units, so there is no reader to write for a new code: write the file from your own data with any HDF5 library, then
 
 ```bash
 synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 ```
 
-Everything else on the [synthesis page](synthesis.md) works the same way: the lines, the velocity grid, the integration axis, cropping and downsampling. The MURaM file options are not needed, and giving one alongside `--atmosphere` is refused.
+Everything else on the [synthesis page](synthesis.md) works the same way: the lines, the velocity grid, the integration axis, cropping and downsampling. MURaM comes in through the same door: convert a snapshot once with [`eclipse-atmosphere from-muram`](#from-muram) and synthesise from the file.
 
 ## What the file holds
 
@@ -26,7 +26,7 @@ Datasets. Every one needs a `unit` attribute holding a unit string astropy can r
 | `temperature` | `(nz, ny, nx)` | |
 | `mass_density` | `(nz, ny, nx)` | Give this, `electron_density`, or both. |
 | `electron_density` | `(nz, ny, nx)` | |
-| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Positive towards increasing coordinate. Only the component along the line of sight is needed: `velocity_z` for the default top-down view. |
+| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | The velocity along each of the box's own axes, positive towards increasing coordinate. Only the component along the axis you synthesise along (`--integration-axis`) is read, so a view from above needs `velocity_z` and a side view `velocity_x` or `velocity_y`. |
 | `time` | scalar | The simulation time of the snapshot (optional). |
 
 The cubes are stored `(nz, ny, nx)` in C order, so that `cube[k]` is a horizontal slice indexed `[y, x]` and z is height. If your code stores its arrays the other way round, transpose them before writing.
@@ -78,11 +78,11 @@ GROUP "/" {
 }
 ```
 
-Fortran stores arrays column-major, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. Write the cubes as float32 if you want the file to stay small; the synthesis works in its own precision.
+Fortran stores arrays column-major, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. Write the cubes as float32 if you want the file to stay small: the synthesis converts whatever it reads to the precision `--precision` asks for, which is float64 unless you say otherwise, and works in that throughout. The file's own precision only sets how exactly the values themselves were recorded.
 
 ## From MURaM
 
-The MURaM reader is now a converter into this format, with the same defaults as the synthesis options had:
+MURaM writes its output as separate binary files, one per variable, which `eclipse-atmosphere from-muram` reads and writes as an atmosphere file:
 
 ```bash
 eclipse-atmosphere from-muram \
@@ -94,9 +94,9 @@ eclipse-atmosphere from-muram \
   --output ./data/atmosphere_0270000.h5
 ```
 
-`--cube-shape` is the file's own `(nx nz ny)` order, as for `synthesise-spectra`. `--velocities` chooses which components to include; each is 400 MB at full resolution, and a top-down view needs only `z`. The snapshot time is read from `header/Header.<snapshot>` if that file exists, or given with `--time`. The box is placed where ECLIPSE has always placed a MURaM box, x and y centred on zero and z = 0 at the centre of the bottom cell, so `--crop-x`, `--crop-y` and `--crop-z` mean what they did before, and a synthesis from the converted file gives the same result as one from the raw files.
+`--cube-shape` is the file's own `(nx nz ny)` order. `--velocities` chooses which components to include; each is 400 MB at full resolution, and a view from above needs only `z`. The snapshot time is read from `header/Header.<snapshot>` if that file exists, or given with `--time`. The box is placed where ECLIPSE has always placed a MURaM box, x and y centred on zero and z = 0 at the centre of the bottom cell, so `--crop-x`, `--crop-y` and `--crop-z` mean to the synthesis what they always did.
 
-`synthesise-spectra` still reads the raw MURaM files directly, so nothing has to change for a MURaM run.
+Convert a snapshot once and synthesise from it as often as you like, cropping and downsampling at synthesis as before.
 
 ## A worked example: Bifrost from the Hinode SDC Europe
 
@@ -142,11 +142,7 @@ The contribution functions need the electron density. A code that carries one, f
 
 With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free electron. By default that is worked out from the abundance set the synthesis uses (`--abundance`) for a fully ionised plasma, which is what the EUV lines ECLIPSE synthesises form in: about 1.16 atomic mass units per electron for coronal abundances. Cells too cool to be fully ionised come out with too high an electron density, but they emit none of those lines. `--mass-per-electron` sets a value by hand instead.
 
-The public Bifrost snapshot of the worked example above carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, while the old 1.29 was 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
-
-!!! warning "Changed from ECLIPSE 0.8.0"
-
-    Up to 0.8.0 the conversion used `--mean-mol-wt`, with a default of 1.29. That is the mean molecular weight of a neutral solar gas, not the mass per electron of an ionised one, and it made every emission measure from a mass density about 20 per cent too small. The default is now derived from the abundances; the old option name still works and still sets the same quantity. To reproduce an older run exactly, give `--mass-per-electron 1.29`.
+The public Bifrost snapshot of the worked example above carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, where 1.29, the value for a neutral gas, is 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
 
 ## Cropping and downsampling
 

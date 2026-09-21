@@ -1256,11 +1256,10 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# The options that say where MURaM's files are and how they are laid out. An
-# atmosphere file carries all of this itself, so giving both is a
-# contradiction rather than a choice.
-MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
-                        "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
+# The options that say where the MURaM files dynamic mode reads are and how
+# they are laid out. An atmosphere file carries all of this itself, so giving
+# both is a contradiction rather than a choice.
+MURAM_LAYOUT_OPTIONS = ("data_dir", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
 
 class _NotedOption(argparse.Action):
@@ -1284,13 +1283,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Input/Output paths
     parser.add_argument("--atmosphere", type=str, default=None,
-                       help="An ECLIPSE atmosphere file (HDF5) to synthesise from, "
-                            "written by eclipse-atmosphere or by your own code. "
-                            "It carries the cube shape and cell sizes, so it "
-                            "replaces the MURaM file options.")
-    parser.add_argument("--data-dir", type=str, default="data/atmosphere",
-                       action=_NotedOption,
-                       help="Directory containing simulation data")
+                       help="The ECLIPSE atmosphere file (HDF5) to synthesise "
+                            "from, written by eclipse-atmosphere or by your own "
+                            "code. It carries the cube shape and the cell sizes. "
+                            "Required, except in dynamic mode.")
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
@@ -1309,37 +1305,6 @@ def build_parser() -> argparse.ArgumentParser:
                             "in ~/.fiasco/fiascorc. Use this to run against a "
                             "second CHIANTI version without changing the "
                             "default for other work.")
-    
-    # Simulation files
-    parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
-                       action=_NotedOption,
-                       help="Temperature file relative to data-dir")
-    parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
-                       action=_NotedOption,
-                       help="Density file relative to data-dir")
-    parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
-                       action=_NotedOption,
-                       help="Velocity x file relative to data-dir")
-    parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
-                       action=_NotedOption,
-                       help="Velocity y file relative to data-dir")
-    parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
-                       action=_NotedOption,
-                       help="Velocity z file relative to data-dir")
-
-    # Grid parameters
-    parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
-                       action=_NotedOption,
-                       help="Cube dimensions in the file's storage order (nx nz ny)")
-    parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in x (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in y (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in z (e.g. '0.064 Mm')")
     
     # Integration direction
     parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
@@ -1374,7 +1339,8 @@ def build_parser() -> argparse.ArgumentParser:
                             "0.8.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
     
-    # Dynamic atmosphere mode (time-varying synthesis)
+    # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
+    # own files and so carries the options describing their layout.
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
         "Options for synthesising with time-varying atmosphere (raster scanning)")
     dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
@@ -1382,7 +1348,22 @@ def build_parser() -> argparse.ArgumentParser:
                             "Enables dynamic mode when specified.")
     dynamic_group.add_argument("--slit-width", type=str, default=None,
                        help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
-    
+    dynamic_group.add_argument("--data-dir", type=str, default="data/atmosphere",
+                       action=_NotedOption,
+                       help="Directory containing the MURaM files")
+    dynamic_group.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
+                       action=_NotedOption,
+                       help="Cube dimensions in the file's storage order (nx nz ny)")
+    dynamic_group.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in x (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in y (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in z (e.g. '0.064 Mm')")
+
     # Directory arguments for dynamic mode
     dynamic_group.add_argument("--temp-dir", type=str, default=None,
                        help="Directory containing temperature files (for dynamic mode)")
@@ -1419,13 +1400,19 @@ def parse_arguments(argv=None):
 
 def check_atmosphere_options(args) -> None:
     """
-    Refuse --atmosphere alongside options it makes meaningless.
+    Refuse an atmosphere given alongside options it makes meaningless, or none at all.
 
-    The MURaM layout options describe files the atmosphere route never
-    reads, so one given explicitly would be ignored without a word, and
-    dynamic mode still builds its time series from MURaM files.
+    The synthesis reads its atmosphere from an atmosphere file. The MURaM
+    layout options describe the files dynamic mode builds its time series
+    from, so one given with --atmosphere would be ignored without a word.
     """
     if not args.atmosphere:
+        if args.slit_rest_time is None:
+            raise ValueError(
+                "--atmosphere is required: the synthesis reads the atmosphere "
+                "from an ECLIPSE atmosphere file. Write MURaM's own files as "
+                "one with eclipse-atmosphere from-muram, or write your code's "
+                "output as one with any HDF5 library.")
         return
     # The parser notes every layout option that appeared on the command
     # line, so one typed at its default value is caught too.
@@ -1435,7 +1422,8 @@ def check_atmosphere_options(args) -> None:
         flags = ", ".join("--" + name.replace("_", "-") for name in given)
         raise ValueError(
             f"--atmosphere carries the cube shape, cell sizes and data itself, "
-            f"so {flags} would not be used. Give one or the other.")
+            f"so {flags} would not be used. Those options describe the MURaM "
+            f"files dynamic mode reads.")
     if args.slit_rest_time is not None:
         raise ValueError(
             "Dynamic mode reads its time series from MURaM files and cannot "
@@ -1508,10 +1496,10 @@ def main(args=None) -> None:
 
     Supports two modes:
     - Static mode: Single timestep synthesis, from an atmosphere file
-      (--atmosphere) or from MURaM's own files
+      (--atmosphere)
     - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
       own files
-    
+
     Parameters
     ----------
     args : argparse.Namespace, optional
@@ -1527,31 +1515,19 @@ def main(args=None) -> None:
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
-    # Voxel sizes of the simulation files. load_cube scales these itself when
-    # it downsamples, so they are passed to it as given.
-    file_voxel_dz = u.Quantity(args.voxel_dz)
-    file_voxel_dx = u.Quantity(args.voxel_dx)
-    file_voxel_dy = u.Quantity(args.voxel_dy)
-
-    # Voxel sizes of the cubes as synthesised, for the path length along the
-    # line of sight, the dynamic-mode slice timing and the saved metadata.
-    voxel_dz = file_voxel_dz * (downsample or 1)
-    voxel_dx = file_voxel_dx * (downsample or 1)
-    voxel_dy = file_voxel_dy * (downsample or 1)
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
-    
+
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    base_dir = Path(args.data_dir)
     integration_axis = args.integration_axis.lower()
     check_atmosphere_options(args)
 
     # What the common processing below needs from whichever route reads the
     # atmosphere. Only an atmosphere file can give the electron density
     # directly or a different size for every cell along the line of sight;
-    # the MURaM routes give a mass density and one cell size.
+    # dynamic mode gives a mass density and one cell size.
     ne_values = None
     los_thickness = None
     atmosphere_metadata = None
@@ -1563,7 +1539,20 @@ def main(args=None) -> None:
         # Validate dynamic mode requirements
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
-        
+
+        base_dir = Path(args.data_dir)
+        # Voxel sizes of the MURaM files. load_cube scales these itself when
+        # it downsamples, so they are passed to it as given.
+        file_voxel_dz = u.Quantity(args.voxel_dz)
+        file_voxel_dx = u.Quantity(args.voxel_dx)
+        file_voxel_dy = u.Quantity(args.voxel_dy)
+
+        # Voxel sizes of the cubes as synthesised, for the path length along
+        # the line of sight, the slice timing and the saved metadata.
+        voxel_dz = file_voxel_dz * (downsample or 1)
+        voxel_dx = file_voxel_dx * (downsample or 1)
+        voxel_dy = file_voxel_dy * (downsample or 1)
+
         # Parse slit rest time and slit width
         slit_rest_time = u.Quantity(args.slit_rest_time)
         slit_width = u.Quantity(args.slit_width)
@@ -1667,7 +1656,7 @@ def main(args=None) -> None:
             "spatially_rebinned": False,  # Output is at MHD resolution
         }
         
-    elif args.atmosphere:
+    else:
         # Static mode from an atmosphere file, which brings its own layout
         dynamic_mode_metadata = {"enabled": False}
 
@@ -1690,10 +1679,9 @@ def main(args=None) -> None:
             crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
         print(atmosphere.describe())
 
-        # The file may hold float32 in any units; the run works in its own
-        # precision, as the MURaM route does from the moment it reads its
-        # files, and the processing below takes the cubes' values as K and
-        # cm/s, so they are converted here.
+        # The file may hold float32 in any units; the run works in the
+        # precision --precision asks for, and the processing below takes the
+        # cubes' values as K and cm/s, so they are converted here.
         temp_cube = atmosphere.to_ndcube(
             atmosphere.temperature.astype(precision).to(u.K))
         vel_cube = atmosphere.to_ndcube(
@@ -1719,81 +1707,6 @@ def main(args=None) -> None:
             "nonuniform_axes": atmosphere.nonuniform_axes(),
             "electron_density_given": atmosphere.electron_density is not None,
         }
-
-    else:
-        # Static mode from MURaM files
-        dynamic_mode_metadata = {"enabled": False}
-
-        files = {
-            "T": args.temp_file,
-            "rho": args.rho_file,
-        }
-        
-        # Determine velocity file based on integration axis
-        if integration_axis == "x":
-            files["vel"] = args.vx_file
-            voxel_dh = voxel_dx
-        elif integration_axis == "y":
-            files["vel"] = args.vy_file
-            voxel_dh = voxel_dy
-        else:  # "z"
-            files["vel"] = args.vz_file
-            voxel_dh = voxel_dz
-        
-        paths = {k: base_dir / fname for k, fname in files.items()}
-        
-        # Validate input files exist
-        for name, path in paths.items():
-            if not path.exists():
-                raise FileNotFoundError(f"{name} file not found: {path}")
-        
-        print(f"STATIC MODE - Single timestep synthesis")
-        print(f"  Data directory: {base_dir}")
-        print(f"  Cube shape: {args.cube_shape}")
-        print(f"  Voxel sizes: {voxel_dx:.3f} x {voxel_dy:.3f} x {voxel_dz:.3f}")
-        print(f"  Integration axis: {integration_axis}")
-        print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
-        print(f"  Precision: {precision}")
-        if downsample:
-            print(f"  Downsampling: {downsample}x")
-        print(f"  Lines: {args.lines}")
-        print(f"  Abundance: {args.abundance}")
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
-        print()
-        
-        # Load simulation data as NDCubes
-        print(f"Loading cubes ({print_mem()})")
-        temp_cube = load_cube(
-            paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        rho_cube = load_cube(
-            paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        vel_cube = load_cube(
-            paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-
-        # Apply cropping if requested
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"Applying cropping ({print_mem()})")
-            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
-                temp_cube, rho_cube, vel_cube,
-                args.crop_x, args.crop_y, args.crop_z
-            )
-            print(f"Cropped cubes to shape: {temp_cube.data.shape}")
-
-        reference_cube = temp_cube
-        rho = u.Quantity(rho_cube.data, rho_cube.unit)
 
     # ---------------- Common processing (both modes) -----------------
     
@@ -1904,8 +1817,8 @@ def main(args=None) -> None:
             "mass_per_electron_source": mass_per_electron_source,
             "intensity_unit": str(intensity_unit),
             "atmosphere": args.atmosphere,
-            "cube_shape": None if args.atmosphere else args.cube_shape,
-            "data_dir": None if args.atmosphere else str(base_dir),
+            "cube_shape": args.cube_shape if dynamic_mode else None,
+            "data_dir": str(base_dir) if dynamic_mode else None,
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,

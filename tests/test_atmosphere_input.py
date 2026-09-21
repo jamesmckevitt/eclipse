@@ -1,11 +1,11 @@
-"""An atmosphere from any code, given as one HDF5 file, synthesises like MURaM's own files.
+"""An atmosphere from any code, given as one HDF5 file, is what the synthesis reads.
 
 The synthesis needs temperature, density, the velocity along the line of
 sight and the cell sizes. An ECLIPSE atmosphere file carries those with
 units, so a simulation from any code can be fed in without a reader for it.
 These check that the file round-trips, that it is validated, that the MURaM
-converter reproduces what the raw-file route gives, that an electron density
-is used as given and otherwise derived from the abundances, and that a
+converter reproduces the raw files it reads, that an electron density is
+used as given and otherwise derived from the abundances, and that a
 stretched line of sight integrates the true size of every cell.
 
 The synthesis runs use a flat contribution function in place of fiasco, so
@@ -33,6 +33,7 @@ from euvst_response.synthesis import (
     along_line_of_sight,
     apply_cube_cropping,
     create_atmosphere_ndcube,
+    load_cube,
 )
 
 LINE = "Fe12_195.1190"
@@ -103,6 +104,16 @@ def _intensity(saved):
     return saved["line_cubes"][LINE].data.sum(axis=-1)
 
 
+def _world(cube, ctype):
+    """The world coordinates in Mm along the axis of *cube* named *ctype*."""
+    wcs = cube.wcs.wcs
+    axis = list(wcs.ctype).index(ctype)
+    assert wcs.cunit[axis] == "Mm"
+    # The WCS axes run the other way round from the array's.
+    n = cube.data.shape[::-1][axis]
+    return wcs.crval[axis] + (np.arange(n) + 1 - wcs.crpix[axis]) * wcs.cdelt[axis]
+
+
 def _write_muram_cube(path, data):
     """A cube in MURaM's own (nx, nz, ny) Fortran layout, from (nz, ny, nx)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,13 +136,6 @@ def _write_muram_files(root, atmosphere, suffix="0270000", time=None):
         header.parent.mkdir(parents=True, exist_ok=True)
         nz, ny, nx = atmosphere.shape
         header.write_text(f"{nx} {nz} {ny} 1e7 1.5e7 5e6 {time} 0.1 1e6\n")
-
-
-def _muram_options(shape=SHAPE):
-    nz, ny, nx = shape
-    return ["--cube-shape", str(nx), str(nz), str(ny),
-            "--voxel-dx", str(SPACING["x"]), "--voxel-dy", str(SPACING["y"]),
-            "--voxel-dz", str(SPACING["z"])]
 
 
 # ----------------------------------------------------------------------
@@ -450,12 +454,14 @@ def _structured_atmosphere():
         velocity_z=velocity)
 
 
-def test_a_converted_muram_snapshot_synthesises_like_the_raw_files(tmp_path, monkeypatch):
+def test_a_converted_muram_snapshot_carries_the_raw_files_into_the_synthesis(
+        tmp_path, monkeypatch):
+    """The converter is the only way in from MURaM, so it has to keep the box as it was."""
     atmosphere = _structured_atmosphere()
     _write_muram_files(tmp_path / "muram", atmosphere, time=26729.5)
+    shape = (SHAPE[2], SHAPE[0], SHAPE[1])
 
-    converted = muram.read_muram(tmp_path / "muram", "0270000",
-                                 shape=(SHAPE[2], SHAPE[0], SHAPE[1]),
+    converted = muram.read_muram(tmp_path / "muram", "0270000", shape=shape,
                                  voxel_dx=SPACING["x"], voxel_dy=SPACING["y"],
                                  voxel_dz=SPACING["z"], velocities=("z",))
     assert converted.time == 26729.5 * u.s
@@ -463,23 +469,27 @@ def test_a_converted_muram_snapshot_synthesises_like_the_raw_files(tmp_path, mon
     for axis in ("x", "y", "z"):
         assert np.allclose(converted.edges(axis).to_value(u.Mm),
                            atmosphere.edges(axis).to_value(u.Mm))
-    path = write_atmosphere(converted, tmp_path / "muram_0270000.h5")
 
-    raw = _synthesise(tmp_path, monkeypatch, "raw", "--data-dir",
-                      str(tmp_path / "muram"), *_muram_options(),
-                      "--mass-per-electron", str(MASS_PER_ELECTRON))
+    # The values and the coordinates are those of the raw files, read as the
+    # cube loader reads them.
+    raw_cube = load_cube(tmp_path / "muram" / "temp" / "eosT.0270000", shape=shape,
+                         unit=u.K, voxel_dx=SPACING["x"], voxel_dy=SPACING["y"],
+                         voxel_dz=SPACING["z"], create_ndcube=True)
+    converted_cube = converted.to_ndcube(converted.temperature)
+    assert converted_cube.data == pytest.approx(raw_cube.data)
+    for ctype in ("SOLX", "SOLY", "SOLZ"):
+        assert _world(converted_cube, ctype) == pytest.approx(_world(raw_cube, ctype))
+
+    path = write_atmosphere(converted, tmp_path / "muram_0270000.h5")
     from_file = _synthesise(tmp_path, monkeypatch, "file", "--atmosphere",
                             str(path), "--mass-per-electron", str(MASS_PER_ELECTRON))
 
-    raw_cube = raw["line_cubes"][LINE]
     file_cube = from_file["line_cubes"][LINE]
-    assert np.all(_intensity(raw) > 0)
-    assert file_cube.data == pytest.approx(raw_cube.data, rel=1e-6)
-    assert list(file_cube.wcs.wcs.ctype) == list(raw_cube.wcs.wcs.ctype)
-    for k in range(3):
-        assert np.allclose(file_cube.axis_world_coords(k)[0].value,
-                           raw_cube.axis_world_coords(k)[0].value)
-    assert from_file["dem_map"] == pytest.approx(raw["dem_map"], rel=1e-6)
+    assert np.all(_intensity(from_file) > 0)
+    # The line cube's image axes are the atmosphere's own, and so the raw
+    # files' own: the synthesis puts the emission where the simulation is.
+    for ctype in ("SOLX", "SOLY"):
+        assert _world(file_cube, ctype) == pytest.approx(_world(raw_cube, ctype))
 
     assert from_file["atmosphere"]["source"] == "MURaM"
     assert from_file["atmosphere"]["time"] == 26729.5 * u.s
@@ -487,7 +497,6 @@ def test_a_converted_muram_snapshot_synthesises_like_the_raw_files(tmp_path, mon
     assert from_file["config"]["atmosphere"] == str(path)
     assert from_file["config"]["cube_shape"] is None
     assert from_file["config"]["mass_per_electron"] == MASS_PER_ELECTRON
-    assert raw["config"]["mass_per_electron"] == MASS_PER_ELECTRON
     assert from_file["voxel_sizes"]["dz"].to_value(u.Mm) == pytest.approx(
         SPACING["z"].to_value(u.Mm))
 
@@ -651,23 +660,22 @@ def test_a_stretched_image_axis_is_refused(tmp_path, monkeypatch):
 
 def test_the_synthesis_crops_and_downsamples_an_atmosphere_file(tmp_path, monkeypatch):
     atmosphere = _structured_atmosphere()
-    _write_muram_files(tmp_path / "muram", atmosphere)
-    shape = (SHAPE[2], SHAPE[0], SHAPE[1])
-    converted = muram.read_muram(tmp_path / "muram", "0270000", shape=shape,
-                                 voxel_dx=SPACING["x"], voxel_dy=SPACING["y"],
-                                 voxel_dz=SPACING["z"], velocities=("z",))
-    path = write_atmosphere(converted, tmp_path / "box.h5")
+    path = write_atmosphere(atmosphere, tmp_path / "box.h5")
     # x cells span -0.2 to 0.2 in steps of 0.1, so this keeps the middle two.
     crop = ["--crop-x", "-0.09 Mm", "0.09 Mm", "--crop-z", "0.12 Mm", "0.3 Mm"]
+    # Cropping at synthesis has to give what synthesising an already cropped
+    # atmosphere does, which is cropping tested against NDCube's own rule above.
+    cropped = write_atmosphere(
+        atmosphere.cropped(x=("-0.09 Mm", "0.09 Mm"), z=("0.12 Mm", "0.3 Mm")),
+        tmp_path / "cropped.h5")
 
-    raw = _synthesise(tmp_path, monkeypatch, "raw", "--data-dir",
-                      str(tmp_path / "muram"), *_muram_options(), *crop,
-                      "--mass-per-electron", str(MASS_PER_ELECTRON))
+    beforehand = _synthesise(tmp_path, monkeypatch, "beforehand", "--atmosphere",
+                             str(cropped), "--mass-per-electron", str(MASS_PER_ELECTRON))
     from_file = _synthesise(tmp_path, monkeypatch, "file", "--atmosphere",
                             str(path), *crop, "--mass-per-electron", str(MASS_PER_ELECTRON))
     assert _intensity(from_file).shape == (5, 2)
     assert from_file["line_cubes"][LINE].data == pytest.approx(
-        raw["line_cubes"][LINE].data, rel=1e-6)
+        beforehand["line_cubes"][LINE].data, rel=1e-6)
 
     even_path = write_atmosphere(_atmosphere((6, 4, 4)), tmp_path / "even.h5")
     full = _synthesise(tmp_path, monkeypatch, "full", "--atmosphere", str(even_path),
@@ -679,6 +687,12 @@ def test_the_synthesis_crops_and_downsamples_an_atmosphere_file(tmp_path, monkey
     wcs = coarse["line_cubes"][LINE].wcs.wcs
     assert wcs.cdelt[1] == pytest.approx(2 * SPACING["x"].to_value(u.Mm))
     assert wcs.cdelt[2] == pytest.approx(2 * SPACING["y"].to_value(u.Mm))
+
+
+def test_the_synthesis_asks_for_an_atmosphere_file(tmp_path, monkeypatch):
+    """There is no other way in: MURaM's own files are converted first."""
+    with pytest.raises(ValueError, match="--atmosphere is required.*from-muram"):
+        _synthesise(tmp_path, monkeypatch, "none")
 
 
 def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monkeypatch):
