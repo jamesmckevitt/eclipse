@@ -244,6 +244,41 @@ def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
     return float(np.sqrt(measured**2 + difference))
 
 
+def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
+    """
+    How many pixels either side of its centre the spectral PSF kernel reaches.
+
+    The kernel spans six sigma of the Gaussian of :func:`spectral_psf_fwhm`,
+    rounded up to an odd number of pixels and at least seven, under either
+    ``spectral_psf``. The slit convolved with the optics is no wider than
+    that Gaussian, and the pixels it leaves out hold a few parts in ten
+    thousand of it at most, for the narrowest slit.
+    """
+    sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width))
+    n = max(7, int(np.ceil(6 * sigma)))
+    if n % 2 == 0:
+        n += 1
+    return n // 2
+
+
+def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
+    """
+    How much further than the reference slit's the spectral PSF of a slit reaches, in pixels.
+
+    The wavelength window of a synthesis has whatever margin it has around
+    its lines. A slit wider than ``tel.psf_slit_width`` spreads them
+    further, and what it spreads past the ends of the window is lost, so
+    the window is widened by this many pixels at each end to give every
+    slit the margin the reference slit has. It is zero for the reference
+    slit, and for a telescope whose PSF does not depend on the slit.
+    """
+    reference = getattr(tel, "psf_slit_width", None)
+    if reference is None:
+        return 0
+    return max(0, spectral_psf_reach(tel, det, slit_width)
+               - spectral_psf_reach(tel, det, reference))
+
+
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
     The spectral PSF as the optics convolved with the slit, sampled at whole pixels.
@@ -252,9 +287,8 @@ def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     after the slit convolved with a rectangle the width of the slit. This
     is that convolution, of a Gaussian of :func:`spectral_optics_fwhm` with
     a rectangle :func:`slit_image_width` wide, evaluated at the centre of
-    each pixel as the Gaussian kernel is, and normalised to sum to one. It
-    reaches three optics sigma beyond the rectangle on each side, the reach
-    the Gaussian kernel has, and is at least seven pixels long.
+    each pixel as the Gaussian kernel is, on the same pixels
+    (:func:`spectral_psf_reach`), and normalised to sum to one.
 
     A wide slit gives a flat-topped profile. For the 0.2 arcsec slit the
     profile is narrower than the Gaussian of :func:`spectral_psf_fwhm`,
@@ -263,9 +297,8 @@ def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
     sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det))
     half = 0.5 * slit_image_width(slit_width, det)
-    reach = int(np.ceil(half + 3 * sigma))
-    n = max(7, 2 * reach + 1)
-    x = np.arange(n) - n // 2
+    reach = spectral_psf_reach(tel, det, slit_width)
+    x = np.arange(-reach, reach + 1)
     scale = np.sqrt(2.0) * sigma
     kernel = 0.5 * (erf((x + half) / scale) - erf((x - half) / scale))
     return kernel / kernel.sum()
@@ -368,9 +401,7 @@ def apply_focusing_optics_psf(
     # Along lambda (axis 1 of each frame) the profile depends on the slit.
     if quadrature:
         sigma_spectral = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width))
-        kx = max(7, int(np.ceil(6 * sigma_spectral)))
-        if kx % 2 == 0:
-            kx += 1
+        kx = 2 * spectral_psf_reach(tel, det, sim.slit_width) + 1
         x_1d = np.arange(kx) - kx // 2
         spectral_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
     else:

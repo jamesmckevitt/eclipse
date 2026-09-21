@@ -360,6 +360,30 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
 
     return cube_det
 
+
+def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
+    """
+    *cube* with *n* empty pixels added at each end of its wavelength axis.
+
+    The wavelength axis is the last one, as in every detector-grid cube, and
+    the WCS moves its reference pixel with the data, so the pixels already
+    there keep their wavelengths. Used to widen a synthesis window for a
+    spectral PSF that reaches further than its margin
+    (:func:`~euvst_response.radiometric.spectral_psf_margin`).
+    """
+    if n < 0:
+        raise ValueError(f"Cannot pad by a negative number of pixels, got {n}.")
+    if n == 0:
+        return cube
+    wcs = cube.wcs.deepcopy()
+    if not wcs.wcs.ctype[0].startswith("WAVE"):
+        raise ValueError(f"Expected the wavelength axis last, got a WCS of "
+                         f"{list(wcs.wcs.ctype)}.")
+    wcs.wcs.crpix[0] += n
+    data = np.pad(cube.data, [(0, 0)] * (cube.data.ndim - 1) + [(n, n)])
+    return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
+
+
 def create_uniform_intensity_cube(
     total_intensity: u.Quantity,
     rest_wavelength: u.Quantity,

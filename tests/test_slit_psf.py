@@ -13,7 +13,9 @@ defines the line profile.
 """
 import sys
 
+import astropy.constants as const
 import astropy.units as u
+import dill
 import numpy as np
 import pytest
 import yaml
@@ -23,12 +25,12 @@ from ndcube import NDCube
 from euvst_response.analysis import analyse_fit_statistics, load_instrument_response_results
 from euvst_response.config import (Detector_EIS, Detector_SWC, Simulation,
                                    Telescope_EIS, Telescope_EUVST)
-from euvst_response.data_processing import create_uniform_intensity_cube
+from euvst_response.data_processing import create_uniform_intensity_cube, pad_spectral_axis
 from euvst_response.main import _validate_config_keys
 from euvst_response.radiometric import (apply_focusing_optics_psf, slit_image_width,
                                         spectral_line_spread, spectral_optics_fwhm,
-                                        spectral_psf_fwhm)
-from euvst_response.utils import _fwhm_to_sigma
+                                        spectral_psf_fwhm, spectral_psf_margin)
+from euvst_response.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
 
 TEL = Telescope_EUVST()
 DET = Detector_SWC()
@@ -37,15 +39,18 @@ SLITS = [0.2, 0.4, 0.8, 1.6]  # arcsec, every SWC slit
 N_SLIT, N_WAVE = 5, 81
 
 
-def _frame(slit_width, spectral_psf="quadrature"):
-    """One exposure of a line one pixel wide, uniform along the slit."""
-    data = np.zeros((N_SLIT, 1, N_WAVE))
-    data[:, 0, N_WAVE // 2] = 1.0
+def _frame(slit_width, spectral_psf="quadrature", profile=None):
+    """One exposure of a line, one pixel wide unless *profile* is given, uniform along the slit."""
+    if profile is None:
+        profile = np.zeros(N_WAVE)
+        profile[N_WAVE // 2] = 1.0
+    data = np.tile(profile, (N_SLIT, 1, 1))
+    n_wave = profile.size
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
     wcs.wcs.cdelt = [0.0169, slit_width, 0.159]
-    wcs.wcs.crpix = [(N_WAVE + 1) / 2, 1.0, (N_SLIT + 1) / 2]
+    wcs.wcs.crpix = [(n_wave + 1) / 2, 1.0, (N_SLIT + 1) / 2]
     wcs.wcs.crval = [REST.to_value(u.Angstrom), 0.0, 0.0]
     cube = NDCube(data, wcs=wcs, unit=u.photon / u.pix, meta={"rest_wav": REST})
     sim = Simulation(slit_width=slit_width * u.arcsec, spectral_psf=spectral_psf)
@@ -198,7 +203,11 @@ def test_the_configuration_takes_the_new_settings():
 
 
 def test_the_uniform_intensity_grid_holds_a_wide_slit_line():
-    """The grid is sized for the line after this slit's PSF."""
+    """The grid is sized for the line after this slit's PSF.
+
+    Whether or not psf is on, as it was sized for the 0.2 arcsec PSF whether
+    or not psf was on, so that a sweep of psf sees one grid per slit.
+    """
     widths = []
     for slit in (0.2, 1.6):
         cube = create_uniform_intensity_cube(
@@ -207,6 +216,99 @@ def test_the_uniform_intensity_grid_holds_a_wide_slit_line():
             sim=Simulation(slit_width=slit * u.arcsec), tel=TEL)
         widths.append(cube.data.shape[-1])
     assert widths[1] > 3 * widths[0]
+
+
+# ----------------------------------------------------------------------
+# The wavelength window of a synthesis
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize("slit, margin", [(0.2, 0), (0.4, 1), (0.8, 4), (1.6, 10)])
+def test_a_wider_slit_widens_the_window_by_its_extra_reach(slit, margin):
+    assert spectral_psf_margin(TEL, DET, slit * u.arcsec) == margin
+    assert spectral_psf_margin(Telescope_EIS(), Detector_EIS(), 4 * u.arcsec) == 0
+
+
+def test_a_widened_window_keeps_a_doppler_shifted_line():
+    """The default synthesis window, 300 km/s either side, is 25 pixels at 195 A.
+
+    A line at +200 km/s sits five pixels from its end. Blurred by the 1.6
+    arcsec PSF, about a seventh of it would spread off the end of that
+    window; the widened window holds all of it, and the pixels already there
+    keep their wavelengths.
+    """
+    pixel = (DET.wvl_res * u.pixel).to(u.AA)
+    shift = (200 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    sigma = (20 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    x = np.arange(25) - 12
+    cube, sim = _frame(1.6, profile=np.exp(-0.5 * ((x - shift) / sigma) ** 2))
+    total = cube.data.sum()
+
+    margin = spectral_psf_margin(TEL, DET, sim.slit_width)
+    widened = pad_spectral_axis(cube, margin)
+    assert np.array_equal(widened.data[..., margin:-margin], cube.data)
+    assert widened.wcs.wcs.crpix[0] == cube.wcs.wcs.crpix[0] + margin
+
+    cut = apply_focusing_optics_psf(cube, TEL, DET, sim, convolve_spatial=False)
+    kept = apply_focusing_optics_psf(widened, TEL, DET, sim, convolve_spatial=False)
+    assert cut.data.sum() < 0.9 * total
+    assert kept.data.sum() == pytest.approx(total, rel=1e-4)
+
+
+def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
+    """The grids are cached by slit width, and sized with it."""
+    from euvst_response.main import main
+
+    config = tmp_path / "sweep.yaml"
+    config.write_text(yaml.safe_dump({
+        "instrument": "SWC", "uniform_intensity": "5000 erg / (s cm2 sr)",
+        "n_iter": 1, "ncpu": 1,
+        "telescope": {"psf_slit_width": ["0.2 arcsec", "0.4 arcsec"]},
+    }))
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="psf_slit_width.*cannot be swept"):
+        main()
+
+
+def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, monkeypatch):
+    """From a synthesis file with the default window to the rebinned cubes the run keeps."""
+    from euvst_response.main import main
+
+    n_spec, n_cells = 121, 8  # 300 km/s either side at 5 km/s; 1.5 Mm square
+    step = (5 * u.km / u.s / const.c * REST).to_value(u.cm)
+    sigma = (20 * u.km / u.s / const.c * REST).to_value(u.cm)
+    offsets = (np.arange(n_spec) - n_spec // 2) * step
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
+    wcs.wcs.cunit = ["cm", "Mm", "Mm"]
+    wcs.wcs.cdelt = [step, 0.192, 0.192]
+    wcs.wcs.crpix = [(n_spec + 1) / 2, (n_cells + 1) / 2, (n_cells + 1) / 2]
+    wcs.wcs.crval = [REST.to_value(u.cm), 0.0, 0.0]
+    line = 1e13 * np.exp(-0.5 * (offsets / sigma) ** 2)
+    cube = NDCube(np.tile(line, (n_cells, n_cells, 1)), wcs=wcs,
+                  unit=u.erg / (u.s * u.cm**3 * u.sr),
+                  meta={"rest_wav": REST, "integration_axis": "z",
+                        "velocity_convention": VELOCITY_CONVENTION})
+    synthesis_file = tmp_path / "synthesis.pkl"
+    with open(synthesis_file, "wb") as f:
+        dill.dump({"line_cubes": {"Fe12_195.1190": cube}}, f)
+
+    config = tmp_path / "window.yaml"
+    config.write_text(yaml.safe_dump({
+        "instrument": "SWC", "synthesis_file": str(synthesis_file),
+        "reference_line": "Fe12_195.1190", "n_iter": 1, "ncpu": 1,
+        "simulation": {"slit_width": ["0.2 arcsec", "1.6 arcsec"], "expos": "10 s",
+                       "psf": True, "noise": False},
+    }))
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.chdir(tmp_path)
+    main()
+
+    cubes = load_instrument_response_results(tmp_path / "run" / "result" / "window.pkl")[
+        "cube_reb_dict"]
+    narrow, wide = cubes[(0.2, 1)], cubes[(1.6, 1)]
+    margin = spectral_psf_margin(TEL, DET, 1.6 * u.arcsec)
+    assert wide.data.shape[-1] == narrow.data.shape[-1] + 2 * margin
+    assert wide.wcs.wcs.crpix[0] == narrow.wcs.wcs.crpix[0] + margin
 
 
 def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypatch):
