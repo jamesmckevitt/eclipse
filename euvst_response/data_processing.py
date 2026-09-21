@@ -10,6 +10,7 @@ import astropy.constants as const
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
+from scipy.special import erf
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
@@ -402,6 +403,8 @@ def create_uniform_intensity_cube(
     The cube is built directly at the detector's spectral resolution and
     assigned a helioprojective WCS consistent with the output of
     ``rebin_atmosphere``, so it can be fed straight into ``monte_carlo``.
+    Each wavelength pixel holds the line integrated across that pixel, so
+    the cube holds exactly ``total_intensity`` however narrow the line is.
 
     Parameters
     ----------
@@ -469,15 +472,22 @@ def create_uniform_intensity_cube(
     n_pix_half = int(np.ceil((half_range / dlam).decompose().value))
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
-    lam_grid = lam0 + (np.arange(n_lam) - n_pix_half) * dlam  # shape (n_lam,)
-
     # --- Gaussian profile -----------------------------------------------
-    # I(lam) = A * exp[-(lam - lam0)^2 / (2 sigma_lam^2)]
-    # with A = I_total / (sigma_lam * sqrt(2*pi))  so integral of I dlam = I_total
-    A = (total_intensity / (sigma_lam * np.sqrt(2 * np.pi))).to(
+    # Each pixel holds the line integrated between its edges and divided by
+    # its width, which is what FluxConservingResampler gives a synthesised
+    # spectrum, so the pixels add up to total_intensity whatever the width.
+    # The Gaussian sampled at pixel centres only does that for a line more
+    # than about half a pixel wide (sigma): centred on a pixel, a line of 0.3
+    # pixels, such as Fe VIII 185.21 at its formation temperature, would come
+    # out 35 per cent too bright.  The edges are counted in pixels from the
+    # line centre, as absolute wavelengths would lose a part in 1e12 of a
+    # pixel to rounding, and each pixel's upper edge is the next one's lower
+    # edge, so the pixels add up to the whole line exactly.
+    edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
+             / (np.sqrt(2.0) * sigma_lam)).decompose().value
+    profile = (total_intensity * 0.5 * np.diff(erf(edges)) / dlam).to(
         u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     )
-    profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
     # Tile the profile along the slit axis.  Every slit pixel holds the same
     # intensity, but each is noised independently downstream, which is what
     # rebin_slit_offchip needs in order to sum them.
