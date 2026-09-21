@@ -404,7 +404,9 @@ def create_uniform_intensity_cube(
     assigned a helioprojective WCS consistent with the output of
     ``rebin_atmosphere``, so it can be fed straight into ``monte_carlo``.
     Each wavelength pixel holds the line integrated across that pixel, so
-    the cube holds exactly ``total_intensity`` however narrow the line is.
+    the cube holds exactly the part of the line on its wavelength grid
+    however narrow the line is.  With the default ``n_sigma_extent`` that is
+    ``total_intensity`` to a part in 1e15.
 
     Parameters
     ----------
@@ -422,7 +424,8 @@ def create_uniform_intensity_cube(
     n_sigma_extent : float, optional
         Number of sigma either side of line centre to include in the
         wavelength grid (default: 8).  Measured on the width the line will have
-        once the spectral PSF has been applied, if *tel* is given.
+        once the spectral PSF has been applied, if *tel* is given.  The part
+        of the line beyond the grid is left out of the cube.
     n_slit_pixels : int, optional
         Number of (uniform) slit pixels to generate.  Set to the
         ``offchip_bin_slit`` value so that subsequent ``rebin_slit_offchip``
@@ -475,14 +478,15 @@ def create_uniform_intensity_cube(
     # --- Gaussian profile -----------------------------------------------
     # Each pixel holds the line integrated between its edges and divided by
     # its width, which is what FluxConservingResampler gives a synthesised
-    # spectrum, so the pixels add up to total_intensity whatever the width.
+    # spectrum, so the pixels add up to all of the line on the grid whatever
+    # its width: total_intensity, less the tails beyond n_sigma_extent.
     # The Gaussian sampled at pixel centres only does that for a line more
     # than about half a pixel wide (sigma): centred on a pixel, a line of 0.3
     # pixels, such as Fe VIII 185.21 at its formation temperature, would come
     # out 35 per cent too bright.  The edges are counted in pixels from the
     # line centre, as absolute wavelengths would lose a part in 1e12 of a
     # pixel to rounding, and each pixel's upper edge is the next one's lower
-    # edge, so the pixels add up to the whole line exactly.
+    # edge, so nothing between two pixels is counted twice or missed.
     edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
              / (np.sqrt(2.0) * sigma_lam)).decompose().value
     profile = (total_intensity * 0.5 * np.diff(erf(edges)) / dlam).to(

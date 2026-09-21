@@ -59,8 +59,17 @@ def _sigma_pixels(width):
     return REST.to_value(u.Angstrom) * width / C_KM_S / dispersion
 
 
+def _gaussian_between(sigma, lo, hi):
+    """The part of a unit Gaussian of this sigma between lo and hi, by numerical integration."""
+    def gaussian(x):
+        return np.exp(-0.5 * (x / sigma) ** 2) / (sigma * np.sqrt(2.0 * np.pi))
+
+    return quad(gaussian, lo, hi, epsabs=1e-15, epsrel=1e-12)[0]
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 def test_the_pixels_add_up_to_the_line_intensity_whatever_its_width(width):
+    """At the default extent, which leaves out a part in 1e15 of the line."""
     cube = _cube(width)
     dlam = (DET.wvl_res * u.pix).to(u.cm)
     total = (cube.data.sum(axis=-1) * cube.unit * dlam).to_value(INTENSITY.unit)
@@ -80,12 +89,7 @@ def test_each_pixel_holds_the_gaussian_integrated_across_it(width):
     assert np.allclose(labelled, offsets, rtol=0.0, atol=1e-9)
 
     sigma = _sigma_pixels(width)
-
-    def gaussian(x):
-        return np.exp(-0.5 * (x / sigma) ** 2) / (sigma * np.sqrt(2.0 * np.pi))
-
-    expected = np.array([quad(gaussian, x - 0.5, x + 0.5, epsabs=1e-15, epsrel=1e-12)[0]
-                         for x in offsets])
+    expected = np.array([_gaussian_between(sigma, x - 0.5, x + 0.5) for x in offsets])
     dlam = (DET.wvl_res * u.pix).to(u.cm)
     got = (cube.data[0, 0] * cube.unit * dlam).to_value(INTENSITY.unit) / INTENSITY.value
     assert np.allclose(got, expected, rtol=1e-9, atol=1e-14)
@@ -113,3 +117,20 @@ def test_the_detector_receives_the_photons_the_radiometric_equation_gives(width,
     expected = (INTENSITY.value * t_exp * 1.0 * omega_sr
                 * REST.to_value(u.cm) / HC_ERG_CM)
     assert photons.data.sum() == pytest.approx(expected, rel=1e-9)
+
+
+def test_a_grid_cut_short_holds_exactly_the_part_of_the_line_on_it():
+    """n_sigma_extent can put the ends of the grid inside the line, and the tails beyond are left out."""
+    width = 60  # km/s, two pixels
+    cube = create_uniform_intensity_cube(
+        total_intensity=INTENSITY, rest_wavelength=REST,
+        thermal_width=width * u.km / u.s, det=DET,
+        sim=Simulation(slit_width=0.2 * u.arcsec), n_sigma_extent=1.0)
+    # From the line centre to the far edge of the outermost pixel.
+    reach = cube.data.shape[-1] // 2 + 0.5
+    on_grid = _gaussian_between(_sigma_pixels(width), -reach, reach)
+    assert on_grid < 0.9
+
+    dlam = (DET.wvl_res * u.pix).to(u.cm)
+    total = (cube.data.sum(axis=-1) * cube.unit * dlam).to_value(INTENSITY.unit)
+    assert np.allclose(total, INTENSITY.value * on_grid, rtol=1e-10, atol=0.0)
