@@ -233,10 +233,17 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     new_wcs = ndcube.wcs.deepcopy()
 
     wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # Reverse axis order for WCS
+    unit = new_wcs.wcs.cunit[wcs_axis]
+    cdelt = (new_spec_grid[1] - new_spec_grid[0]).to_value(unit)
+    # The reference pixel is the centre of the axis, which falls between two
+    # pixels when there is an even number of them. The reference value has
+    # to be the wavelength at that point, not at the pixel below it, or the
+    # whole axis is labelled half a pixel low and every fitted velocity comes
+    # out half a pixel blue.
     center_pixel = (n_spec + 1) / 2  # 1-based index (FITS convention)
     new_wcs.wcs.crpix[wcs_axis] = center_pixel
-    new_wcs.wcs.crval[wcs_axis] = new_spec_grid[int(center_pixel - 1)].to_value(new_wcs.wcs.cunit[wcs_axis])
-    new_wcs.wcs.cdelt[wcs_axis] = (new_spec_grid[1] - new_spec_grid[0]).to_value(new_wcs.wcs.cunit[wcs_axis])
+    new_wcs.wcs.crval[wcs_axis] = new_spec_grid[0].to_value(unit) + (center_pixel - 1) * cdelt
+    new_wcs.wcs.cdelt[wcs_axis] = cdelt
 
     return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
 
