@@ -261,7 +261,7 @@ def test_psf_blurs_within_one_scan_position():
                   meta={"rest_wav": REST})
 
     tel = Telescope_EUVST(psf_params=[2.0 * u.pix, 2.0 * u.pix])
-    out = apply_focusing_optics_psf(cube, tel)
+    out = apply_focusing_optics_psf(cube, tel, Detector_SWC(), Simulation())
 
     assert out.data[:, 0, :].sum() == 0.0
     assert out.data[:, 2, :].sum() == 0.0

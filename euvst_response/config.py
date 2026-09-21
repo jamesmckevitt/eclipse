@@ -274,7 +274,13 @@ class Telescope_EUVST:
     psf_type: str = "gaussian"
     # psf_params: list = field(default_factory=lambda: [1.26 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec (w/ slit-scan; FOV2) and 33.00 mA in RSC-2022021 (Oct 2023) and RSC-2022021B (Feb 2024).
     psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec (w/ slit-scan; FOV2) and 43.00 mA in RSC-2022021C (Mar 2025).
-    
+    # The slit width the spectral FWHM in psf_params is for. RSC-2022021C
+    # quotes the spectral resolution with the 0.2 arcsec slit, as the optics
+    # FWHM after the slit (0.352 arcsec at 212.3 A) added in quadrature to the
+    # slit width (giving 0.405 arcsec, 43.00 mA), so the spectral PSF of any
+    # other slit is worked out from it; see radiometric.spectral_psf_fwhm.
+    psf_slit_width: u.Quantity = 0.2 * u.arcsec
+
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
     grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
@@ -417,6 +423,10 @@ class Telescope_EIS:
     """
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
+    # The EIS PSF is not tied to a slit width, so its spectral FWHM stays the
+    # same whichever slit is used. Setting this says which slit psf_params was
+    # measured with, and the spectral PSF then follows the slit as for SWC.
+    psf_slit_width: u.Quantity | None = None
     calibration: str = "ground"
     date: str | None = None
 
@@ -497,6 +507,14 @@ class Simulation:
     # zero-filled either way: the wavelength grid runs several sigma past the
     # line, so there is nothing at its ends to lose.
     psf_boundary: str = "replicate"
+    # How the slit enters the spectral PSF. "quadrature" keeps the PSF a
+    # Gaussian and adds the slit's width to the optics FWHM in quadrature,
+    # which is how RSC-2022021C quotes the spectral resolution. "convolution"
+    # convolves the optics Gaussian with the slit's rectangular image, which
+    # is how the same document defines the line profile; it gives the
+    # flat-topped profile of a wide slit, and a narrower one than quadrature
+    # for the 0.2 arcsec slit. See radiometric.spectral_line_spread.
+    spectral_psf: str = "quadrature"
     # With noise False every random draw in the detector chain is replaced by
     # its own mean, so the run returns the signal the instrument would measure
     # on average. Deterministic quantisation stays: DN are still rounded and
@@ -534,6 +552,11 @@ class Simulation:
             raise ValueError(
                 f"psf_boundary must be 'replicate' or 'zero', got "
                 f"{self.psf_boundary!r}."
+            )
+        if self.spectral_psf not in ("quadrature", "convolution"):
+            raise ValueError(
+                f"spectral_psf must be 'quadrature' or 'convolution', got "
+                f"{self.spectral_psf!r}."
             )
 
         # The pinhole lists are paired, and both pipelines zip them together.

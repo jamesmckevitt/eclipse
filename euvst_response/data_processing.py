@@ -14,6 +14,7 @@ from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from .radiometric import spectral_psf_fwhm
 from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign
 
 
@@ -359,6 +360,32 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
 
     return cube_det
 
+
+def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
+    """
+    *cube* with *n* empty pixels added at each end of its wavelength axis.
+
+    The wavelength axis is the last data axis, as in every detector-grid
+    cube, which is the first WCS axis, since the WCS lists its axes the other
+    way round. The WCS moves its reference pixel with the data, so the pixels
+    already there keep their wavelengths. Used to widen a synthesis window
+    for a spectral PSF that reaches further than its margin
+    (:func:`~euvst_response.radiometric.spectral_psf_margin`).
+    """
+    if n < 0:
+        raise ValueError(f"Cannot pad by a negative number of pixels, got {n}.")
+    if n == 0:
+        return cube
+    wcs = cube.wcs.deepcopy()
+    if not wcs.wcs.ctype[0].startswith("WAVE"):
+        raise ValueError(
+            f"Expected wavelength on the last data axis, which is the first WCS "
+            f"axis, but the WCS axes are {list(wcs.wcs.ctype)}.")
+    wcs.wcs.crpix[0] += n
+    data = np.pad(cube.data, [(0, 0)] * (cube.data.ndim - 1) + [(n, n)])
+    return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
+
+
 def create_uniform_intensity_cube(
     total_intensity: u.Quantity,
     rest_wavelength: u.Quantity,
@@ -430,10 +457,12 @@ def create_uniform_intensity_cube(
     # the two: at the default 20 km/s the line is 0.77 pixels against a PSF of
     # 1.08.  Always widening, rather than only when psf is set, keeps the grid
     # independent of a value that is swept and is not known when the cube is
-    # built and cached.
+    # built and cached.  The PSF is the one for this slit, with the slit added
+    # in quadrature: that is at least as broad as the slit convolved with the
+    # optics, so the grid holds the line under either spectral_psf.
     sigma_total = sigma_lam
     if tel is not None:
-        sigma_psf = _fwhm_to_sigma(tel.psf_params[1].to(u.pixel).value) * dlam
+        sigma_psf = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * dlam
         sigma_total = np.sqrt(sigma_lam**2 + sigma_psf**2)
 
     half_range = n_sigma_extent * sigma_total
