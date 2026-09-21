@@ -45,19 +45,12 @@ telescope:
 
 ### The spectral PSF and the slit
 
-With `psf: True` a line is blurred along the dispersion by the optics and by the image of the slit, so the spectral PSF depends on the slit width. For SWC, `telescope.psf_params` gives the spectral FWHM with the 0.2 arcsec slit, 43.00 mA or 2.54 pixels from RSC-2022021C, and `telescope.psf_slit_width` records that slit. The other slits follow from it the way RSC-2022021C adds the slit to the optics, in quadrature:
-
-| Slit | Spectral FWHM |
-| --- | --- |
-| 0.2 arcsec | 2.54 pixels |
-| 0.4 arcsec | 3.35 pixels |
-| 0.8 arcsec | 5.49 pixels |
-| 1.6 arcsec | 10.30 pixels |
+With `psf: True` a line is blurred along the dispersion by the optics and by the image of the slit, so the spectral PSF depends on the slit width. For SWC, `telescope.psf_params` gives the spectral FWHM with the 0.2 arcsec slit.
 
 `simulation.spectral_psf` sets how the slit enters the line profile:
 
-- `quadrature` (default): a Gaussian with the FWHM above, the resolution as the document quotes it.
-- `convolution`: the optics alone, a Gaussian of 2.21 pixels, convolved with the slit's rectangular image, which is how the document defines the line profile. A wide slit then gives a flat-topped line, and the 0.2 arcsec slit a slightly narrower one than the quoted 2.54 pixels.
+- `quadrature` (default): a Gaussian with the FWHM above.
+- `convolution`: a Gaussian from the optical design convolved with the slit's rectangular image.
 
 ```yaml
 simulation:
