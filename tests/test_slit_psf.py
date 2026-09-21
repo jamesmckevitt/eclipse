@@ -253,6 +253,15 @@ def test_a_widened_window_keeps_a_doppler_shifted_line():
     assert kept.data.sum() == pytest.approx(total, rel=1e-4)
 
 
+def test_the_window_is_widened_only_along_wavelength():
+    """The last data axis, which is the first WCS axis."""
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["HPLN-TAN", "HPLT-TAN", "WAVE"]
+    cube = NDCube(np.zeros((4, 3, 2)), wcs=wcs)
+    with pytest.raises(ValueError, match="last data axis, which is the first WCS axis"):
+        pad_spectral_axis(cube, 1)
+
+
 def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
     """The grids are cached by slit width, and sized with it."""
     from euvst_response.main import main

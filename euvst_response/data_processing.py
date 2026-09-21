@@ -365,10 +365,11 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
     """
     *cube* with *n* empty pixels added at each end of its wavelength axis.
 
-    The wavelength axis is the last one, as in every detector-grid cube, and
-    the WCS moves its reference pixel with the data, so the pixels already
-    there keep their wavelengths. Used to widen a synthesis window for a
-    spectral PSF that reaches further than its margin
+    The wavelength axis is the last data axis, as in every detector-grid
+    cube, which is the first WCS axis, since the WCS lists its axes the other
+    way round. The WCS moves its reference pixel with the data, so the pixels
+    already there keep their wavelengths. Used to widen a synthesis window
+    for a spectral PSF that reaches further than its margin
     (:func:`~euvst_response.radiometric.spectral_psf_margin`).
     """
     if n < 0:
@@ -377,8 +378,9 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
         return cube
     wcs = cube.wcs.deepcopy()
     if not wcs.wcs.ctype[0].startswith("WAVE"):
-        raise ValueError(f"Expected the wavelength axis last, got a WCS of "
-                         f"{list(wcs.wcs.ctype)}.")
+        raise ValueError(
+            f"Expected wavelength on the last data axis, which is the first WCS "
+            f"axis, but the WCS axes are {list(wcs.wcs.ctype)}.")
     wcs.wcs.crpix[0] += n
     data = np.pad(cube.data, [(0, 0)] * (cube.data.ndim - 1) + [(n, n)])
     return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
