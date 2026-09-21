@@ -117,4 +117,3 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
-- [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
