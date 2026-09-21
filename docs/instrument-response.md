@@ -43,6 +43,31 @@ telescope:
   date: ["2008-01-01", "2013-01-01", "2018-01-01"]
 ```
 
+### The spectral PSF and the slit
+
+With `psf: True` a line is blurred along the dispersion by the optics and by the image of the slit, so the spectral PSF depends on the slit width. For SWC, `telescope.psf_params` gives the spectral FWHM with the 0.2 arcsec slit, 43.00 mA or 2.54 pixels from RSC-2022021C, and `telescope.psf_slit_width` records that slit. The other slits follow from it the way RSC-2022021C adds the slit to the optics, in quadrature:
+
+| Slit | Spectral FWHM |
+| --- | --- |
+| 0.2 arcsec | 2.54 pixels |
+| 0.4 arcsec | 3.35 pixels |
+| 0.8 arcsec | 5.49 pixels |
+| 1.6 arcsec | 10.30 pixels |
+
+`simulation.spectral_psf` sets how the slit enters the line profile:
+
+- `quadrature` (default): a Gaussian with the FWHM above, the resolution as the document quotes it.
+- `convolution`: the optics alone, a Gaussian of 2.21 pixels, convolved with the slit's rectangular image, which is how the document defines the line profile. A wide slit then gives a flat-topped line, and the 0.2 arcsec slit a slightly narrower one than the quoted 2.54 pixels.
+
+```yaml
+simulation:
+  slit_width: [0.2 arcsec, 1.6 arcsec]
+  psf: True
+  spectral_psf: convolution
+```
+
+The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
+
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.

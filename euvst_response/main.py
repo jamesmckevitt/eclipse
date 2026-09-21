@@ -45,7 +45,7 @@ _TOP_LEVEL_KEYS = {
 # (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
 # writing one here would have been parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "noise", "enable_pinholes"}
+                    "spectral_psf", "noise", "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -452,6 +452,7 @@ def main() -> None:
         "vis_sl": 0.0 * u.photon / (u.s * u.cm**2),
         "psf": False,
         "psf_boundary": "replicate",
+        "spectral_psf": "quadrature",
         "noise": True,
         "enable_pinholes": False,
     }
@@ -643,6 +644,7 @@ def main() -> None:
         vis_sl = all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2))
         psf = all_sim.get("psf", False)
         psf_boundary = all_sim.get("psf_boundary", "replicate")
+        spectral_psf = all_sim.get("spectral_psf", "quadrature")
         noise = all_sim.get("noise", True)
         enable_pinholes = all_sim.get("enable_pinholes", False)
 
@@ -732,6 +734,7 @@ def main() -> None:
             vis_sl=vis_sl,
             psf=psf,
             psf_boundary=psf_boundary,
+            spectral_psf=spectral_psf,
             noise=noise,
             enable_pinholes=enable_pinholes,
             pinhole_sizes=pinhole_sizes if enable_pinholes else [],

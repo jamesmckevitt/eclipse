@@ -9,6 +9,7 @@ import astropy.constants as const
 from ndcube import NDCube
 from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
+from scipy.special import erf
 from scipy.stats import poisson
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
@@ -173,9 +174,108 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
     )
 
 
+def slit_image_width(slit_width: u.Quantity, det) -> float:
+    """
+    The width of the slit's image across the dispersion, in detector pixels.
+
+    RSC-2022021C measures widths along the dispersion in the same arcsec as
+    along the slit, converting both with the spatial scale (0.0118 arcsec per
+    micron for SW), and adds the slit to the optics in those units. A slit
+    *slit_width* wide therefore covers *slit_width* over the plate scale in
+    spectral pixels, as it would along the slit.
+    """
+    return (slit_width / (det.plate_scale_angle * u.pixel)).to_value(u.dimensionless_unscaled)
+
+
+def spectral_optics_fwhm(tel, det) -> float:
+    """
+    FWHM of the optics alone along the dispersion, in detector pixels.
+
+    ``tel.psf_params[1]`` is the spectral FWHM with a slit
+    ``tel.psf_slit_width`` wide, the optics FWHM and the slit width added in
+    quadrature, so the optics part is what is left when the slit is taken
+    out the same way. For the default SWC values that is 2.207 pixels, or
+    0.351 arcsec, where RSC-2022021C gives 0.352 arcsec; the two agree to the
+    rounding of 43.00 mA to 2.54 pixels and of the plate scale to 0.159
+    arcsec per pixel.
+    """
+    reference = getattr(tel, "psf_slit_width", None)
+    if reference is None:
+        raise ValueError(
+            f"{type(tel).__name__} has no psf_slit_width, so its spectral PSF "
+            f"is not separated into the optics and the slit and cannot be "
+            f"convolved with a slit. Give psf_slit_width, the slit width "
+            f"psf_params was measured with, or use spectral_psf: quadrature.")
+    measured = tel.psf_params[1].to_value(u.pixel)
+    slit = slit_image_width(reference, det)
+    optics_squared = measured**2 - slit**2
+    if optics_squared <= 0:
+        raise ValueError(
+            f"The spectral FWHM of {measured} pixels is no wider than the "
+            f"{slit:.3f}-pixel image of the {reference} slit it is quoted for, "
+            f"so it leaves nothing for the optics.")
+    return float(np.sqrt(optics_squared))
+
+
+def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
+    """
+    FWHM of the spectral PSF with a slit *slit_width* wide, in detector pixels.
+
+    The optics FWHM and the slit width add in quadrature, as RSC-2022021C
+    adds them for the spectral resolution it quotes:
+    ``FWHM(w)**2 = FWHM(w0)**2 + s(w)**2 - s(w0)**2``, where ``w0`` is
+    ``tel.psf_slit_width``, ``FWHM(w0)`` is ``tel.psf_params[1]`` and ``s``
+    is :func:`slit_image_width`. With the reference slit this is
+    ``psf_params[1]`` exactly. For the default SWC values it gives 2.54,
+    3.35, 5.49 and 10.30 pixels for the 0.2, 0.4, 0.8 and 1.6 arcsec slits.
+
+    A telescope without ``psf_slit_width`` has one spectral FWHM whatever
+    the slit.
+    """
+    measured = tel.psf_params[1].to_value(u.pixel)
+    reference = getattr(tel, "psf_slit_width", None)
+    if reference is None:
+        return measured
+    # Refuses a FWHM that leaves nothing for the optics.
+    spectral_optics_fwhm(tel, det)
+    # The difference of squares comes first so that it is exactly zero for
+    # the reference slit, which then gets psf_params[1] to the last bit.
+    difference = slit_image_width(slit_width, det)**2 - slit_image_width(reference, det)**2
+    return float(np.sqrt(measured**2 + difference))
+
+
+def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
+    """
+    The spectral PSF as the optics convolved with the slit, sampled at whole pixels.
+
+    RSC-2022021C defines the line spread function as the PSF of the optics
+    after the slit convolved with a rectangle the width of the slit. This
+    is that convolution, of a Gaussian of :func:`spectral_optics_fwhm` with
+    a rectangle :func:`slit_image_width` wide, evaluated at the centre of
+    each pixel as the Gaussian kernel is, and normalised to sum to one. It
+    reaches three optics sigma beyond the rectangle on each side, the reach
+    the Gaussian kernel has, and is at least seven pixels long.
+
+    A wide slit gives a flat-topped profile. For the 0.2 arcsec slit the
+    profile is narrower than the Gaussian of :func:`spectral_psf_fwhm`,
+    because a rectangle adds less to a width than a Gaussian of the same
+    FWHM does.
+    """
+    sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det))
+    half = 0.5 * slit_image_width(slit_width, det)
+    reach = int(np.ceil(half + 3 * sigma))
+    n = max(7, 2 * reach + 1)
+    x = np.arange(n) - n // 2
+    scale = np.sqrt(2.0) * sigma
+    kernel = 0.5 * (erf((x + half) / scale) - erf((x - half) / scale))
+    return kernel / kernel.sum()
+
+
 def apply_focusing_optics_psf(
     signal: NDCube,
     tel,
+    det,
+    sim,
     *,
     convolve_spatial: bool = True,
     boundary: str = "replicate",
@@ -185,7 +285,11 @@ def apply_focusing_optics_psf(
     anisotropic 2-D PSF from the focusing optics.
 
     The PSF is specified separately in the spatial (slit) and spectral
-    (wavelength) directions via ``tel.psf_params``.
+    (wavelength) directions via ``tel.psf_params``. Along the dispersion it
+    also depends on the slit, whose image is part of the line profile: with
+    ``sim.spectral_psf`` ``"quadrature"`` the PSF is a Gaussian of
+    :func:`spectral_psf_fwhm`, and with ``"convolution"`` it is
+    :func:`spectral_line_spread`.
 
     Parameters
     ----------
@@ -195,6 +299,11 @@ def apply_focusing_optics_psf(
     tel : Telescope_EUVST or Telescope_EIS
         Telescope configuration containing PSF parameters.
         psf_params = [spatial_fwhm, spectral_fwhm] in pixel units.
+    det : Detector_SWC or Detector_EIS
+        The detector, whose plate scale sets how many spectral pixels the
+        slit's image covers.
+    sim : Simulation
+        The slit width and ``spectral_psf``, how the slit enters the PSF.
     convolve_spatial : bool, optional
         When False, convolve the spectral axis only and leave the slit axis
         alone.  This is for a field that is uniform along the slit, where
@@ -240,29 +349,39 @@ def apply_focusing_optics_psf(
             "[spatial_fwhm, spectral_fwhm] in pixel units."
         )
 
-    # FWHM in pixels for each axis
-    spatial_fwhm = psf_params[0].to(u.pixel).value   # along slit (axis 0 of each frame)
-    spectral_fwhm = psf_params[1].to(u.pixel).value  # along lambda (axis 1 of each frame)
+    if sim.spectral_psf not in ("quadrature", "convolution"):
+        raise ValueError(
+            f"spectral_psf must be 'quadrature' or 'convolution', got "
+            f"{sim.spectral_psf!r}."
+        )
+    quadrature = sim.spectral_psf == "quadrature"
 
-    # Convert FWHM -> sigma
+    # FWHM in pixels along the slit (axis 0 of each frame)
+    spatial_fwhm = psf_params[0].to(u.pixel).value
     sigma_spatial = _fwhm_to_sigma(spatial_fwhm)
-    sigma_spectral = _fwhm_to_sigma(spectral_fwhm)
 
     # Kernel size: 6*sigma rounded up to next odd integer, minimum 7
     ky = max(7, int(np.ceil(6 * sigma_spatial)))
-    kx = max(7, int(np.ceil(6 * sigma_spectral)))
     if ky % 2 == 0:
         ky += 1
-    if kx % 2 == 0:
-        kx += 1
+
+    # Along lambda (axis 1 of each frame) the profile depends on the slit.
+    if quadrature:
+        sigma_spectral = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width))
+        kx = max(7, int(np.ceil(6 * sigma_spectral)))
+        if kx % 2 == 0:
+            kx += 1
+        x_1d = np.arange(kx) - kx // 2
+        spectral_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
+    else:
+        spectral_1d = spectral_line_spread(tel, det, sim.slit_width)
+        kx = spectral_1d.size
 
     if not convolve_spatial:
         # Spectral axis only.  Zero padding is correct here: the wavelength
         # grid extends several sigma past the line, so there is no flux at its
         # edges to lose.
-        x_1d = np.arange(kx) - kx // 2
-        psf_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
-        psf_1d /= psf_1d.sum()
+        psf_1d = spectral_1d / spectral_1d.sum()
         return NDCube(
             data=convolve1d(data_in, psf_1d, axis=2, mode="constant", cval=0.0),
             wcs=signal.wcs.deepcopy(),
@@ -270,15 +389,21 @@ def apply_focusing_optics_psf(
             meta=signal.meta,
         )
 
-    # Coordinate grids centred at zero
-    cy, cx = ky // 2, kx // 2
-    y, x = np.mgrid[:ky, :kx]
-    y = (y - cy).astype(float)
-    x = (x - cx).astype(float)
+    if quadrature:
+        # Coordinate grids centred at zero
+        cy, cx = ky // 2, kx // 2
+        y, x = np.mgrid[:ky, :kx]
+        y = (y - cy).astype(float)
+        x = (x - cx).astype(float)
 
-    # Build PSF
-    psf = np.exp(-0.5 * ((y / sigma_spatial) ** 2
-                         + (x / sigma_spectral) ** 2))
+        # Build PSF
+        psf = np.exp(-0.5 * ((y / sigma_spatial) ** 2
+                             + (x / sigma_spectral) ** 2))
+    else:
+        # The optics blur along the slit does not depend on the slit, so the
+        # PSF is the spatial Gaussian times the spectral profile.
+        y_1d = np.arange(ky) - ky // 2
+        psf = np.outer(np.exp(-0.5 * (y_1d / sigma_spatial) ** 2), spectral_1d)
 
     # Normalise
     psf /= psf.sum()

@@ -102,7 +102,7 @@ def simulate_once(
     # Apply focusing optics PSF (primary mirror + diffraction grating)
     if sim.psf:
         photons_focused = apply_focusing_optics_psf(
-            photons_pixels, tel, convolve_spatial=not uniform_mode,
+            photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
             boundary=getattr(sim, "psf_boundary", "replicate"),
         )
     else:

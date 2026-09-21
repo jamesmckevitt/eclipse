@@ -12,7 +12,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Simulation, Telescope_EUVST
+from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.radiometric import apply_focusing_optics_psf
 
 REST = 195.119 * u.Angstrom
@@ -38,6 +38,8 @@ def _uniform_slit_cube(value=100.0):
 
 
 TEL = Telescope_EUVST()
+DET = Detector_SWC()
+SIM = Simulation()
 
 
 def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
@@ -47,7 +49,7 @@ def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
     change anything. Under zero fill the outer rows lose flux anyway.
     """
     cube = _uniform_slit_cube()
-    replicated = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
+    replicated = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
 
     middle = replicated.data[N_SLIT // 2, 0, :]
     for row in range(N_SLIT):
@@ -62,8 +64,8 @@ def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
     quoted, so the numbers cannot drift apart from the PSF they describe.
     """
     cube = _uniform_slit_cube()
-    zero_filled = apply_focusing_optics_psf(cube, TEL, boundary="zero")
-    replicated = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
+    zero_filled = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="zero")
+    replicated = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
 
     fwhm = TEL.psf_params[0].to_value(u.pixel)
     sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
@@ -88,8 +90,8 @@ def test_the_interior_is_untouched_by_the_choice():
     rng = np.random.RandomState(20260913)
     cube = _cube(rng.uniform(10.0, 200.0, (N_SLIT, N_SCAN, N_WAVE)))
 
-    zero_filled = apply_focusing_optics_psf(cube, TEL, boundary="zero")
-    replicated = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
+    zero_filled = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="zero")
+    replicated = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
 
     interior = slice(4, N_SLIT - 4)
     assert np.allclose(zero_filled.data[interior, :, :],
@@ -104,7 +106,7 @@ def test_the_spectral_axis_is_still_zero_filled():
     data[:, :, 0] = 1000.0     # all the flux against the blue edge
     cube = _cube(data)
 
-    out = apply_focusing_optics_psf(cube, TEL, boundary="replicate")
+    out = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
     assert out.data.sum() < 0.75 * data.sum()
 
 
@@ -112,7 +114,7 @@ def test_replication_does_not_invent_flux_in_a_dark_field():
     """Continuing a dark edge outward must stay dark."""
     data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[N_SLIT // 2, :, N_WAVE // 2] = 1.0
-    out = apply_focusing_optics_psf(_cube(data), TEL, boundary="replicate")
+    out = apply_focusing_optics_psf(_cube(data), TEL, DET, SIM, boundary="replicate")
 
     # A point source well inside the field keeps all of its flux, and none of
     # it appears at the edge rows the replication reaches.
@@ -123,16 +125,16 @@ def test_replication_does_not_invent_flux_in_a_dark_field():
 def test_the_uniform_intensity_path_is_unaffected():
     """It skips the spatial convolution entirely, so the boundary is moot."""
     cube = _uniform_slit_cube()
-    a = apply_focusing_optics_psf(cube, TEL, convolve_spatial=False,
+    a = apply_focusing_optics_psf(cube, TEL, DET, SIM, convolve_spatial=False,
                                   boundary="replicate")
-    b = apply_focusing_optics_psf(cube, TEL, convolve_spatial=False,
+    b = apply_focusing_optics_psf(cube, TEL, DET, SIM, convolve_spatial=False,
                                   boundary="zero")
     assert np.array_equal(a.data, b.data)
 
 
 def test_an_unknown_boundary_is_refused():
     with pytest.raises(ValueError, match="replicate"):
-        apply_focusing_optics_psf(_uniform_slit_cube(), TEL, boundary="edge")
+        apply_focusing_optics_psf(_uniform_slit_cube(), TEL, DET, SIM, boundary="edge")
 
 
 def test_the_simulation_default_is_replicate():
@@ -148,5 +150,5 @@ def test_scan_positions_stay_independent():
     """The PSF acts within one detector frame; exposures are taken in turn."""
     data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[N_SLIT // 2, 0, N_WAVE // 2] = 1.0
-    out = apply_focusing_optics_psf(_cube(data), TEL, boundary="replicate")
+    out = apply_focusing_optics_psf(_cube(data), TEL, DET, SIM, boundary="replicate")
     assert out.data[:, 1, :].sum() == pytest.approx(0.0, abs=1e-12)
