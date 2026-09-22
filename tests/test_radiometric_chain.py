@@ -424,6 +424,12 @@ def test_dn_conversion_divides_by_gain_and_clips_at_full_well():
     assert np.all(out.data <= det.max_dn.to_value(u.DN / u.pix))
 
 
+def test_swc_pixel_fills_before_the_digitiser():
+    """The SW CCD's full well is below the charge the FEE can digitise."""
+    det = Detector_SWC()
+    assert det.full_well < det.max_dn * det.gain_e_per_dn
+
+
 def test_eis_and_swc_differ_only_by_their_numbers():
     """Same radiance through both instruments, ratio set purely by geometry.
 

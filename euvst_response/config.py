@@ -207,6 +207,13 @@ class Detector_SWC:
     _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K
     gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
+    # Peak charge storage of the CCD42-40 in non-inverted mode, the signal at
+    # which resolution begins to degrade: 150 ke- typical, 80 ke- minimum
+    # (Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January
+    # 2024). It is below the 182 ke- the FEE accepts, so a pixel fills before
+    # the digitiser does. Nothing is clipped or spilled at it; it says which
+    # pixels a frame would saturate.
+    full_well: u.Quantity = 150000 * u.electron / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
