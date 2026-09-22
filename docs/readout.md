@@ -119,6 +119,6 @@ Without a shutter a pixel holds photons from every row its charge crossed, so `d
 
 ## What is not modelled
 
-- **Blooming.** A saturated line spills along the column, which is the same axis as the smear. The full well is above 100 ke- and the CCDs have no anti-blooming, so this matters in a flare.
+- **Blooming.** A saturated line spills along the column, which is the same axis as the smear. The CCDs have no anti-blooming, and the full well, `Detector_SWC.full_well`, is 150 ke- (typical in non-inverted mode; 80 ke- at the least), below the 182 ke- the FEE accepts, so in a flare a pixel fills before the digitiser does. Nothing is clipped or spilled at the full well: it says which pixels a frame would saturate.
 - **The shutter in motion.** The shutter takes about 30 ms to open and the same to close, and light falls during both.
 - **Vignetting shape.** The edge of the illuminated area is treated as a step.
