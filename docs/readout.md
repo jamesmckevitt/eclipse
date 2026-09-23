@@ -67,22 +67,22 @@ A frame is cleared, exposed, then read row by row. Rows inside a window go throu
 `euvst_response.frame` turns a spectrum into the photons per second each row receives. It is the radiometric equation `radiometric` applies to a synthesis cube, with the radiance integrated between the row boundaries instead of multiplied by one pixel bandwidth, which matters here because the rows are not evenly spaced and a frame spans the whole band.
 
 ```python
-from euvst_response.config import Telescope_EUVST
+from euvst_response.config import Detector_SWC, Telescope_EUVST
 from euvst_response.frame import apply_spectral_psf, photons_from_lines, thermal_width
 
-telescope = Telescope_EUVST()
+telescope, det = Telescope_EUVST(), Detector_SWC()
 width = thermal_width(192.030 * u.Angstrom, 1.8e7 * u.K, 55.845 * u.u)     # Fe XXIV where it forms
 
 rows = photons_from_lines(fp, "left", telescope, 0.4 * u.arcsec,
                           [192.030] * u.Angstrom,
                           [5.3e4] * u.erg / (u.s * u.cm**2 * u.sr), [width])
-rows = apply_spectral_psf(rows, telescope)      # the instrument's spectral response
+rows = apply_spectral_psf(rows, telescope, det, 0.4 * u.arcsec)     # the spectral response for this slit
 ```
 
 - `photons_from_lines`: a list of lines, each a Gaussian of the given 1-sigma width as the Sun emits it, integrated between the row boundaries so that its flux is conserved wherever it falls.
 - `photons_from_spectrum`: a spectrum already on a wavelength grid, such as a continuum, integrated between the row boundaries by trapezium rule.
 - Both zero the rows the baffle keeps dark unless `lit_only=False`, and take a `column` for a focal plane with the slit image tilt switched on.
-- `apply_spectral_psf`: blurs the rows with the spectral point spread function in `telescope.psf_params`, conserving flux.
+- `apply_spectral_psf`: blurs the rows with the spectral response a synthesis through the same slit gets from `radiometric.apply_focusing_optics_psf`, conserving flux. The slit's image is part of it, so it widens with the slit: 2.54 rows of FWHM for the 0.2 arcsec slit and 3.35 for the 0.4 arcsec one. Its last argument is `spectral_psf`, `"quadrature"` (the default) or `"convolution"`, as in the configuration.
 
 `expose` then takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together. Feed the result to the detector stages in `radiometric` in place of the exposure-only photon count.
 

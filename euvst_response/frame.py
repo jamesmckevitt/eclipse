@@ -36,7 +36,12 @@ import astropy.units as u
 import numpy as np
 from scipy.special import erf
 
-from .radiometric import _vectorized_fano_noise
+from .radiometric import (
+    _vectorized_fano_noise,
+    spectral_line_spread,
+    spectral_psf_fwhm,
+    spectral_psf_reach,
+)
 from .readout import FocalPlane_SWC
 from .utils import angle_to_distance, _fwhm_to_sigma
 
@@ -221,21 +226,38 @@ def thermal_width(wavelength: u.Quantity, temperature: u.Quantity,
     return (u.Quantity(wavelength) * speed / const.c).to(u.Angstrom)
 
 
-def apply_spectral_psf(rows: u.Quantity, telescope) -> u.Quantity:
+def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
+                       spectral_psf: str = "quadrature") -> u.Quantity:
     """
     Blur a frame's rows with the instrument's spectral response.
 
-    The point spread function is the Gaussian ``telescope.psf_params[1]`` gives,
-    in pixels, which along the dispersion is rows.  Flux is conserved: the
-    kernel is normalised and the ends are padded by repeating the edge value,
-    which is right here because a frame covers the whole band rather than a
-    window with empty edges.
+    Along the dispersion a pixel is a row, and the response is the one
+    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` gives a
+    synthesis through the same slit: with *spectral_psf* ``"quadrature"`` a
+    Gaussian of :func:`~euvst_response.radiometric.spectral_psf_fwhm`, and
+    with ``"convolution"``
+    :func:`~euvst_response.radiometric.spectral_line_spread`, on the same
+    rows either way. The slit's image is part of the line profile, so a
+    wider slit gives a wider response: 2.54 rows of FWHM for the 0.2 arcsec
+    slit and 3.35 for the 0.4 arcsec one.
+
+    Flux is conserved: the kernel is normalised and the ends are padded by
+    repeating the edge value, which is right here because a frame covers the
+    whole band rather than a window with empty edges.
     """
-    sigma = _fwhm_to_sigma(telescope.psf_params[1].to_value(u.pixel))
-    half = max(3, int(np.ceil(3 * sigma)))
-    offsets = np.arange(-half, half + 1)
-    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    kernel /= kernel.sum()
+    if spectral_psf == "quadrature":
+        sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
+        reach = spectral_psf_reach(telescope, det, slit_width)
+        offsets = np.arange(-reach, reach + 1)
+        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    elif spectral_psf == "convolution":
+        kernel = spectral_line_spread(telescope, det, slit_width)
+    else:
+        raise ValueError(
+            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
+        )
+    kernel = kernel / kernel.sum()
+    half = kernel.size // 2
     unit = rows.unit if hasattr(rows, "unit") else 1
     values = np.asarray(rows.value if hasattr(rows, "value") else rows, dtype=float)
     padded = np.pad(values, half, mode="edge")

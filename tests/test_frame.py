@@ -21,7 +21,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC
+from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.frame import (
     apply_spectral_psf,
     detect,
@@ -31,8 +31,14 @@ from euvst_response.frame import (
     pixel_solid_angle,
     thermal_width,
 )
-from euvst_response.radiometric import to_electrons
+from euvst_response.radiometric import (
+    apply_focusing_optics_psf,
+    spectral_psf_fwhm,
+    spectral_psf_reach,
+    to_electrons,
+)
 from euvst_response.readout import FocalPlane_SWC
+from euvst_response.utils import _fwhm_to_sigma
 
 H_ERG_S = 6.62607015e-27
 C_CM_S = 2.99792458e10
@@ -177,17 +183,45 @@ def test_a_flat_spectrum_matches_the_radiometric_chain():
 
 def test_the_spectral_psf_conserves_flux_and_widens_a_line():
     fp = FocalPlane_SWC()
-    rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
+    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    rows = photons_from_lines(fp, "left", StubTelescope(), slit,
                               [195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
                               [0.001] * u.Angstrom)
-    blurred = apply_spectral_psf(rows, StubTelescope())
+    blurred = apply_spectral_psf(rows, telescope, det, slit)
     assert blurred.value.sum() == pytest.approx(rows.value.sum(), rel=1e-6)
     assert blurred.value.max() < rows.value.max()
-    # Convolution adds variances, so the line comes out wider by the response's
-    # own sigma: 2.54 pixels of FWHM is 2.54 / (2 sqrt(2 ln 2)) = 1.078 rows.
-    sigma = 2.54 / (2 * np.sqrt(2 * np.log(2)))
+    # The 0.4 arcsec slit's response is 3.35 rows of FWHM, the optics and the
+    # slit's image in quadrature, not the 2.54 of the 0.2 arcsec slit.
+    fwhm = spectral_psf_fwhm(telescope, det, slit)
+    assert fwhm == pytest.approx(3.35, abs=0.01)
+    # Convolution adds variances, so the line comes out wider by the variance
+    # of the response itself: that Gaussian at whole rows, out to its reach.
+    reach = spectral_psf_reach(telescope, det, slit)
+    offsets = np.arange(-reach, reach + 1)
+    kernel = np.exp(-0.5 * (offsets / _fwhm_to_sigma(fwhm)) ** 2)
+    kernel /= kernel.sum()
     widening = row_variance(blurred.value) - row_variance(rows.value)
-    assert widening == pytest.approx(sigma**2, rel=0.01)
+    assert widening == pytest.approx(np.sum(offsets**2 * kernel), rel=0.01)
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+@pytest.mark.parametrize("slit", [0.2, 0.4, 1.6])
+def test_a_frame_is_blurred_as_a_synthesis_is(slit, spectral_psf):
+    """The rows of a frame get the spectral response a synthesis through the same slit gets."""
+    telescope, det = Telescope_EUVST(), Detector_SWC()
+    sim = Simulation(instrument="SWC", slit_width=slit * u.arcsec, spectral_psf=spectral_psf)
+    rows = np.zeros(61)
+    rows[30] = 1.0
+    frame = apply_spectral_psf(rows / u.s, telescope, det, slit * u.arcsec, spectral_psf)
+    cube = NDCube(rows[np.newaxis, np.newaxis, :], wcs=WCS(naxis=3), unit=1 / u.s)
+    synthesis = apply_focusing_optics_psf(cube, telescope, det, sim, convolve_spatial=False)
+    np.testing.assert_allclose(frame.value, synthesis.data[0, 0], rtol=1e-12, atol=1e-15)
+
+
+def test_the_spectral_psf_refuses_an_unknown_mode():
+    with pytest.raises(ValueError, match="quadrature"):
+        apply_spectral_psf(np.ones(10) / u.s, Telescope_EUVST(), Detector_SWC(),
+                           0.4 * u.arcsec, "gaussian")
 
 
 def test_thermal_width_is_the_doppler_width():
