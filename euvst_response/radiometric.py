@@ -549,7 +549,12 @@ def to_electrons(
 
 def to_dn(electrons: NDCube, det) -> NDCube:
     """
-    Convert an electron-count NDCube to DN and clip at the detector's full-well.
+    Convert an electron-count NDCube to DN, rounded and clipped at the
+    digitiser's maximum, ``det.max_dn``.
+
+    Nothing is clipped at the CCD's own full well (``Detector_SWC.full_well``),
+    which is lower: it marks the pixels a frame would saturate, and no charge
+    is lost or spilled from them.
 
     Parameters
     ----------

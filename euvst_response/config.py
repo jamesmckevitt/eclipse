@@ -212,8 +212,9 @@ class Detector_SWC:
     # (Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January
     # 2024). It is below the 182 ke- the FEE accepts, so a pixel fills before
     # the digitiser does. Nothing is clipped or spilled at it; it says which
-    # pixels a frame would saturate.
-    full_well: u.Quantity = 150000 * u.electron / u.pixel
+    # pixels a frame would saturate. Keyword-only, so that the fields after it
+    # keep their places in the constructor.
+    full_well: u.Quantity = field(default=150000 * u.electron / u.pixel, kw_only=True)
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
@@ -525,7 +526,7 @@ class Simulation:
     # With noise False every random draw in the detector chain is replaced by
     # its own mean, so the run returns the signal the instrument would measure
     # on average. Deterministic quantisation stays: DN are still rounded and
-    # still clip at the full well.
+    # still clip at the digitiser's maximum, max_dn.
     noise: bool = True
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
