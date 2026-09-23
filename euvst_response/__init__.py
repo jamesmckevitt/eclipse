@@ -4,7 +4,7 @@ ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 This package provides tools for modeling the performance of the EUV spectrograph EUVST, on SOLAR-C.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.10.0"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
@@ -14,7 +14,8 @@ from .eis_calibration import effective_area as eis_effective_area
 from .utils import wl_to_vel, vel_to_wl, angle_to_distance, distance_to_angle
 from .radiometric import (
     intensity_to_photons, add_telescope_throughput, photons_to_pixel_counts,
-    apply_exposure, sample_photon_arrivals, add_poisson, apply_focusing_optics_psf, to_electrons, 
+    apply_exposure, sample_photon_arrivals, add_poisson, apply_focusing_optics_psf,
+    spectral_psf_fwhm, spectral_line_spread, to_electrons,
     to_dn, add_visible_stray_light, add_pinhole_visible_light
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction, airy_disk_pattern
@@ -39,7 +40,8 @@ __all__ = [
     "eis_effective_area",
     "wl_to_vel", "vel_to_wl", "angle_to_distance", "distance_to_angle",
     "intensity_to_photons", "add_telescope_throughput", "photons_to_pixel_counts",
-    "apply_exposure", "sample_photon_arrivals", "add_poisson", "apply_focusing_optics_psf", "to_electrons", 
+    "apply_exposure", "sample_photon_arrivals", "add_poisson", "apply_focusing_optics_psf",
+    "spectral_psf_fwhm", "spectral_line_spread", "to_electrons",
     "to_dn", "add_visible_stray_light", "add_pinhole_visible_light",
     "fit_cube_gauss", "velocity_from_fit", "width_from_fit", "analyse",
     "FitConfig", "FitComponent",

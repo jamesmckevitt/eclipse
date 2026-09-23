@@ -19,6 +19,37 @@ from tqdm import tqdm
 # Global debug flag - can be set by command line or configuration
 DEBUG_MODE = False
 
+# Recorded in every synthesised line cube.  Before it was, ECLIPSE used the
+# simulation velocity along the integration axis as the line-of-sight
+# velocity, which has the wrong sign for views along x and z and happens to be
+# right for views along y.
+VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
+
+
+def has_wrong_velocity_sign(meta) -> bool:
+    """
+    Whether a synthesised cube's Doppler shifts have the wrong sign.
+
+    A cube that records :data:`VELOCITY_CONVENTION` is right.  One that does
+    not was written before the simulation velocity was turned into velocity
+    away from the observer, which reversed the sign for views along x and z
+    and left views along y as they were.  A cube that records no integration
+    axis was written before the side views existed, so it is a view along z.
+
+    Parameters
+    ----------
+    meta : dict or None
+        The cube's metadata.
+
+    Returns
+    -------
+    bool
+    """
+    meta = meta or {}
+    if meta.get("velocity_convention") == VELOCITY_CONVENTION:
+        return False
+    return meta.get("integration_axis", "z") != "y"
+
 
 def _get_mpi_info():
     """Return (comm, rank, world_size) if MPI is active with multiple ranks.
@@ -345,7 +376,7 @@ _SECTION_STRING_FIELDS = {
     # instrument is chosen by the top-level key and main() builds both
     # Simulation objects from that, so a value here would be parsed, swept and
     # then discarded. main() rejects it rather than letting it look effective.
-    "simulation": ["psf_boundary"],
+    "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date"],
     "filter": [],

@@ -212,8 +212,9 @@ class Detector_SWC:
     # (Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January
     # 2024). It is below the 182 ke- the FEE accepts, so a pixel fills before
     # the digitiser does. Nothing is clipped or spilled at it; it says which
-    # pixels a frame would saturate.
-    full_well: u.Quantity = 150000 * u.electron / u.pixel
+    # pixels a frame would saturate. Keyword-only, so that the fields after it
+    # keep their places in the constructor.
+    full_well: u.Quantity = field(default=150000 * u.electron / u.pixel, kw_only=True)
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
@@ -281,7 +282,13 @@ class Telescope_EUVST:
     psf_type: str = "gaussian"
     # psf_params: list = field(default_factory=lambda: [1.26 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec (w/ slit-scan; FOV2) and 33.00 mA in RSC-2022021 (Oct 2023) and RSC-2022021B (Feb 2024).
     psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec (w/ slit-scan; FOV2) and 43.00 mA in RSC-2022021C (Mar 2025).
-    
+    # The slit width the spectral FWHM in psf_params is for. RSC-2022021C
+    # quotes the spectral resolution with the 0.2 arcsec slit, as the optics
+    # FWHM after the slit (0.352 arcsec at 212.3 A) added in quadrature to the
+    # slit width (giving 0.405 arcsec, 43.00 mA), so the spectral PSF of any
+    # other slit is worked out from it; see radiometric.spectral_psf_fwhm.
+    psf_slit_width: u.Quantity = 0.2 * u.arcsec
+
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
     grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
@@ -424,6 +431,10 @@ class Telescope_EIS:
     """
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
+    # The EIS PSF is not tied to a slit width, so its spectral FWHM stays the
+    # same whichever slit is used. Setting this says which slit psf_params was
+    # measured with, and the spectral PSF then follows the slit as for SWC.
+    psf_slit_width: u.Quantity | None = None
     calibration: str = "ground"
     date: str | None = None
 
@@ -504,10 +515,18 @@ class Simulation:
     # zero-filled either way: the wavelength grid runs several sigma past the
     # line, so there is nothing at its ends to lose.
     psf_boundary: str = "replicate"
+    # How the slit enters the spectral PSF. "quadrature" keeps the PSF a
+    # Gaussian and adds the slit's width to the optics FWHM in quadrature,
+    # which is how RSC-2022021C quotes the spectral resolution. "convolution"
+    # convolves the optics Gaussian with the slit's rectangular image, which
+    # is how the same document defines the line profile; it gives the
+    # flat-topped profile of a wide slit, and a narrower one than quadrature
+    # for the 0.2 arcsec slit. See radiometric.spectral_line_spread.
+    spectral_psf: str = "quadrature"
     # With noise False every random draw in the detector chain is replaced by
     # its own mean, so the run returns the signal the instrument would measure
     # on average. Deterministic quantisation stays: DN are still rounded and
-    # still clip at the full well.
+    # still clip at the digitiser's maximum, max_dn.
     noise: bool = True
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
@@ -541,6 +560,11 @@ class Simulation:
             raise ValueError(
                 f"psf_boundary must be 'replicate' or 'zero', got "
                 f"{self.psf_boundary!r}."
+            )
+        if self.spectral_psf not in ("quadrature", "convolution"):
+            raise ValueError(
+                f"spectral_psf must be 'quadrature' or 'convolution', got "
+                f"{self.spectral_psf!r}."
             )
 
         # The pinhole lists are paired, and both pipelines zip them together.

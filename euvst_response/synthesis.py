@@ -16,7 +16,7 @@ from mendeleev import element
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import angle_to_distance
+from .utils import angle_to_distance, VELOCITY_CONVENTION
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -1031,6 +1031,46 @@ def interpolate_g_on_dem(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
+# Which side of the box the observer is on, for each integration axis: +1 on
+# the side of increasing coordinate, -1 on the other.  It is the side from
+# which the line cube, with its rows and columns as create_line_cube lays them
+# out, is seen the right way round, so the column axis crossed with the row
+# axis points at the observer: above the box (+z) for the top-down view, and
+# at +x and at -y for the two side views.
+OBSERVER_SIDE = {"x": +1, "y": -1, "z": +1}
+
+
+def line_of_sight_velocity(velocity, integration_axis: str):
+    """
+    Turn the velocity along the integration axis into velocity away from the observer.
+
+    Simulation velocities are positive towards increasing coordinate, so an
+    upflow has a positive z velocity.  Seen from above, that upflow is moving
+    towards the observer and is blueshifted, so its line-of-sight velocity is
+    negative.  Positive line-of-sight velocity is a redshift: each line is
+    placed at ``lambda_0 (1 + v / c)``.
+
+    Parameters
+    ----------
+    velocity : np.ndarray or u.Quantity
+        Velocity along the integration axis, positive towards increasing
+        coordinate.
+    integration_axis : str
+        ``"x"``, ``"y"`` or ``"z"``.  The observer is on the side given by
+        :data:`OBSERVER_SIDE`.
+
+    Returns
+    -------
+    np.ndarray or u.Quantity
+        Velocity away from the observer, in the same units.
+    """
+    if integration_axis not in OBSERVER_SIDE:
+        raise ValueError(
+            f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}"
+        )
+    return -OBSERVER_SIDE[integration_axis] * velocity
+
+
 def build_em_tv(
     logT_cube: np.ndarray,
     vel_cube: np.ndarray,
@@ -1171,6 +1211,18 @@ def synthesise_spectra(
         data["si"] = spec_map / (4 * np.pi)
 
 
+def _world_at(coords: u.Quantity, crpix: float) -> float:
+    """
+    The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
+
+    A reference pixel at the middle of an axis falls between two pixels when
+    there is an even number of them, so the reference value has to be read
+    off the grid there rather than taken from the pixel below.
+    """
+    step = (coords[1] - coords[0]).value
+    return coords[0].value + (crpix - 1) * step
+
+
 def create_line_cube(
     line_name: str,
     line_data: dict,
@@ -1230,8 +1282,8 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            y_coords[ny//2].to(u.Mm).value,  # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1250,8 +1302,8 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
@@ -1270,9 +1322,9 @@ def create_line_cube(
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
-            line_data["wl0"].to(u.cm).value,
-            x_coords[nx//2].to(u.Mm).value,  # X centered
-            y_coords[ny//2].to(u.Mm).value   # Y centered
+            _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
+            _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
+            _world_at(y_coords.to(u.Mm), spatial_crpix[2]),
         ]
 
     wcs = WCS(naxis=3)
@@ -1292,6 +1344,7 @@ def create_line_cube(
             "atom": line_data["atom"],
             "ion": line_data["ion"],
             "integration_axis": integration_axis,
+            "velocity_convention": VELOCITY_CONVENTION,
             "spatial_reference": spatial_cube.meta if hasattr(spatial_cube, 'meta') else None
         }
     )
@@ -1661,7 +1714,9 @@ def main(args=None) -> None:
     logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0, 
                         out=np.zeros_like(temp_cube.data)).astype(precision)
     
-    vel_data = vel_cube.data
+    # The velocity files hold the velocity along each axis; the Doppler shift
+    # needs the velocity away from the observer.
+    vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
 
     # ---------------- Compute contribution functions (fiasco) ---------
     print(f"Computing contribution functions via fiasco ({print_mem()})")
@@ -1746,6 +1801,8 @@ def main(args=None) -> None:
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,
             "integration_axis": integration_axis,
+            "velocity_convention": VELOCITY_CONVENTION,
+            "observer_side": OBSERVER_SIDE[integration_axis],
             "crop_params": {
                 "crop_x": args.crop_x,
                 "crop_y": args.crop_y,

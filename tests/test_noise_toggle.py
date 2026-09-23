@@ -229,7 +229,7 @@ def test_dn_are_still_quantised_and_still_clip():
 
     # 1e12 erg/(s cm2 sr cm) only reaches a few hundred DN through the real
     # SWC effective area, so the line has to be far brighter than anything
-    # solar to drive the detector into its full well.
+    # solar to drive the digitiser to its maximum.
     dn = simulate_once(_intensity_cube(peak=1.0e16), 40 * u.s, det, tel, sim)[-1]
     assert np.array_equal(dn.data, np.round(dn.data))
     assert dn.data.max() == det.max_dn.to_value(u.DN / u.pix)

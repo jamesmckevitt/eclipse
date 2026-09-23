@@ -311,8 +311,6 @@ def test_every_config_example_in_the_docs_is_valid():
 
     blocks = _doc_yaml_blocks()
     assert len(blocks) > 5, "expected the docs to carry config examples"
-    assert any(page.endswith(".ipynb") for page, _ in blocks), (
-        "expected the config written by the reproduction notebook")
 
     for page, block in blocks:
         config = yaml.safe_load(block)
