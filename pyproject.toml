@@ -24,7 +24,7 @@ dependencies = [
     "numpy",
     "astropy",
     "ndcube",
-    "specutils",
+    "specutils>=2.0",
     "scipy",
     "matplotlib",
     "joblib",
