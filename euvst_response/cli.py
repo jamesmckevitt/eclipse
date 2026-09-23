@@ -22,7 +22,7 @@ ASCII_LOGO = """
 
 ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 
-Contact: James McKevitt (jm2@mssl.ucl.ac.uk). License: Contact for permission to use.
+Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See LICENSE for usage terms.
 """
 
 
