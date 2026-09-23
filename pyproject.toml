@@ -24,8 +24,6 @@ dependencies = [
     "numpy",
     "astropy",
     "ndcube",
-    # 2.0 renamed Spectrum1D to Spectrum, the name data_processing.py imports.
-    # Without the bound pip keeps an older specutils that is already installed.
     "specutils>=2.0",
     "scipy",
     "matplotlib",
