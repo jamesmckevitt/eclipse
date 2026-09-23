@@ -11,33 +11,35 @@ authors = [
 description = "ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "numpy",
-    "astropy",
-    "ndcube",
+    "numpy>=2.0",
+    "astropy>=6.1.5",
+    "ndcube>=2.3",
     "specutils>=2.0",
     "scipy",
     "matplotlib",
-    "joblib",
+    "joblib>=1.2",
     "tqdm",
     "dill",
     "pyyaml",
-    "reproject",
-    "sunpy[all]",
-    "dask",
+    "reproject>=0.14",
+    "sunpy[all]>=6.0",
+    "dask>=2024.9.1",
     "psutil",
     "mendeleev",
-    "h5py",
-    "fiasco",
+    "h5py>=3.11",
+    "fiasco>=0.5",
 ]
 
 [project.optional-dependencies]
