@@ -677,14 +677,21 @@ def build_composite_cubes_mhd(
 
 def _compute_single_ion(args):
     """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
-    that each spawned process gets its own HDF5 handles."""
+    that each spawned process gets its own HDF5 handles.
+
+    With a temperature chunk, fiasco is called on that many temperatures at a
+    time, one call after another, and only the requested lines are kept from
+    each call, so the memory needed is that of one chunk rather than of the
+    whole temperature grid."""
 
     import fiasco
     import logging
 
-    elem, stage, temperature_K, densities_cm3, abundance, lines, hdf5_dbase_root = args
-    temperature = temperature_K * u.K
+    (elem, stage, temperature_K, densities_cm3, abundance, lines,
+     hdf5_dbase_root, temperature_chunk) = args
     densities = densities_cm3 / u.cm**3
+    n_temperatures = len(temperature_K)
+    step = n_temperatures if temperature_chunk is None else temperature_chunk
 
     # A spawned process re-imports fiasco from scratch, so it re-reads
     # ~/.fiasco/fiascorc and knows nothing about a database the parent
@@ -702,25 +709,37 @@ def _compute_single_ion(args):
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
 
+    g_parts = {line_name: [] for line_name, _ in lines}
     try:
-        ion = fiasco.Ion(f'{elem} {stage}', temperature, abundance=abundance,
-                         **ion_kwargs)
+        for start in range(0, n_temperatures, step):
+            ion = fiasco.Ion(f'{elem} {stage}',
+                             temperature_K[start:start + step] * u.K,
+                             abundance=abundance, **ion_kwargs)
 
-        g = ion.contribution_function(densities)
-        pe_ratio = ion.proton_electron_ratio
-        g = g * pe_ratio[:, np.newaxis, np.newaxis]
+            g = ion.contribution_function(densities)
+            pe_ratio = ion.proton_electron_ratio
+            g = g * pe_ratio[:, np.newaxis, np.newaxis]
+
+            # The transitions do not depend on temperature, so the lines are
+            # matched once, on the first chunk.
+            if start == 0:
+                bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
+                line_idx = {line_name: int(np.argmin(np.abs(bb_wl - target_wl_aa * u.AA)))
+                            for line_name, target_wl_aa in lines}
+            for line_name, idx in line_idx.items():
+                g_parts[line_name].append(
+                    g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+            del g
     finally:
         fiasco_logger.setLevel(prev_level)
-
-    bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
 
     results = {}
     for line_name, target_wl_aa in lines:
         target_wl = target_wl_aa * u.AA
-        idx = int(np.argmin(np.abs(bb_wl - target_wl)))
+        idx = line_idx[line_name]
         matched_wl = bb_wl[idx]
 
-        g_tn = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value.T
+        g_tn = np.concatenate(g_parts[line_name]).T
         np.nan_to_num(g_tn, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
         results[line_name] = {
@@ -750,6 +769,7 @@ def compute_goft_fiasco(
     precision: type = np.float64,
     n_workers: int = 0,
     hdf5_dbase_root=None,
+    temperature_chunk: int | None = None,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
     Compute G(T,N) contribution functions using fiasco.
@@ -800,6 +820,15 @@ def compute_goft_fiasco(
         to reach a worker raises rather than letting that worker fall back to
         the fiascorc default.  Note this confirms the argument arrived, not
         that fiasco read the file correctly once pointed at it.
+    temperature_chunk : int, optional
+        Number of temperatures to pass to fiasco at a time.  fiasco solves
+        the level populations for all the temperatures it is given together,
+        so its memory grows with their number, and for an ion with many
+        levels the whole grid can need several GB.  The chunks of an ion are
+        computed one after another, so this lowers the peak memory to that
+        of one chunk (per worker), at the cost of fiasco reading the ion's
+        atomic data again for each chunk.  The result is the same.  Defaults
+        to None, which passes the whole grid at once.
 
     Returns
     -------
@@ -816,6 +845,12 @@ def compute_goft_fiasco(
     logN_grid : np.ndarray
         1-D array of log10(n_e / cm^-3) values.
     """
+    if temperature_chunk is not None and temperature_chunk < 1:
+        raise ValueError(
+            f"temperature_chunk must be a positive number of temperatures, "
+            f"not {temperature_chunk}."
+        )
+
     logT_grid = np.linspace(logT_min, logT_max, nT)
     logN_grid = np.linspace(logN_min, logN_max, nN)
 
@@ -841,9 +876,12 @@ def compute_goft_fiasco(
     # Build worker arguments (all picklable plain types / numpy arrays)
     dbase_root = None if hdf5_dbase_root is None else str(hdf5_dbase_root)
     worker_args = [
-        (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root)
+        (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root,
+         temperature_chunk)
         for (elem, stage), lines in ion_lines.items()
     ]
+    if temperature_chunk is not None and temperature_chunk < nT:
+        print(f"  {nT} temperatures in chunks of {temperature_chunk}")
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
@@ -1385,7 +1423,14 @@ def parse_arguments():
                             "in ~/.fiasco/fiascorc. Use this to run against a "
                             "second CHIANTI version without changing the "
                             "default for other work.")
-    
+    parser.add_argument("--goft-temperature-chunk", type=int, default=None,
+                       help="Compute G(T,N) this many temperatures at a time "
+                            "rather than the whole grid at once. This lowers "
+                            "fiasco's peak memory, which for an ion with many "
+                            "levels can be several GB, at the cost of reading "
+                            "the atomic data again for each chunk. The result "
+                            "is the same.")
+
     # Simulation files
     parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
                        help="Temperature file relative to data-dir")
@@ -1724,6 +1769,7 @@ def main(args=None) -> None:
         args.lines, abundance=args.abundance, precision=precision,
         n_workers=args.n_workers,
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
+        temperature_chunk=getattr(args, "goft_temperature_chunk", None),
     )
 
     # Record the database the contribution functions actually came from, not

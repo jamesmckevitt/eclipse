@@ -58,6 +58,7 @@ synthesise-spectra --help
 - `--abundance`: CHIANTI abundance dataset name (default: `sun_coronal_2021_chianti`)
 - `--n-workers`: Number of parallel workers for the fiasco G(T, n_e) computation. Each distinct ion is computed in a separate process. `0` uses all available CPUs (default: `0`). Set to `1` for serial execution.
 - `--hdf5-dbase-root`: CHIANTI HDF5 database to compute G(T, n_e) from. Defaults to whichever database fiasco is configured to use in `~/.fiasco/fiascorc`. Set this to run against a second CHIANTI version without changing that default for your other work.
+- `--goft-temperature-chunk`: Compute G(T, n_e) this many temperatures at a time instead of the whole grid at once to require less memory usage (default: the whole grid). With several ions and `--n-workers`, each worker needs this memory at once.
 
 **Simulation Files:**
 
