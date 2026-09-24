@@ -91,9 +91,46 @@ def read_muram(
     data_dir = Path(data_dir)
     names = {**MURAM_FILES, **(files or {})}
     wanted = ["temperature", "mass_density"] + [f"velocity_{axis}" for axis in velocities]
+    paths = {name: data_dir / f"{names[name]}.{snapshot}" for name in wanted}
+    return read_muram_files(
+        paths, shape=shape, voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
+        header=None if header is None else data_dir / f"{header}.{snapshot}",
+        time=time, source=source)
+
+
+def read_muram_files(
+    paths: dict,
+    shape: Sequence[int] = DEFAULT_SHAPE,
+    voxel_dx: u.Quantity = DEFAULT_VOXEL["x"],
+    voxel_dy: u.Quantity = DEFAULT_VOXEL["y"],
+    voxel_dz: u.Quantity = DEFAULT_VOXEL["z"],
+    header: Optional[str | Path] = None,
+    time: Optional[u.Quantity] = None,
+    source: str = "MURaM",
+) -> Atmosphere:
+    """
+    Read MURaM files named in full as an :class:`~euvst_response.atmosphere.Atmosphere`.
+
+    Parameters
+    ----------
+    paths : dict
+        The file of each quantity, keyed by the names in :data:`MURAM_FILES`.
+        ``temperature`` and ``mass_density`` are needed, and any of the
+        velocities.
+    shape : sequence of int
+        The cube dimensions in the files' own order, ``(nx, nz, ny)``.
+    voxel_dx, voxel_dy, voxel_dz : u.Quantity
+        The cell sizes.
+    header : str or Path, optional
+        The header file the snapshot time is read from if it exists.
+    time : u.Quantity, optional
+        The snapshot time, overriding the header.
+    source : str
+        What to record as the atmosphere's source.
+    """
     fields = {}
-    for name in wanted:
-        path = data_dir / f"{names[name]}.{snapshot}"
+    for name, path in paths.items():
+        path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"{name} file not found: {path}")
         fields[name] = load_cube(path, shape=tuple(shape), unit=MURAM_UNITS[name])
@@ -105,10 +142,8 @@ def read_muram(
     y_edges = (np.arange(ny + 1) - ny / 2) * voxel_dy
     z_edges = (np.arange(nz + 1) - 0.5) * voxel_dz
 
-    if time is None and header is not None:
-        header_path = data_dir / f"{header}.{snapshot}"
-        if header_path.exists():
-            time = read_timestep_time(header_path) * u.s
+    if time is None and header is not None and Path(header).exists():
+        time = read_timestep_time(Path(header)) * u.s
 
     return Atmosphere(x_edges=x_edges, y_edges=y_edges, z_edges=z_edges,
                       time=time, source=source, **fields)

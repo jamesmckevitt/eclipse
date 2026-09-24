@@ -4,9 +4,10 @@ The synthesis needs temperature, density, the velocity along the line of
 sight and the cell sizes. An ECLIPSE atmosphere file carries those with
 units, so a simulation from any code can be fed in without a reader for it.
 These check that the file round-trips, that it is validated, that the MURaM
-converter reproduces the raw files it reads, that an electron density is
-used as given and otherwise derived from the abundances, and that a
-stretched line of sight integrates the true size of every cell.
+converter reproduces the raw files it reads and that the deprecated route
+from those files synthesises as the converted file does, that an electron
+density is used as given and otherwise derived from the abundances, and
+that a stretched line of sight integrates the true size of every cell.
 
 The synthesis runs use a flat contribution function in place of fiasco, so
 the intensity of a cell is just its emission measure.
@@ -689,10 +690,51 @@ def test_the_synthesis_crops_and_downsamples_an_atmosphere_file(tmp_path, monkey
     assert wcs.cdelt[2] == pytest.approx(2 * SPACING["y"].to_value(u.Mm))
 
 
-def test_the_synthesis_asks_for_an_atmosphere_file(tmp_path, monkeypatch):
-    """There is no other way in: MURaM's own files are converted first."""
-    with pytest.raises(ValueError, match="--atmosphere is required.*from-muram"):
-        _synthesise(tmp_path, monkeypatch, "none")
+def test_muram_files_given_directly_synthesise_as_the_converted_file_with_a_warning(
+        tmp_path, monkeypatch):
+    """The old command line still runs until it is removed, and gives what converting first gives."""
+    atmosphere = _structured_atmosphere()
+    _write_muram_files(tmp_path / "muram", atmosphere, suffix="0300000")
+    nz, ny, nx = SHAPE
+    layout = ["--data-dir", str(tmp_path / "muram"),
+              "--cube-shape", str(nx), str(nz), str(ny),
+              "--voxel-dx", str(SPACING["x"]), "--voxel-dy", str(SPACING["y"]),
+              "--voxel-dz", str(SPACING["z"])]
+    crop = ["--crop-x", "-0.09 Mm", "0.19 Mm", "--crop-z", "0.12 Mm", "0.3 Mm"]
+
+    converted = tmp_path / "converted.h5"
+    muram.main(["from-muram", "--snapshot", "0300000", "--output", str(converted),
+                "--velocities", "z", *layout])
+    from_file = _synthesise(tmp_path, monkeypatch, "file", "--atmosphere",
+                            str(converted), *crop)
+    with pytest.warns(FutureWarning, match="deprecated.*from-muram.*--atmosphere"):
+        direct = _synthesise(tmp_path, monkeypatch, "direct", *layout, *crop,
+                             "--temp-file", "temp/eosT.0300000",
+                             "--rho-file", "rho/result_prim_0.0300000",
+                             "--vz-file", "vz/result_prim_2.0300000")
+
+    direct_cube = direct["line_cubes"][LINE]
+    file_cube = from_file["line_cubes"][LINE]
+    assert np.all(_intensity(direct) > 0)
+    assert np.array_equal(direct_cube.data, file_cube.data)
+    assert list(direct_cube.wcs.wcs.ctype) == list(file_cube.wcs.wcs.ctype)
+    for attribute in ("crval", "cdelt", "crpix"):
+        assert np.array_equal(getattr(direct_cube.wcs.wcs, attribute),
+                              getattr(file_cube.wcs.wcs, attribute))
+    assert np.array_equal(direct["dem_map"], from_file["dem_map"])
+    assert direct["config"]["mass_per_electron"] == from_file["config"]["mass_per_electron"]
+    assert direct["config"]["atmosphere"] is None
+    assert direct["config"]["data_dir"] == str(tmp_path / "muram")
+    assert direct["config"]["cube_shape"] == [nx, nz, ny]
+    assert direct["atmosphere"]["path"] is None
+    assert direct["atmosphere"]["source"] == "MURaM"
+
+
+def test_without_an_atmosphere_file_the_missing_muram_files_are_named(tmp_path, monkeypatch):
+    """Forgetting --atmosphere warns that the MURaM route is deprecated before it fails."""
+    with pytest.warns(FutureWarning, match="--atmosphere"):
+        with pytest.raises(FileNotFoundError, match="temperature file not found"):
+            _synthesise(tmp_path, monkeypatch, "none", "--data-dir", str(tmp_path / "empty"))
 
 
 def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monkeypatch):
@@ -703,6 +745,9 @@ def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monke
     with pytest.raises(ValueError, match="--voxel-dx.*--voxel-dz would not be used"):
         _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),
                     "--voxel-dx", "0.1 Mm", "--voxel-dz", "0.1 Mm")
+    with pytest.raises(ValueError, match="--temp-file would not be used"):
+        _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),
+                    "--temp-file", "temp/eosT.0300000")
     # Typed at its default value it is still a MURaM option that goes unused.
     with pytest.raises(ValueError, match="--data-dir.*--cube-shape would not be used"):
         _synthesise(tmp_path, monkeypatch, "both", "--atmosphere", str(path),

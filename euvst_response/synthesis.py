@@ -1294,10 +1294,12 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# The options that say where the MURaM files dynamic mode reads are and how
-# they are laid out. An atmosphere file carries all of this itself, so giving
-# both is a contradiction rather than a choice.
-MURAM_LAYOUT_OPTIONS = ("data_dir", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
+# The options that say where MURaM's own files are and how they are laid out,
+# for dynamic mode and for the deprecated static route that reads them
+# without an atmosphere file. An atmosphere file carries all of this itself,
+# so giving both is a contradiction rather than a choice.
+MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
+                        "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
 
 class _NotedOption(argparse.Action):
@@ -1325,6 +1327,16 @@ def build_parser() -> argparse.ArgumentParser:
                             "from, written by eclipse-atmosphere or by your own "
                             "code. It carries the cube shape and the cell sizes. "
                             "Required, except in dynamic mode.")
+    # The MURaM files static mode read before atmosphere files, kept out of
+    # the help so that old command lines still run, with a warning, until
+    # the route is removed.
+    for flag, default in (("--temp-file", "temp/eosT.0270000"),
+                          ("--rho-file", "rho/result_prim_0.0270000"),
+                          ("--vx-file", "vx/result_prim_1.0270000"),
+                          ("--vy-file", "vy/result_prim_3.0270000"),
+                          ("--vz-file", "vz/result_prim_2.0270000")):
+        parser.add_argument(flag, type=str, default=default, action=_NotedOption,
+                            help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
@@ -1445,19 +1457,23 @@ def parse_arguments(argv=None):
 
 def check_atmosphere_options(args) -> None:
     """
-    Refuse an atmosphere given alongside options it makes meaningless, or none at all.
+    Refuse an atmosphere given alongside options it makes meaningless, and warn when there is none.
 
-    The synthesis reads its atmosphere from an atmosphere file. The MURaM
-    layout options describe the files dynamic mode builds its time series
-    from, so one given with --atmosphere would be ignored without a word.
+    The synthesis reads its atmosphere from an atmosphere file. Without one,
+    static mode still reads MURaM's own files, which is deprecated. The
+    MURaM layout options describe those files and the ones dynamic mode
+    builds its time series from, so one given with --atmosphere would be
+    ignored without a word.
     """
     if not args.atmosphere:
         if args.slit_rest_time is None:
-            raise ValueError(
-                "--atmosphere is required: the synthesis reads the atmosphere "
-                "from an ECLIPSE atmosphere file. Write MURaM's own files as "
-                "one with eclipse-atmosphere from-muram, or write your code's "
-                "output as one with any HDF5 library.")
+            warnings.warn(
+                f"No --atmosphere was given, so the synthesis is reading "
+                f"MURaM's own files from {args.data_dir}. This is deprecated "
+                f"and will be removed in a future release: convert the "
+                f"snapshot with eclipse-atmosphere from-muram and give the "
+                f"file it writes with --atmosphere.",
+                FutureWarning, stacklevel=2)
         return
     # The parser notes every layout option that appeared on the command
     # line, so one typed at its default value is caught too.
@@ -1467,8 +1483,8 @@ def check_atmosphere_options(args) -> None:
         flags = ", ".join("--" + name.replace("_", "-") for name in given)
         raise ValueError(
             f"--atmosphere carries the cube shape, cell sizes and data itself, "
-            f"so {flags} would not be used. Those options describe the MURaM "
-            f"files dynamic mode reads.")
+            f"so {flags} would not be used. Those options describe MURaM's "
+            f"own files.")
     if args.slit_rest_time is not None:
         raise ValueError(
             "Dynamic mode reads its time series from MURaM files and cannot "
@@ -1491,6 +1507,40 @@ def load_atmosphere_file(
     of each cell along it.
     """
     atmosphere = read_atmosphere(path, velocities=(integration_axis,))
+    return _prepare_atmosphere(atmosphere, str(path), integration_axis,
+                               downsample, crop_x, crop_y, crop_z)
+
+
+def load_muram_files(
+    args,
+    integration_axis: str,
+    downsample: int | bool = False,
+    crop_x=None, crop_y=None, crop_z=None,
+) -> Atmosphere:
+    """
+    Read the MURaM files the deprecated static options name, as :func:`load_atmosphere_file` reads a file.
+
+    The atmosphere is the one eclipse-atmosphere from-muram would write for
+    these files, so the synthesis from it is the one from the converted file.
+    """
+    # Imported here because the MURaM converter imports this module.
+    from .muram import read_muram_files
+
+    data_dir = Path(args.data_dir)
+    velocity_file = getattr(args, f"v{integration_axis}_file")
+    paths = {"temperature": data_dir / args.temp_file,
+             "mass_density": data_dir / args.rho_file,
+             f"velocity_{integration_axis}": data_dir / velocity_file}
+    atmosphere = read_muram_files(
+        paths, shape=args.cube_shape, voxel_dx=u.Quantity(args.voxel_dx),
+        voxel_dy=u.Quantity(args.voxel_dy), voxel_dz=u.Quantity(args.voxel_dz))
+    return _prepare_atmosphere(atmosphere, f"the MURaM files in {data_dir}",
+                               integration_axis, downsample, crop_x, crop_y, crop_z)
+
+
+def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str,
+                        downsample, crop_x, crop_y, crop_z) -> Atmosphere:
+    """Downsample and crop *atmosphere*, and check that its image axes are even."""
     if downsample:
         atmosphere = atmosphere.downsampled(downsample)
     if crop_x or crop_y or crop_z:
@@ -1498,7 +1548,7 @@ def load_atmosphere_file(
     for axis in AXES:
         if axis != integration_axis and not atmosphere.is_uniform(axis):
             raise ValueError(
-                f"The {axis} axis of {path} is not evenly spaced, and with the "
+                f"The {axis} axis of {name} is not evenly spaced, and with the "
                 f"line of sight along {integration_axis} it would become an "
                 f"image axis, whose coordinates must be even. Only the axis "
                 f"along the line of sight may be stretched; resample the "
@@ -1541,7 +1591,7 @@ def main(args=None) -> None:
 
     Supports two modes:
     - Static mode: Single timestep synthesis, from an atmosphere file
-      (--atmosphere)
+      (--atmosphere), or from MURaM's own files, which is deprecated
     - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
       own files
 
@@ -1702,11 +1752,17 @@ def main(args=None) -> None:
         }
         
     else:
-        # Static mode from an atmosphere file, which brings its own layout
+        # Static mode from an atmosphere file, which brings its own layout, or
+        # by the deprecated route from MURaM's own files, read into the same
+        # atmosphere the converter would write
         dynamic_mode_metadata = {"enabled": False}
 
-        print("STATIC MODE - Synthesis from an atmosphere file")
-        print(f"  Atmosphere: {args.atmosphere}")
+        if args.atmosphere:
+            print("STATIC MODE - Synthesis from an atmosphere file")
+            print(f"  Atmosphere: {args.atmosphere}")
+        else:
+            print("STATIC MODE - Synthesis from MURaM files (deprecated)")
+            print(f"  Data directory: {args.data_dir}")
         print(f"  Integration axis: {integration_axis}")
         print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
@@ -1719,9 +1775,13 @@ def main(args=None) -> None:
         print()
 
         print(f"Reading the atmosphere ({print_mem()})")
-        atmosphere = load_atmosphere_file(
-            args.atmosphere, integration_axis, downsample=downsample,
-            crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        crops = dict(crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        if args.atmosphere:
+            atmosphere = load_atmosphere_file(
+                args.atmosphere, integration_axis, downsample=downsample, **crops)
+        else:
+            atmosphere = load_muram_files(
+                args, integration_axis, downsample=downsample, **crops)
         print(atmosphere.describe())
 
         # The file may hold float32 in any units; the run works in the
@@ -1745,7 +1805,7 @@ def main(args=None) -> None:
             atmosphere.spacing(axis) if atmosphere.is_uniform(axis) else None
             for axis in AXES)
         atmosphere_metadata = {
-            "path": str(Path(args.atmosphere).resolve()),
+            "path": str(Path(args.atmosphere).resolve()) if args.atmosphere else None,
             "source": atmosphere.source,
             "time": atmosphere.time,
             "shape": atmosphere.shape,
@@ -1863,8 +1923,8 @@ def main(args=None) -> None:
             "mass_per_electron_source": mass_per_electron_source,
             "intensity_unit": str(intensity_unit),
             "atmosphere": args.atmosphere,
-            "cube_shape": args.cube_shape if dynamic_mode else None,
-            "data_dir": str(base_dir) if dynamic_mode else None,
+            "cube_shape": None if args.atmosphere else args.cube_shape,
+            "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,
