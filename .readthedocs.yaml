@@ -14,3 +14,12 @@ python:
       path: .
       extra_requirements:
         - docs
+
+# The defaults, and the instrument team's pages, which are reached by link only.
+search:
+  ignore:
+    - search.html
+    - search/index.html
+    - 404.html
+    - 404/index.html
+    - internal/*

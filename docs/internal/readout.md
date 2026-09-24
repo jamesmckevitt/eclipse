@@ -1,3 +1,8 @@
+---
+search:
+  exclude: true
+---
+
 # Reading out without a shutter
 
 The SW camera has a mechanical shutter that keeps the CCDs dark while a frame is cleared and read. If it is not there, or does not close, the chip stays illuminated throughout, and every charge packet collects light from each row it is clocked through on the way to the serial register. A bright line therefore appears again, faintly, in every row between it and the register. `euvst_response.readout` models that.
