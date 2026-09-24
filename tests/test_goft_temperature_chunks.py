@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from euvst_response import synthesis
+from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.synthesis import compute_goft_fiasco
 
 LINES = ["Fe12_195.1190", "Fe12_195.1790"]
@@ -91,21 +92,22 @@ def test_a_chunk_of_no_temperatures_is_refused(fake_fiasco, chunk):
         compute_goft_fiasco(LINES, n_workers=1, temperature_chunk=chunk)
 
 
-def _write_cube(path, shape, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.full(shape, value, dtype=np.float32).ravel(order="F").tofile(path)
+def _write_atmosphere(path, shape):
+    """A uniform coronal box as an atmosphere file."""
+    edges = {f"{axis}_edges": np.arange(n + 1) * 0.1 * u.Mm
+             for axis, n in zip(("z", "y", "x"), shape)}
+    density = (1e9 / u.cm**3 * 1.29 * const.u).to(u.g / u.cm**3)
+    return write_atmosphere(Atmosphere(
+        temperature=np.full(shape, 1e6) * u.K,
+        mass_density=np.full(shape, density.value) * density.unit,
+        velocity_z=np.zeros(shape) * u.cm / u.s, **edges), path)
 
 
 @pytest.mark.parametrize("extra, expected", [((), None),
                                              (("--goft-temperature-chunk", "10"), 10)])
 def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
                                                          extra, expected):
-    shape = (4, 4, 4)
-    atmosphere = tmp_path / "atmosphere"
-    density = (1e9 / u.cm**3 * 1.29 * const.u).to_value(u.g / u.cm**3)
-    _write_cube(atmosphere / "temp" / "eosT.0270000", shape, 1e6)
-    _write_cube(atmosphere / "rho" / "result_prim_0.0270000", shape, density)
-    _write_cube(atmosphere / "vz" / "result_prim_2.0270000", shape, 0.0)
+    atmosphere = _write_atmosphere(tmp_path / "box.h5", (4, 4, 4))
 
     received = {}
 
@@ -119,9 +121,9 @@ def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
         return goft, logt, logn
 
     monkeypatch.setattr(sys, "argv", [
-        "synthesise-spectra", "--data-dir", str(atmosphere),
+        "synthesise-spectra", "--atmosphere", str(atmosphere),
         "--output-dir", str(tmp_path / "out"), "--lines", LINES[0],
-        "--cube-shape", "4", "4", "4", *extra,
+        "--mass-per-electron", "1.29", *extra,
     ])
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _recording_goft)
     synthesis.main()

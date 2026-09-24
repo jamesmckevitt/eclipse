@@ -4,32 +4,230 @@ The synthesis script converts 3D MHD simulation data into synthetic solar spectr
 
 The output is a synthesis file, which is the input to the [instrument response](instrument-response.md) stage.
 
-!!! note "Which simulations are supported"
+## Atmosphere files
 
-    The reader currently expects MURaM output: separate binary files for temperature, density, and velocity, with the cube shape given on the command line. Support for other MHD codes is being added; until then, reducing your simulation to a [VDEM](vdem-synthesis.md) is the best way to use it.
+`synthesise-spectra` reads the simulation from an HDF5 file with the layout described below. Write the file with a simulation's output using h5py or any other HDF5 library, and pass it with `--atmosphere`:
 
-    Synthesis here is optically thin. If you need optically thick lines, synthesise them with a code such as Lightweaver or RH1.5D, and bring the spectra in at the [instrument response](instrument-response.md) stage instead of this one. Reading externally synthesised spectra is coming soon.
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
+```
+
+### Layout
+
+Root attributes:
+
+| Attribute | Value |
+| --- | --- |
+| `format` | `eclipse-atmosphere` |
+| `version` | `1` |
+| `source` | A description of the simulation (optional). It is copied into the synthesis file. |
+
+Datasets. Each one needs a `unit` attribute that astropy can read, such as `K`, `g / cm3`, `kg / m3`, `cm / s`, `km / s`, `Mm` or `km`. Any unit of the right kind will do.
+
+| Dataset | Shape | Description |
+| --- | --- | --- |
+| `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | Positions of the cell boundaries along each axis, in increasing order. |
+| `temperature` | `(nz, ny, nx)` | |
+| `mass_density` | `(nz, ny, nx)` | At least one of `mass_density` and `electron_density` is needed. |
+| `electron_density` | `(nz, ny, nx)` | |
+| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Velocity along each axis of the box, positive towards increasing coordinate. Only the component along `--integration-axis` is read: `velocity_z` for a view from above, `velocity_x` or `velocity_y` for a side view. |
+| `time` | scalar | Time of the snapshot (optional). |
+
+The cubes are stored in C order with z first, so `cube[k]` is a horizontal slice indexed `[y, x]`, and z points up. If your code stores its arrays in a different order, transpose them before writing.
+
+The two axes that become the image must be evenly spaced, because the maps are given a linear WCS. The axis along the line of sight can have cells of different sizes.
+
+### Writing a file from Python
+
+```python
+import astropy.units as u
+import numpy as np
+from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+
+atmosphere = Atmosphere(
+    temperature=temperature * u.K,                # (nz, ny, nx)
+    mass_density=density * u.g / u.cm**3,         # or electron_density=n_e / u.cm**3
+    velocity_z=vz * u.km / u.s,                   # the component along the line of sight
+    x_edges=np.arange(nx + 1) * 0.192 * u.Mm,     # an even grid
+    y_edges=np.arange(ny + 1) * 0.192 * u.Mm,
+    z_edges=edges_from_centres(z_centres * u.km), # an uneven one, from cell centres
+    time=1250.0 * u.s,
+    source="my simulation, snapshot 385",
+)
+write_atmosphere(atmosphere, "atmosphere.h5")
+```
+
+`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres.
+
+`read_atmosphere` reads a file back into an `Atmosphere`. To check what a file holds without loading the cubes, run
+
+```bash
+eclipse-atmosphere info atmosphere.h5
+```
+
+### Writing a file from other languages
+
+Any HDF5 library can write the file, for example from Fortran or C inside the simulation code, or from IDL or Julia. Put the datasets and attributes listed above at the root of the file. A minimal file for a view from above looks like this in `h5dump`:
+
+```text
+HDF5 "atmosphere.h5" {
+GROUP "/" {
+   ATTRIBUTE "format"  { "eclipse-atmosphere" }
+   ATTRIBUTE "version" { 1 }
+   DATASET "x_edges"      { DATATYPE H5T_IEEE_F64LE DATASPACE SIMPLE { ( 513 ) }
+                            ATTRIBUTE "unit" { "Mm" } }
+   DATASET "y_edges"      { ... ( 257 ) ... ATTRIBUTE "unit" { "Mm" } }
+   DATASET "z_edges"      { ... ( 769 ) ... ATTRIBUTE "unit" { "Mm" } }
+   DATASET "temperature"  { DATATYPE H5T_IEEE_F32LE DATASPACE SIMPLE { ( 768, 256, 512 ) }
+                            ATTRIBUTE "unit" { "K" } }
+   DATASET "mass_density" { ... ( 768, 256, 512 ) ... ATTRIBUTE "unit" { "g / cm3" } }
+   DATASET "velocity_z"   { ... ( 768, 256, 512 ) ... ATTRIBUTE "unit" { "cm / s" } }
+}
+}
+```
+
+Fortran arrays are column-major, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. float32 is enough for the cubes and halves the size of the file; the synthesis converts everything to the precision set by `--precision` (float64 by default) when it reads the file.
+
+### Electron density
+
+The contribution functions need the electron density. If your code calculates one, for example with non-equilibrium hydrogen ionisation, write it as `electron_density` and ECLIPSE will use it as it is.
+
+If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This can be set with `--mass-per-electron`.
+
+### Cropping and downsampling
+
+`--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.
+
+The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
+
+### Worked example: a MURaM flare
+
+The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several MURaM and Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
+
+This example uses the flare simulation of [Cheung et al. (2019)](https://doi.org/10.1038/s41550-018-0629-3), run `ar098192`, at snapshot 300000, during the flare. Download the temperature, density and vertical velocity (400 MB each):
+
+```bash
+for variable in lgtg lgr uz; do
+  curl -O https://sdc.uio.no/vol/simulations/ar098192/atmos/MURaM_ar098192_${variable}_300000.fits
+done
+```
+
+Then write them to an atmosphere file:
+
+```python
+import astropy.units as u
+import numpy as np
+from astropy.io import fits
+from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+
+def variable(name, snapshot=300000):
+    with fits.open(f"MURaM_ar098192_{name}_{snapshot}.fits") as hdul:
+        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
+
+lgtg, header, z = variable("lgtg")
+lgr, _, _ = variable("lgr")
+uz, _, _ = variable("uz")
+
+nz, ny, nx = lgtg.shape
+x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
+y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
+
+atmosphere = Atmosphere(
+    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
+    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
+    velocity_z=uz * u.m / u.s,
+    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
+    z_edges=edges_from_centres(z * u.Mm),
+    time=header["ELAPSED"] * u.s,
+    source="MURaM ar098192 snapshot 300000, Hinode SDC Europe",
+)
+write_atmosphere(atmosphere, "muram_300000.h5")
+```
+
+The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise the flare line Fe XXIV 192.028 from the surface upwards:
+
+```bash
+synthesise-spectra --atmosphere muram_300000.h5 \
+  --lines Fe24_192.0280 \
+  --crop-z "0 Mm" "42 Mm" \
+  --vel-lim "1000 km/s" --vel-res "10 km/s" \
+  --output-dir ./run/input
+```
+
+The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.4 GB, with cells twice the size.
+
+### Worked example: Bifrost quiet Sun
+
+This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
+
+```bash
+for variable in lgtg lgr lgne uz; do
+  curl -O https://sdc.uio.no/vol/simulations/en024048_hion/atmos/BIFROST_en024048_hion_${variable}_385.fits
+done
+```
+
+Then write them to an atmosphere file:
+
+```python
+import astropy.units as u
+import numpy as np
+from astropy.io import fits
+from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+
+def variable(name, snapshot=385):
+    with fits.open(f"BIFROST_en024048_hion_{name}_{snapshot}.fits") as hdul:
+        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
+
+lgtg, header, z = variable("lgtg")
+lgr, _, _ = variable("lgr")
+lgne, _, _ = variable("lgne")
+uz, _, _ = variable("uz")
+
+nz, ny, nx = lgtg.shape
+x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
+y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
+
+atmosphere = Atmosphere(
+    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
+    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
+    electron_density=10.0 ** lgne.astype(np.float64) * u.m**-3,
+    velocity_z=uz * u.m / u.s,
+    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
+    z_edges=edges_from_centres(z * u.Mm),
+    time=header["ELAPSED"] * u.s,
+    source="Bifrost en024048_hion snapshot 385, Hinode SDC Europe",
+)
+write_atmosphere(atmosphere, "bifrost_385.h5")
+```
+
+The box starts 2.4 Mm below the surface, so `--crop-z "0 Mm" "20 Mm"` keeps the part that emits:
+
+```bash
+synthesise-spectra --atmosphere bifrost_385.h5 \
+  --lines Fe09_171.0730 \
+  --crop-z "0 Mm" "20 Mm" \
+  --output-dir ./run/input
+```
+
+This needs about 130 GB of memory and writes a 25 GB synthesis file, or about 40 GB and 6.4 GB with `--downsample 2`.
 
 ## Basic usage
 
 ```bash
-# Example using all available command line options
+# The shortest run
 synthesise-spectra \
-  --data-dir ./data/atmosphere \
+  --atmosphere ./data/atmosphere.h5 \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --output-dir ./run/input
+
+# The same, using all available command line options
+synthesise-spectra \
+  --atmosphere ./data/atmosphere.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
   --output-dir ./run/input \
   --output-name synthesised_spectra.pkl \
-  --temp-file temp/eosT.0270000 \
-  --rho-file rho/result_prim_0.0270000 \
-  --vx-file vx/result_prim_1.0270000 \
-  --vy-file vy/result_prim_3.0270000 \
-  --vz-file vz/result_prim_2.0270000 \
-  --cube-shape 512 768 256 \
-  --voxel-dx "0.192 Mm" \
-  --voxel-dy "0.192 Mm" \
-  --voxel-dz "0.064 Mm" \
   --vel-res "5.0 km/s" \
   --vel-lim "300.0 km/s" \
   --integration-axis z \
@@ -38,7 +236,7 @@ synthesise-spectra \
   --crop-z "0 Mm" "20 Mm" \
   --downsample 1 \
   --precision float64 \
-  --mean-mol-wt 1.29
+  --mass-per-electron 1.16
 
 # Show all available options
 synthesise-spectra --help
@@ -48,7 +246,7 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 
-- `--data-dir`: Directory containing simulation data (default: `data/atmosphere`)
+- `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in dynamic mode)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
 
@@ -59,19 +257,6 @@ synthesise-spectra --help
 - `--n-workers`: Number of parallel workers for the fiasco G(T, n_e) computation. Each distinct ion is computed in a separate process. `0` uses all available CPUs (default: `0`). Set to `1` for serial execution.
 - `--hdf5-dbase-root`: CHIANTI HDF5 database to compute G(T, n_e) from. Defaults to whichever database fiasco is configured to use in `~/.fiasco/fiascorc`. Set this to run against a second CHIANTI version without changing that default for your other work.
 - `--goft-temperature-chunk`: Compute G(T, n_e) this many temperatures at a time instead of the whole grid at once to require less memory usage (default: the whole grid). With several ions and `--n-workers`, each worker needs this memory at once.
-
-**Simulation Files:**
-
-- `--temp-file`: Temperature file relative to data-dir (default: `temp/eosT.0270000`)
-- `--rho-file`: Density file relative to data-dir (default: `rho/result_prim_0.0270000`)
-- `--vx-file`: X-velocity file (required if `--integration-axis x`)
-- `--vy-file`: Y-velocity file (required if `--integration-axis y`)
-- `--vz-file`: Z-velocity file (required if `--integration-axis z`)
-
-**Grid Parameters:**
-
-- `--cube-shape`: Cube dimensions as three integers in the order the file stores them, `(nx nz ny)`, so the vertical axis is the second one and not the last (default: `512 768 256`). The reader rearranges the cube after reading it, so `--voxel-dx`, `--voxel-dy` and `--voxel-dz` always name the physical axes whatever order is given here. Getting this the wrong way round still reshapes without error when the two sizes differ, and puts the simulation on a box of the wrong shape.
-- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes with units (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
 
 **Velocity Grid:**
 
@@ -94,9 +279,9 @@ synthesise-spectra --help
 
 **Processing Options:**
 
-- `--downsample`: Downsampling factor, which must divide every dimension of `--cube-shape` (default: `1` = no downsampling)
+- `--downsample`: Downsampling factor, which must divide every dimension of the atmosphere (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
-- `--mean-mol-wt`: Mean molecular weight (default: `1.29`)
+- `--mass-per-electron`: Mass per free electron in atomic mass units, used to get the electron density from the mass density (default: calculated from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](#electron-density)). Not used if the atmosphere file has an electron density. `--mean-mol-wt` is the old name for this option, which defaulted to 1.29 up to ECLIPSE 0.11.0.
 
 ## Naming spectral lines
 
@@ -123,7 +308,7 @@ does not match the pattern at all raises `ValueError` immediately.
 
 ## Dynamic mode (time-varying atmospheres)
 
-For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning:
+For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning. Dynamic mode reads MURaM's own files rather than an atmosphere file:
 
 ```bash
 synthesise-spectra \
@@ -154,6 +339,9 @@ synthesise-spectra \
 
 - `--slit-rest-time`: Slit rest time per position - enables dynamic mode
 - `--slit-width`: Slit width
+- `--data-dir`: Directory containing the MURaM files (default: `data/atmosphere`)
+- `--cube-shape`: Cube dimensions as three integers in the order the files store them, `(nx nz ny)`, so the vertical axis is the second one and not the last (default: `512 768 256`). The reader rearranges the cube after reading it, so `--voxel-dx`, `--voxel-dy` and `--voxel-dz` always name the physical axes whatever order is given here. Getting this the wrong way round still reshapes without error when the two sizes differ, and puts the simulation on a box of the wrong shape.
+- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes with units (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
 - `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
 - `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
 
@@ -171,7 +359,7 @@ The synthesis produces a pickle file containing:
 - Use `--precision float32` to reduce memory usage (may affect accuracy)
 - Use spatial cropping to focus on regions of interest and reduce computation time
 - Monitor memory usage - full resolution synthesis can require 50+ GB RAM
-- Side views (`--integration-axis x` or `y`) may require different velocity files
+- Side views (`--integration-axis x` or `y`) need the atmosphere file to carry that velocity component
 
 ## Working with synthesis results
 
@@ -202,3 +390,27 @@ print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
 # List all available lines
 print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 ```
+
+??? note "Reading MURaM's own files (deprecated)"
+
+    Command lines from ECLIPSE 0.11.0 and earlier, which read MURaM's binary files directly, still run without `--atmosphere`, with a warning, until a future release removes them:
+
+    ```bash
+    synthesise-spectra \
+      --data-dir ./data/atmosphere \
+      --temp-file temp/eosT.0270000 \
+      --rho-file rho/result_prim_0.0270000 \
+      --vz-file vz/result_prim_2.0270000 \
+      --cube-shape 512 768 256 \
+      --voxel-dx "0.192 Mm" --voxel-dy "0.192 Mm" --voxel-dz "0.064 Mm" \
+      --lines Fe12_195.1190 \
+      --output-dir ./run/input
+    ```
+
+    - `--data-dir`: Directory the file names are relative to (default: `data/atmosphere`)
+    - `--temp-file`, `--rho-file`: Temperature and density files (default: `temp/eosT.0270000`, `rho/result_prim_0.0270000`)
+    - `--vx-file`, `--vy-file`, `--vz-file`: Velocity files; only the one along `--integration-axis` is read (default: `vx/result_prim_1.0270000`, `vy/result_prim_3.0270000`, `vz/result_prim_2.0270000`)
+    - `--cube-shape`: Cube dimensions in the order the files store them, `(nx nz ny)` (default: `512 768 256`)
+    - `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Cell sizes (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
+
+    x and y are centred on zero, and z = 0 is the centre of the bottom cell, which is what `--crop-x`, `--crop-y` and `--crop-z` refer to.

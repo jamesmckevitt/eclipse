@@ -16,130 +16,16 @@ from mendeleev import element
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import angle_to_distance, VELOCITY_CONVENTION
+from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
+                    velocity_centers_to_edges, VELOCITY_CONVENTION)
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
+                         require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
 #  I/O helpers
 # ---------------------------------------------------------------------------
 ##############################################################################
-
-def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
-    """
-    Check that *values* is a finite, increasing, evenly spaced 1D grid.
-
-    Both the velocity binning and the wavelength WCS take the first spacing
-    of the grid and apply it everywhere, so an uneven grid is not
-    approximated, it is silently misread.  A decreasing grid is worse: the
-    bin edges come out in descending order and every ``>= low & < high`` test
-    fails, so the emission measure is zero everywhere.
-
-    Parameters
-    ----------
-    values : np.ndarray or u.Quantity
-        1D grid of bin centres.
-    name : str
-        Name to use in the error message.
-    rtol : float, optional
-        How far any spacing may differ from the first spacing, relative to
-        the first spacing.  The default admits the rounding in ``np.arange``
-        and ``np.linspace`` without admitting a grid anyone built unevenly on
-        purpose.
-
-    Returns
-    -------
-    float
-        The first spacing, in the units of *values*.
-    """
-    plain = np.asarray(getattr(values, "value", values), dtype=float)
-
-    if plain.ndim != 1:
-        raise ValueError(f"{name} must be 1D, got {plain.ndim} dimensions.")
-    if plain.size < 2:
-        raise ValueError(f"{name} must have at least 2 elements, "
-                         f"got {plain.size}.")
-
-    # Comparisons with NaN are always false, so a NaN or inf in the grid can
-    # slip past the spacing checks below and come back as the spacing.
-    non_finite = np.flatnonzero(~np.isfinite(plain))
-    if non_finite.size:
-        first_bad = int(non_finite[0])
-        raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
-                         f"at index {first_bad}.")
-
-    diffs = np.diff(plain)
-    step = float(diffs[0])
-
-    if step <= 0.0:
-        raise ValueError(
-            f"{name} must increase. Bin edges are built by stepping out from "
-            f"the first spacing, so a decreasing grid produces edges in "
-            f"descending order and every bin ends up empty."
-        )
-
-    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
-    if uneven.size:
-        first_uneven = int(uneven[0])
-        raise ValueError(
-            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
-            f"but the spacing between elements {first_uneven} and "
-            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
-            f"the first spacing and uses it for every bin edge and for the "
-            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
-            f"bins and writes wrong wavelength coordinates. Resample onto a "
-            f"uniform grid first."
-        )
-
-    return step
-
-
-def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
-    """
-    Convert velocity grid centers to bin edges.
-
-    Parameters
-    ----------
-    vel_grid : np.ndarray
-        1D array of velocity centers.  Must be evenly spaced and increasing.
-
-    Returns
-    -------
-    np.ndarray
-        1D array of velocity bin edges (length = len(vel_grid) + 1).
-    """
-    dv = require_uniform_grid(vel_grid, "vel_grid")
-
-    return np.concatenate([
-        [vel_grid[0] - 0.5 * dv],
-        vel_grid[:-1] + 0.5 * dv,
-        [vel_grid[-1] + 0.5 * dv]
-    ])
-
-def require_downsample_divides(shape: Tuple[int, ...], downsample: int) -> None:
-    """
-    Check that *downsample* divides every dimension of *shape*.
-
-    Downsampling keeps every *downsample*-th cell and gives each kept cell
-    *downsample* times the voxel size.  Where a dimension is not a multiple of
-    the factor, the last kept cell stands for fewer cells than that, so the
-    domain would come out too large, and so would the emission measure when
-    that axis is the line of sight.
-
-    Parameters
-    ----------
-    shape : tuple of int
-        Cube dimensions, in any order.
-    downsample : int
-        Downsampling factor.
-    """
-    uneven = [n for n in shape if n % downsample]
-    if uneven:
-        raise ValueError(
-            f"--downsample {downsample} does not divide the cube shape "
-            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
-            f"a factor that divides every dimension."
-        )
-
 
 def load_cube(
     file_path: str | Path,
@@ -939,7 +825,7 @@ def compute_goft_fiasco(
 def compute_dem(
     logT_cube: np.ndarray,
     logN_cube: np.ndarray,
-    voxel_dh_cm: float,
+    voxel_dh_cm: float | np.ndarray,
     logT_grid: np.ndarray,
     integration_axis: str = "z",
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -953,8 +839,9 @@ def compute_dem(
         3D array of log10(T/K) values.
     logN_cube : np.ndarray  
         3D array of log10(n_e/cm^3) values.
-    voxel_dh_cm : float
-        Voxel depth in cm along integration axis.
+    voxel_dh_cm : float or np.ndarray
+        Depth of the cells along the integration axis in cm: one value for
+        every cell, or one value per cell along that axis.
     logT_grid : np.ndarray
         1D array of temperature bin centers for DEM calculation.
     integration_axis : str
@@ -998,8 +885,9 @@ def compute_dem(
     ])
 
     ne = 10.0 ** logN_cube.astype(np.float64)
-    w2 = ne**2  # weights for EM
-    w3 = ne**3  # weights for EM*n_e
+    dh = along_line_of_sight(voxel_dh_cm, integration_axis)
+    w2 = ne**2 * dh  # weights for EM
+    w3 = ne**3 * dh  # weights for EM*n_e
 
     dem = np.zeros(output_shape)
     avg_ne = np.zeros_like(dem)
@@ -1009,8 +897,8 @@ def compute_dem(
         mask = (logT_cube >= lo) & (logT_cube < hi)  # (nz,ny,nx)
 
         # Integrate along the specified axis
-        em = np.sum(w2 * mask, axis=integration_axis_idx) * voxel_dh_cm    # cm^-5
-        em_n = np.sum(w3 * mask, axis=integration_axis_idx) * voxel_dh_cm  # cm^-5 * n_e
+        em = np.sum(w2 * mask, axis=integration_axis_idx)    # cm^-5
+        em_n = np.sum(w3 * mask, axis=integration_axis_idx)  # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
         avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
@@ -1293,6 +1181,17 @@ def create_line_cube(
         array that plots the right way up, and slicing out the celestial WCS
         gives one a SunPy map accepts directly.
     """
+    # An axis whose cells differ in size has no one CDELT. Only the line of
+    # sight may be such an axis, and that is the one integrated out here.
+    nonuniform = (spatial_cube.meta or {}).get("nonuniform_axes", [])
+    stretched = [axis for axis in AXES
+                 if axis != integration_axis and axis in nonuniform]
+    if stretched:
+        raise ValueError(
+            f"The {', '.join(stretched)} axis of the atmosphere is not evenly "
+            f"spaced, so it cannot be an image axis of a view along "
+            f"{integration_axis}. Only the line of sight may be stretched.")
+
     # The simulation cubes are (z, y, x), so integrating one axis out leaves
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
@@ -1395,16 +1294,57 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-def parse_arguments():
-    """Parse command line arguments for spectrum synthesis."""
+# The options that say where MURaM's own files are and how they are laid out,
+# for dynamic mode and for the deprecated static route that reads them
+# without an atmosphere file. An atmosphere file carries all of this itself,
+# so giving both is a contradiction rather than a choice.
+MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
+                        "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
+
+# The options only dynamic mode reads, which a static synthesis from an
+# atmosphere file would ignore.
+DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_filename",
+                   "vx_dir", "vx_filename", "vy_dir", "vy_filename", "vz_dir",
+                   "vz_filename", "time_dir", "time_filename")
+
+# Where the documentation describes the atmosphere file and how to write one.
+ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
+
+
+class _NotedOption(argparse.Action):
+    """Stores the value and records that the option was given, at its default or not."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        given = getattr(namespace, "given_options", None)
+        if given is None:
+            given = set()
+            namespace.given_options = given
+        given.add(self.dest)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line options of synthesise-spectra."""
     parser = argparse.ArgumentParser(
         description="Synthesise solar spectra from 3D MHD simulation data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     # Input/Output paths
-    parser.add_argument("--data-dir", type=str, default="data/atmosphere",
-                       help="Directory containing simulation data")
+    parser.add_argument("--atmosphere", type=str, default=None,
+                       help="The ECLIPSE atmosphere file (HDF5) to synthesise "
+                            f"from; see {ATMOSPHERE_DOCS} for how to write one. "
+                            "Required, except in dynamic mode.")
+    # The MURaM files static mode read before atmosphere files, kept out of
+    # the help so that old command lines still run, with a warning, until
+    # the route is removed.
+    for flag, default in (("--temp-file", "temp/eosT.0270000"),
+                          ("--rho-file", "rho/result_prim_0.0270000"),
+                          ("--vx-file", "vx/result_prim_1.0270000"),
+                          ("--vy-file", "vy/result_prim_3.0270000"),
+                          ("--vz-file", "vz/result_prim_2.0270000")):
+        parser.add_argument(flag, type=str, default=default, action=_NotedOption,
+                            help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
@@ -1431,28 +1371,6 @@ def parse_arguments():
                             "the atomic data again for each chunk. The result "
                             "is the same.")
 
-    # Simulation files
-    parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
-                       help="Temperature file relative to data-dir")
-    parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
-                       help="Density file relative to data-dir")
-    parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
-                       help="Velocity x file relative to data-dir")
-    parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
-                       help="Velocity y file relative to data-dir")
-    parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
-                       help="Velocity z file relative to data-dir")
-    
-    # Grid parameters
-    parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
-                       help="Cube dimensions in the file's storage order (nx nz ny)")
-    parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
-                       help="Voxel size in x (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
-                       help="Voxel size in y (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
-                       help="Voxel size in z (e.g. '0.064 Mm')")
-    
     # Integration direction
     parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
                        help="Axis along which to integrate (x, y, or z)")
@@ -1476,55 +1394,246 @@ def parse_arguments():
                        help="Downsampling factor (1 = no downsampling)")
     parser.add_argument("--precision", choices=["float32", "float64"], default="float64",
                        help="Numerical precision")
-    parser.add_argument("--mean-mol-wt", type=float, default=1.29,
-                       help="Mean molecular weight")
+    parser.add_argument("--mass-per-electron", "--mean-mol-wt",
+                       dest="mass_per_electron", type=float, default=None,
+                       help="Mass of the plasma per free electron, in atomic mass "
+                            "units, which turns a mass density into an electron "
+                            "density. By default it is worked out from --abundance "
+                            "for a fully ionised plasma, about 1.16 for coronal "
+                            "abundances. --mean-mol-wt is the old name; ECLIPSE "
+                            "0.11.0 and earlier used 1.29, the value for a neutral gas. "
+                            "Not used when the atmosphere gives an electron density.")
     
-    # Dynamic atmosphere mode (time-varying synthesis)
+    # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
+    # own files and so carries the options describing their layout.
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
         "Options for synthesising with time-varying atmosphere (raster scanning)")
     dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
                        help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
     dynamic_group.add_argument("--slit-width", type=str, default=None,
+                       action=_NotedOption,
                        help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
-    
+    dynamic_group.add_argument("--data-dir", type=str, default="data/atmosphere",
+                       action=_NotedOption,
+                       help="Directory containing the MURaM files")
+    dynamic_group.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
+                       action=_NotedOption,
+                       help="Cube dimensions in the file's storage order (nx nz ny)")
+    dynamic_group.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in x (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in y (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in z (e.g. '0.064 Mm')")
+
     # Directory arguments for dynamic mode
     dynamic_group.add_argument("--temp-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing temperature files (for dynamic mode)")
     dynamic_group.add_argument("--temp-filename", type=str, default="eosT",
+                       action=_NotedOption,
                        help="Temperature filename prefix before timestep suffix")
     dynamic_group.add_argument("--rho-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing density files (for dynamic mode)")
     dynamic_group.add_argument("--rho-filename", type=str, default="result_prim_0",
+                       action=_NotedOption,
                        help="Density filename prefix before timestep suffix")
     dynamic_group.add_argument("--vx-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vx files (for dynamic mode)")
     dynamic_group.add_argument("--vx-filename", type=str, default="result_prim_1",
+                       action=_NotedOption,
                        help="Vx filename prefix before timestep suffix")
     dynamic_group.add_argument("--vy-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vy files (for dynamic mode)")
     dynamic_group.add_argument("--vy-filename", type=str, default="result_prim_3",
+                       action=_NotedOption,
                        help="Vy filename prefix before timestep suffix")
     dynamic_group.add_argument("--vz-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vz files (for dynamic mode)")
     dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
+                       action=_NotedOption,
                        help="Vz filename prefix before timestep suffix")
     dynamic_group.add_argument("--time-dir", type=str, default="header",
+                       action=_NotedOption,
                        help="Directory containing header files (for dynamic mode)")
     dynamic_group.add_argument("--time-filename", type=str, default="Header",
+                       action=_NotedOption,
                        help="Header filename prefix before timestep suffix")
-    
-    return parser.parse_args()
+
+    return parser
+
+
+def parse_arguments(argv=None):
+    """Parse command line arguments for spectrum synthesis."""
+    return build_parser().parse_args(argv)
+
+
+def check_atmosphere_options(args) -> None:
+    """
+    Refuse an atmosphere given alongside options it makes meaningless, and warn when there is none.
+
+    The synthesis reads its atmosphere from an atmosphere file. Without one,
+    static mode still reads MURaM's own files, which is deprecated. The
+    MURaM layout options describe those files and the ones dynamic mode
+    builds its time series from, and the dynamic mode options only apply to
+    dynamic mode, so one of either given with --atmosphere would be ignored
+    without a word.
+    """
+    if not args.atmosphere:
+        if args.slit_rest_time is None:
+            warnings.warn(
+                f"No --atmosphere was given, so the synthesis is reading "
+                f"MURaM's own files from {args.data_dir}. This is deprecated "
+                f"and will be removed in a future release: write the snapshot "
+                f"as an atmosphere file, as described at {ATMOSPHERE_DOCS}, "
+                f"and give it with --atmosphere.",
+                FutureWarning, stacklevel=2)
+        return
+    # The parser notes every layout option that appeared on the command
+    # line, so one typed at its default value is caught too.
+    noted = getattr(args, "given_options", ())
+    given = [name for name in MURAM_LAYOUT_OPTIONS if name in noted]
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(
+            f"--atmosphere carries the cube shape, cell sizes and data itself, "
+            f"so {flags} would not be used. Those options describe MURaM's "
+            f"own files.")
+    if args.slit_rest_time is not None:
+        raise ValueError(
+            "Dynamic mode reads its time series from MURaM files and cannot "
+            "yet take an atmosphere file. Give the MURaM options instead.")
+    given = [name for name in DYNAMIC_OPTIONS if name in noted]
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(
+            f"--atmosphere is a static synthesis, so {flags} would not be "
+            f"used. Those options only apply to dynamic mode (--slit-rest-time).")
+
+
+def load_atmosphere_file(
+    path: str | Path,
+    integration_axis: str,
+    downsample: int | bool = False,
+    crop_x=None, crop_y=None, crop_z=None,
+) -> Atmosphere:
+    """
+    Read an atmosphere file with the velocity a view along *integration_axis* needs.
+
+    Downsampling and cropping are applied here, in the atmosphere's own
+    coordinates, and the two axes that become the image are checked to be
+    evenly spaced, since the image WCS can only describe an even grid. The
+    line of sight may be stretched: the emission measure uses the true size
+    of each cell along it.
+    """
+    atmosphere = read_atmosphere(path, velocities=(integration_axis,))
+    return _prepare_atmosphere(atmosphere, str(path), integration_axis,
+                               downsample, crop_x, crop_y, crop_z)
+
+
+def load_muram_files(
+    args,
+    integration_axis: str,
+    downsample: int | bool = False,
+    crop_x=None, crop_y=None, crop_z=None,
+) -> Atmosphere:
+    """
+    Read the MURaM files the deprecated static options name, as :func:`load_atmosphere_file` reads a file.
+
+    The box is placed where ECLIPSE has always placed a MURaM box, x and y
+    centred on zero and z = 0 at the centre of the bottom cell, so the crop
+    options mean what they did before atmosphere files.
+    """
+    data_dir = Path(args.data_dir)
+    files = {
+        "temperature": (args.temp_file, u.K),
+        "mass_density": (args.rho_file, u.g / u.cm**3),
+        f"velocity_{integration_axis}": (getattr(args, f"v{integration_axis}_file"),
+                                         u.cm / u.s),
+    }
+    cubes = {}
+    for name, (file_name, unit) in files.items():
+        path = data_dir / file_name
+        if not path.exists():
+            raise FileNotFoundError(f"{name} file not found: {path}")
+        cubes[name] = load_cube(path, shape=tuple(args.cube_shape), unit=unit)
+
+    nz, ny, nx = cubes["temperature"].shape
+    voxel = {axis: u.Quantity(getattr(args, f"voxel_d{axis}")) for axis in AXES}
+    atmosphere = Atmosphere(
+        x_edges=(np.arange(nx + 1) - nx / 2) * voxel["x"],
+        y_edges=(np.arange(ny + 1) - ny / 2) * voxel["y"],
+        z_edges=(np.arange(nz + 1) - 0.5) * voxel["z"],
+        source="MURaM", **cubes)
+    return _prepare_atmosphere(atmosphere, f"the MURaM files in {data_dir}",
+                               integration_axis, downsample, crop_x, crop_y, crop_z)
+
+
+def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str,
+                        downsample, crop_x, crop_y, crop_z) -> Atmosphere:
+    """Downsample and crop *atmosphere*, and check that its image axes are even."""
+    if downsample:
+        atmosphere = atmosphere.downsampled(downsample)
+    if crop_x or crop_y or crop_z:
+        atmosphere = atmosphere.cropped(x=crop_x, y=crop_y, z=crop_z)
+    for axis in AXES:
+        if axis != integration_axis and not atmosphere.is_uniform(axis):
+            raise ValueError(
+                f"The {axis} axis of {name} is not evenly spaced, and with the "
+                f"line of sight along {integration_axis} it would become an "
+                f"image axis, whose coordinates must be even. Only the axis "
+                f"along the line of sight may be stretched; resample the "
+                f"others onto an even grid first.")
+    return atmosphere
+
+
+def resolve_mass_per_electron(args) -> Tuple[float, str]:
+    """The mass per free electron to use, in atomic mass units, and where it came from."""
+    if args.mass_per_electron is not None:
+        try:
+            value = require_mass_per_electron(args.mass_per_electron)
+        except ValueError as error:
+            raise ValueError(f"--mass-per-electron: {error}") from None
+        return value, "given on the command line"
+    value = mass_per_electron(args.abundance, getattr(args, "hdf5_dbase_root", None))
+    return value, f"fully ionised plasma with {args.abundance} abundances"
+
+
+def along_line_of_sight(values, integration_axis: str) -> np.ndarray:
+    """
+    *values*, one per cell along the line of sight, shaped to broadcast over a (z, y, x) cube.
+
+    A single value comes back as it is, so one cell size applies everywhere.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.ndim == 0:
+        return values
+    if values.ndim != 1:
+        raise ValueError(f"Expected one value per cell along the line of sight, "
+                         f"got an array of shape {values.shape}.")
+    shape = [1, 1, 1]
+    shape[NUMPY_AXIS[integration_axis]] = values.size
+    return values.reshape(shape)
 
 
 def main(args=None) -> None:
     """
     Main workflow for synthesising solar spectra from 3D MHD simulations.
-    
+
     Supports two modes:
-    - Static mode: Single timestep synthesis
-    - Dynamic mode: Time-varying synthesis with raster scanning
-    
+    - Static mode: Single timestep synthesis, from an atmosphere file
+      (--atmosphere), or from MURaM's own files, which is deprecated
+    - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
+      own files
+
     Parameters
     ----------
     args : argparse.Namespace, optional
@@ -1535,38 +1644,49 @@ def main(args=None) -> None:
     
     # ---------------- Configuration from arguments -----------------
     precision = np.float32 if args.precision == "float32" else np.float64
+    if args.downsample < 1:
+        raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
-    # Voxel sizes of the simulation files. load_cube scales these itself when
-    # it downsamples, so they are passed to it as given.
-    file_voxel_dz = u.Quantity(args.voxel_dz)
-    file_voxel_dx = u.Quantity(args.voxel_dx)
-    file_voxel_dy = u.Quantity(args.voxel_dy)
 
-    # Voxel sizes of the cubes as synthesised, for the path length along the
-    # line of sight, the dynamic-mode slice timing and the saved metadata.
-    voxel_dz = file_voxel_dz * (downsample or 1)
-    voxel_dx = file_voxel_dx * (downsample or 1)
-    voxel_dy = file_voxel_dy * (downsample or 1)
-
-    mean_mol_wt = args.mean_mol_wt
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
-    
+
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    base_dir = Path(args.data_dir)
     integration_axis = args.integration_axis.lower()
-    
+    check_atmosphere_options(args)
+
+    # What the common processing below needs from whichever route reads the
+    # atmosphere. Only an atmosphere file can give the electron density
+    # directly or a different size for every cell along the line of sight;
+    # dynamic mode gives a mass density and one cell size.
+    ne_values = None
+    los_thickness = None
+    atmosphere_metadata = None
+
     # Determine if we're in dynamic mode
     dynamic_mode = args.slit_rest_time is not None
-    
+
     if dynamic_mode:
         # Validate dynamic mode requirements
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
-        
+
+        base_dir = Path(args.data_dir)
+        # Voxel sizes of the MURaM files. load_cube scales these itself when
+        # it downsamples, so they are passed to it as given.
+        file_voxel_dz = u.Quantity(args.voxel_dz)
+        file_voxel_dx = u.Quantity(args.voxel_dx)
+        file_voxel_dy = u.Quantity(args.voxel_dy)
+
+        # Voxel sizes of the cubes as synthesised, for the path length along
+        # the line of sight, the slice timing and the saved metadata.
+        voxel_dz = file_voxel_dz * (downsample or 1)
+        voxel_dx = file_voxel_dx * (downsample or 1)
+        voxel_dy = file_voxel_dy * (downsample or 1)
+
         # Parse slit rest time and slit width
         slit_rest_time = u.Quantity(args.slit_rest_time)
         slit_width = u.Quantity(args.slit_width)
@@ -1657,7 +1777,8 @@ def main(args=None) -> None:
             print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
         
         reference_cube = temp_cube
-        
+        rho = u.Quantity(rho_cube.data, rho_cube.unit)
+
         # Dynamic mode metadata for output (no spatial rebinning in synthesis)
         dynamic_mode_metadata = {
             "enabled": True,
@@ -1670,36 +1791,17 @@ def main(args=None) -> None:
         }
         
     else:
-        # Static mode (original behavior)
+        # Static mode from an atmosphere file, which brings its own layout, or
+        # by the deprecated route from MURaM's own files, read into the same
+        # atmosphere the converter would write
         dynamic_mode_metadata = {"enabled": False}
-        
-        files = {
-            "T": args.temp_file,
-            "rho": args.rho_file,
-        }
-        
-        # Determine velocity file based on integration axis
-        if integration_axis == "x":
-            files["vel"] = args.vx_file
-            voxel_dh = voxel_dx
-        elif integration_axis == "y":
-            files["vel"] = args.vy_file
-            voxel_dh = voxel_dy
-        else:  # "z"
-            files["vel"] = args.vz_file
-            voxel_dh = voxel_dz
-        
-        paths = {k: base_dir / fname for k, fname in files.items()}
-        
-        # Validate input files exist
-        for name, path in paths.items():
-            if not path.exists():
-                raise FileNotFoundError(f"{name} file not found: {path}")
-        
-        print(f"STATIC MODE - Single timestep synthesis")
-        print(f"  Data directory: {base_dir}")
-        print(f"  Cube shape: {args.cube_shape}")
-        print(f"  Voxel sizes: {voxel_dx:.3f} x {voxel_dy:.3f} x {voxel_dz:.3f}")
+
+        if args.atmosphere:
+            print("STATIC MODE - Synthesis from an atmosphere file")
+            print(f"  Atmosphere: {args.atmosphere}")
+        else:
+            print("STATIC MODE - Synthesis from MURaM files (deprecated)")
+            print(f"  Data directory: {args.data_dir}")
         print(f"  Integration axis: {integration_axis}")
         print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
@@ -1710,39 +1812,46 @@ def main(args=None) -> None:
         if args.crop_x or args.crop_y or args.crop_z:
             print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
         print()
-        
-        # Load simulation data as NDCubes
-        print(f"Loading cubes ({print_mem()})")
-        temp_cube = load_cube(
-            paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        rho_cube = load_cube(
-            paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        vel_cube = load_cube(
-            paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
 
-        # Apply cropping if requested
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"Applying cropping ({print_mem()})")
-            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
-                temp_cube, rho_cube, vel_cube,
-                args.crop_x, args.crop_y, args.crop_z
-            )
-            print(f"Cropped cubes to shape: {temp_cube.data.shape}")
+        print(f"Reading the atmosphere ({print_mem()})")
+        crops = dict(crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        if args.atmosphere:
+            atmosphere = load_atmosphere_file(
+                args.atmosphere, integration_axis, downsample=downsample, **crops)
+        else:
+            atmosphere = load_muram_files(
+                args, integration_axis, downsample=downsample, **crops)
+        print(atmosphere.describe())
 
+        # The file may hold float32 in any units; the run works in the
+        # precision --precision asks for, and the processing below takes the
+        # cubes' values as K and cm/s, so they are converted here.
+        temp_cube = atmosphere.to_ndcube(
+            atmosphere.temperature.astype(precision).to(u.K))
+        vel_cube = atmosphere.to_ndcube(
+            atmosphere.velocity(integration_axis).astype(precision).to(u.cm / u.s))
+        rho = None
+        if atmosphere.mass_density is not None:
+            rho = atmosphere.mass_density.astype(precision)
+        if atmosphere.electron_density is not None:
+            ne_values = atmosphere.electron_density.astype(precision).to_value(u.cm**-3)
+        los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
-    
+
+        # The cell sizes stand in for the MURaM voxel sizes in what is saved;
+        # a stretched axis has no single size.
+        voxel_dx, voxel_dy, voxel_dz = (
+            atmosphere.spacing(axis) if atmosphere.is_uniform(axis) else None
+            for axis in AXES)
+        atmosphere_metadata = {
+            "path": str(Path(args.atmosphere).resolve()) if args.atmosphere else None,
+            "source": atmosphere.source,
+            "time": atmosphere.time,
+            "shape": atmosphere.shape,
+            "nonuniform_axes": atmosphere.nonuniform_axes(),
+            "electron_density_given": atmosphere.electron_density is not None,
+        }
+
     # ---------------- Common processing (both modes) -----------------
     
     # Build velocity grid
@@ -1752,11 +1861,22 @@ def main(args=None) -> None:
         vel_res.to(u.cm / u.s).value
     ) * (u.cm / u.s)
 
+    # The electron density: the atmosphere's own where it gives one, otherwise
+    # the mass density over the mass per free electron.
+    if ne_values is None:
+        mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
+        print(f"Electron density from the mass density with "
+              f"{mass_per_electron_amu:.4f} u per electron ({mass_per_electron_source})")
+        ne_values = (rho / (mass_per_electron_amu * const.u)).to_value(u.cm**-3)
+    else:
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
+        print("Electron density taken from the atmosphere")
+
     # Convert to log10 temperature and density
-    ne_arr = (rho_cube / (mean_mol_wt * const.u.cgs.to(u.g))).to(1/u.cm**3)
-    logN_cube = np.log10(ne_arr.data, where=ne_arr.data > 0.0, 
-                        out=np.zeros_like(ne_arr.data)).astype(precision)
-    logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0, 
+    logN_cube = np.log10(ne_values, where=ne_values > 0.0,
+                        out=np.zeros_like(ne_values)).astype(precision)
+    logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0,
                         out=np.zeros_like(temp_cube.data)).astype(precision)
     
     # The velocity files hold the velocity along each axis; the Doppler shift
@@ -1783,14 +1903,11 @@ def main(args=None) -> None:
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
     
-    # Determine voxel_dh based on integration axis
-    if integration_axis == "x":
-        voxel_dh = voxel_dx
-    elif integration_axis == "y":
-        voxel_dh = voxel_dy
-    else:
-        voxel_dh = voxel_dz
-    dh_cm = voxel_dh.to(u.cm).value
+    # The size of each cell along the line of sight. MURaM's files have one
+    # size; an atmosphere file may give every cell its own.
+    if los_thickness is None:
+        los_thickness = {"x": voxel_dx, "y": voxel_dy, "z": voxel_dz}[integration_axis]
+    dh_cm = los_thickness.to_value(u.cm)
 
     # ---------------- Calculate DEM -----------------
     print(f"Calculating DEM and average density per bin ({print_mem()})")
@@ -1800,7 +1917,8 @@ def main(args=None) -> None:
     interpolate_g_on_dem(goft, avg_ne_map, logT_grid, logN_grid, logT_goft, precision)
 
     # ---------------- Build EM(T,v) cube -----------------
-    ne_sq_dh = (10.0 ** logN_cube.astype(np.float64)) ** 2 * dh_cm
+    ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
+                * along_line_of_sight(dh_cm, integration_axis))
     print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
     em_tv = build_em_tv(logT_cube, vel_data, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
@@ -1834,15 +1952,18 @@ def main(args=None) -> None:
         "goft": goft,
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "dynamic_mode": dynamic_mode_metadata,
+        "atmosphere": atmosphere_metadata,
         "config": {
             "precision": precision.__name__,
             "downsample": downsample,
             "vel_res": vel_res,
             "vel_lim": vel_lim,
-            "mean_mol_wt": mean_mol_wt,
+            "mass_per_electron": mass_per_electron_amu,
+            "mass_per_electron_source": mass_per_electron_source,
             "intensity_unit": str(intensity_unit),
-            "cube_shape": args.cube_shape,
-            "data_dir": str(base_dir),
+            "atmosphere": args.atmosphere,
+            "cube_shape": None if args.atmosphere else args.cube_shape,
+            "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,
