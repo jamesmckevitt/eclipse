@@ -1,12 +1,10 @@
 # Atmosphere files
 
-`synthesise-spectra` reads the simulation from an HDF5 file with the layout described below. You write this file yourself from your simulation's output, using h5py or any other HDF5 library, and pass it with `--atmosphere`:
+`synthesise-spectra` reads the simulation from an HDF5 file with the layout described below. Write the file with a simulation's output using h5py or any other HDF5 library, and pass it with `--atmosphere`:
 
 ```bash
 synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 ```
-
-The other options on the [synthesis page](synthesis.md) work the same whichever code the simulation came from. At the end of this page there are worked examples for a [MURaM](#worked-example-a-muram-flare) and a [Bifrost](#worked-example-bifrost-quiet-sun) snapshot, both downloaded from the Hinode SDC Europe.
 
 ## Layout
 
@@ -31,7 +29,7 @@ Datasets. Each one needs a `unit` attribute that astropy can read, such as `K`, 
 
 The cubes are stored in C order with z first, so `cube[k]` is a horizontal slice indexed `[y, x]`, and z points up. If your code stores its arrays in a different order, transpose them before writing.
 
-The two axes that become the image must be evenly spaced, because the maps are given a linear WCS. The axis along the line of sight can have cells of different sizes, as z often does in codes that include the chromosphere; each cell is integrated over its own depth. A side view of a box with an uneven z axis is refused, so resample it onto an even grid first.
+The two axes that become the image must be evenly spaced, because the maps are given a linear WCS. The axis along the line of sight can have cells of different sizes.
 
 ## Writing a file from Python
 
@@ -53,7 +51,7 @@ atmosphere = Atmosphere(
 write_atmosphere(atmosphere, "atmosphere.h5")
 ```
 
-`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres. If it gives the cell boundaries, use those instead, as the two are not the same on an uneven grid.
+`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres.
 
 `read_atmosphere` reads a file back into an `Atmosphere`. To check what a file holds without loading the cubes, run
 
@@ -88,11 +86,11 @@ Fortran arrays are column-major, so an array declared `(nx, ny, nz)` in Fortran 
 
 The contribution functions need the electron density. If your code calculates one, for example with non-equilibrium hydrogen ionisation, write it as `electron_density` and ECLIPSE will use it as it is.
 
-If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This overestimates the electron density in gas that is too cool to be fully ionised, but that gas does not emit the EUV lines ECLIPSE synthesises. You can set the value yourself with `--mass-per-electron`.
+If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. You can set the value yourself with `--mass-per-electron`.
 
 ## Cropping and downsampling
 
-`--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range; a cell that only touches the range at one of its boundaries is not. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.
+`--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
@@ -140,17 +138,17 @@ atmosphere = Atmosphere(
 write_atmosphere(atmosphere, "muram_300000.h5")
 ```
 
-The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise Fe XII 195.119 and the flare line Fe XXIV 192.028 from the surface upwards:
+The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise the flare line Fe XXIV 192.028 from the surface upwards:
 
 ```bash
 synthesise-spectra --atmosphere muram_300000.h5 \
-  --lines Fe12_195.1190 Fe24_192.0280 \
+  --lines Fe24_192.0280 \
   --crop-z "0 Mm" "42 Mm" \
   --vel-lim "1000 km/s" --vel-res "10 km/s" \
   --output-dir ./run/input
 ```
 
-The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.5 GB, with cells twice the size.
+The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.4 GB, with cells twice the size.
 
 ## Worked example: Bifrost quiet Sun
 
