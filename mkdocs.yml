@@ -35,9 +35,6 @@ nav:
   - Simulating the instrument: instrument-response.md
   - Tutorials:
       - Basic results analysis: basic-results-analysis.ipynb
-  - Advanced topics:
-      - Science cases: science-cases.md
-      - Pinhole stray light: pinholes.md
   - Acknowledgements: acknowledgements.md
 
 # docs/internal/ holds pages for the instrument team, reached only by a link.
