@@ -689,6 +689,20 @@ def test_the_atmosphere_option_excludes_the_muram_layout_options(tmp_path, monke
                     "--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec")
 
 
+def test_the_atmosphere_option_excludes_the_dynamic_mode_options(tmp_path, monkeypatch):
+    path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
+    with pytest.raises(ValueError, match="--temp-dir would not be used"):
+        _synthesise(tmp_path, monkeypatch, "static", "--atmosphere", str(path),
+                    "--temp-dir", "other")
+    with pytest.raises(ValueError, match="--slit-width would not be used"):
+        _synthesise(tmp_path, monkeypatch, "static", "--atmosphere", str(path),
+                    "--slit-width", "0.2 arcsec")
+    # Typed at their default values they still go unused.
+    with pytest.raises(ValueError, match="--time-dir, --time-filename would not be used"):
+        _synthesise(tmp_path, monkeypatch, "static", "--atmosphere", str(path),
+                    "--time-dir", "header", "--time-filename", "Header")
+
+
 def test_the_line_cube_refuses_a_stretched_image_axis_whatever_calls_it():
     """The guard sits on the cube, not only on the command line route."""
     atmosphere = _atmosphere(x_edges=STRETCHED_X)

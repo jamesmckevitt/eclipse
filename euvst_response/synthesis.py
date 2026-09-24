@@ -1301,6 +1301,12 @@ def create_line_cube(
 MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
                         "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
+# The options only dynamic mode reads, which a static synthesis from an
+# atmosphere file would ignore.
+DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_filename",
+                   "vx_dir", "vx_filename", "vy_dir", "vy_filename", "vz_dir",
+                   "vz_filename", "time_dir", "time_filename")
+
 # Where the documentation describes the atmosphere file and how to write one.
 ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/atmosphere-files/"
 
@@ -1406,6 +1412,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
     dynamic_group.add_argument("--slit-width", type=str, default=None,
+                       action=_NotedOption,
                        help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
     dynamic_group.add_argument("--data-dir", type=str, default="data/atmosphere",
                        action=_NotedOption,
@@ -1425,28 +1432,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Directory arguments for dynamic mode
     dynamic_group.add_argument("--temp-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing temperature files (for dynamic mode)")
     dynamic_group.add_argument("--temp-filename", type=str, default="eosT",
+                       action=_NotedOption,
                        help="Temperature filename prefix before timestep suffix")
     dynamic_group.add_argument("--rho-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing density files (for dynamic mode)")
     dynamic_group.add_argument("--rho-filename", type=str, default="result_prim_0",
+                       action=_NotedOption,
                        help="Density filename prefix before timestep suffix")
     dynamic_group.add_argument("--vx-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vx files (for dynamic mode)")
     dynamic_group.add_argument("--vx-filename", type=str, default="result_prim_1",
+                       action=_NotedOption,
                        help="Vx filename prefix before timestep suffix")
     dynamic_group.add_argument("--vy-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vy files (for dynamic mode)")
     dynamic_group.add_argument("--vy-filename", type=str, default="result_prim_3",
+                       action=_NotedOption,
                        help="Vy filename prefix before timestep suffix")
     dynamic_group.add_argument("--vz-dir", type=str, default=None,
+                       action=_NotedOption,
                        help="Directory containing vz files (for dynamic mode)")
     dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
+                       action=_NotedOption,
                        help="Vz filename prefix before timestep suffix")
     dynamic_group.add_argument("--time-dir", type=str, default="header",
+                       action=_NotedOption,
                        help="Directory containing header files (for dynamic mode)")
     dynamic_group.add_argument("--time-filename", type=str, default="Header",
+                       action=_NotedOption,
                        help="Header filename prefix before timestep suffix")
 
     return parser
@@ -1464,8 +1483,9 @@ def check_atmosphere_options(args) -> None:
     The synthesis reads its atmosphere from an atmosphere file. Without one,
     static mode still reads MURaM's own files, which is deprecated. The
     MURaM layout options describe those files and the ones dynamic mode
-    builds its time series from, so one given with --atmosphere would be
-    ignored without a word.
+    builds its time series from, and the dynamic mode options only apply to
+    dynamic mode, so one of either given with --atmosphere would be ignored
+    without a word.
     """
     if not args.atmosphere:
         if args.slit_rest_time is None:
@@ -1491,6 +1511,12 @@ def check_atmosphere_options(args) -> None:
         raise ValueError(
             "Dynamic mode reads its time series from MURaM files and cannot "
             "yet take an atmosphere file. Give the MURaM options instead.")
+    given = [name for name in DYNAMIC_OPTIONS if name in noted]
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(
+            f"--atmosphere is a static synthesis, so {flags} would not be "
+            f"used. Those options only apply to dynamic mode (--slit-rest-time).")
 
 
 def load_atmosphere_file(
