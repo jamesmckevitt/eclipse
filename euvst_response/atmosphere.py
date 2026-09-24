@@ -461,21 +461,25 @@ def read_atmosphere(path: str | Path,
         that the file lacks raises.
     """
     path = Path(path)
+    wanted = AXES if velocities is None else tuple(_check_axis(axis) for axis in velocities)
     with h5py.File(path, "r") as f:
         _check_format(f, path)
+        # A velocity asked for that the file lacks is refused before any cube
+        # is read, since the cubes of a large simulation take gigabytes.
+        if velocities is not None:
+            for axis in wanted:
+                if f"velocity_{axis}" not in f:
+                    raise ValueError(f"{path} has no velocity_{axis}, which a line "
+                                     f"of sight along {axis} needs.")
         fields = {EDGES[axis]: _read_dataset(f, EDGES[axis]) for axis in AXES}
         fields["temperature"] = _read_dataset(f, "temperature")
         for name in ("mass_density", "electron_density", "time"):
             if name in f:
                 fields[name] = _read_dataset(f, name)
-        wanted = AXES if velocities is None else tuple(velocities)
         for axis in wanted:
-            name = f"velocity_{_check_axis(axis)}"
+            name = f"velocity_{axis}"
             if name in f:
                 fields[name] = _read_dataset(f, name)
-            elif velocities is not None:
-                raise ValueError(f"{path} has no {name}, which a line of sight "
-                                 f"along {axis} needs.")
         source = f.attrs.get("source", "")
         if isinstance(source, bytes):
             source = source.decode()
@@ -521,14 +525,15 @@ def _check_format(f: h5py.File, path: Path) -> None:
     if version is None:
         raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "
                          f"atmosphere file has version {FORMAT_VERSION}.")
-    try:
-        matches = np.ndim(version) == 0 and float(version) == FORMAT_VERSION
-    except (TypeError, ValueError):
-        matches = False
-    if not matches:
-        if isinstance(version, bytes):
-            version = version.decode()
-        raise ValueError(f"{path} is atmosphere format version {version}; "
+    # An integer, which some HDF5 writers store as an array of one element;
+    # a string or a float is not a version even when it reads as 1.
+    value = np.asarray(version)
+    if value.size != 1 or not np.issubdtype(value.dtype, np.integer):
+        raise ValueError(f"{path} has a 'version' attribute of {version} "
+                         f"({type(version).__name__}); it must be the integer "
+                         f"{FORMAT_VERSION}.")
+    if value.item() != FORMAT_VERSION:
+        raise ValueError(f"{path} is atmosphere format version {value.item()}; "
                          f"this ECLIPSE reads version {FORMAT_VERSION}.")
 
 

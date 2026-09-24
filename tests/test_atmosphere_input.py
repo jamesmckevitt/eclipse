@@ -13,6 +13,7 @@ The synthesis runs use a flat contribution function in place of fiasco, so
 the intensity of a cell is just its emission measure.
 """
 import sys
+import types
 
 import astropy.constants as const
 import astropy.units as u
@@ -27,6 +28,7 @@ from euvst_response.atmosphere import (
     Atmosphere,
     edges_from_centres,
     main as eclipse_atmosphere,
+    mass_per_electron,
     mass_per_electron_from_abundances,
     read_atmosphere,
     write_atmosphere,
@@ -170,6 +172,23 @@ def test_the_reader_reads_only_the_velocity_asked_for(tmp_path):
         read_atmosphere(path, velocities=("y",))
 
 
+def test_a_missing_velocity_is_refused_before_any_cube_is_read(tmp_path):
+    """The cubes can take gigabytes, so the check must not need them."""
+    path = tmp_path / "huge.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["format"] = "eclipse-atmosphere"
+        f.attrs["version"] = 1
+        for axis, edges in _edges().items():
+            f.create_dataset(axis, data=edges.value).attrs["unit"] = str(edges.unit)
+        # A cube whose bytes are in a file that does not exist: reading it fails.
+        missing = f.create_dataset("temperature", shape=SHAPE, dtype="f4",
+                                   external=[(str(tmp_path / "missing.bin"), 0,
+                                              4 * int(np.prod(SHAPE)))])
+        missing.attrs["unit"] = "K"
+    with pytest.raises(ValueError, match="no velocity_x"):
+        read_atmosphere(path, velocities=("x",))
+
+
 def test_the_reader_refuses_files_that_are_not_atmospheres(tmp_path):
     other = tmp_path / "other.h5"
     with h5py.File(other, "w") as f:
@@ -192,17 +211,34 @@ def test_the_reader_refuses_files_that_are_not_atmospheres(tmp_path):
         read_atmosphere(newer)
 
 
-def test_the_version_must_be_the_one_this_eclipse_reads(tmp_path):
-    for version, message in ((None, "no 'version'"), (1.5, "version 1.5"),
-                             (2, "version 2"), ("one", "version one")):
-        path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
-        with h5py.File(path, "a") as f:
-            if version is None:
-                del f.attrs["version"]
-            else:
-                f.attrs["version"] = version
-        with pytest.raises(ValueError, match=message):
-            read_atmosphere(path)
+@pytest.mark.parametrize("version, message", [
+    (None, "no 'version'"),
+    (2, "version 2; this ECLIPSE reads version 1"),
+    (1.5, "must be the integer 1"),
+    # Values that read as 1 but are not the integer the format asks for.
+    (1.0, "must be the integer 1"),
+    ("1", "must be the integer 1"),
+    (b"1", "must be the integer 1"),
+    ("one", "must be the integer 1"),
+])
+def test_the_version_must_be_the_one_this_eclipse_reads(tmp_path, version, message):
+    path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
+    with h5py.File(path, "a") as f:
+        if version is None:
+            del f.attrs["version"]
+        else:
+            f.attrs["version"] = version
+    with pytest.raises(ValueError, match=message):
+        read_atmosphere(path)
+
+
+@pytest.mark.parametrize("version", [np.int32(1), np.array([1], dtype=np.int16)])
+def test_an_integer_version_of_any_width_is_read(tmp_path, version):
+    """Fortran and C writers may store the version as a small integer, or an array of one."""
+    path = write_atmosphere(_atmosphere(), tmp_path / "box.h5")
+    with h5py.File(path, "a") as f:
+        f.attrs["version"] = version
+    assert read_atmosphere(path).shape == SHAPE
 
 
 def test_info_describes_a_file_without_loading_its_cubes(tmp_path, capsys):
@@ -428,12 +464,69 @@ def test_the_mass_per_electron_follows_from_the_abundances():
     helium = element("He").atomic_weight
     expected = (hydrogen + 0.085 * helium) / (1.0 + 0.085 * 2)
     assert mass_per_electron_from_abundances({"H": 1.0, "He": 0.085}) == pytest.approx(expected)
-    # Well below the neutral-gas 1.29 that ECLIPSE 0.8.0 used, and well
+    # Well below the neutral-gas 1.29 that ECLIPSE 0.11.0 and earlier used, and well
     # above the 1 a pure hydrogen plasma would have.
     assert 1.1 < expected < 1.2
 
     with pytest.raises(ValueError, match="hydrogen"):
         mass_per_electron_from_abundances({"He": 0.085})
+
+
+def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(monkeypatch):
+    """Every element in the database is asked for, through one of its ions; those the set leaves out hold none."""
+    listed = {"H": 1.0, "He": 0.085, "O": 4.9e-4}  # a set with no iron in it
+    asked = []
+
+    class MissingDatasetException(Exception):
+        pass
+
+    class Ion:
+        """Enough of fiasco.Ion to read an abundance, recording how it was built."""
+
+        def __init__(self, name, temperature, abundance=None, hdf5_dbase_root=None):
+            asked.append((name, abundance, hdf5_dbase_root))
+            self.symbol = name.split()[0]
+
+        @property
+        def abundance(self):
+            if self.symbol not in listed:
+                raise MissingDatasetException(self.symbol)
+            return listed[self.symbol] * u.dimensionless_unscaled
+
+    fiasco = types.ModuleType("fiasco")
+    fiasco.list_elements = lambda hdf5_dbase_root=None: ["H", "He", "O", "Fe"]
+    fiasco.list_ions = lambda hdf5_dbase_root=None: ["H 1", "H 2", "He 1", "He 2", "He 3",
+                                                     "O 1", "O 9", "Fe 1", "Fe 27"]
+    fiasco.Ion = Ion
+    exceptions = types.ModuleType("fiasco.util.exceptions")
+    exceptions.MissingDatasetException = MissingDatasetException
+    util = types.ModuleType("fiasco.util")
+    util.exceptions = exceptions
+    fiasco.util = util
+    for name, module in (("fiasco", fiasco), ("fiasco.util", util),
+                         ("fiasco.util.exceptions", exceptions)):
+        monkeypatch.setitem(sys.modules, name, module)
+
+    # The value is cached per set and database, so the cache must not carry
+    # a real database's answer into this test or this test's out of it.
+    mass_per_electron.cache_clear()
+    try:
+        value = mass_per_electron("a set", "/data/chianti.h5")
+        asked_with_database = list(asked)
+        asked.clear()
+        mass_per_electron("a set")
+        asked_with_default = list(asked)
+        listed.clear()
+        with pytest.raises(ValueError, match="is the name right"):
+            mass_per_electron("a misspelt set")
+    finally:
+        mass_per_electron.cache_clear()
+
+    assert value == pytest.approx(
+        mass_per_electron_from_abundances({"H": 1.0, "He": 0.085, "O": 4.9e-4}))
+    assert asked_with_database == [(f"{symbol} 1", "a set", "/data/chianti.h5")
+                                   for symbol in ("H", "He", "O", "Fe")]
+    assert [database for _, _, database in asked_with_default] == [None] * 4
 
 
 # ----------------------------------------------------------------------
