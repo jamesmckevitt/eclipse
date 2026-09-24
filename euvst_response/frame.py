@@ -69,12 +69,15 @@ def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
     """
     Effective area in cm^2 at each wavelength, from the telescope model.
 
-    Outside its throughput tables the telescope has no effective area, and a
-    single such wavelength would turn every row of the frame to NaN through
-    the spectral blur, so that is an error here rather than a silent result.
+    The telescope is asked for every wavelength at once, and may answer with
+    one area for all of them.  Outside its throughput tables it has no
+    effective area, and a single such wavelength would turn every row of the
+    frame to NaN through the spectral blur, so that is an error here rather
+    than a silent result.
     """
     wavelength = np.atleast_1d(wavelength)
-    area = np.array([telescope.ea_and_throughput(w).cgs.value for w in wavelength])
+    area = u.Quantity(telescope.ea_and_throughput(wavelength)).cgs.value
+    area = np.array(np.broadcast_to(area, wavelength.shape), dtype=float)
     if not np.all(np.isfinite(area)):
         outside = wavelength[~np.isfinite(area)].to_value(u.Angstrom)
         raise ValueError(
@@ -99,7 +102,7 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     ccd : str
         ``'left'`` or ``'right'``.
     telescope : Telescope_EUVST
-        Supplies the effective area at each wavelength.
+        Supplies the effective area, asked for an array of wavelengths at once.
     slit_width : u.Quantity
         The slit the light came through, as an angle.
     wavelengths : u.Quantity

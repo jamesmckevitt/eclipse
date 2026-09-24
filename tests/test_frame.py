@@ -243,14 +243,45 @@ def test_a_wavelength_the_telescope_cannot_see_is_an_error():
     # NaN from a throughput table would otherwise spread to every row.
     class TelescopeWithTables(StubTelescope):
         def ea_and_throughput(self, wavelength):
-            inside = 170.0 <= wavelength.to_value(u.Angstrom) <= 214.0
-            return (EFFECTIVE_AREA if inside else np.nan) * u.cm**2
+            w = wavelength.to_value(u.Angstrom)
+            return np.where((w >= 170.0) & (w <= 214.0), EFFECTIVE_AREA, np.nan) * u.cm**2
 
     fp = FocalPlane_SWC()
     with pytest.raises(ValueError, match="no effective area at 169.9000"):
         photons_from_lines(fp, "left", TelescopeWithTables(), SLIT_WIDTH * u.arcsec,
                            [169.9, 195.119] * u.Angstrom,
                            [1.0, 1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.02, 0.02] * u.Angstrom)
+
+
+def test_the_telescope_gives_a_spectrum_the_area_at_each_wavelength():
+    # A frame asks for the effective area of a whole spectrum in one call.
+    telescope = Telescope_EUVST()
+    wavelength = np.linspace(170.5, 211.5, 9) * u.Angstrom
+    together = telescope.ea_and_throughput(wavelength).to_value(u.cm**2)
+    one_by_one = [telescope.ea_and_throughput(w).to_value(u.cm**2) for w in wavelength]
+    assert together.shape == (9,)
+    np.testing.assert_allclose(together, one_by_one, rtol=1e-14, atol=0)
+
+
+def test_the_throughput_tables_are_read_once(monkeypatch):
+    # Reading all five again for every wavelength made a spectrum take minutes.
+    import pathlib
+
+    from euvst_response import config
+
+    monkeypatch.setattr(config, "_THROUGHPUT_TABLES", {})
+    reads = []
+    read_text = pathlib.Path.read_text
+
+    def counted(self, *args, **kwargs):
+        reads.append(self.name)
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", counted)
+    telescope = Telescope_EUVST()
+    for w in np.linspace(171.0, 211.0, 20) * u.Angstrom:
+        telescope.ea_and_throughput(w)
+    assert len(reads) == len(set(reads)) == 5
 
 
 def test_a_line_list_must_be_consistent():
