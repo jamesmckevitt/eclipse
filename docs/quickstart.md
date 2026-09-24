@@ -19,8 +19,7 @@ eclipse --help
 
 That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
 spectra, `eclipse` puts them through the instrument. See
-[Atmosphere files](atmosphere-files.md) for how to write the atmosphere file,
-[From an MHD simulation](synthesis.md) and
+[From an MHD simulation](synthesis.md), which also describes the atmosphere file, and
 [Simulating the instrument](instrument-response.md) for the full set of options.
 
 There is no default configuration file, so write `config.yaml` yourself between
@@ -70,11 +69,10 @@ filter_eff = telescope.filter.total_throughput(fe12_wl)
 
 ## Working with results
 
-For analysing simulation results, see the [analysis tutorial](basic-results-analysis.ipynb), which demonstrates how to:
+For analysing simulation results, see the [analysis tutorial](analysing-the-results.ipynb), which demonstrates how to:
 
 - Load simulation results
 - Explore parameter combinations
-- Analyse fit statistics and compute velocity/line width errors
 - Create SunPy maps for visualization
 
 The analysis functions are available directly from the package:

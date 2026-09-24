@@ -1308,7 +1308,7 @@ DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_fi
                    "vz_filename", "time_dir", "time_filename")
 
 # Where the documentation describes the atmosphere file and how to write one.
-ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/atmosphere-files/"
+ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
 
 
 class _NotedOption(argparse.Action):
