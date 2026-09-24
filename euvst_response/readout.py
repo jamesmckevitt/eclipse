@@ -368,12 +368,17 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
 
     Both CCDs share one row timeline, so the returned ranges are row numbers
     without a CCD attached: a window over rows 1850 to 1880 makes those rows
-    slow on both devices, whatever wavelength they are on the other one.
+    slow on both devices, whatever wavelength they are on the other one.  A
+    range that crosses the gap runs from each of its ends to the butted edge,
+    so its window goes on to the last row.
     """
     windows = []
     for low, high in ranges:
-        rows = sorted(focal_plane.row_of_wavelength(w)[1] for w in (low, high))
-        windows.append((int(np.floor(rows[0])), int(np.ceil(rows[1]))))
+        (ccd_low, row_low), (ccd_high, row_high) = (
+            focal_plane.row_of_wavelength(w) for w in (low, high))
+        first = min(row_low, row_high)
+        last = max(row_low, row_high) if ccd_low == ccd_high else focal_plane.n_rows - 1
+        windows.append((int(np.floor(first)), int(np.ceil(last))))
     return windows
 
 

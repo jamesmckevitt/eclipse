@@ -217,6 +217,26 @@ def test_windows_from_wavelengths_covers_the_line():
     assert last - first == pytest.approx(0.4 / 0.0169, abs=2)
 
 
+@pytest.mark.parametrize("low, high", [
+    (194.9, 195.3),       # one CCD
+    (195.119, 200.972),   # Fe XII on the left CCD to Ca XV on the right
+    (200.972, 195.119),   # the same, given the other way round
+])
+def test_a_window_holds_every_row_its_wavelengths_land_on(low, high):
+    # Across the gap, each end of the range runs out to the butted edge, so
+    # the rows it needs reach row 2047 on both CCDs.
+    fp = FocalPlane_SWC()
+    (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
+    rows = np.arange(fp.n_rows)
+    for ccd in ("left", "right"):
+        lam = fp.wavelength(rows, ccd).to_value(u.Angstrom)
+        wanted = rows[(lam >= min(low, high)) & (lam <= max(low, high))]
+        if wanted.size:
+            assert first <= wanted.min() and wanted.max() <= last
+    if min(low, high) < 199.0 < max(low, high):
+        assert last == fp.n_rows - 1
+
+
 # ---------------------------------------------------------------------------
 # Smear
 # ---------------------------------------------------------------------------
