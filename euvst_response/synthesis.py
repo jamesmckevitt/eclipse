@@ -173,6 +173,223 @@ def read_timestep_time(file_path: Path) -> float:
         return float(values[6])
 
 
+def discover_timesteps(
+    time_dir: Path,
+    time_filename: str,
+) -> Dict[str, float]:
+    """
+    Discover all available timesteps and their simulation times.
+    
+    Parameters
+    ----------
+    time_dir : Path
+        Directory containing header files.
+    time_filename : str
+        Filename prefix before the timestep suffix (e.g., "Header").
+        
+    Returns
+    -------
+    dict
+        Mapping of timestep suffix to simulation time in seconds.
+        E.g., {"0270000": 26729.535, "0280000": 27571.395, ...}
+    """
+    if not time_dir.is_dir():
+        raise FileNotFoundError(f"Time directory not found: {time_dir}")
+    
+    timesteps = {}
+    
+    for file_path in sorted(time_dir.iterdir()):
+        if file_path.is_file() and file_path.name.startswith(time_filename):
+            # Extract suffix after the filename prefix
+            suffix = file_path.name[len(time_filename):]
+            if suffix.startswith('.'):
+                suffix = suffix[1:]  # Remove leading dot
+            
+            try:
+                sim_time = read_timestep_time(file_path)
+                timesteps[suffix] = sim_time
+            except Exception as e:
+                warnings.warn(f"Could not read time from {file_path}: {e}")
+    
+    if not timesteps:
+        raise ValueError(f"No valid timestep files found in {time_dir} with prefix '{time_filename}'")
+    
+    return timesteps
+
+
+def get_file_for_timestep(
+    directory: Path,
+    filename: str,
+    suffix: str,
+) -> Path:
+    """
+    Get the file path for a specific timestep.
+    
+    Parameters
+    ----------
+    directory : Path
+        Directory containing the data files.
+    filename : str
+        Filename prefix before the suffix (e.g., "eosT").
+    suffix : str
+        Timestep suffix (e.g., "0270000").
+        
+    Returns
+    -------
+    Path
+        Full path to the file.
+    """
+    file_path = directory / f"{filename}.{suffix}"
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    return file_path
+
+
+def compute_slice_timestep_mapping_mhd(
+    nx_mhd: int,
+    voxel_dx: u.Quantity,
+    slit_width: u.Quantity,
+    slit_rest_time: u.Quantity,
+    timestep_times: Dict[str, float],
+    crop_x: Optional[Tuple[u.Quantity, u.Quantity]] = None,
+) -> Tuple[List[str], Dict[str, List[int]]]:
+    """
+    Compute which timestep suffix to use for each MHD X-slice.
+    
+    The spectrometer scans from right to left (high X to low X).
+    Each slit position covers a physical width (slit_width converted to Mm).
+    Determine which slit position each MHD slice belongs to, then find
+    the appropriate timestep based on observation time.
+    
+    If crop_x is specified, the observation timing is calculated as if the
+    scan starts at the right edge of the crop region. Slices to the right
+    of the crop region are filled with the first timestep.
+    
+    To avoid error accumulation, calculate the observation time for each
+    MHD slice based on its absolute physical position.
+    
+    Parameters
+    ----------
+    nx_mhd : int
+        Number of MHD X-slices.
+    voxel_dx : u.Quantity
+        MHD voxel size in X direction (physical units, e.g., Mm).
+    slit_width : u.Quantity
+        Slit width in angular units (e.g., arcsec).
+    slit_rest_time : u.Quantity
+        Slit rest time per position.
+    timestep_times : dict
+        Mapping of timestep suffix to simulation time in seconds.
+    crop_x : tuple of u.Quantity, optional
+        If provided, (x_min, x_max) crop boundaries. Observation timing starts
+        at x_max (right edge of crop). Slices outside crop on the right use
+        the first timestep.
+        
+    Returns
+    -------
+    slice_mapping : list
+        List of timestep suffixes, one per MHD X-slice.
+    grouped : dict
+        Dictionary mapping each unique timestep suffix to list of MHD slice indices.
+    """
+    rest_time_sec = slit_rest_time.to_value(u.s)
+    
+    # Convert slit width from angular to physical distance
+    slit_physical = angle_to_distance(slit_width).to(u.Mm)
+    voxel_physical = voxel_dx.to(u.Mm)
+    
+    # Sort timesteps by simulation time
+    sorted_timesteps = sorted(timestep_times.items(), key=lambda x: x[1])
+    suffixes = [s for s, t in sorted_timesteps]
+    times = np.array([t for s, t in sorted_timesteps])
+    first_suffix = suffixes[0]
+    
+    # Check if observation time range extends beyond available MHD time range
+    t0 = times[0]
+    t_final = times[-1]
+    mhd_duration = t_final - t0
+    
+    # Total physical extent of the full domain
+    total_extent = nx_mhd * voxel_physical
+    
+    # Determine the effective scan start position (right edge)
+    # If crop_x is specified, scan starts at the crop boundary
+    if crop_x is not None:
+        x_min_crop = crop_x[0].to(u.Mm)
+        x_max_crop = crop_x[1].to(u.Mm)
+        
+        # The domain is centered at 0, so convert to absolute position
+        # WCS has X centered, so x=0 is at nx/2
+        domain_center = total_extent / 2
+        scan_start_position = domain_center + x_max_crop  # Right edge of crop in absolute coords
+        scan_end_position = domain_center + x_min_crop    # Left edge of crop in absolute coords
+        
+        # Calculate observation duration for just the cropped region
+        crop_extent = x_max_crop - x_min_crop
+        n_slit_positions_crop = int(np.ceil((crop_extent / slit_physical).decompose().value))
+        observation_duration = n_slit_positions_crop * rest_time_sec
+        
+        print(f"  Crop region: X = [{x_min_crop:.3f}, {x_max_crop:.3f}]")
+        print(f"  Observation starts at X = {x_max_crop:.3f} (right edge of crop)")
+    else:
+        scan_start_position = total_extent  # Right edge of full domain
+        scan_end_position = 0 * u.Mm
+        n_slit_positions_crop = int(np.ceil((total_extent / slit_physical).decompose().value))
+        observation_duration = n_slit_positions_crop * rest_time_sec
+    
+    if observation_duration > mhd_duration:
+        print(f"  WARNING: Observation duration ({observation_duration:.1f} s) exceeds MHD time range ({mhd_duration:.1f} s)")
+        print(f"  Slices observed after t={t_final:.1f} s will use the last available timestep")
+    
+    slice_mapping = []
+    
+    # For each MHD X-slice, calculate which slit position it belongs to
+    # Scanning right to left: scan_start_position is observed first (at t=t0)
+    for mhd_slice_idx in range(nx_mhd):
+        # Physical position of this slice (center of voxel) in absolute coords
+        x_physical = (mhd_slice_idx + 0.5) * voxel_physical
+        
+        # Distance from the scan start position (right edge of observation region)
+        distance_from_scan_start = scan_start_position - x_physical
+        
+        if distance_from_scan_start < 0:
+            # This slice is to the right of the scan start (outside crop on right)
+            # Use the first timestep for these slices
+            slice_mapping.append(first_suffix)
+            continue
+        
+        # Which slit position does this belong to?
+        # slit_position = 0 is at scan_start_position
+        slit_position = int(np.floor((distance_from_scan_start / slit_physical).decompose().value))
+        
+        # Observation time for this slit position
+        observation_time = t0 + slit_position * rest_time_sec
+        
+        # Find the latest timestep that doesn't exceed observation_time
+        idx = np.searchsorted(times, observation_time, side='right') - 1
+        # Clamp to valid range (0 to len(times)-1)
+        idx = max(0, min(idx, len(times) - 1))
+        slice_mapping.append(suffixes[idx])
+    
+    # Group slices by timestep for efficient processing
+    grouped = {}
+    for slice_idx, suffix in enumerate(slice_mapping):
+        if suffix not in grouped:
+            grouped[suffix] = []
+        grouped[suffix].append(slice_idx)
+    
+    # Print statistics
+    if crop_x is not None:
+        print(f"  Cropped region extent: {crop_extent:.3f}")
+    else:
+        print(f"  Physical domain extent: {total_extent:.3f}")
+    print(f"  Slit physical width: {slit_physical:.3f}")
+    print(f"  Number of slit positions: {n_slit_positions_crop}")
+    print(f"  Total raster time: {observation_duration:.1f} s")
+    
+    return slice_mapping, grouped
+
+
 def apply_cube_cropping(
     temp_cube: NDCube,
     rho_cube: NDCube,
@@ -228,16 +445,139 @@ def apply_cube_cropping(
     return temp_cube, rho_cube, vel_cube
 
 
+def build_composite_cubes_mhd(
+    base_dir: Path,
+    temp_dir: str,
+    temp_filename: str,
+    rho_dir: str,
+    rho_filename: str,
+    vel_dir: str,
+    vel_filename: str,
+    slice_mapping: List[str],
+    grouped_slices: Dict[str, List[int]],
+    cube_shape: Tuple[int, int, int],
+    voxel_dx: u.Quantity,
+    voxel_dy: u.Quantity,
+    voxel_dz: u.Quantity,
+    downsample: int | bool,
+    precision: type,
+) -> Tuple[NDCube, NDCube, NDCube]:
+    """
+    Build composite temp, rho, vel cubes from multiple timesteps at MHD resolution.
+    
+    Each MHD X-slice comes from the appropriate timestep per slice_mapping.
+    No spatial rebinning is performed - output is at full MHD resolution.
+    
+    Parameters
+    ----------
+    base_dir : Path
+        Base directory for atmosphere data.
+    temp_dir, temp_filename : str
+        Directory and filename prefix for temperature files.
+    rho_dir, rho_filename : str
+        Directory and filename prefix for density files.
+    vel_dir, vel_filename : str
+        Directory and filename prefix for velocity files.
+    slice_mapping : list
+        Timestep suffix for each MHD X-slice.
+    grouped_slices : dict
+        Slices grouped by timestep for efficient processing.
+    cube_shape : tuple
+        Original cube dimensions in the file's storage order.
+    voxel_dx, voxel_dy, voxel_dz : u.Quantity
+        Voxel sizes of the files, at full resolution; load_cube applies the
+        downsampling to them.
+    downsample : int or bool
+        Downsampling factor.
+    precision : type
+        Numerical precision.
+        
+    Returns
+    -------
+    tuple
+        (temp_composite, rho_composite, vel_composite) NDCubes at MHD resolution.
+    """
+    nx_mhd = len(slice_mapping)
+    
+    # Load first timestep to determine dimensions and get reference WCS
+    first_suffix = list(grouped_slices.keys())[0]
+    temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, first_suffix)
+    temp_cube_ref = load_cube(
+        temp_file, shape=cube_shape, unit=u.K,
+        downsample=downsample, precision=precision,
+        voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
+        create_ndcube=True
+    )
+    
+    nz, ny, nx = temp_cube_ref.data.shape
+    reference_wcs = temp_cube_ref.wcs
+
+    # Verify dimensions match slice mapping
+    if nx != nx_mhd:
+        raise ValueError(f"Cube X dimension ({nx}) doesn't match slice mapping ({nx_mhd})")
+
+    # Initialise composite arrays
+    temp_composite = np.zeros((nz, ny, nx), dtype=precision)
+    rho_composite = np.zeros((nz, ny, nx), dtype=precision)
+    vel_composite = np.zeros((nz, ny, nx), dtype=precision)
+    
+    # Process each timestep
+    for suffix, slice_indices in tqdm(grouped_slices.items(), desc="Loading timesteps", unit="timestep"):
+        # Load cubes for this timestep
+        temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, suffix)
+        rho_file = get_file_for_timestep(base_dir / rho_dir, rho_filename, suffix)
+        vel_file = get_file_for_timestep(base_dir / vel_dir, vel_filename, suffix)
+        
+        temp_cube = load_cube(
+            temp_file, shape=cube_shape, unit=u.K,
+            downsample=downsample, precision=precision,
+            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
+            create_ndcube=True
+        )
+        rho_cube = load_cube(
+            rho_file, shape=cube_shape, unit=u.g/u.cm**3,
+            downsample=downsample, precision=precision,
+            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
+            create_ndcube=True
+        )
+        vel_cube = load_cube(
+            vel_file, shape=cube_shape, unit=u.cm/u.s,
+            downsample=downsample, precision=precision,
+            voxel_dx=voxel_dx, voxel_dy=voxel_dy, voxel_dz=voxel_dz,
+            create_ndcube=True
+        )
+        
+        # Copy relevant slices to composite (no rebinning - direct copy)
+        for slice_idx in slice_indices:
+            temp_composite[:, :, slice_idx] = temp_cube.data[:, :, slice_idx]
+            rho_composite[:, :, slice_idx] = rho_cube.data[:, :, slice_idx]
+            vel_composite[:, :, slice_idx] = vel_cube.data[:, :, slice_idx]
+    
+    # Create NDCubes with proper WCS (at MHD resolution)
+    temp_ndcube = NDCube(temp_composite * u.K, wcs=reference_wcs, meta={"source": "composite_dynamic"})
+    rho_ndcube = NDCube(rho_composite * (u.g/u.cm**3), wcs=reference_wcs, meta={"source": "composite_dynamic"})
+    vel_ndcube = NDCube(vel_composite * (u.cm/u.s), wcs=reference_wcs, meta={"source": "composite_dynamic"})
+    
+    return temp_ndcube, rho_ndcube, vel_ndcube
+
+
 def _compute_single_ion(args):
     """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
-    that each spawned process gets its own HDF5 handles."""
+    that each spawned process gets its own HDF5 handles.
+
+    With a temperature chunk, fiasco is called on that many temperatures at a
+    time, one call after another, and only the requested lines are kept from
+    each call, so the memory needed is that of one chunk rather than of the
+    whole temperature grid."""
 
     import fiasco
     import logging
 
-    elem, stage, temperature_K, densities_cm3, abundance, lines, hdf5_dbase_root = args
-    temperature = temperature_K * u.K
+    (elem, stage, temperature_K, densities_cm3, abundance, lines,
+     hdf5_dbase_root, temperature_chunk) = args
     densities = densities_cm3 / u.cm**3
+    n_temperatures = len(temperature_K)
+    step = n_temperatures if temperature_chunk is None else temperature_chunk
 
     # A spawned process re-imports fiasco from scratch, so it re-reads
     # ~/.fiasco/fiascorc and knows nothing about a database the parent
@@ -255,25 +595,37 @@ def _compute_single_ion(args):
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
 
+    g_parts = {line_name: [] for line_name, _ in lines}
     try:
-        ion = fiasco.Ion(f'{elem} {stage}', temperature, abundance=abundance,
-                         **ion_kwargs)
+        for start in range(0, n_temperatures, step):
+            ion = fiasco.Ion(f'{elem} {stage}',
+                             temperature_K[start:start + step] * u.K,
+                             abundance=abundance, **ion_kwargs)
 
-        g = ion.contribution_function(densities)
-        pe_ratio = ion.proton_electron_ratio
-        g = g * pe_ratio[:, np.newaxis, np.newaxis]
+            g = ion.contribution_function(densities)
+            pe_ratio = ion.proton_electron_ratio
+            g = g * pe_ratio[:, np.newaxis, np.newaxis]
+
+            # The transitions do not depend on temperature, so the lines are
+            # matched once, on the first chunk.
+            if start == 0:
+                bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
+                line_idx = {line_name: int(np.argmin(np.abs(bb_wl - target_wl_aa * u.AA)))
+                            for line_name, target_wl_aa in lines}
+            for line_name, idx in line_idx.items():
+                g_parts[line_name].append(
+                    g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+            del g
     finally:
         fiasco_logger.setLevel(prev_level)
-
-    bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
 
     results = {}
     for line_name, target_wl_aa in lines:
         target_wl = target_wl_aa * u.AA
-        idx = int(np.argmin(np.abs(bb_wl - target_wl)))
+        idx = line_idx[line_name]
         matched_wl = bb_wl[idx]
 
-        g_tn = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value.T
+        g_tn = np.concatenate(g_parts[line_name]).T
         np.nan_to_num(g_tn, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
         results[line_name] = {
@@ -303,6 +655,7 @@ def compute_goft_fiasco(
     precision: type = np.float64,
     n_workers: int = 0,
     hdf5_dbase_root=None,
+    temperature_chunk: int | None = None,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
     Compute G(T,N) contribution functions using fiasco.
@@ -353,6 +706,15 @@ def compute_goft_fiasco(
         to reach a worker raises rather than letting that worker fall back to
         the fiascorc default.  Note this confirms the argument arrived, not
         that fiasco read the file correctly once pointed at it.
+    temperature_chunk : int, optional
+        Number of temperatures to pass to fiasco at a time.  fiasco solves
+        the level populations for all the temperatures it is given together,
+        so its memory grows with their number, and for an ion with many
+        levels the whole grid can need several GB.  The chunks of an ion are
+        computed one after another, so this lowers the peak memory to that
+        of one chunk (per worker), at the cost of fiasco reading the ion's
+        atomic data again for each chunk.  The result is the same.  Defaults
+        to None, which passes the whole grid at once.
 
     Returns
     -------
@@ -369,6 +731,12 @@ def compute_goft_fiasco(
     logN_grid : np.ndarray
         1-D array of log10(n_e / cm^-3) values.
     """
+    if temperature_chunk is not None and temperature_chunk < 1:
+        raise ValueError(
+            f"temperature_chunk must be a positive number of temperatures, "
+            f"not {temperature_chunk}."
+        )
+
     logT_grid = np.linspace(logT_min, logT_max, nT)
     logN_grid = np.linspace(logN_min, logN_max, nN)
 
@@ -394,9 +762,12 @@ def compute_goft_fiasco(
     # Build worker arguments (all picklable plain types / numpy arrays)
     dbase_root = None if hdf5_dbase_root is None else str(hdf5_dbase_root)
     worker_args = [
-        (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root)
+        (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root,
+         temperature_chunk)
         for (elem, stage), lines in ion_lines.items()
     ]
+    if temperature_chunk is not None and temperature_chunk < nT:
+        print(f"  {nT} temperatures in chunks of {temperature_chunk}")
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
@@ -1018,11 +1389,24 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# The options that say where MURaM's files are and how they are laid out. An
-# atmosphere file carries all of this itself, so giving both is a
-# contradiction rather than a choice.
+# The options that say where MURaM's own files are and how they are laid out,
+# for dynamic mode and for the deprecated static route that reads them
+# without an atmosphere file. An atmosphere file carries all of this itself,
+# so giving both is a contradiction rather than a choice.
 MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
                         "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
+
+# The options only dynamic mode reads, which a static synthesis from an
+# atmosphere file would ignore.
+DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_filename",
+                   "vx_dir", "vx_filename", "vy_dir", "vy_filename", "vz_dir",
+                   "vz_filename", "time_dir", "time_filename")
+
+# Where the documentation describes the atmosphere file and how to write one.
+ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
+# Where it describes observing a time series of atmosphere files, which
+# replaces the deprecated dynamic mode.
+TIME_SERIES_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/time-series/"
 
 
 class _NotedOption(argparse.Action):
@@ -1046,13 +1430,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Input/Output paths
     parser.add_argument("--atmosphere", type=str, default=None,
-                       help="An ECLIPSE atmosphere file (HDF5) to synthesise from, "
-                            "written by eclipse-atmosphere or by your own code. "
-                            "It carries the cube shape and cell sizes, so it "
-                            "replaces the MURaM file options.")
-    parser.add_argument("--data-dir", type=str, default="data/atmosphere",
-                       action=_NotedOption,
-                       help="Directory containing simulation data")
+                       help="The ECLIPSE atmosphere file (HDF5) to synthesise "
+                            f"from; see {ATMOSPHERE_DOCS} for how to write one. "
+                            "Required, except in dynamic mode.")
+    # The MURaM files static mode read before atmosphere files, kept out of
+    # the help so that old command lines still run, with a warning, until
+    # the route is removed.
+    for flag, default in (("--temp-file", "temp/eosT.0270000"),
+                          ("--rho-file", "rho/result_prim_0.0270000"),
+                          ("--vx-file", "vx/result_prim_1.0270000"),
+                          ("--vy-file", "vy/result_prim_3.0270000"),
+                          ("--vz-file", "vz/result_prim_2.0270000")):
+        parser.add_argument(flag, type=str, default=default, action=_NotedOption,
+                            help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
@@ -1071,38 +1461,14 @@ def build_parser() -> argparse.ArgumentParser:
                             "in ~/.fiasco/fiascorc. Use this to run against a "
                             "second CHIANTI version without changing the "
                             "default for other work.")
-    
-    # Simulation files
-    parser.add_argument("--temp-file", type=str, default="temp/eosT.0270000",
-                       action=_NotedOption,
-                       help="Temperature file relative to data-dir")
-    parser.add_argument("--rho-file", type=str, default="rho/result_prim_0.0270000",
-                       action=_NotedOption,
-                       help="Density file relative to data-dir")
-    parser.add_argument("--vx-file", type=str, default="vx/result_prim_1.0270000",
-                       action=_NotedOption,
-                       help="Velocity x file relative to data-dir")
-    parser.add_argument("--vy-file", type=str, default="vy/result_prim_3.0270000",
-                       action=_NotedOption,
-                       help="Velocity y file relative to data-dir")
-    parser.add_argument("--vz-file", type=str, default="vz/result_prim_2.0270000",
-                       action=_NotedOption,
-                       help="Velocity z file relative to data-dir")
+    parser.add_argument("--goft-temperature-chunk", type=int, default=None,
+                       help="Compute G(T,N) this many temperatures at a time "
+                            "rather than the whole grid at once. This lowers "
+                            "fiasco's peak memory, which for an ion with many "
+                            "levels can be several GB, at the cost of reading "
+                            "the atomic data again for each chunk. The result "
+                            "is the same.")
 
-    # Grid parameters
-    parser.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
-                       action=_NotedOption,
-                       help="Cube dimensions in the file's storage order (nx nz ny)")
-    parser.add_argument("--voxel-dx", type=str, default="0.192 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in x (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dy", type=str, default="0.192 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in y (e.g. '0.192 Mm')")
-    parser.add_argument("--voxel-dz", type=str, default="0.064 Mm",
-                       action=_NotedOption,
-                       help="Voxel size in z (e.g. '0.064 Mm')")
-    
     # Integration direction
     parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
                        help="Axis along which to integrate (x, y, or z)")
@@ -1133,9 +1499,75 @@ def build_parser() -> argparse.ArgumentParser:
                             "density. By default it is worked out from --abundance "
                             "for a fully ionised plasma, about 1.16 for coronal "
                             "abundances. --mean-mol-wt is the old name; ECLIPSE "
-                            "0.8.0 and earlier used 1.29, the value for a neutral gas. "
+                            "0.11.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
     
+    # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
+    # own files and so carries the options describing their layout.
+    dynamic_group = parser.add_argument_group("Dynamic atmosphere mode (deprecated)",
+        "Options for synthesising with time-varying atmosphere (raster scanning). "
+        "Deprecated: observe a time series of atmosphere files with the "
+        "instrument run instead.")
+    dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
+                       help="Slit rest time per position (e.g. '40 s'). "
+                            "Enables dynamic mode when specified.")
+    dynamic_group.add_argument("--slit-width", type=str, default=None,
+                       action=_NotedOption,
+                       help="Slit width (e.g. '0.2 arcsec', required for dynamic mode)")
+    dynamic_group.add_argument("--data-dir", type=str, default="data/atmosphere",
+                       action=_NotedOption,
+                       help="Directory containing the MURaM files")
+    dynamic_group.add_argument("--cube-shape", nargs=3, type=int, default=[512, 768, 256],
+                       action=_NotedOption,
+                       help="Cube dimensions in the file's storage order (nx nz ny)")
+    dynamic_group.add_argument("--voxel-dx", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in x (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dy", type=str, default="0.192 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in y (e.g. '0.192 Mm')")
+    dynamic_group.add_argument("--voxel-dz", type=str, default="0.064 Mm",
+                       action=_NotedOption,
+                       help="Voxel size in z (e.g. '0.064 Mm')")
+
+    # Directory arguments for dynamic mode
+    dynamic_group.add_argument("--temp-dir", type=str, default=None,
+                       action=_NotedOption,
+                       help="Directory containing temperature files (for dynamic mode)")
+    dynamic_group.add_argument("--temp-filename", type=str, default="eosT",
+                       action=_NotedOption,
+                       help="Temperature filename prefix before timestep suffix")
+    dynamic_group.add_argument("--rho-dir", type=str, default=None,
+                       action=_NotedOption,
+                       help="Directory containing density files (for dynamic mode)")
+    dynamic_group.add_argument("--rho-filename", type=str, default="result_prim_0",
+                       action=_NotedOption,
+                       help="Density filename prefix before timestep suffix")
+    dynamic_group.add_argument("--vx-dir", type=str, default=None,
+                       action=_NotedOption,
+                       help="Directory containing vx files (for dynamic mode)")
+    dynamic_group.add_argument("--vx-filename", type=str, default="result_prim_1",
+                       action=_NotedOption,
+                       help="Vx filename prefix before timestep suffix")
+    dynamic_group.add_argument("--vy-dir", type=str, default=None,
+                       action=_NotedOption,
+                       help="Directory containing vy files (for dynamic mode)")
+    dynamic_group.add_argument("--vy-filename", type=str, default="result_prim_3",
+                       action=_NotedOption,
+                       help="Vy filename prefix before timestep suffix")
+    dynamic_group.add_argument("--vz-dir", type=str, default=None,
+                       action=_NotedOption,
+                       help="Directory containing vz files (for dynamic mode)")
+    dynamic_group.add_argument("--vz-filename", type=str, default="result_prim_2",
+                       action=_NotedOption,
+                       help="Vz filename prefix before timestep suffix")
+    dynamic_group.add_argument("--time-dir", type=str, default="header",
+                       action=_NotedOption,
+                       help="Directory containing header files (for dynamic mode)")
+    dynamic_group.add_argument("--time-filename", type=str, default="Header",
+                       action=_NotedOption,
+                       help="Header filename prefix before timestep suffix")
+
     return parser
 
 
@@ -1146,12 +1578,31 @@ def parse_arguments(argv=None):
 
 def check_atmosphere_options(args) -> None:
     """
-    Refuse --atmosphere alongside options it makes meaningless.
+    Refuse an atmosphere given alongside options it makes meaningless, and warn when there is none.
 
-    The MURaM layout options describe files the atmosphere route never
-    reads, so one given explicitly would be ignored without a word.
+    The synthesis reads its atmosphere from an atmosphere file. Without one,
+    static mode still reads MURaM's own files, and dynamic mode reads a
+    time series of them; both are deprecated. The MURaM layout options
+    describe those files, and the dynamic mode options only apply to dynamic
+    mode, so one of either given with --atmosphere would be ignored without
+    a word.
     """
     if not args.atmosphere:
+        if args.slit_rest_time is not None:
+            warnings.warn(
+                f"Dynamic mode (--slit-rest-time) is deprecated and will be "
+                f"removed in a future release: write the snapshots as atmosphere "
+                f"files and observe them as a time series in the instrument run, "
+                f"as described at {TIME_SERIES_DOCS}.",
+                FutureWarning, stacklevel=2)
+        else:
+            warnings.warn(
+                f"No --atmosphere was given, so the synthesis is reading "
+                f"MURaM's own files from {args.data_dir}. This is deprecated "
+                f"and will be removed in a future release: write the snapshot "
+                f"as an atmosphere file, as described at {ATMOSPHERE_DOCS}, "
+                f"and give it with --atmosphere.",
+                FutureWarning, stacklevel=2)
         return
     # The parser notes every layout option that appeared on the command
     # line, so one typed at its default value is caught too.
@@ -1161,7 +1612,19 @@ def check_atmosphere_options(args) -> None:
         flags = ", ".join("--" + name.replace("_", "-") for name in given)
         raise ValueError(
             f"--atmosphere carries the cube shape, cell sizes and data itself, "
-            f"so {flags} would not be used. Give one or the other.")
+            f"so {flags} would not be used. Those options describe MURaM's "
+            f"own files.")
+    if args.slit_rest_time is not None:
+        raise ValueError(
+            f"Dynamic mode reads its time series from MURaM files and cannot "
+            f"take an atmosphere file. A time series of atmosphere files is "
+            f"observed by the instrument run instead: see {TIME_SERIES_DOCS}.")
+    given = [name for name in DYNAMIC_OPTIONS if name in noted]
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(
+            f"--atmosphere is a static synthesis, so {flags} would not be "
+            f"used. Those options only apply to dynamic mode (--slit-rest-time).")
 
 
 def load_atmosphere_file(
@@ -1180,6 +1643,51 @@ def load_atmosphere_file(
     of each cell along it.
     """
     atmosphere = read_atmosphere(path, velocities=(integration_axis,))
+    return _prepare_atmosphere(atmosphere, str(path), integration_axis,
+                               downsample, crop_x, crop_y, crop_z)
+
+
+def load_muram_files(
+    args,
+    integration_axis: str,
+    downsample: int | bool = False,
+    crop_x=None, crop_y=None, crop_z=None,
+) -> Atmosphere:
+    """
+    Read the MURaM files the deprecated static options name, as :func:`load_atmosphere_file` reads a file.
+
+    The box is placed where ECLIPSE has always placed a MURaM box, x and y
+    centred on zero and z = 0 at the centre of the bottom cell, so the crop
+    options mean what they did before atmosphere files.
+    """
+    data_dir = Path(args.data_dir)
+    files = {
+        "temperature": (args.temp_file, u.K),
+        "mass_density": (args.rho_file, u.g / u.cm**3),
+        f"velocity_{integration_axis}": (getattr(args, f"v{integration_axis}_file"),
+                                         u.cm / u.s),
+    }
+    cubes = {}
+    for name, (file_name, unit) in files.items():
+        path = data_dir / file_name
+        if not path.exists():
+            raise FileNotFoundError(f"{name} file not found: {path}")
+        cubes[name] = load_cube(path, shape=tuple(args.cube_shape), unit=unit)
+
+    nz, ny, nx = cubes["temperature"].shape
+    voxel = {axis: u.Quantity(getattr(args, f"voxel_d{axis}")) for axis in AXES}
+    atmosphere = Atmosphere(
+        x_edges=(np.arange(nx + 1) - nx / 2) * voxel["x"],
+        y_edges=(np.arange(ny + 1) - ny / 2) * voxel["y"],
+        z_edges=(np.arange(nz + 1) - 0.5) * voxel["z"],
+        source="MURaM", **cubes)
+    return _prepare_atmosphere(atmosphere, f"the MURaM files in {data_dir}",
+                               integration_axis, downsample, crop_x, crop_y, crop_z)
+
+
+def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str,
+                        downsample, crop_x, crop_y, crop_z) -> Atmosphere:
+    """Downsample and crop *atmosphere*, and check that its image axes are even."""
     if downsample:
         atmosphere = atmosphere.downsampled(downsample)
     if crop_x or crop_y or crop_z:
@@ -1187,7 +1695,7 @@ def load_atmosphere_file(
     for axis in AXES:
         if axis != integration_axis and not atmosphere.is_uniform(axis):
             raise ValueError(
-                f"The {axis} axis of {path} is not evenly spaced, and with the "
+                f"The {axis} axis of {name} is not evenly spaced, and with the "
                 f"line of sight along {integration_axis} it would become an "
                 f"image axis, whose coordinates must be even. Only the axis "
                 f"along the line of sight may be stretched; resample the "
@@ -1228,10 +1736,13 @@ def main(args=None) -> None:
     """
     Main workflow for synthesising solar spectra from 3D MHD simulations.
 
-    Synthesises one snapshot, from an atmosphere file (--atmosphere) or from
-    MURaM's own files. A time series is observed by the instrument run
-    instead, from a series of atmosphere files (see euvst_response.raster).
-    
+    Supports two modes:
+    - Static mode: Single timestep synthesis, from an atmosphere file
+      (--atmosphere), or from MURaM's own files, which is deprecated
+    - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
+      own files, which is deprecated: the instrument run observes a time
+      series of atmosphere files instead (see euvst_response.raster)
+
     Parameters
     ----------
     args : argparse.Namespace, optional
@@ -1247,41 +1758,159 @@ def main(args=None) -> None:
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
-    # Voxel sizes of the simulation files. load_cube scales these itself when
-    # it downsamples, so they are passed to it as given.
-    file_voxel_dz = u.Quantity(args.voxel_dz)
-    file_voxel_dx = u.Quantity(args.voxel_dx)
-    file_voxel_dy = u.Quantity(args.voxel_dy)
-
-    # Voxel sizes of the cubes as synthesised, for the path length along the
-    # line of sight and the saved metadata.
-    voxel_dz = file_voxel_dz * (downsample or 1)
-    voxel_dx = file_voxel_dx * (downsample or 1)
-    voxel_dy = file_voxel_dy * (downsample or 1)
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
-    
+
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    base_dir = Path(args.data_dir)
     integration_axis = args.integration_axis.lower()
     check_atmosphere_options(args)
 
     # What the common processing below needs from whichever route reads the
     # atmosphere. Only an atmosphere file can give the electron density
     # directly or a different size for every cell along the line of sight;
-    # the MURaM routes give a mass density and one cell size.
+    # dynamic mode gives a mass density and one cell size.
     ne_values = None
     los_thickness = None
     atmosphere_metadata = None
 
-    if args.atmosphere:
-        # Static mode from an atmosphere file, which brings its own layout
+    # Determine if we're in dynamic mode
+    dynamic_mode = args.slit_rest_time is not None
+
+    if dynamic_mode:
+        # Validate dynamic mode requirements
+        if args.slit_width is None:
+            raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
+
+        base_dir = Path(args.data_dir)
+        # Voxel sizes of the MURaM files. load_cube scales these itself when
+        # it downsamples, so they are passed to it as given.
+        file_voxel_dz = u.Quantity(args.voxel_dz)
+        file_voxel_dx = u.Quantity(args.voxel_dx)
+        file_voxel_dy = u.Quantity(args.voxel_dy)
+
+        # Voxel sizes of the cubes as synthesised, for the path length along
+        # the line of sight, the slice timing and the saved metadata.
+        voxel_dz = file_voxel_dz * (downsample or 1)
+        voxel_dx = file_voxel_dx * (downsample or 1)
+        voxel_dy = file_voxel_dy * (downsample or 1)
+
+        # Parse slit rest time and slit width
+        slit_rest_time = u.Quantity(args.slit_rest_time)
+        slit_width = u.Quantity(args.slit_width)
+        
+        # Determine which velocity direction to use
+        if integration_axis == "x":
+            vel_dir = args.vx_dir or "vx"
+            vel_filename = args.vx_filename
+            voxel_dh = voxel_dx
+        elif integration_axis == "y":
+            vel_dir = args.vy_dir or "vy"
+            vel_filename = args.vy_filename
+            voxel_dh = voxel_dy
+        else:  # "z"
+            vel_dir = args.vz_dir or "vz"
+            vel_filename = args.vz_filename
+            voxel_dh = voxel_dz
+        
+        # Set directory defaults
+        temp_dir = args.temp_dir or "temp"
+        rho_dir = args.rho_dir or "rho"
+        
+        print(f"DYNAMIC MODE - Time-varying synthesis at MHD resolution (deprecated)")
+        print(f"  Slit width: {slit_width}")
+        print(f"  Slit rest time: {slit_rest_time}")
+        print(f"  Voxel dx: {voxel_dx}")
+        print()
+        
+        # Discover available timesteps
+        time_dir = base_dir / args.time_dir
+        print(f"Discovering timesteps from {time_dir}...")
+        timestep_times = discover_timesteps(time_dir, args.time_filename)
+        print(f"  Found {len(timestep_times)} timesteps")
+        for suffix, sim_time in sorted(timestep_times.items(), key=lambda x: x[1]):
+            print(f"    {suffix}: {sim_time:.3f} s")
+        print()
+        
+        # Calculate MHD cube dimensions
+        cube_shape_tuple = tuple(args.cube_shape)
+        nx_mhd = cube_shape_tuple[0]
+        if downsample:
+            nx_mhd = nx_mhd // downsample
+        
+        # Prepare crop_x for slice mapping if specified
+        crop_x_for_mapping = None
+        if args.crop_x:
+            crop_x_for_mapping = (u.Quantity(args.crop_x[0]), u.Quantity(args.crop_x[1]))
+        
+        # Compute slice-to-timestep mapping at MHD resolution
+        print(f"Computing slice-to-timestep mapping at MHD resolution...")
+        slice_mapping, grouped_slices = compute_slice_timestep_mapping_mhd(
+            nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times,
+            crop_x=crop_x_for_mapping
+        )
+        print(f"  MHD slices per timestep:")
+        for suffix, indices in sorted(grouped_slices.items(), key=lambda x: min(x[1])):
+            print(f"    {suffix}: {len(indices)} slices (indices {min(indices)}-{max(indices)})")
+        print()
+        
+        # Build composite cubes at MHD resolution
+        print(f"Building composite atmosphere cubes at MHD resolution ({print_mem()})...")
+        temp_cube, rho_cube, vel_cube = build_composite_cubes_mhd(
+            base_dir=base_dir,
+            temp_dir=temp_dir,
+            temp_filename=args.temp_filename,
+            rho_dir=rho_dir,
+            rho_filename=args.rho_filename,
+            vel_dir=vel_dir,
+            vel_filename=vel_filename,
+            slice_mapping=slice_mapping,
+            grouped_slices=grouped_slices,
+            cube_shape=cube_shape_tuple,
+            voxel_dx=file_voxel_dx,
+            voxel_dy=file_voxel_dy,
+            voxel_dz=file_voxel_dz,
+            downsample=downsample,
+            precision=precision,
+        )
+        print(f"  Composite cube shape: {temp_cube.data.shape}")
+        
+        # Apply cropping if requested in dynamic mode
+        if args.crop_x or args.crop_y or args.crop_z:
+            print(f"Applying cropping ({print_mem()})")
+            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
+                temp_cube, rho_cube, vel_cube,
+                args.crop_x, args.crop_y, args.crop_z
+            )
+            print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
+        
+        reference_cube = temp_cube
+        rho = u.Quantity(rho_cube.data, rho_cube.unit)
+
+        # Dynamic mode metadata for output (no spatial rebinning in synthesis)
+        dynamic_mode_metadata = {
+            "enabled": True,
+            "slit_width": slit_width,
+            "slit_rest_time": slit_rest_time,
+            "scan_direction": "right_to_left",
+            "slice_timesteps": slice_mapping,
+            "available_timesteps": timestep_times,
+            "spatially_rebinned": False,  # Output is at MHD resolution
+        }
+        
+    else:
+        # Static mode from an atmosphere file, which brings its own layout, or
+        # by the deprecated route from MURaM's own files, read into the same
+        # atmosphere the converter would write
         dynamic_mode_metadata = {"enabled": False}
 
-        print("STATIC MODE - Synthesis from an atmosphere file")
-        print(f"  Atmosphere: {args.atmosphere}")
+        if args.atmosphere:
+            print("STATIC MODE - Synthesis from an atmosphere file")
+            print(f"  Atmosphere: {args.atmosphere}")
+        else:
+            print("STATIC MODE - Synthesis from MURaM files (deprecated)")
+            print(f"  Data directory: {args.data_dir}")
         print(f"  Integration axis: {integration_axis}")
         print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
@@ -1294,15 +1923,18 @@ def main(args=None) -> None:
         print()
 
         print(f"Reading the atmosphere ({print_mem()})")
-        atmosphere = load_atmosphere_file(
-            args.atmosphere, integration_axis, downsample=downsample,
-            crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        crops = dict(crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
+        if args.atmosphere:
+            atmosphere = load_atmosphere_file(
+                args.atmosphere, integration_axis, downsample=downsample, **crops)
+        else:
+            atmosphere = load_muram_files(
+                args, integration_axis, downsample=downsample, **crops)
         print(atmosphere.describe())
 
-        # The file may hold float32 in any units; the run works in its own
-        # precision, as the MURaM route does from the moment it reads its
-        # files, and the processing below takes the cubes' values as K and
-        # cm/s, so they are converted here.
+        # The file may hold float32 in any units; the run works in the
+        # precision --precision asks for, and the processing below takes the
+        # cubes' values as K and cm/s, so they are converted here.
         temp_cube = atmosphere.to_ndcube(
             atmosphere.temperature.astype(precision).to(u.K))
         vel_cube = atmosphere.to_ndcube(
@@ -1321,88 +1953,13 @@ def main(args=None) -> None:
             atmosphere.spacing(axis) if atmosphere.is_uniform(axis) else None
             for axis in AXES)
         atmosphere_metadata = {
-            "path": str(Path(args.atmosphere).resolve()),
+            "path": str(Path(args.atmosphere).resolve()) if args.atmosphere else None,
             "source": atmosphere.source,
             "time": atmosphere.time,
             "shape": atmosphere.shape,
             "nonuniform_axes": atmosphere.nonuniform_axes(),
             "electron_density_given": atmosphere.electron_density is not None,
         }
-
-    else:
-        # Static mode from MURaM files
-        dynamic_mode_metadata = {"enabled": False}
-
-        files = {
-            "T": args.temp_file,
-            "rho": args.rho_file,
-        }
-        
-        # Determine velocity file based on integration axis
-        if integration_axis == "x":
-            files["vel"] = args.vx_file
-            voxel_dh = voxel_dx
-        elif integration_axis == "y":
-            files["vel"] = args.vy_file
-            voxel_dh = voxel_dy
-        else:  # "z"
-            files["vel"] = args.vz_file
-            voxel_dh = voxel_dz
-        
-        paths = {k: base_dir / fname for k, fname in files.items()}
-        
-        # Validate input files exist
-        for name, path in paths.items():
-            if not path.exists():
-                raise FileNotFoundError(f"{name} file not found: {path}")
-        
-        print(f"STATIC MODE - Single timestep synthesis")
-        print(f"  Data directory: {base_dir}")
-        print(f"  Cube shape: {args.cube_shape}")
-        print(f"  Voxel sizes: {voxel_dx:.3f} x {voxel_dy:.3f} x {voxel_dz:.3f}")
-        print(f"  Integration axis: {integration_axis}")
-        print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
-        print(f"  Precision: {precision}")
-        if downsample:
-            print(f"  Downsampling: {downsample}x")
-        print(f"  Lines: {args.lines}")
-        print(f"  Abundance: {args.abundance}")
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"  Cropping: X={args.crop_x}, Y={args.crop_y}, Z={args.crop_z}")
-        print()
-        
-        # Load simulation data as NDCubes
-        print(f"Loading cubes ({print_mem()})")
-        temp_cube = load_cube(
-            paths["T"], shape=tuple(args.cube_shape), unit=u.K, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        rho_cube = load_cube(
-            paths["rho"], shape=tuple(args.cube_shape), unit=u.g/u.cm**3, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-        vel_cube = load_cube(
-            paths["vel"], shape=tuple(args.cube_shape), unit=u.cm/u.s, 
-            downsample=downsample, precision=precision,
-            voxel_dx=file_voxel_dx, voxel_dy=file_voxel_dy,
-            voxel_dz=file_voxel_dz, create_ndcube=True
-        )
-
-        # Apply cropping if requested
-        if args.crop_x or args.crop_y or args.crop_z:
-            print(f"Applying cropping ({print_mem()})")
-            temp_cube, rho_cube, vel_cube = apply_cube_cropping(
-                temp_cube, rho_cube, vel_cube,
-                args.crop_x, args.crop_y, args.crop_z
-            )
-            print(f"Cropped cubes to shape: {temp_cube.data.shape}")
-
-        reference_cube = temp_cube
-        rho = u.Quantity(rho_cube.data, rho_cube.unit)
 
     # ---------------- Common processing (both modes) -----------------
     
@@ -1435,6 +1992,7 @@ def main(args=None) -> None:
         args.lines, abundance=args.abundance, precision=precision,
         n_workers=args.n_workers,
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
+        temperature_chunk=getattr(args, "goft_temperature_chunk", None),
     )
 
     # Record the database the contribution functions actually came from, not
@@ -1447,7 +2005,7 @@ def main(args=None) -> None:
 
     # Use the GOFT temperature grid as our DEM temperature grid
     logT_grid = logT_goft
-
+    
     # The size of each cell along the line of sight. MURaM's files have one
     # size; an atmosphere file may give every cell its own.
     if los_thickness is None:
@@ -1467,7 +2025,7 @@ def main(args=None) -> None:
         line_cubes[name] = create_line_cube(
             name, info, reference_cube, intensity_unit, integration_axis
         )
-
+    
     print(f"Built {len(line_cubes)} line cubes")
 
     # ---------------- Save results -----------------
@@ -1497,7 +2055,7 @@ def main(args=None) -> None:
             "intensity_unit": str(intensity_unit),
             "atmosphere": args.atmosphere,
             "cube_shape": None if args.atmosphere else args.cube_shape,
-            "data_dir": None if args.atmosphere else str(base_dir),
+            "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,

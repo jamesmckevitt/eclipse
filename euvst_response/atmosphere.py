@@ -37,6 +37,8 @@ the line of sight may be stretched, since it is integrated out cell by cell.
 
 from __future__ import annotations
 
+import argparse
+import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -465,8 +467,16 @@ def read_atmosphere(path: str | Path,
         large box cost a few columns. None reads them all.
     """
     path = Path(path)
+    wanted = AXES if velocities is None else tuple(_check_axis(axis) for axis in velocities)
     with h5py.File(path, "r") as f:
         _check_format(f, path)
+        # A velocity asked for that the file lacks is refused before any cube
+        # is read, since the cubes of a large simulation take gigabytes.
+        if velocities is not None:
+            for axis in wanted:
+                if f"velocity_{axis}" not in f:
+                    raise ValueError(f"{path} has no velocity_{axis}, which a line "
+                                     f"of sight along {axis} needs.")
         fields = {EDGES[axis]: _read_dataset(f, EDGES[axis]) for axis in AXES}
         if columns is not None:
             nx = fields[EDGES["x"]].size - 1
@@ -482,14 +492,10 @@ def read_atmosphere(path: str | Path,
                 fields[name] = _read_dataset(f, name, columns)
         if "time" in f:
             fields["time"] = _read_dataset(f, "time")
-        wanted = AXES if velocities is None else tuple(velocities)
         for axis in wanted:
-            name = f"velocity_{_check_axis(axis)}"
+            name = f"velocity_{axis}"
             if name in f:
                 fields[name] = _read_dataset(f, name, columns)
-            elif velocities is not None:
-                raise ValueError(f"{path} has no {name}, which a line of sight "
-                                 f"along {axis} needs.")
         source = f.attrs.get("source", "")
         if isinstance(source, bytes):
             source = source.decode()
@@ -551,14 +557,15 @@ def _check_format(f: h5py.File, path: Path) -> None:
     if version is None:
         raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "
                          f"atmosphere file has version {FORMAT_VERSION}.")
-    try:
-        matches = np.ndim(version) == 0 and float(version) == FORMAT_VERSION
-    except (TypeError, ValueError):
-        matches = False
-    if not matches:
-        if isinstance(version, bytes):
-            version = version.decode()
-        raise ValueError(f"{path} is atmosphere format version {version}; "
+    # An integer, which some HDF5 writers store as an array of one element;
+    # a string or a float is not a version even when it reads as 1.
+    value = np.asarray(version)
+    if value.size != 1 or not np.issubdtype(value.dtype, np.integer):
+        raise ValueError(f"{path} has a 'version' attribute of {version} "
+                         f"({type(version).__name__}); it must be the integer "
+                         f"{FORMAT_VERSION}.")
+    if value.item() != FORMAT_VERSION:
+        raise ValueError(f"{path} is atmosphere format version {value.item()}; "
                          f"this ECLIPSE reads version {FORMAT_VERSION}.")
 
 
@@ -649,3 +656,24 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
         raise ValueError(f"No element has an abundance in the set "
                          f"{abundance!r}; is the name right?")
     return mass_per_electron_from_abundances(abundances)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line of eclipse-atmosphere."""
+    parser = argparse.ArgumentParser(
+        prog="eclipse-atmosphere", description="Inspect ECLIPSE atmosphere files.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    info = commands.add_parser("info", help="Describe an atmosphere file")
+    info.add_argument("atmosphere", type=str, help="The file to describe")
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """``eclipse-atmosphere info FILE`` describes a file without loading its cubes."""
+    args = build_parser().parse_args(argv)
+    print(args.atmosphere)
+    print(describe_atmosphere_file(args.atmosphere))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

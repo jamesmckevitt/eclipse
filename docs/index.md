@@ -57,18 +57,18 @@ flowchart LR
 
 | Starting point | Page | Use it when |
 | --- | --- | --- |
-| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. MURaM output is read directly; any other code's output goes in as an [atmosphere file](atmosphere-files.md). |
+| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. The simulation goes in as an [atmosphere file](synthesis.md#atmosphere-files), which you write from any code's output. |
 | A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
 | Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
-| A time series of simulation snapshots | [A time series, observed](time-series.md) | You want the raster or sit-and-stare observed as the instrument would make it, each exposure seeing the atmosphere at its own time. |
+| A time series of simulation snapshots | [From a time series](time-series.md) | You want the raster or sit-and-stare observed as the instrument would make it, each exposure seeing the atmosphere at its own time. |
 
 The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The single intensity has no synthesis step at all and is set directly in the instrument configuration. The time series runs ECLIPSE's synthesis too, but inside the instrument run, one exposure at a time.
 
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
 
-**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](basic-results-analysis.ipynb).
+**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](analysing-the-results.ipynb).
 
 ## Instruments
 
@@ -115,7 +115,6 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a DEM](dem-synthesis.md) - start from an observed DEM instead of an MHD cube
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
-- [A time series, observed](time-series.md) - a raster or sit-and-stare over a series of atmosphere files
+- [From a time series](time-series.md) - a raster or sit-and-stare over a series of atmosphere files
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
-- [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
-- [Reproducing McKevitt+2026](reproducing-mckevitt-2026.ipynb) - the whole pipeline end to end, from the public simulation data to the maps in the paper
+- [Analysing the results](analysing-the-results.ipynb) - worked notebook example

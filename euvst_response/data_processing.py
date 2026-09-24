@@ -10,10 +10,12 @@ import astropy.constants as const
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
+from scipy.special import erf
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from .radiometric import spectral_psf_fwhm
 from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign
 
 
@@ -386,6 +388,32 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
 
     return cube_det
 
+
+def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
+    """
+    *cube* with *n* empty pixels added at each end of its wavelength axis.
+
+    The wavelength axis is the last data axis, as in every detector-grid
+    cube, which is the first WCS axis, since the WCS lists its axes the other
+    way round. The WCS moves its reference pixel with the data, so the pixels
+    already there keep their wavelengths. Used to widen a synthesis window
+    for a spectral PSF that reaches further than its margin
+    (:func:`~euvst_response.radiometric.spectral_psf_margin`).
+    """
+    if n < 0:
+        raise ValueError(f"Cannot pad by a negative number of pixels, got {n}.")
+    if n == 0:
+        return cube
+    wcs = cube.wcs.deepcopy()
+    if not wcs.wcs.ctype[0].startswith("WAVE"):
+        raise ValueError(
+            f"Expected wavelength on the last data axis, which is the first WCS "
+            f"axis, but the WCS axes are {list(wcs.wcs.ctype)}.")
+    wcs.wcs.crpix[0] += n
+    data = np.pad(cube.data, [(0, 0)] * (cube.data.ndim - 1) + [(n, n)])
+    return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
+
+
 def create_uniform_intensity_cube(
     total_intensity: u.Quantity,
     rest_wavelength: u.Quantity,
@@ -402,6 +430,10 @@ def create_uniform_intensity_cube(
     The cube is built directly at the detector's spectral resolution and
     assigned a helioprojective WCS consistent with the output of
     ``rebin_atmosphere``, so it can be fed straight into ``monte_carlo``.
+    Each wavelength pixel holds the line integrated across that pixel, so
+    the cube holds exactly the part of the line on its wavelength grid
+    however narrow the line is.  With the default ``n_sigma_extent`` that is
+    ``total_intensity`` to a part in 1e15.
 
     Parameters
     ----------
@@ -419,7 +451,8 @@ def create_uniform_intensity_cube(
     n_sigma_extent : float, optional
         Number of sigma either side of line centre to include in the
         wavelength grid (default: 8).  Measured on the width the line will have
-        once the spectral PSF has been applied, if *tel* is given.
+        once the spectral PSF has been applied, if *tel* is given.  The part
+        of the line beyond the grid is left out of the cube.
     n_slit_pixels : int, optional
         Number of (uniform) slit pixels to generate.  Set to the
         ``offchip_bin_slit`` value so that subsequent ``rebin_slit_offchip``
@@ -457,25 +490,35 @@ def create_uniform_intensity_cube(
     # the two: at the default 20 km/s the line is 0.77 pixels against a PSF of
     # 1.08.  Always widening, rather than only when psf is set, keeps the grid
     # independent of a value that is swept and is not known when the cube is
-    # built and cached.
+    # built and cached.  The PSF is the one for this slit, with the slit added
+    # in quadrature: that is at least as broad as the slit convolved with the
+    # optics, so the grid holds the line under either spectral_psf.
     sigma_total = sigma_lam
     if tel is not None:
-        sigma_psf = _fwhm_to_sigma(tel.psf_params[1].to(u.pixel).value) * dlam
+        sigma_psf = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * dlam
         sigma_total = np.sqrt(sigma_lam**2 + sigma_psf**2)
 
     half_range = n_sigma_extent * sigma_total
     n_pix_half = int(np.ceil((half_range / dlam).decompose().value))
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
-    lam_grid = lam0 + (np.arange(n_lam) - n_pix_half) * dlam  # shape (n_lam,)
-
     # --- Gaussian profile -----------------------------------------------
-    # I(lam) = A * exp[-(lam - lam0)^2 / (2 sigma_lam^2)]
-    # with A = I_total / (sigma_lam * sqrt(2*pi))  so integral of I dlam = I_total
-    A = (total_intensity / (sigma_lam * np.sqrt(2 * np.pi))).to(
+    # Each pixel holds the line integrated between its edges and divided by
+    # its width, which is what FluxConservingResampler gives a synthesised
+    # spectrum, so the pixels add up to all of the line on the grid whatever
+    # its width: total_intensity, less the tails beyond n_sigma_extent.
+    # The Gaussian sampled at pixel centres only does that for a line more
+    # than about half a pixel wide (sigma): centred on a pixel, a line of 0.3
+    # pixels, such as Fe VIII 185.21 at its formation temperature, would come
+    # out 35 per cent too bright.  The edges are counted in pixels from the
+    # line centre, as absolute wavelengths would lose a part in 1e12 of a
+    # pixel to rounding, and each pixel's upper edge is the next one's lower
+    # edge, so nothing between two pixels is counted twice or missed.
+    edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
+             / (np.sqrt(2.0) * sigma_lam)).decompose().value
+    profile = (total_intensity * 0.5 * np.diff(erf(edges)) / dlam).to(
         u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     )
-    profile = A * np.exp(-0.5 * ((lam_grid - lam0) / sigma_lam) ** 2)
     # Tile the profile along the slit axis.  Every slit pixel holds the same
     # intensity, but each is noised independently downstream, which is what
     # rebin_slit_offchip needs in order to sum them.

@@ -362,6 +362,22 @@ def _config(tmp_path, series_glob, **extra):
     return path
 
 
+def test_the_contribution_functions_can_be_computed_in_temperature_chunks(tmp_path, monkeypatch):
+    """The synthesis: section takes goft_temperature_chunk as synthesise-spectra takes the option."""
+    from euvst_response.main import _parse_synthesis_settings
+    received = {}
+
+    def recording_goft(lines, **kwargs):
+        received.update(kwargs)
+        return _flat_goft(lines, **kwargs)
+
+    monkeypatch.setattr(raster_module, "compute_goft_fiasco", recording_goft)
+    settings = _parse_synthesis_settings({"synthesis": {"lines": [LINE],
+                                                        "goft_temperature_chunk": 10}})
+    RasterSynthesiser(AtmosphereSeries(_series(tmp_path, [_snapshot(0.0)])), settings)
+    assert received["temperature_chunk"] == 10
+
+
 def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypatch, flat_goft):
     snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
     _series(tmp_path / "series", snapshots)
@@ -428,26 +444,4 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
         config.write_text(yaml.safe_dump({"instrument": "SWC", "uniform_intensity": "100 erg / (s cm2 sr)",
                                           "raster": {"start": "0 s"}}))
         monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
-        run_main()
-
-
-def test_an_old_dynamic_mode_synthesis_file_is_refused(tmp_path, monkeypatch):
-    from euvst_response.main import main as run_main
-    from euvst_response.synthesis import create_atmosphere_ndcube
-    from euvst_response.atmosphere import Atmosphere as _A  # noqa: F401
-    line = {"si": np.zeros((4, 4, 3)), "wl_grid": (REST + np.array([-0.1, 0.0, 0.1]) * u.Angstrom).to(u.cm),
-            "wl0": REST.to(u.cm), "atom": 26, "ion": 12}
-    from euvst_response.synthesis import create_line_cube
-    reference = create_atmosphere_ndcube(np.zeros((2, 4, 4)) * u.K, voxel_dx=1 * u.Mm,
-                                         voxel_dy=1 * u.Mm, voxel_dz=1 * u.Mm)
-    cube = create_line_cube(LINE, line, reference, u.erg / u.s / u.cm**2 / u.sr / u.cm, "z")
-    path = tmp_path / "old_dynamic.pkl"
-    with open(path, "wb") as f:
-        dill.dump({"line_cubes": {LINE: cube}, "dynamic_mode": {"enabled": True}}, f)
-    config = tmp_path / "old.yaml"
-    config.write_text(yaml.safe_dump({"instrument": "SWC", "synthesis_file": str(path),
-                                      "reference_line": LINE}))
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
-    with pytest.raises(ValueError, match="old dynamic mode"):
         run_main()

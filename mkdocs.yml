@@ -28,15 +28,12 @@ nav:
   - Quick start: quickstart.md
   - Synthesising an atmosphere:
       - From an MHD simulation: synthesis.md
-      - Atmosphere files: atmosphere-files.md
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
-      - A time series, observed: time-series.md
+      - From a time series: time-series.md
   - Simulating the instrument: instrument-response.md
-  - Tutorials:
-      - Basic results analysis: basic-results-analysis.ipynb
-      - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
+  - Analysing the results: analysing-the-results.ipynb
   - Advanced topics:
       - Science cases: science-cases.md
       - Pinhole stray light: pinholes.md

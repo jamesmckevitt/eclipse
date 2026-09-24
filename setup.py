@@ -35,10 +35,12 @@ setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Astronomy",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
     ],
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     # Dependencies are defined in pyproject.toml.
     entry_points={
         "console_scripts": [
@@ -47,7 +49,7 @@ setup(
             "synthesise-spectra=euvst_response.synthesis_cli:main",
             "synthesise_spectra=euvst_response.synthesis_cli:main",
             "eclipse-science-cases=euvst_response.science_cases:main",
-            "eclipse-atmosphere=euvst_response.muram:main",
+            "eclipse-atmosphere=euvst_response.atmosphere:main",
         ],
     },
     include_package_data=True,

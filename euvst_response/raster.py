@@ -78,6 +78,10 @@ class SynthesisSettings:
         The CHIANTI database for fiasco; None uses its default.
     n_workers : int
         Workers for the contribution functions; 0 uses every CPU.
+    goft_temperature_chunk : int, optional
+        Temperatures to pass fiasco at a time when computing the contribution
+        functions, which lowers the memory they need; None passes the whole
+        grid at once.
     """
 
     lines: Tuple[str, ...]
@@ -90,6 +94,7 @@ class SynthesisSettings:
     mass_per_electron: Optional[float] = None
     hdf5_dbase_root: Optional[str] = None
     n_workers: int = 0
+    goft_temperature_chunk: Optional[int] = None
 
     def __post_init__(self):
         if not self.lines:
@@ -308,7 +313,8 @@ class RasterSynthesiser:
         self.goft, self.logT_grid, self.logN_grid = compute_goft_fiasco(
             list(settings.lines), abundance=settings.abundance,
             precision=settings.precision, n_workers=settings.n_workers,
-            hdf5_dbase_root=settings.hdf5_dbase_root)
+            hdf5_dbase_root=settings.hdf5_dbase_root,
+            temperature_chunk=settings.goft_temperature_chunk)
         self.goft_dbase_root = next(iter(self.goft.values()))["hdf5_dbase_root"]
         self._mass_per_electron: Optional[Tuple[float, str]] = None
         self._columns: Dict[Tuple[int, int], Dict[str, np.ndarray]] = {}

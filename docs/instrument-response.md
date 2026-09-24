@@ -43,6 +43,24 @@ telescope:
   date: ["2008-01-01", "2013-01-01", "2018-01-01"]
 ```
 
+### The spectral PSF and the slit
+
+With `psf: True` a line is blurred along the dispersion by the optics and by the image of the slit, so the spectral PSF depends on the slit width. For SWC, `telescope.psf_params` gives the spectral FWHM with the 0.2 arcsec slit.
+
+`simulation.spectral_psf` sets how the slit enters the line profile:
+
+- `quadrature` (default): a Gaussian with the FWHM above.
+- `convolution`: a Gaussian from the optical design convolved with the slit's rectangular image.
+
+```yaml
+simulation:
+  slit_width: [0.2 arcsec, 1.6 arcsec]
+  psf: True
+  spectral_psf: convolution
+```
+
+The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
+
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
@@ -59,7 +77,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only), covered in [pinhole stray light](pinholes.md)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
-- `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [observing a time series](time-series.md)
+- `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [From a time series](time-series.md)
 
 Here's a complete example configuration file:
 
@@ -164,7 +182,7 @@ Without `components`, a single-Gaussian fit is used.
 
     Separately, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two, because the dip between them never falls below half maximum and the initial width then covers the whole blend. `constrain_positive_intensity` does not help here and can make it worse.
 
-If you synthesised data in dynamic mode, your configuration must specify:
+If you synthesised data in the deprecated dynamic mode, your configuration must specify:
 
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time

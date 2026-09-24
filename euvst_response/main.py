@@ -16,10 +16,12 @@ import gzip
 import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
-from .data_processing import load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube
+from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
+                              pad_spectral_axis)
 from .raster import AtmosphereSeries, RasterSynthesiser
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
+from .radiometric import spectral_psf_margin
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
@@ -46,7 +48,8 @@ _TOP_LEVEL_KEYS = {
 # observed. The synthesis keys are those of synthesise-spectra; the raster
 # keys are the observing plan of euvst_response.raster.RasterPlan.
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
-                   "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers"}
+                   "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
+                   "goft_temperature_chunk"}
 _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
 
 # The Simulation dataclass has more fields than this, but main() builds its
@@ -54,7 +57,7 @@ _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
 # (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
 # writing one here would have been parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "noise", "enable_pinholes"}
+                    "spectral_psf", "noise", "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -230,6 +233,8 @@ def _parse_synthesis_settings(config: dict):
         settings["hdf5_dbase_root"] = str(section["hdf5_dbase_root"])
     if section.get("n_workers") is not None:
         settings["n_workers"] = int(section["n_workers"])
+    if section.get("goft_temperature_chunk") is not None:
+        settings["goft_temperature_chunk"] = int(section["goft_temperature_chunk"])
     return SynthesisSettings(**settings)
 
 
@@ -524,6 +529,15 @@ def main() -> None:
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
+    # The wavelength grids are cached by slit width and detector sampling, and
+    # are sized for the spectral PSF of the slit, which also depends on the
+    # slit psf_params was measured with. That is one fact about the
+    # telescope, as psf_params is, so it takes one value.
+    if "psf_slit_width" in tel_sweep:
+        raise ValueError(
+            "telescope.psf_slit_width is the slit psf_params was measured with, "
+            "so like psf_params it takes a single value and cannot be swept.")
+
     # Instrument-specific validation
     if instrument == "EIS":
         if config.get("filter"):
@@ -596,6 +610,7 @@ def main() -> None:
         "vis_sl": 0.0 * u.photon / (u.s * u.cm**2),
         "psf": False,
         "psf_boundary": "replicate",
+        "spectral_psf": "quadrature",
         "noise": True,
         "enable_pinholes": False,
     }
@@ -697,14 +712,55 @@ def main() -> None:
         print("\nLoading atmosphere...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
         cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
-        if dynamic_mode_info.get("enabled", False):
-            raise ValueError(
-                f"{synthesis_file} was synthesised in the old dynamic mode, which fixed "
-                f"the slit width and exposure at synthesis and has been replaced. Write "
-                f"the snapshots as atmosphere files and observe them with "
-                f"'atmosphere_series' and a 'raster:' section in this configuration, "
-                f"where the slit width and exposure can be swept."
+
+        is_dynamic_mode = dynamic_mode_info.get("enabled", False)
+        if is_dynamic_mode:
+            print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
+            print(f"  Slit width: {dynamic_mode_info['slit_width']}")
+            print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
+            print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
+
+            synth_slit_width = dynamic_mode_info["slit_width"]
+            synth_rest_time = dynamic_mode_info["slit_rest_time"]
+
+            slit_width_vals = sweep_dims.get(
+                "simulation.slit_width", [sim_fixed["slit_width"]]
             )
+            expos_vals = sweep_dims.get(
+                "simulation.expos", [sim_fixed["expos"]]
+            )
+
+            if len(slit_width_vals) != 1:
+                raise ValueError(
+                    f"Dynamic mode synthesis requires exactly one slit width. "
+                    f"Config specifies {len(slit_width_vals)}: {slit_width_vals}. "
+                    f"Please provide only the synthesis slit width: {synth_slit_width}"
+                )
+            if not np.isclose(
+                slit_width_vals[0].to_value(u.arcsec),
+                synth_slit_width.to_value(u.arcsec),
+                rtol=1e-6,
+            ):
+                raise ValueError(
+                    f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
+                    f"but config specifies {slit_width_vals[0]}."
+                )
+            if len(expos_vals) != 1:
+                raise ValueError(
+                    f"Dynamic mode synthesis requires exactly one exposure time. "
+                    f"Config specifies {len(expos_vals)}: {expos_vals}. "
+                    f"Please provide only the synthesis slit rest time: {synth_rest_time}"
+                )
+            if not np.isclose(
+                expos_vals[0].to_value(u.s),
+                synth_rest_time.to_value(u.s),
+                rtol=1e-6,
+            ):
+                raise ValueError(
+                    f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
+                    f"but config specifies {expos_vals[0]}."
+                )
+            print("  Dynamic mode parameters validated successfully!")
 
     # Main sweep loop
     all_results = {}
@@ -770,6 +826,7 @@ def main() -> None:
         vis_sl = all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2))
         psf = all_sim.get("psf", False)
         psf_boundary = all_sim.get("psf_boundary", "replicate")
+        spectral_psf = all_sim.get("spectral_psf", "quadrature")
         noise = all_sim.get("noise", True)
         enable_pinholes = all_sim.get("enable_pinholes", False)
 
@@ -841,7 +898,13 @@ def main() -> None:
                     tel=TEL,
                 )
             else:
-                cube_reb_cache[cube_reb_key] = rebin_atmosphere(cube_sim, DET, SIM_rebin)
+                # A slit wider than the one psf_params is for spreads each line
+                # further than the synthesis window's margin allows, so the
+                # window is widened to hold what it spreads. Not for the
+                # reference slit, whose window is as it was.
+                cube_reb_cache[cube_reb_key] = pad_spectral_axis(
+                    rebin_atmosphere(cube_sim, DET, SIM_rebin),
+                    spectral_psf_margin(TEL, DET, slit_width))
 
         cube_reb = cube_reb_cache[cube_reb_key]
 
@@ -879,6 +942,7 @@ def main() -> None:
             vis_sl=vis_sl,
             psf=psf,
             psf_boundary=psf_boundary,
+            spectral_psf=spectral_psf,
             noise=noise,
             enable_pinholes=enable_pinholes,
             pinhole_sizes=pinhole_sizes if enable_pinholes else [],
