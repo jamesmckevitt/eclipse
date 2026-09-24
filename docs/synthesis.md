@@ -390,3 +390,27 @@ print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
 # List all available lines
 print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 ```
+
+??? note "Reading MURaM's own files (deprecated)"
+
+    Command lines from ECLIPSE 0.11.0 and earlier, which read MURaM's binary files directly, still run without `--atmosphere`, with a warning, until a future release removes them:
+
+    ```bash
+    synthesise-spectra \
+      --data-dir ./data/atmosphere \
+      --temp-file temp/eosT.0270000 \
+      --rho-file rho/result_prim_0.0270000 \
+      --vz-file vz/result_prim_2.0270000 \
+      --cube-shape 512 768 256 \
+      --voxel-dx "0.192 Mm" --voxel-dy "0.192 Mm" --voxel-dz "0.064 Mm" \
+      --lines Fe12_195.1190 \
+      --output-dir ./run/input
+    ```
+
+    - `--data-dir`: Directory the file names are relative to (default: `data/atmosphere`)
+    - `--temp-file`, `--rho-file`: Temperature and density files (default: `temp/eosT.0270000`, `rho/result_prim_0.0270000`)
+    - `--vx-file`, `--vy-file`, `--vz-file`: Velocity files; only the one along `--integration-axis` is read (default: `vx/result_prim_1.0270000`, `vy/result_prim_3.0270000`, `vz/result_prim_2.0270000`)
+    - `--cube-shape`: Cube dimensions in the order the files store them, `(nx nz ny)` (default: `512 768 256`)
+    - `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Cell sizes (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
+
+    x and y are centred on zero, and z = 0 is the centre of the bottom cell, which is what `--crop-x`, `--crop-y` and `--crop-z` refer to.
