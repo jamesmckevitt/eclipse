@@ -122,7 +122,8 @@ def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
 
     monkeypatch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(atmosphere),
-        "--output-dir", str(tmp_path / "out"), "--lines", LINES[0], *extra,
+        "--output-dir", str(tmp_path / "out"), "--lines", LINES[0],
+        "--mass-per-electron", "1.29", *extra,
     ])
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _recording_goft)
     synthesis.main()

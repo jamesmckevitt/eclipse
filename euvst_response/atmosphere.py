@@ -37,6 +37,8 @@ the line of sight may be stretched, since it is integrated out cell by cell.
 
 from __future__ import annotations
 
+import argparse
+import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -614,3 +616,24 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
         raise ValueError(f"No element has an abundance in the set "
                          f"{abundance!r}; is the name right?")
     return mass_per_electron_from_abundances(abundances)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line of eclipse-atmosphere."""
+    parser = argparse.ArgumentParser(
+        prog="eclipse-atmosphere", description="Inspect ECLIPSE atmosphere files.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    info = commands.add_parser("info", help="Describe an atmosphere file")
+    info.add_argument("atmosphere", type=str, help="The file to describe")
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """``eclipse-atmosphere info FILE`` describes a file without loading its cubes."""
+    args = build_parser().parse_args(argv)
+    print(args.atmosphere)
+    print(describe_atmosphere_file(args.atmosphere))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

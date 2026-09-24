@@ -1,14 +1,14 @@
 # Atmosphere files
 
-`synthesise-spectra` reads the atmosphere it synthesises from one HDF5 file, whatever code produced it. The file holds the few things the synthesis needs, each with its units, so there is no reader to write for a new code: write the file from your own data with any HDF5 library, then
+`synthesise-spectra` reads the simulation from an HDF5 file with the layout described below. You write this file yourself from your simulation's output, using h5py or any other HDF5 library, and pass it with `--atmosphere`:
 
 ```bash
 synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 ```
 
-Everything else on the [synthesis page](synthesis.md) works the same way: the lines, the velocity grid, the integration axis, cropping and downsampling. MURaM comes in through the same door: convert a snapshot once with [`eclipse-atmosphere from-muram`](#from-muram) and synthesise from the file.
+The other options on the [synthesis page](synthesis.md) work the same whichever code the simulation came from. At the end of this page there are worked examples for a [MURaM](#worked-example-a-muram-flare) and a [Bifrost](#worked-example-bifrost-quiet-sun) snapshot, both downloaded from the Hinode SDC Europe.
 
-## What the file holds
+## Layout
 
 Root attributes:
 
@@ -16,24 +16,24 @@ Root attributes:
 | --- | --- |
 | `format` | `eclipse-atmosphere` |
 | `version` | `1` |
-| `source` | Free text naming the simulation (optional). It is kept in the synthesis file. |
+| `source` | A description of the simulation (optional). It is copied into the synthesis file. |
 
-Datasets. Every one needs a `unit` attribute holding a unit string astropy can read, such as `K`, `g / cm3`, `cm / s`, `km / s`, `Mm` or `km`; the values can be in any unit of the right kind.
+Datasets. Each one needs a `unit` attribute that astropy can read, such as `K`, `g / cm3`, `kg / m3`, `cm / s`, `km / s`, `Mm` or `km`. Any unit of the right kind will do.
 
-| Dataset | Shape | What it is |
+| Dataset | Shape | Description |
 | --- | --- | --- |
-| `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | The positions of the cell boundaries along each axis, increasing. |
+| `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | Positions of the cell boundaries along each axis, in increasing order. |
 | `temperature` | `(nz, ny, nx)` | |
-| `mass_density` | `(nz, ny, nx)` | Give this, `electron_density`, or both. |
+| `mass_density` | `(nz, ny, nx)` | At least one of `mass_density` and `electron_density` is needed. |
 | `electron_density` | `(nz, ny, nx)` | |
-| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | The velocity along each of the box's own axes, positive towards increasing coordinate. Only the component along the axis you synthesise along (`--integration-axis`) is read, so a view from above needs `velocity_z` and a side view `velocity_x` or `velocity_y`. |
-| `time` | scalar | The simulation time of the snapshot (optional). |
+| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Velocity along each axis of the box, positive towards increasing coordinate. Only the component along `--integration-axis` is read: `velocity_z` for a view from above, `velocity_x` or `velocity_y` for a side view. |
+| `time` | scalar | Time of the snapshot (optional). |
 
-The cubes are stored `(nz, ny, nx)` in C order, so that `cube[k]` is a horizontal slice indexed `[y, x]` and z is height. If your code stores its arrays the other way round, transpose them before writing.
+The cubes are stored in C order with z first, so `cube[k]` is a horizontal slice indexed `[y, x]`, and z points up. If your code stores its arrays in a different order, transpose them before writing.
 
-The two axes that end up as the image must be evenly spaced, because the image coordinates are written as a linear WCS. The axis along the line of sight may be stretched: the emission measure of each cell uses that cell's own size, so a chromosphere-to-corona grid whose cells grow with height integrates correctly seen from above. A stretched axis that would become an image axis is refused, so resample onto an even grid first if you want a side view of such a box.
+The two axes that become the image must be evenly spaced, because the maps are given a linear WCS. The axis along the line of sight can have cells of different sizes, as z often does in codes that include the chromosphere; each cell is integrated over its own depth. A side view of a box with an uneven z axis is refused, so resample it onto an even grid first.
 
-## Writing one from Python
+## Writing a file from Python
 
 ```python
 import astropy.units as u
@@ -46,20 +46,24 @@ atmosphere = Atmosphere(
     velocity_z=vz * u.km / u.s,                   # the component along the line of sight
     x_edges=np.arange(nx + 1) * 0.192 * u.Mm,     # an even grid
     y_edges=np.arange(ny + 1) * 0.192 * u.Mm,
-    z_edges=edges_from_centres(z_centres * u.km), # a stretched one, from cell centres
+    z_edges=edges_from_centres(z_centres * u.km), # an uneven one, from cell centres
     time=1250.0 * u.s,
     source="my simulation, snapshot 385",
 )
 write_atmosphere(atmosphere, "atmosphere.h5")
 ```
 
-`Atmosphere` checks the shapes, the units and the ordering of the edges as it is built, and `write_atmosphere` writes the layout above. `edges_from_centres` is for codes that know their cell centres rather than their cell boundaries: it places each edge halfway between two centres. Use your code's own boundaries when it has them, since on a stretched grid the two are not the same.
+`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres. If it gives the cell boundaries, use those instead, as the two are not the same on an uneven grid.
 
-`read_atmosphere` reads a file back as an `Atmosphere`, and `eclipse-atmosphere info atmosphere.h5` prints what a file holds without loading all of it into Python.
+`read_atmosphere` reads a file back into an `Atmosphere`. To check what a file holds without loading the cubes, run
 
-## Writing one from anything else
+```bash
+eclipse-atmosphere info atmosphere.h5
+```
 
-Any HDF5 library can write the file: from Fortran or C inside a simulation code, from IDL, or from Julia. Create the datasets and attributes listed above at the root of the file. In `h5dump` terms, a minimal file for a top-down view looks like this:
+## Writing a file from other languages
+
+Any HDF5 library can write the file, for example from Fortran or C inside the simulation code, or from IDL or Julia. Put the datasets and attributes listed above at the root of the file. A minimal file for a view from above looks like this in `h5dump`:
 
 ```text
 HDF5 "atmosphere.h5" {
@@ -78,29 +82,87 @@ GROUP "/" {
 }
 ```
 
-Fortran stores arrays column-major, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. Write the cubes as float32 if you want the file to stay small: the synthesis converts whatever it reads to the precision `--precision` asks for, which is float64 unless you say otherwise, and works in that throughout. The file's own precision only sets how exactly the values themselves were recorded.
+Fortran arrays are column-major, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. float32 is enough for the cubes and halves the size of the file; the synthesis converts everything to the precision set by `--precision` (float64 by default) when it reads the file.
 
-## From MURaM
+## Electron density
 
-MURaM writes its output as separate binary files, one per variable, which `eclipse-atmosphere from-muram` reads and writes as an atmosphere file:
+The contribution functions need the electron density. If your code calculates one, for example with non-equilibrium hydrogen ionisation, write it as `electron_density` and ECLIPSE will use it as it is.
+
+If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This overestimates the electron density in gas that is too cool to be fully ionised, but that gas does not emit the EUV lines ECLIPSE synthesises. You can set the value yourself with `--mass-per-electron`.
+
+## Cropping and downsampling
+
+`--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range; a cell that only touches the range at one of its boundaries is not. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.
+
+The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
+
+## Worked example: a MURaM flare
+
+The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several MURaM and Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
+
+This example uses the flare simulation of [Cheung et al. (2019)](https://doi.org/10.1038/s41550-018-0629-3), run `ar098192`, at snapshot 300000, during the flare. Download the temperature, density and vertical velocity (400 MB each):
 
 ```bash
-eclipse-atmosphere from-muram \
-  --data-dir ./data/atmosphere \
-  --snapshot 0270000 \
-  --cube-shape 512 768 256 \
-  --voxel-dx "0.192 Mm" --voxel-dy "0.192 Mm" --voxel-dz "0.064 Mm" \
-  --velocities z \
-  --output ./data/atmosphere_0270000.h5
+for variable in lgtg lgr uz; do
+  curl -O https://sdc.uio.no/vol/simulations/ar098192/atmos/MURaM_ar098192_${variable}_300000.fits
+done
 ```
 
-`--cube-shape` is the file's own `(nx nz ny)` order. `--velocities` chooses which components to include; each is 400 MB at full resolution, and a view from above needs only `z`. The snapshot time is read from `header/Header.<snapshot>` if that file exists, or given with `--time`. The box is placed where ECLIPSE has always placed a MURaM box, x and y centred on zero and z = 0 at the centre of the bottom cell, so `--crop-x`, `--crop-y` and `--crop-z` mean to the synthesis what they always did.
+Then write them to an atmosphere file:
 
-Convert a snapshot once and synthesise from it as often as you like, cropping and downsampling at synthesis as before.
+```python
+import astropy.units as u
+import numpy as np
+from astropy.io import fits
+from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
 
-## A worked example: Bifrost from the Hinode SDC Europe
+def variable(name, snapshot=300000):
+    with fits.open(f"MURaM_ar098192_{name}_{snapshot}.fits") as hdul:
+        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
 
-The [Hinode Science Data Centre Europe](https://sdc.uio.no/search/simulations) publishes Bifrost and MURaM snapshots as FITS files, one variable per file, in SI units, with `lg` variables as base-10 logarithms and the non-uniform z grid in a FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5). This builds an atmosphere file from the enhanced-network run `en024048_hion`, which has a stretched vertical grid and its own electron density:
+lgtg, header, z = variable("lgtg")
+lgr, _, _ = variable("lgr")
+uz, _, _ = variable("uz")
+
+nz, ny, nx = lgtg.shape
+x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
+y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
+
+atmosphere = Atmosphere(
+    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
+    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
+    velocity_z=uz * u.m / u.s,
+    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
+    z_edges=edges_from_centres(z * u.Mm),
+    time=header["ELAPSED"] * u.s,
+    source="MURaM ar098192 snapshot 300000, Hinode SDC Europe",
+)
+write_atmosphere(atmosphere, "muram_300000.h5")
+```
+
+The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise Fe XII 195.119 and the flare line Fe XXIV 192.028 from the surface upwards:
+
+```bash
+synthesise-spectra --atmosphere muram_300000.h5 \
+  --lines Fe12_195.1190 Fe24_192.0280 \
+  --crop-z "0 Mm" "42 Mm" \
+  --vel-lim "1000 km/s" --vel-res "10 km/s" \
+  --output-dir ./run/input
+```
+
+The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.5 GB, with cells twice the size.
+
+## Worked example: Bifrost quiet Sun
+
+This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
+
+```bash
+for variable in lgtg lgr lgne uz; do
+  curl -O https://sdc.uio.no/vol/simulations/en024048_hion/atmos/BIFROST_en024048_hion_${variable}_385.fits
+done
+```
+
+Then write them to an atmosphere file:
 
 ```python
 import astropy.units as u
@@ -134,20 +196,13 @@ atmosphere = Atmosphere(
 write_atmosphere(atmosphere, "bifrost_385.h5")
 ```
 
-The files put z increasing upwards, so `uz` is positive upwards as ECLIPSE expects; the granulation confirms it, with hot cells rising at the surface. The box starts 2.4 Mm below the surface, so `--crop-z "0 Mm" "20 Mm"` keeps the part that emits.
+The box starts 2.4 Mm below the surface, so `--crop-z "0 Mm" "20 Mm"` keeps the part that emits:
 
-## Electron density
+```bash
+synthesise-spectra --atmosphere bifrost_385.h5 \
+  --lines Fe09_171.0730 \
+  --crop-z "0 Mm" "20 Mm" \
+  --output-dir ./run/input
+```
 
-The contribution functions need the electron density. A code that carries one, for instance from non-equilibrium hydrogen ionisation, should write `electron_density`, and it is used as given.
-
-With only a `mass_density`, ECLIPSE divides it by the mass of plasma per free electron. By default that is worked out from the abundance set the synthesis uses (`--abundance`) for a fully ionised plasma, which is what the EUV lines ECLIPSE synthesises form in: about 1.16 atomic mass units per electron for coronal abundances. Cells too cool to be fully ionised come out with too high an electron density, but they emit none of those lines. `--mass-per-electron` sets a value by hand instead.
-
-The public Bifrost snapshot of the worked example above carries its own electron density, from non-equilibrium hydrogen ionisation. Above 100,000 K the density derived from its mass density with the coronal value is within 3 per cent of the one the code carries, where 1.29, the value for a neutral gas, is 8 per cent off; below 20,000 K the derived density is several times too high, as expected, and those cells emit nothing in the EUV lines.
-
-## Cropping and downsampling
-
-`--crop-x`, `--crop-y` and `--crop-z` are ranges in the file's own coordinates, and keep every cell that any part of the range covers; a bound that falls on a cell boundary does not keep the cell beyond it. `--downsample` keeps every n-th cell along each axis and gives each kept cell the boundaries of the block of cells it stands for, on an even grid and a stretched one alike, so the box keeps its extent and the columns their depth.
-
-## What the synthesis file records
-
-A synthesis from an atmosphere file records, under `atmosphere`, the file's path, its `source`, its time, its shape, which axes are stretched and whether it gave an electron density; and under `config`, the mass per electron used and where it came from.
+This needs about 130 GB of memory and writes a 25 GB synthesis file, or about 40 GB and 6.4 GB with `--downsample 2`.

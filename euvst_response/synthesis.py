@@ -1301,6 +1301,9 @@ def create_line_cube(
 MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
                         "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
+# Where the documentation describes the atmosphere file and how to write one.
+ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/atmosphere-files/"
+
 
 class _NotedOption(argparse.Action):
     """Stores the value and records that the option was given, at its default or not."""
@@ -1324,8 +1327,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Input/Output paths
     parser.add_argument("--atmosphere", type=str, default=None,
                        help="The ECLIPSE atmosphere file (HDF5) to synthesise "
-                            "from, written by eclipse-atmosphere or by your own "
-                            "code. It carries the cube shape and the cell sizes. "
+                            f"from; see {ATMOSPHERE_DOCS} for how to write one. "
                             "Required, except in dynamic mode.")
     # The MURaM files static mode read before atmosphere files, kept out of
     # the help so that old command lines still run, with a warning, until
@@ -1393,7 +1395,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "density. By default it is worked out from --abundance "
                             "for a fully ionised plasma, about 1.16 for coronal "
                             "abundances. --mean-mol-wt is the old name; ECLIPSE "
-                            "0.8.0 and earlier used 1.29, the value for a neutral gas. "
+                            "0.11.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
     
     # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
@@ -1470,9 +1472,9 @@ def check_atmosphere_options(args) -> None:
             warnings.warn(
                 f"No --atmosphere was given, so the synthesis is reading "
                 f"MURaM's own files from {args.data_dir}. This is deprecated "
-                f"and will be removed in a future release: convert the "
-                f"snapshot with eclipse-atmosphere from-muram and give the "
-                f"file it writes with --atmosphere.",
+                f"and will be removed in a future release: write the snapshot "
+                f"as an atmosphere file, as described at {ATMOSPHERE_DOCS}, "
+                f"and give it with --atmosphere.",
                 FutureWarning, stacklevel=2)
         return
     # The parser notes every layout option that appeared on the command
@@ -1520,20 +1522,31 @@ def load_muram_files(
     """
     Read the MURaM files the deprecated static options name, as :func:`load_atmosphere_file` reads a file.
 
-    The atmosphere is the one eclipse-atmosphere from-muram would write for
-    these files, so the synthesis from it is the one from the converted file.
+    The box is placed where ECLIPSE has always placed a MURaM box, x and y
+    centred on zero and z = 0 at the centre of the bottom cell, so the crop
+    options mean what they did before atmosphere files.
     """
-    # Imported here because the MURaM converter imports this module.
-    from .muram import read_muram_files
-
     data_dir = Path(args.data_dir)
-    velocity_file = getattr(args, f"v{integration_axis}_file")
-    paths = {"temperature": data_dir / args.temp_file,
-             "mass_density": data_dir / args.rho_file,
-             f"velocity_{integration_axis}": data_dir / velocity_file}
-    atmosphere = read_muram_files(
-        paths, shape=args.cube_shape, voxel_dx=u.Quantity(args.voxel_dx),
-        voxel_dy=u.Quantity(args.voxel_dy), voxel_dz=u.Quantity(args.voxel_dz))
+    files = {
+        "temperature": (args.temp_file, u.K),
+        "mass_density": (args.rho_file, u.g / u.cm**3),
+        f"velocity_{integration_axis}": (getattr(args, f"v{integration_axis}_file"),
+                                         u.cm / u.s),
+    }
+    cubes = {}
+    for name, (file_name, unit) in files.items():
+        path = data_dir / file_name
+        if not path.exists():
+            raise FileNotFoundError(f"{name} file not found: {path}")
+        cubes[name] = load_cube(path, shape=tuple(args.cube_shape), unit=unit)
+
+    nz, ny, nx = cubes["temperature"].shape
+    voxel = {axis: u.Quantity(getattr(args, f"voxel_d{axis}")) for axis in AXES}
+    atmosphere = Atmosphere(
+        x_edges=(np.arange(nx + 1) - nx / 2) * voxel["x"],
+        y_edges=(np.arange(ny + 1) - ny / 2) * voxel["y"],
+        z_edges=(np.arange(nz + 1) - 0.5) * voxel["z"],
+        source="MURaM", **cubes)
     return _prepare_atmosphere(atmosphere, f"the MURaM files in {data_dir}",
                                integration_axis, downsample, crop_x, crop_y, crop_z)
 

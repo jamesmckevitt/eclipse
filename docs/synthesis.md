@@ -6,22 +6,22 @@ The output is a synthesis file, which is the input to the [instrument response](
 
 !!! note "Which simulations are supported"
 
-    Any code's output, through an [atmosphere file](atmosphere-files.md): one HDF5 file holding the temperature, density, velocity and cell boundaries with their units, which you write from your own data and pass with `--atmosphere`. MURaM's own binary output is converted into one with `eclipse-atmosphere from-muram`, so every code comes in the same way.
+    Any code, as long as its output is written to an [atmosphere file](atmosphere-files.md): an HDF5 file with the temperature, density, velocity and cell boundaries, passed with `--atmosphere`. The atmosphere files page has worked examples for MURaM and Bifrost.
 
     Synthesis here is optically thin. If you need optically thick lines, synthesise them with a code such as Lightweaver or RH1.5D, and bring the spectra in at the [instrument response](instrument-response.md) stage instead of this one. Reading externally synthesised spectra is coming soon.
 
 ## Basic usage
 
 ```bash
-# The shortest run: the atmosphere file carries the cube shape and cell sizes
+# The shortest run
 synthesise-spectra \
-  --atmosphere ./data/atmosphere_0270000.h5 \
+  --atmosphere ./data/atmosphere.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --output-dir ./run/input
 
 # The same, using all available command line options
 synthesise-spectra \
-  --atmosphere ./data/atmosphere_0270000.h5 \
+  --atmosphere ./data/atmosphere.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
@@ -45,7 +45,7 @@ synthesise-spectra --help
 
 **Input/Output Paths:**
 
-- `--atmosphere`: The [atmosphere file](atmosphere-files.md) to synthesise from, which carries the cube shape and the cell sizes (required, except in dynamic mode)
+- `--atmosphere`: The [atmosphere file](atmosphere-files.md) to synthesise from (required, except in dynamic mode)
 - `--output-dir`: Output directory for results (default: `./run/input`)
 - `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
 
@@ -80,7 +80,7 @@ synthesise-spectra --help
 
 - `--downsample`: Downsampling factor, which must divide every dimension of the atmosphere (default: `1` = no downsampling)
 - `--precision`: Numerical precision `float32` or `float64` (default: `float64`)
-- `--mass-per-electron`: Mass of the plasma per free electron in atomic mass units, which turns the simulation's mass density into the electron density. By default it is worked out from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](atmosphere-files.md#electron-density). Not used when an atmosphere file gives the electron density itself. `--mean-mol-wt` is the old name for this option; ECLIPSE 0.8.0 and earlier defaulted it to 1.29, the value for a neutral gas.
+- `--mass-per-electron`: Mass per free electron in atomic mass units, used to get the electron density from the mass density (default: calculated from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](atmosphere-files.md#electron-density)). Not used if the atmosphere file has an electron density. `--mean-mol-wt` is the old name for this option, which defaulted to 1.29 up to ECLIPSE 0.11.0.
 
 ## Naming spectral lines
 
@@ -107,7 +107,7 @@ does not match the pattern at all raises `ValueError` immediately.
 
 ## Dynamic mode (time-varying atmospheres)
 
-For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning. It reads MURaM's own files rather than an atmosphere file, so it carries the options that describe their layout:
+For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning. Dynamic mode reads MURaM's own files rather than an atmosphere file:
 
 ```bash
 synthesise-spectra \

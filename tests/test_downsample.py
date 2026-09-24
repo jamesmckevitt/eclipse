@@ -20,8 +20,7 @@ import numpy as np
 import pytest
 
 from euvst_response import synthesis
-from euvst_response.atmosphere import write_atmosphere
-from euvst_response.muram import read_muram
+from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.synthesis import load_cube
 
 LINE = "Fe12_195.1190"
@@ -62,10 +61,17 @@ def _flat_goft(lines, **kwargs):
 
 
 def _atmosphere_file(tmp_path, shape, suffix="0270000"):
-    """The MURaM files above as the atmosphere file the synthesis reads."""
-    atmosphere = read_muram(tmp_path / "atmosphere", suffix, shape=shape,
-                            voxel_dx=VOXEL["dx"], voxel_dy=VOXEL["dy"],
-                            voxel_dz=VOXEL["dz"], velocities=("z",))
+    """The MURaM files above as an atmosphere file, placed as dynamic mode places them."""
+    root = tmp_path / "atmosphere"
+    files = {"temperature": ("temp/eosT", u.K),
+             "mass_density": ("rho/result_prim_0", u.g / u.cm**3),
+             "velocity_z": ("vz/result_prim_2", u.cm / u.s)}
+    cubes = {name: load_cube(root / f"{prefix}.{suffix}", shape=shape, unit=unit)
+             for name, (prefix, unit) in files.items()}
+    nz, ny, nx = cubes["temperature"].shape
+    atmosphere = Atmosphere(x_edges=(np.arange(nx + 1) - nx / 2) * VOXEL["dx"],
+                            y_edges=(np.arange(ny + 1) - ny / 2) * VOXEL["dy"],
+                            z_edges=(np.arange(nz + 1) - 0.5) * VOXEL["dz"], **cubes)
     return write_atmosphere(atmosphere, tmp_path / f"atmosphere_{suffix}.h5")
 
 
