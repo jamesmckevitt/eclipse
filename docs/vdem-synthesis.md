@@ -4,9 +4,8 @@ A velocity differential emission measure (VDEM) is a DEM resolved in line-of-sig
 
 This is ECLIPSE's native internal format. The [MHD route](synthesis.md) does that binning itself, and produces this object before folding it with `G(T, n_e)`. Providing one directly just skips that first step.
 
-Two reasons to take this route rather than the [MHD route](synthesis.md):
+When to take this route rather than the [MHD route](synthesis.md):
 
-- **Your simulation is not MURaM.** ECLIPSE's reader currently expects MURaM output. Reducing your own simulation to a VDEM is the way to use it in the meantime.
 - **The reduction is already done.** A VDEM is far smaller than the MHD cubes it came from, and easy to re-synthesise from with different lines or abundances.
 
 A DEM carries no velocity information, so the [DEM route](dem-synthesis.md) puts all the emission in the zero-velocity bin. A VDEM fills the velocity bins in, and the synthesised lines come out Doppler shifted and broadened by the bulk motions along the line of sight, as well as thermally.
@@ -60,4 +59,4 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 ## Running the instrument response
 
-The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [analysis tutorial](basic-results-analysis.ipynb).
+The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [analysis tutorial](analysing-the-results.ipynb).

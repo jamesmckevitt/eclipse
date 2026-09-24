@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from euvst_response import synthesis
+from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.synthesis import load_cube
 
 LINE = "Fe12_195.1190"
@@ -36,7 +37,7 @@ def _write_cube(path, shape, value):
     np.full(shape, value, dtype=np.float32).ravel(order="F").tofile(path)
 
 
-def _write_atmosphere(root, shape, suffix="0270000"):
+def _write_muram_files(root, shape, suffix="0270000"):
     """Temperature, density and vertical velocity for one snapshot."""
     density = (ELECTRON_DENSITY * MEAN_MOL_WT * const.u).to_value(u.g / u.cm**3)
     _write_cube(root / "temp" / f"eosT.{suffix}", shape,
@@ -59,23 +60,42 @@ def _flat_goft(lines, **kwargs):
     return goft, logT_grid, logN_grid
 
 
+def _atmosphere_file(tmp_path, shape, suffix="0270000"):
+    """The MURaM files above as an atmosphere file, placed as dynamic mode places them."""
+    root = tmp_path / "atmosphere"
+    files = {"temperature": ("temp/eosT", u.K),
+             "mass_density": ("rho/result_prim_0", u.g / u.cm**3),
+             "velocity_z": ("vz/result_prim_2", u.cm / u.s)}
+    cubes = {name: load_cube(root / f"{prefix}.{suffix}", shape=shape, unit=unit)
+             for name, (prefix, unit) in files.items()}
+    nz, ny, nx = cubes["temperature"].shape
+    atmosphere = Atmosphere(x_edges=(np.arange(nx + 1) - nx / 2) * VOXEL["dx"],
+                            y_edges=(np.arange(ny + 1) - ny / 2) * VOXEL["dy"],
+                            z_edges=(np.arange(nz + 1) - 0.5) * VOXEL["dz"], **cubes)
+    return write_atmosphere(atmosphere, tmp_path / f"atmosphere_{suffix}.h5")
+
+
 def _synthesise(tmp_path, monkeypatch, shape, downsample, extra=()):
     """Run synthesis main() and return what it saved."""
     output_name = f"out_{downsample}_{len(extra)}.pkl"
     argv = [
         "synthesise-spectra",
-        "--data-dir", str(tmp_path / "atmosphere"),
         "--output-dir", str(tmp_path / "out"),
         "--output-name", output_name,
         "--lines", LINE,
-        "--cube-shape", *[str(n) for n in shape],
-        "--voxel-dx", str(VOXEL["dx"]),
-        "--voxel-dy", str(VOXEL["dy"]),
-        "--voxel-dz", str(VOXEL["dz"]),
         "--mean-mol-wt", str(MEAN_MOL_WT),
         "--downsample", str(downsample),
         *extra,
     ]
+    if "--slit-rest-time" in extra:
+        # Dynamic mode reads the MURaM files themselves.
+        argv += ["--data-dir", str(tmp_path / "atmosphere"),
+                 "--cube-shape", *[str(n) for n in shape],
+                 "--voxel-dx", str(VOXEL["dx"]),
+                 "--voxel-dy", str(VOXEL["dy"]),
+                 "--voxel-dz", str(VOXEL["dz"])]
+    else:
+        argv += ["--atmosphere", str(_atmosphere_file(tmp_path, shape))]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
@@ -118,7 +138,7 @@ def test_load_cube_leaves_the_callers_voxel_sizes_alone(tmp_path):
 def test_downsampling_keeps_the_field_of_view_and_the_intensity(
         tmp_path, monkeypatch, downsample):
     shape = (8, 8, 8)
-    _write_atmosphere(tmp_path / "atmosphere", shape)
+    _write_muram_files(tmp_path / "atmosphere", shape)
 
     full = _synthesise(tmp_path, monkeypatch, shape, 1)
     reduced = _synthesise(tmp_path, monkeypatch, shape, downsample)
@@ -140,16 +160,16 @@ def test_downsampling_keeps_the_field_of_view_and_the_intensity(
     assert _intensity(reduced) == pytest.approx(
         np.full((ny, nx), _intensity(full).mean()), rel=1e-6)
 
-    assert reduced["voxel_sizes"]["dx"] == downsample * VOXEL["dx"]
-    assert reduced["voxel_sizes"]["dy"] == downsample * VOXEL["dy"]
-    assert reduced["voxel_sizes"]["dz"] == downsample * VOXEL["dz"]
+    for axis in ("dx", "dy", "dz"):
+        assert reduced["voxel_sizes"][axis].to_value(u.Mm) == pytest.approx(
+            (downsample * VOXEL[axis]).to_value(u.Mm))
 
 
 def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
                                                             monkeypatch):
     """Crops are in world coordinates, so they rely on the WCS being right."""
     shape = (16, 8, 8)
-    _write_atmosphere(tmp_path / "atmosphere", shape)
+    _write_muram_files(tmp_path / "atmosphere", shape)
     crop = ["--crop-x", "-0.4 Mm", "0.4 Mm"]
 
     full = _synthesise(tmp_path, monkeypatch, shape, 1, crop)
@@ -165,10 +185,10 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
     assert abs(2 * cells - full_cells) <= 2
 
 
-def _write_dynamic_atmosphere(root, shape):
+def _write_muram_series(root, shape):
     """Two snapshots, with the header files dynamic mode reads times from."""
     for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
-        _write_atmosphere(root, shape, suffix)
+        _write_muram_files(root, shape, suffix)
         header = root / "header" / f"Header.{suffix}"
         header.parent.mkdir(parents=True, exist_ok=True)
         header.write_text(f"8 8 8 1e7 1.5e7 5e6 {time} 0.1 1e6\n")
@@ -179,7 +199,7 @@ DYNAMIC = ["--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec"]
 
 def test_dynamic_mode_downsamples_the_same_way(tmp_path, monkeypatch):
     shape = (8, 8, 8)
-    _write_dynamic_atmosphere(tmp_path / "atmosphere", shape)
+    _write_muram_series(tmp_path / "atmosphere", shape)
 
     full = _synthesise(tmp_path, monkeypatch, shape, 1, DYNAMIC)
     reduced = _synthesise(tmp_path, monkeypatch, shape, 2, DYNAMIC)
@@ -206,6 +226,6 @@ def test_synthesis_refuses_a_factor_that_does_not_divide_the_cube(
         tmp_path, monkeypatch, mode):
     """In either mode, rather than a domain and path length that are too large."""
     shape = (8, 8, 9)
-    _write_dynamic_atmosphere(tmp_path / "atmosphere", shape)
+    _write_muram_series(tmp_path / "atmosphere", shape)
     with pytest.raises(ValueError, match="does not divide the cube shape"):
         _synthesise(tmp_path, monkeypatch, shape, 2, mode)

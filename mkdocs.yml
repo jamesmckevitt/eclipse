@@ -33,8 +33,7 @@ nav:
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument: instrument-response.md
-  - Tutorials:
-      - Basic results analysis: basic-results-analysis.ipynb
+  - Analysing the results: analysing-the-results.ipynb
   - Acknowledgements: acknowledgements.md
 
 # docs/internal/ holds pages for the instrument team, reached only by a link.

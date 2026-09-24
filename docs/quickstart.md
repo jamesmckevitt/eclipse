@@ -5,8 +5,9 @@
 After installation, you can run ECLIPSE from the command line:
 
 ```bash
-# Run synthesis script (convert 3D MHD data to synthetic spectra)
-synthesise-spectra --data-dir ./data/atmosphere --lines Fe12_195.1190 --output-dir ./run/input
+# Run synthesis script (convert 3D MHD data to synthetic spectra), from an
+# atmosphere file written from the simulation
+synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 
 # Run instrument response simulation
 eclipse --config ./run/input/config.yaml
@@ -18,7 +19,7 @@ eclipse --help
 
 That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
 spectra, `eclipse` puts them through the instrument. See
-[From an MHD simulation](synthesis.md) and
+[From an MHD simulation](synthesis.md), which also describes the atmosphere file, and
 [Simulating the instrument](instrument-response.md) for the full set of options.
 
 There is no default configuration file, so write `config.yaml` yourself between
@@ -68,11 +69,10 @@ filter_eff = telescope.filter.total_throughput(fe12_wl)
 
 ## Working with results
 
-For analysing simulation results, see the [analysis tutorial](basic-results-analysis.ipynb), which demonstrates how to:
+For analysing simulation results, see the [analysis tutorial](analysing-the-results.ipynb), which demonstrates how to:
 
 - Load simulation results
 - Explore parameter combinations
-- Analyse fit statistics and compute velocity/line width errors
 - Create SunPy maps for visualization
 
 The analysis functions are available directly from the package:

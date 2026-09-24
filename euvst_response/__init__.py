@@ -4,7 +4,7 @@ ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 This package provides tools for modeling the performance of the EUV spectrograph EUVST, on SOLAR-C.
 """
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
@@ -23,6 +23,8 @@ from .fitting import fit_cube_gauss, velocity_from_fit, width_from_fit, analyse,
 from .monte_carlo import simulate_once, monte_carlo
 from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
+from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centres,
+                         read_atmosphere, write_atmosphere)
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -49,6 +51,11 @@ __all__ = [
     "main",
     "load_atmosphere",
     "create_uniform_intensity_cube",
+    "Atmosphere",
+    "describe_atmosphere_file",
+    "edges_from_centres",
+    "read_atmosphere",
+    "write_atmosphere",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 

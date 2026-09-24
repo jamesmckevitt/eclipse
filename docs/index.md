@@ -57,8 +57,8 @@ flowchart LR
 
 | Starting point | Page | Use it when |
 | --- | --- | --- |
-| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. |
-| A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity, or it comes from a code ECLIPSE cannot yet read directly. |
+| A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. The simulation goes in as an [atmosphere file](synthesis.md#atmosphere-files), which you write from any code's output. |
+| A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
 | Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
@@ -67,7 +67,7 @@ The first three run ECLIPSE's own synthesis, which is optically thin, and produc
 
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating the instrument](instrument-response.md).
 
-**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](basic-results-analysis.ipynb).
+**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](analysing-the-results.ipynb).
 
 ## Instruments
 
@@ -80,7 +80,6 @@ The instrument is chosen with a single top-level `instrument:` key in the config
 ## Coming soon
 
 - **The long wavelength channel**, completing EUVST alongside the short wavelength channel already modelled.
-- **More MHD codes.** Synthesis currently reads MURaM output. Support for other MHD codes is being added.
 - **Spectra from any other synthesis code.** ECLIPSE will read the spectra produced by codes like [Lightweaver](https://github.com/Goobley/Lightweaver) or [RH1.5D](https://rh15d.readthedocs.io/).
 
 ## Installation
@@ -116,4 +115,4 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating the instrument](instrument-response.md) - configuration file reference and the `eclipse` CLI
-- [Basic results analysis](basic-results-analysis.ipynb) - worked notebook example
+- [Analysing the results](analysing-the-results.ipynb) - worked notebook example
