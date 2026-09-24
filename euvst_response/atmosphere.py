@@ -503,11 +503,22 @@ def read_atmosphere(path: str | Path,
 
 
 def read_time(path: str | Path) -> Optional[u.Quantity]:
-    """The snapshot time recorded in an atmosphere file, or None if it has none."""
+    """
+    The snapshot time recorded in an atmosphere file, or None if it has none.
+
+    The time is checked as reading the whole file would check it, so a time
+    that is NaN, infinite or not a single value is refused here too.
+    """
     path = Path(path)
     with h5py.File(path, "r") as f:
         _check_format(f, path)
-        return _read_dataset(f, "time") if "time" in f else None
+        if "time" not in f:
+            return None
+        time = _read_dataset(f, "time")
+    try:
+        return _quantity(time, "time", ndim=0)
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from None
 
 
 def read_edges(path: str | Path) -> Dict[str, u.Quantity]:

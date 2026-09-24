@@ -14,6 +14,7 @@ import sys
 import astropy.constants as const
 import astropy.units as u
 import dill
+import h5py
 import numpy as np
 import pytest
 import yaml
@@ -114,6 +115,13 @@ def test_a_series_orders_its_files_by_time_and_needs_one_in_each(tmp_path):
         AtmosphereSeries(paths + [untimed])
     with pytest.raises(ValueError, match="same time"):
         AtmosphereSeries(paths + [write_atmosphere(_snapshot(10.0), tmp_path / "twin.h5")])
+    # A time that is not a finite number would slip through the ordering.
+    for bad in (np.nan, np.inf):
+        broken = write_atmosphere(_snapshot(30.0), tmp_path / "broken.h5")
+        with h5py.File(broken, "r+") as f:
+            f["time"][()] = bad
+        with pytest.raises(ValueError, match="broken.h5: time contains NaN or infinite"):
+            AtmosphereSeries(paths + [broken])
     with pytest.raises(ValueError, match="at least two"):
         AtmosphereSeries(paths[:1]).valid_until()
 
@@ -210,6 +218,25 @@ def test_an_exposure_averages_over_the_slit_and_over_time(tmp_path, flat_goft):
     assert spectra == pytest.approx(0.5 * (0.5 * col6 + 0.5 * col7) + 0.5 * later, rel=1e-6)
     # Each column of each snapshot was synthesised once.
     assert synthesiser.strips_synthesised == 2
+
+
+def test_a_wider_slit_synthesises_only_the_columns_a_narrower_one_has_not(tmp_path, flat_goft, monkeypatch):
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
+    synthesiser = RasterSynthesiser(series, _settings())
+    strips = []
+    synthesise_strip = synthesiser._synthesise_strip
+
+    def recording(snapshot, first, last):
+        strips.append((snapshot, first, last))
+        synthesise_strip(snapshot, first, last)
+
+    monkeypatch.setattr(synthesiser, "_synthesise_strip", recording)
+    # Centred on cell 6, a 0.2 arcsec slit covers it alone, and a 0.4 arcsec
+    # one half of each neighbour as well.
+    exposure = raster_module.Exposure(0, 0.5 * CELL, 2 * u.s, 8 * u.s)
+    synthesiser.exposure_spectra(exposure, 0.2 * u.arcsec)
+    synthesiser.exposure_spectra(exposure, 0.4 * u.arcsec)
+    assert strips == [(0, 6, 7), (0, 5, 6), (0, 7, 8)]
 
 
 def test_a_flow_seen_from_above_is_blueshifted_in_the_exposure(tmp_path, flat_goft):

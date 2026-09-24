@@ -291,6 +291,17 @@ class AtmosphereSeries:
         return [(int(k), float(f)) for k, f in enumerate(fractions) if f > 0.0]
 
 
+def _runs(indices: Sequence[int]) -> List[Tuple[int, int]]:
+    """The runs of consecutive numbers in the ascending *indices*, each as its first and its last plus one."""
+    runs: List[Tuple[int, int]] = []
+    for index in indices:
+        if runs and index == runs[-1][1]:
+            runs[-1] = (runs[-1][0], index + 1)
+        else:
+            runs.append((index, index + 1))
+    return runs
+
+
 class RasterSynthesiser:
     """
     Synthesises the spectra a slit sees over a plan, one exposure at a time.
@@ -423,8 +434,11 @@ class RasterSynthesiser:
         spectra: Dict[str, np.ndarray] = {}
         for snapshot, weight in self.series.coverage(exposure.start, exposure.end):
             missing = [c for c in range(first, last) if (snapshot, c) not in self._columns]
-            if missing:
-                self._synthesise_strip(snapshot, min(missing), max(missing) + 1)
+            # Each run of neighbouring columns not yet synthesised is one
+            # strip, so a wider slit around columns a narrower one has
+            # already seen synthesises only the columns either side.
+            for run_first, run_last in _runs(missing):
+                self._synthesise_strip(snapshot, run_first, run_last)
             for column, fraction in zip(range(first, last), fractions):
                 for name, si in self._columns[(snapshot, column)].items():
                     contribution = weight * fraction * si

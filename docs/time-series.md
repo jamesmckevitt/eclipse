@@ -34,7 +34,7 @@ Each snapshot stands for the atmosphere from its own time until the next snapsho
 
 ## The synthesis
 
-The `synthesis:` section takes the same settings as `synthesise-spectra`:
+The `synthesis:` section takes these settings, which mean what they do in `synthesise-spectra`. The view is always from above and the slit picks the columns, so `integration_axis`, `crop_x` and `downsample` aren't among them.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
