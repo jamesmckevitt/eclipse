@@ -4,12 +4,6 @@ The synthesis script converts 3D MHD simulation data into synthetic solar spectr
 
 The output is a synthesis file, which is the input to the [instrument response](instrument-response.md) stage.
 
-!!! note "Which simulations are supported"
-
-    Any code, as long as its output is written to an [atmosphere file](atmosphere-files.md): an HDF5 file with the temperature, density, velocity and cell boundaries, passed with `--atmosphere`. The atmosphere files page has worked examples for MURaM and Bifrost.
-
-    Synthesis here is optically thin. If you need optically thick lines, synthesise them with a code such as Lightweaver or RH1.5D, and bring the spectra in at the [instrument response](instrument-response.md) stage instead of this one. Reading externally synthesised spectra is coming soon.
-
 ## Basic usage
 
 ```bash

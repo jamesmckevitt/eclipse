@@ -86,7 +86,7 @@ Fortran arrays are column-major, so an array declared `(nx, ny, nz)` in Fortran 
 
 The contribution functions need the electron density. If your code calculates one, for example with non-equilibrium hydrogen ionisation, write it as `electron_density` and ECLIPSE will use it as it is.
 
-If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. You can set the value yourself with `--mass-per-electron`.
+If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This can be set with `--mass-per-electron`.
 
 ## Cropping and downsampling
 

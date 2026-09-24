@@ -4,10 +4,9 @@ A velocity differential emission measure (VDEM) is a DEM resolved in line-of-sig
 
 This is ECLIPSE's native internal format. The [MHD route](synthesis.md) does that binning itself, and produces this object before folding it with `G(T, n_e)`. Providing one directly just skips that first step.
 
-Two reasons to take this route rather than the [MHD route](synthesis.md):
+When to take this route rather than the [MHD route](synthesis.md):
 
 - **The reduction is already done.** A VDEM is far smaller than the MHD cubes it came from, and easy to re-synthesise from with different lines or abundances.
-- **The cubes are too large to carry around.** The MHD route reads the whole box; a VDEM of it is small enough to keep beside the results and re-use.
 
 A DEM carries no velocity information, so the [DEM route](dem-synthesis.md) puts all the emission in the zero-velocity bin. A VDEM fills the velocity bins in, and the synthesised lines come out Doppler shifted and broadened by the bulk motions along the line of sight, as well as thermally.
 
