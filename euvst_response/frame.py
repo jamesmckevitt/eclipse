@@ -42,7 +42,7 @@ from .radiometric import (
     spectral_psf_fwhm,
     spectral_psf_reach,
 )
-from .readout import FocalPlane_SWC
+from .readout import FocalPlane_SWC, expose
 from .utils import angle_to_distance, _fwhm_to_sigma
 
 
@@ -58,11 +58,29 @@ def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.
     return ((along_slit * across).cgs / const.au.cgs ** 2).value * u.sr
 
 
-def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None) -> np.ndarray:
-    """Row boundaries in Angstrom, sorted so that the first is the shorter."""
-    edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
+def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int = 0) -> np.ndarray:
+    """
+    Row boundaries in Angstrom, sorted so that the first is the shorter, for
+    the rows of the CCD and *margin* more past each end.
+    """
+    if margin:
+        rows = np.arange(-margin, focal_plane.n_rows + margin + 1) - 0.5
+        edges = focal_plane.wavelength(rows, ccd, column).to_value(u.Angstrom)
+    else:
+        edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
     return np.column_stack([np.minimum(edges[:-1], edges[1:]),
                             np.maximum(edges[:-1], edges[1:])])
+
+
+def _check_margin(margin: int, lit_only: bool) -> None:
+    if margin < 0:
+        raise ValueError(f"margin is a number of rows, and cannot be negative, got {margin}.")
+    if margin and lit_only:
+        raise ValueError(
+            "A margin is for the spectral blur, and the baffle comes after it: "
+            "lay the spectrum with lit_only=False, blur it, and empty the dark "
+            "rows then."
+        )
 
 
 def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
@@ -91,7 +109,7 @@ def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
 def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
                        slit_width: u.Quantity, wavelengths: u.Quantity,
                        intensities: u.Quantity, widths: u.Quantity,
-                       column=None, lit_only: bool = True) -> u.Quantity:
+                       column=None, lit_only: bool = True, margin: int = 0) -> u.Quantity:
     """
     Photons per second in each row of one CCD from a list of emission lines.
 
@@ -118,13 +136,21 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         it.  Ignored otherwise.
     lit_only : bool
         Zero the rows the baffle keeps dark.  They still pass charge, so the
-        smear model needs them present but empty.
+        smear model needs them present but empty.  The baffle comes after the
+        grating, so for rows that are to be blurred with
+        :func:`apply_spectral_psf`, leave this off and empty those rows after.
+    margin : int
+        Rows to add past each end of the CCD, for :func:`apply_spectral_psf`:
+        light just off the chip is blurred onto its edge rows.  Needs
+        ``lit_only=False``.
 
     Returns
     -------
     u.Quantity
-        Photons per second per pixel, one value per row.
+        Photons per second per pixel, one value per row, and then *margin*
+        more past each end.
     """
+    _check_margin(margin, lit_only)
     wavelengths = np.atleast_1d(u.Quantity(wavelengths).to(u.Angstrom))
     intensities = np.atleast_1d(u.Quantity(intensities).to(u.erg / (u.s * u.cm**2 * u.sr)))
     widths = np.atleast_1d(u.Quantity(widths).to(u.Angstrom))
@@ -143,8 +169,8 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     # one row; the Gaussian below shares that out between the rows it covers.
     total = (intensities * solid_angle * area / energy).to(1 / u.s)
 
-    bounds = _row_bounds(focal_plane, ccd, column)
-    rows = np.zeros(focal_plane.n_rows)
+    bounds = _row_bounds(focal_plane, ccd, column, margin)
+    rows = np.zeros(len(bounds))
     scale = np.sqrt(2.0) * widths.to_value(u.Angstrom)
     centre = wavelengths.to_value(u.Angstrom)
     for i, weight in enumerate(total.value):
@@ -165,7 +191,7 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
 def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
                           slit_width: u.Quantity, wavelength: u.Quantity,
                           radiance: u.Quantity, column=None,
-                          lit_only: bool = True) -> u.Quantity:
+                          lit_only: bool = True, margin: int = 0) -> u.Quantity:
     """
     Photons per second in each row of one CCD from a continuous spectrum.
 
@@ -180,11 +206,15 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     radiance : u.Quantity
         Spectral radiance per unit wavelength, in erg / (s cm2 sr Angstrom).
 
+    The other parameters are those of :func:`photons_from_lines`.
+
     Returns
     -------
     u.Quantity
-        Photons per second per pixel, one value per row.
+        Photons per second per pixel, one value per row, and then *margin*
+        more past each end.
     """
+    _check_margin(margin, lit_only)
     wavelength = u.Quantity(wavelength).to(u.Angstrom)
     radiance = u.Quantity(radiance).to(u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom))
     if wavelength.size != radiance.size:
@@ -203,7 +233,7 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
 
     grid = wavelength.to_value(u.Angstrom)
     cumulative = np.concatenate([[0.0], np.cumsum(np.diff(grid) * (density[1:] + density[:-1]) / 2)])
-    bounds = _row_bounds(focal_plane, ccd, column)
+    bounds = _row_bounds(focal_plane, ccd, column, margin)
     rows = (np.interp(bounds[:, 1], grid, cumulative, left=cumulative[0], right=cumulative[-1])
             - np.interp(bounds[:, 0], grid, cumulative, left=cumulative[0], right=cumulative[-1]))
 
@@ -230,7 +260,7 @@ def thermal_width(wavelength: u.Quantity, temperature: u.Quantity,
 
 
 def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
-                       spectral_psf: str = "quadrature") -> u.Quantity:
+                       spectral_psf: str = "quadrature", margin: int = 0) -> u.Quantity:
     """
     Blur a frame's rows with the instrument's spectral response.
 
@@ -244,10 +274,18 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     wider slit gives a wider response: 2.54 rows of FWHM for the 0.2 arcsec
     slit and 3.35 for the 0.4 arcsec one.
 
-    Flux is conserved: the kernel is normalised and the ends are padded by
-    repeating the edge value, which is right here because a frame covers the
-    whole band rather than a window with empty edges.
+    Nothing is assumed beyond the rows given: light blurred past either end is
+    lost, as off the edge of a detector, and none comes in.  The edge rows of
+    a CCD do receive light from just off the chip, though, and at the butted
+    edge the spectrum carries on across the gap.  To include it, lay the
+    spectrum with a *margin* of rows past each end
+    (:func:`photons_from_lines` and :func:`photons_from_spectrum` take one),
+    at least :func:`~euvst_response.radiometric.spectral_psf_reach` of them,
+    and pass the same margin here: the result is then the chip's own rows.
+    The kernel is normalised, so any flux that stays within the rows is
+    conserved.
     """
+    margin = int(margin)
     if spectral_psf == "quadrature":
         sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
         reach = spectral_psf_reach(telescope, det, slit_width)
@@ -261,10 +299,63 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
         )
     kernel = kernel / kernel.sum()
     half = kernel.size // 2
+    if margin and margin < half:
+        raise ValueError(
+            f"A margin of {margin} rows is less than the {half} the spectral "
+            f"response reaches, so the edge rows would miss light."
+        )
     unit = rows.unit if hasattr(rows, "unit") else 1
     values = np.asarray(rows.value if hasattr(rows, "value") else rows, dtype=float)
-    padded = np.pad(values, half, mode="edge")
-    return np.convolve(padded, kernel, mode="valid") * unit
+    if values.size <= 2 * margin:
+        raise ValueError(
+            f"{values.size} rows leave nothing inside a margin of {margin} at each end."
+        )
+    blurred = np.convolve(np.pad(values, half), kernel, mode="valid")
+    return blurred[margin:values.size - margin] * unit
+
+
+def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u.Quantity,
+                           sequence) -> tuple:
+    """
+    Photons in each pixel of a frame, as :func:`~euvst_response.readout.expose`
+    gives them, and the wavelength that carries their mean energy.
+
+    Without a shutter a pixel holds photons from every row its charge crossed,
+    and :func:`detect` needs their mean energy to turn them into electrons.
+    ``expose`` is linear in the rate, so exposing the energy-weighted rate
+    gives the energy each pixel holds, and dividing by the photons gives the
+    mean.  A pixel with no photons keeps its own row's wavelength, and a
+    parallel overscan pixel with none the last image row's.
+
+    Parameters
+    ----------
+    rate : np.ndarray
+        Photons per second reaching each pixel of one CCD, ``(n_rows, n_columns)``.
+    wavelength : u.Quantity
+        The wavelength each row records, one per row.
+    exposure, sequence
+        As for ``expose``.
+
+    Returns
+    -------
+    photons : np.ndarray
+        Photons per pixel, ``(n_rows + parallel_overscan_rows, n_columns)``.
+    wavelength : u.Quantity
+        The wavelength of their mean energy, the same shape.
+    """
+    rate = np.asarray(rate, dtype=float)
+    own = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
+    if rate.ndim != 2 or own.shape != (rate.shape[0],):
+        raise ValueError(
+            f"One wavelength per row: got {own.shape} for a rate of {rate.shape}."
+        )
+    hc = (const.h * const.c).to_value(u.erg * u.Angstrom)
+    photons = expose(rate, exposure, sequence)
+    energy = expose(rate * (hc / own)[:, np.newaxis], exposure, sequence)
+    fallback = np.concatenate([own, np.full(photons.shape[0] - own.size, own[-1])])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean = np.where(photons > 0, hc * photons / energy, np.nan)
+    return photons, np.where(np.isfinite(mean), mean, fallback[:, np.newaxis]) * u.Angstrom
 
 
 def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, det,
@@ -288,7 +379,8 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         The wavelength of the photons in each row, one per row, or one per
         pixel as an array the shape of *photons*.  Without a shutter a pixel
         holds photons from every row its charge crossed, and the per-pixel
-        form takes the wavelength that carries their mean energy.
+        form takes the wavelength that carries their mean energy, as
+        :func:`expose_with_wavelength` gives it.
     dark_time : u.Quantity
         How long each row collects dark current, one per row or one for all.
         :func:`euvst_response.readout.dark_current_time` gives it.

@@ -108,7 +108,7 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     return _THROUGHPUT_TABLES[key]
 
 
-def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray):
+def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float | np.ndarray:
     """Linear interpolation: a float for one wavelength, an array for several."""
     f = scipy.interpolate.interp1d(wl_tab, tr_tab, bounds_error=False, fill_value=np.nan)
     out = f(wavelength_nm)
@@ -191,8 +191,8 @@ class AluminiumFilter:
     c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
 
-    def total_throughput(self, wl0: u.Quantity) -> float:
-        """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them."""
+    def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
+        """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""
         wl_nm = wl0.to_value(u.nm)
         wl_al, tr_al = _load_throughput_table(self.al_table)
         wl_ox, tr_ox = _load_throughput_table(self.oxide_table)
@@ -313,43 +313,45 @@ class Telescope_EUVST:
     def collecting_area(self) -> u.Quantity:
         return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
 
-    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float:
+    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate wavelength-dependent primary mirror efficiency.
-        
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Primary mirror efficiency (dimensionless)
+        float or np.ndarray
+            Primary mirror efficiency (dimensionless), one per wavelength
+            for an array.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_pm, eff_pm = _load_throughput_table(self.pm_table)
         return _interp_tr(wl_nm, wl_pm, eff_pm)
 
-    def grating_efficiency(self, wl0: u.Quantity) -> float:
+    def grating_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate wavelength-dependent grating efficiency.
-        
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Grating efficiency (dimensionless)
+        float or np.ndarray
+            Grating efficiency (dimensionless), one per wavelength for an
+            array.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_grat, eff_grat = _load_throughput_table(self.grating_table)
         return _interp_tr(wl_nm, wl_grat, eff_grat)
 
-    def microroughness_efficiency(self, wl0: u.Quantity) -> float:
+    def microroughness_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate the efficiency reduction due to primary mirror microroughness.
         
@@ -362,12 +364,13 @@ class Telescope_EUVST:
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Microroughness efficiency factor (dimensionless)
+        float or np.ndarray
+            Microroughness efficiency factor (dimensionless), one per
+            wavelength for an array.
         """
         # Convert both wavelength and sigma to the same units (nm for convenience)
         wl_nm = wl0.to(u.nm)
@@ -379,7 +382,7 @@ class Telescope_EUVST:
         # Return exp(-(4*pi*sigma/lambda)^2)  [Debye-Waller specular efficiency]
         return np.exp(-roughness_term.value)
 
-    def throughput(self, wl0: u.Quantity) -> float:
+    def throughput(self, wl0: u.Quantity) -> u.Quantity:
         """
         Calculate total telescope throughput including wavelength-dependent efficiencies.
 
@@ -390,9 +393,9 @@ class Telescope_EUVST:
 
         Returns
         -------
-        float
-            Total telescope throughput (dimensionless), one per wavelength
-            for an array.
+        u.Quantity
+            Total telescope throughput, dimensionless: one value, or one per
+            wavelength for an array.
         """
         # Get wavelength-dependent efficiencies
         pm_eff_wl = self.primary_mirror_efficiency(wl0)

@@ -350,15 +350,6 @@ class ReadoutSequence:
         """How long clearing the image area takes."""
         return (self.dump_rows * self.row_transfer_time).to(u.s)
 
-    def time_until_read(self, n_rows: int) -> np.ndarray:
-        """
-        Seconds from the end of the exposure until each row reaches the serial
-        register, for the image rows and then the parallel overscan rows.  A row
-        collects dark current for this long after its exposure ends, whether or
-        not there is a shutter.
-        """
-        return np.cumsum(self.dwell(n_rows))
-
 
 def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
                              ranges: Sequence[Tuple[u.Quantity, u.Quantity]],
@@ -471,11 +462,27 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
 def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
                       n_rows: int) -> u.Quantity:
     """
-    How long each row accumulates dark current, from the clear to its read-out.
+    How long each packet of a frame collects dark current, for the image rows
+    and then the parallel overscan rows.
 
-    This is the exposure plus the time the row waits while the rows before it
-    are read, and it applies with a shutter as well as without one: the chip is
-    dark then, but not cold.  Rows read late in a windowed frame wait longest.
+    A packet collects dark current in whichever pixel it sits, so this is the
+    time it spends in the image area, the same time :func:`smear_photons`
+    gives it light for.  An image row's packet is clocked into place during
+    the clear, sits through the exposure, and waits while the rows before it
+    are read; a parallel overscan packet only crosses the image area during
+    the read-out.  None of that needs light, so it is the same with a shutter
+    as without one.  The serial register's own dark current is not included.
     """
-    waiting = sequence.time_until_read(n_rows)
-    return (u.Quantity(exposure).to_value(u.s) + waiting) * u.s
+    dwell = sequence.dwell(n_rows)
+    packets = np.arange(n_rows + sequence.parallel_overscan_rows)
+    image = packets < n_rows
+    # The read-out: every dwell before the packet's own, back to the one in
+    # which it came in at the top of the image area.
+    elapsed = np.concatenate([[0.0], np.cumsum(dwell)])
+    reading = elapsed[packets] - elapsed[np.maximum(packets - n_rows, 0)]
+    # The clear: one row transfer at each row above its own on the way down,
+    # as far as the clear reaches.
+    above = np.where(image, n_rows - 1 - packets, 0)
+    clear = np.minimum(sequence.dump_rows, above) * sequence.row_transfer_time.to_value(u.s)
+    exposed = np.where(image, u.Quantity(exposure).to_value(u.s), 0.0)
+    return (clear + exposed + reading) * u.s

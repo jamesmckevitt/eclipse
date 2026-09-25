@@ -368,10 +368,30 @@ def test_a_flare_line_smears_into_the_rows_beyond_it():
 
 
 def test_dark_current_time_grows_down_the_frame():
-    sequence = small_sequence()
+    sequence = small_sequence(dump_rows=6)
     times = dark_current_time(2.0 * u.s, sequence, 6).to_value(u.s)
-    assert np.all(np.diff(times) > 0)
-    assert times[0] == pytest.approx(2.0 + 15.0e-6 + 10 * 500e-9)
+    # The clear brings row 0's packet down past the five rows above it, and
+    # row 0 is read first. Each later row waits for one more read, 15 us of
+    # transfer and 10 samples of 500 ns, and spends one transfer less in the
+    # clear.
+    assert times[0] == pytest.approx(2.0 + 5 * 15.0e-6)
+    assert np.diff(times[:6]) == pytest.approx(np.full(5, 10 * 500e-9))
+    # The overscan packets come in after the exposure and cross all six rows.
+    assert times[6:] == pytest.approx(np.full(2, 6 * (15.0e-6 + 10 * 500e-9)))
+
+
+@pytest.mark.parametrize("windows", [[], [(2, 3)]])
+@pytest.mark.parametrize("dump_rows", [0, 3, 6, 10])
+def test_a_packet_collects_dark_current_wherever_it_collects_light(windows, dump_rows):
+    # Lit evenly at one photon a second, a packet collects outside the
+    # exposure one photon for each second it spends in the image area then,
+    # which is its dark time less the exposure.
+    sequence = small_sequence(windows=windows, dump_rows=dump_rows)
+    n_rows, exposure = 6, 2.0
+    smear = smear_photons(np.ones((n_rows, 1)), sequence)[:, 0]
+    dark = dark_current_time(exposure * u.s, sequence, n_rows).to_value(u.s)
+    exposed = np.where(np.arange(dark.size) < n_rows, exposure, 0.0)
+    np.testing.assert_allclose(dark, smear + exposed, rtol=1e-9, atol=1e-15)
 
 
 def test_a_sequence_rejects_a_backwards_window():

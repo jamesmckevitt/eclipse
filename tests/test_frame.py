@@ -26,6 +26,7 @@ from euvst_response.frame import (
     apply_spectral_psf,
     detect,
     digitise,
+    expose_with_wavelength,
     photons_from_lines,
     photons_from_spectrum,
     pixel_solid_angle,
@@ -37,7 +38,7 @@ from euvst_response.radiometric import (
     spectral_psf_reach,
     to_electrons,
 )
-from euvst_response.readout import FocalPlane_SWC
+from euvst_response.readout import FocalPlane_SWC, ReadoutSequence, expose
 from euvst_response.utils import _fwhm_to_sigma
 
 H_ERG_S = 6.62607015e-27
@@ -218,6 +219,75 @@ def test_a_frame_is_blurred_as_a_synthesis_is(slit, spectral_psf):
     np.testing.assert_allclose(frame.value, synthesis.data[0, 0], rtol=1e-12, atol=1e-15)
 
 
+def test_light_blurred_off_the_end_of_the_rows_is_lost():
+    # Nothing lies beyond the rows given, so an impulse in the first row keeps
+    # the half of the response that lands on them, and its centre.
+    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    edge = apply_spectral_psf(np.eye(61)[0] / u.s, telescope, det, slit).value
+    centre = apply_spectral_psf(np.eye(61)[30] / u.s, telescope, det, slit).value.max()
+    assert edge.sum() == pytest.approx((1.0 + centre) / 2.0, rel=1e-12)
+
+
+def test_the_edge_rows_get_the_light_from_just_off_the_chip():
+    # A line in the gap, two rows past the left CCD's butted edge, still
+    # reaches its last rows through the spectral response.
+    fp = FocalPlane_SWC()
+    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    reach = spectral_psf_reach(telescope, det, slit)
+    line = ([fp.wavelength(fp.n_rows + 1, "left").to_value(u.Angstrom)] * u.Angstrom,
+            [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.001] * u.Angstrom)
+
+    def on_chip(margin):
+        rows = photons_from_lines(fp, "left", StubTelescope(), slit, *line,
+                                  lit_only=False, margin=margin)
+        return rows, apply_spectral_psf(rows, telescope, det, slit, margin=margin).value
+
+    rows, blurred = on_chip(reach)
+    without, _ = on_chip(0)
+    assert rows.size == fp.n_rows + 2 * reach
+    np.testing.assert_array_equal(rows[reach:-reach].value, without.value)
+    assert without.value[-1] < 1e-6 * rows.value.max()
+    assert blurred.size == fp.n_rows
+    assert blurred[-1] > 0.05 * rows.value.max()
+    # Any margin that reaches as far as the response gives the same rows.
+    np.testing.assert_allclose(on_chip(3 * reach)[1], blurred, rtol=1e-12, atol=0)
+
+
+def test_a_margin_has_to_reach_as_far_as_the_response():
+    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    with pytest.raises(ValueError, match="less than the"):
+        apply_spectral_psf(np.ones(100) / u.s, telescope, det, slit, margin=1)
+    with pytest.raises(ValueError, match="baffle comes after"):
+        photons_from_lines(FocalPlane_SWC(), "left", StubTelescope(), slit,
+                           [195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
+                           [0.02] * u.Angstrom, margin=5)
+
+
+def test_each_pixel_gets_the_wavelength_of_its_mean_photon_energy():
+    # Two rows lit at different wavelengths. Without a shutter a packet
+    # collects from both, and since a photon carries h c / lambda the
+    # wavelength of the mean energy is the photon-weighted harmonic mean.
+    n_rows = 8
+    wavelength = np.linspace(170.0, 210.0, n_rows) * u.Angstrom
+    first, second = np.zeros((n_rows, 1)), np.zeros((n_rows, 1))
+    first[5], second[2] = 100.0, 40.0
+    sequence = ReadoutSequence(shutter=False, dump_rows=n_rows, parallel_overscan_rows=2)
+    photons, mean = expose_with_wavelength(first + second, wavelength, 1.0 * u.s, sequence)
+    a, b = (expose(rate, 1.0 * u.s, sequence) for rate in (first, second))
+    # The smear is convolved by FFT, so pixels holding only smear carry
+    # rounding of order 1e-16 of the brightest pixel.
+    np.testing.assert_allclose(photons, a + b, rtol=1e-9)
+    lam = wavelength.to_value(u.Angstrom)
+    expected = (a + b) / (a / lam[5] + b / lam[2])
+    np.testing.assert_allclose(mean.to_value(u.Angstrom), expected, rtol=1e-9)
+    # With a shutter the lit rows keep their own wavelength, and a pixel with
+    # no photons its row's, or the last image row's in the overscan.
+    sequence = ReadoutSequence(shutter=True, dump_rows=n_rows, parallel_overscan_rows=2)
+    photons, mean = expose_with_wavelength(first + second, wavelength, 1.0 * u.s, sequence)
+    np.testing.assert_allclose(mean.to_value(u.Angstrom)[:, 0],
+                               np.concatenate([lam, [lam[-1]] * 2]), rtol=1e-12)
+
+
 def test_the_spectral_psf_refuses_an_unknown_mode():
     with pytest.raises(ValueError, match="quadrature"):
         apply_spectral_psf(np.ones(10) / u.s, Telescope_EUVST(), Detector_SWC(),
@@ -261,6 +331,14 @@ def test_the_telescope_gives_a_spectrum_the_area_at_each_wavelength():
     one_by_one = [telescope.ea_and_throughput(w).to_value(u.cm**2) for w in wavelength]
     assert together.shape == (9,)
     np.testing.assert_allclose(together, one_by_one, rtol=1e-14, atol=0)
+    # Every stage answers an array with one value per wavelength.
+    assert telescope.throughput(wavelength).unit == u.dimensionless_unscaled
+    assert telescope.throughput(wavelength).shape == (9,)
+    assert telescope.filter.total_throughput(wavelength).shape == (9,)
+    for stage in (telescope.primary_mirror_efficiency, telescope.grating_efficiency,
+                  telescope.microroughness_efficiency):
+        assert np.shape(stage(wavelength)) == (9,)
+        assert np.ndim(stage(wavelength[0])) == 0
 
 
 def test_the_throughput_tables_are_read_once(monkeypatch):

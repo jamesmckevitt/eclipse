@@ -40,7 +40,7 @@ tilted.row_of_wavelength(195.119 * u.Angstrom, column=1904)   # ('left', 1863.3)
 
 !!! warning "The dark rows are an assumption, not a measurement"
 
-    No drawing dimensions the baffle. The documents put the edge within a few rows of the band limits, so `lit_rows` is good to about four rows on the left CCD and seven on the right, and the real vignetting is gradual rather than a step.
+    The drawings do not give the baffle's dimensions, only that its edge is within a few rows of the band limits. `lit_rows` is therefore uncertain by about four rows on the left CCD and seven on the right, and the real vignetting is gradual rather than a step.
 
 ## The read-out
 
@@ -74,56 +74,60 @@ A frame is cleared, exposed, then read row by row. Rows inside a window go throu
 ```python
 from euvst_response.config import Detector_SWC, Telescope_EUVST
 from euvst_response.frame import apply_spectral_psf, photons_from_lines, thermal_width
+from euvst_response.radiometric import spectral_psf_reach
 
-telescope, det = Telescope_EUVST(), Detector_SWC()
+telescope, det, slit = Telescope_EUVST(), Detector_SWC(), 0.4 * u.arcsec
 width = thermal_width(192.030 * u.Angstrom, 1.8e7 * u.K, 55.845 * u.u)     # Fe XXIV where it forms
+margin = spectral_psf_reach(telescope, det, slit)       # rows past each end of the chip, for the blur
 
-rows = photons_from_lines(fp, "left", telescope, 0.4 * u.arcsec,
+rows = photons_from_lines(fp, "left", telescope, slit,
                           [192.030] * u.Angstrom,
-                          [5.3e4] * u.erg / (u.s * u.cm**2 * u.sr), [width])
-rows = apply_spectral_psf(rows, telescope, det, 0.4 * u.arcsec)     # the spectral response for this slit
+                          [5.3e4] * u.erg / (u.s * u.cm**2 * u.sr), [width],
+                          lit_only=False, margin=margin)
+rows = apply_spectral_psf(rows, telescope, det, slit, margin=margin).to_value(1 / u.s)
+first, last = fp.lit_rows("left")                       # the baffle comes after the grating
+rows[:first] = 0.0
+rows[last + 1:] = 0.0
 ```
 
 - `photons_from_lines`: a list of lines, each a Gaussian of the given 1-sigma width as the Sun emits it, integrated between the row boundaries so that its flux is conserved wherever it falls.
 - `photons_from_spectrum`: a spectrum already on a wavelength grid, such as a continuum, integrated between the row boundaries by trapezium rule.
-- Both zero the rows the baffle keeps dark unless `lit_only=False`, and take a `column` for a focal plane with the slit image tilt switched on.
-- `apply_spectral_psf`: blurs the rows with the spectral response a synthesis through the same slit gets from `radiometric.apply_focusing_optics_psf`, conserving flux. The slit's image is part of it, so it widens with the slit: 2.54 rows of FWHM for the 0.2 arcsec slit and 3.35 for the 0.4 arcsec one. Its last argument is `spectral_psf`, `"quadrature"` (the default) or `"convolution"`, as in the configuration.
+- Both take a `column` for a focal plane with the slit image tilt switched on. By default they zero the rows the baffle keeps dark themselves, but the baffle is after the grating, so a spectrum that is to be blurred is laid with `lit_only=False` and cut after the blur, as above.
+- `apply_spectral_psf`: blurs the rows with the spectral response a synthesis through the same slit gets from `radiometric.apply_focusing_optics_psf`. The slit's image is part of it, so it widens with the slit: 2.54 rows of FWHM for the 0.2 arcsec slit and 3.35 for the 0.4 arcsec one. `spectral_psf` is `"quadrature"` (the default) or `"convolution"`, as in the configuration.
+- Nothing is assumed beyond the rows `apply_spectral_psf` is given, and the chip's edge rows do receive light from just off it, from across the gap at the butted edge in particular. So the spectrum is laid with a `margin` of rows past each end, at least `spectral_psf_reach`, and `apply_spectral_psf` given the same margin returns the chip's own rows.
 
-`expose` then takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together. Feed the result to the detector stages in `radiometric` in place of the exposure-only photon count.
+`expose` then takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together.
 
 ```python
 import numpy as np
 from euvst_response.readout import expose
 
-rate = np.repeat(rows.value[:, np.newaxis], fp.n_columns, axis=1)   # the same along the slit
+rate = np.repeat(rows[:, np.newaxis], fp.n_columns, axis=1)   # the same along the slit
 
 frame = expose(rate, 1.0 * u.s, sequence)       # photons, including the parallel overscan rows
 ```
 
 The frame has `parallel_overscan_rows` more rows than the image area. With a shutter, the smear is zero and those rows are empty.
 
-`dark_current_time` gives how long each row accumulates dark current, from the clear to its own read-out. That is longer than the exposure whether or not there is a shutter, and longest for the rows read last.
+`dark_current_time` gives how long each packet collects dark current, which is how long it spends in the image area: its part of the clear, the exposure, and the wait while the rows before it are read, or for a parallel overscan packet its crossing of the chip during the read-out. It is the same with a shutter as without one, and longest for the rows read last.
 
-`detect` and `digitise` in `euvst_response.frame` take the frame through the detector stages of `radiometric`, to electrons and then DN, with two things a full-band frame needs: a photon energy for each row, since a 170 A photon liberates a fifth more electrons than a 212 A one, and a dark current time for each row.
+`detect` and `digitise` in `euvst_response.frame` take the frame through the detector stages of `radiometric`, to electrons and then DN, with two things a full-band frame needs: a dark current time for each row, and a photon energy for each pixel, since a 170 A photon liberates a fifth more electrons than a 212 A one. Without a shutter a pixel holds photons from every row its charge crossed, so its energy is the mean of what it holds. `expose` is linear in the rate, so `expose_with_wavelength` exposes the energy-weighted rate alongside the photons and gives each pixel the wavelength of that mean.
 
 ```python
-from euvst_response.config import Detector_SWC
-from euvst_response.frame import detect, digitise
+from euvst_response.frame import detect, digitise, expose_with_wavelength
 from euvst_response.readout import dark_current_time
 
-det = Detector_SWC()
-photons = np.random.poisson(frame)
 wavelength = fp.wavelength(np.arange(fp.n_rows), "left")
-wavelength = np.concatenate([wavelength, np.repeat(wavelength[-1:], sequence.parallel_overscan_rows)])
+frame, pixel_wavelength = expose_with_wavelength(rate, wavelength, 1.0 * u.s, sequence)
 
-electrons = detect(photons, wavelength, dark_current_time(1.0 * u.s, sequence, fp.n_rows), det)
+photons = np.random.poisson(frame)
+electrons = detect(photons, pixel_wavelength, dark_current_time(1.0 * u.s, sequence, fp.n_rows), det)
 dn = digitise(electrons, det)
 ```
-
-Without a shutter a pixel holds photons from every row its charge crossed, so `detect` also accepts a wavelength per pixel, for the one that carries the mean energy of what the pixel holds. `expose` is linear in the rate, so exposing the energy-weighted rate and dividing by the photons gives that mean.
 
 ## What is not modelled
 
 - **Blooming.** A saturated line spills along the column, which is the same axis as the smear. The CCDs have no anti-blooming, and the full well, `Detector_SWC.full_well`, is 150 ke- (typical in non-inverted mode; 80 ke- at the least), below the 182 ke- the FEE accepts, so in a flare a pixel fills before the digitiser does. Nothing is clipped or spilled at the full well: it says which pixels a frame would saturate.
 - **The shutter in motion.** The shutter takes about 30 ms to open and the same to close, and light falls during both.
 - **Vignetting shape.** The edge of the illuminated area is treated as a step.
+- **Dark current in the serial register.** A packet collects dark current while it is in the image area, not while it is read.
