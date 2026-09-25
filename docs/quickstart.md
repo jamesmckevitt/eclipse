@@ -27,7 +27,7 @@ those two commands. A minimal one that reads what the synthesis just wrote:
 
 ```yaml
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.pkl
+synthesis_file: ./run/input/synthesised_spectra.h5
 reference_line: Fe12_195.1190
 n_iter: 100
 

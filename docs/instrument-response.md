@@ -2,7 +2,7 @@
 
 This is the second stage of a run. It takes the spectra produced when you [synthesised an atmosphere](index.md#how-eclipse-works), puts them through the telescope and detector, adds the noise, and fits the result the same way you would fit real data. Because the noise is random, a Monte Carlo simulation gives a distribution of measured intensities, velocities, and line widths to compare against the known truth.
 
-To observe a series of atmosphere files instead, see [Simulating a time series](time-series.md). The rest of this page applies to that too.
+To observe a series of atmosphere files instead, see [Simulating a time series](time-series.md), and for spectra that another code synthesised, [From another code](other-codes.md). The rest of this page applies to those too.
 
 ## Choosing an instrument
 
@@ -72,14 +72,13 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 **Top-level keys**:
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
-- `synthesis_file`: path to the synthesised spectra pickle file
-- `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
+- `synthesis_file`: the synthesis file to observe, from ECLIPSE's own synthesis or [another code](other-codes.md) (default `./run/input/synthesised_spectra.h5`). Pickles written by ECLIPSE 0.11.0 and earlier are still read, with a warning
+- `reference_line`: spectral line used as the wavelength-grid reference (default: the file's only line if it has one, otherwise `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
-- `spectra_file`, `rest_wavelength`: spectra another code has synthesised (alternative to a synthesis file), see [Spectra from another code](other-codes.md)
 - `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [Simulating a time series](time-series.md)
 
 Here's a complete example configuration file:
@@ -87,7 +86,7 @@ Here's a complete example configuration file:
 ```yaml
 # Input
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.pkl
+synthesis_file: ./run/input/synthesised_spectra.h5
 reference_line: Fe12_195.1190
 
 # Global settings (apply to all combinations)

@@ -27,6 +27,7 @@ from euvst_response.raster import (
     RasterSynthesiser,
     SynthesisSettings,
 )
+from euvst_response.synthesis_file import load_synthesis
 from euvst_response.utils import angle_to_distance
 
 LINE = "Fe12_195.1190"
@@ -310,11 +311,10 @@ def test_a_static_atmosphere_one_cell_wide_synthesises(tmp_path, monkeypatch):
     path = write_atmosphere(column, tmp_path / "column.h5")
     monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(path),
                                       "--lines", LINE, "--output-dir", str(tmp_path / "out"),
-                                      "--output-name", "column.pkl"])
+                                      "--output-name", "column.h5"])
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
-    with open(tmp_path / "out" / "column.pkl", "rb") as f:
-        cube = dill.load(f)["line_cubes"][LINE]
+    cube = load_synthesis(tmp_path / "out" / "column.h5")["line_cubes"][LINE]
     assert cube.data.shape[:2] == (6, 1)
     assert cube.wcs.wcs.cdelt[1] == pytest.approx(CELL.value)
     assert cube.axis_world_coords(1)[0].to_value(u.Mm) == pytest.approx([0.0])

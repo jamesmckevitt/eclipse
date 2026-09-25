@@ -26,6 +26,7 @@ from euvst_response import synthesis
 from euvst_response.analysis import load_instrument_response_results
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.data_processing import load_atmosphere
+from euvst_response.synthesis_file import load_synthesis
 from euvst_response.utils import VELOCITY_CONVENTION
 
 LINE = "Fe12_195.1190"
@@ -93,7 +94,7 @@ def _synthesise(tmp_path, monkeypatch, axis, extra=()):
     argv = [
         "synthesise-spectra",
         "--output-dir", str(tmp_path / "out"),
-        "--output-name", f"{axis}.pkl",
+        "--output-name", f"{axis}.h5",
         "--lines", LINE,
         "--mean-mol-wt", str(MEAN_MOL_WT),
         "--integration-axis", axis,
@@ -110,12 +111,11 @@ def _synthesise(tmp_path, monkeypatch, axis, extra=()):
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
-    return tmp_path / "out" / f"{axis}.pkl"
+    return tmp_path / "out" / f"{axis}.h5"
 
 
 def _load(path):
-    with open(path, "rb") as f:
-        return dill.load(f)
+    return load_synthesis(path)
 
 
 def _doppler_velocity(cube):
@@ -194,14 +194,15 @@ def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wro
     """Views along y kept their sign, so older ones are still right and still load."""
     _write_muram_files(tmp_path / "atmosphere", {})
     path = _synthesise(tmp_path, monkeypatch, axis)
-    cube, _ = load_atmosphere(str(path))
-    assert cube.meta["velocity_convention"] == VELOCITY_CONVENTION
-
     saved = _load(path)
+    assert saved["config"]["velocity_convention"] == VELOCITY_CONVENTION
+
+    # The same line cubes as a pickle of an older version, which did not
+    # record the convention.
     del saved["line_cubes"][LINE].meta["velocity_convention"]
     old = tmp_path / "old.pkl"
     with open(old, "wb") as f:
-        dill.dump(saved, f)
+        dill.dump({"line_cubes": saved["line_cubes"]}, f)
     if refused:
         with pytest.raises(ValueError, match=f"view along {axis}.*wrong sign"):
             load_atmosphere(str(old))

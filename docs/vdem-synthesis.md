@@ -12,7 +12,7 @@ A DEM carries no velocity information, so the [DEM route](dem-synthesis.md) puts
 
 !!! note "This is not the route for another code's spectra"
 
-    A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer on it, optically thin. If another code has already synthesised the *spectra* from an atmosphere - Lightweaver, RH1.5D, or anything else - that is a different input. The synthesis stage is skipped altogether and the spectra go straight into the instrument simulation as a [spectra file](other-codes.md).
+    A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer on it, optically thin. If another code has already synthesised the *spectra* from an atmosphere - Lightweaver, RH1.5D, or anything else - that is a different input. The synthesis stage is skipped altogether and the spectra go straight into the instrument simulation, written as a [synthesis file](other-codes.md).
 
 ## Minimal example
 

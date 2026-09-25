@@ -15,13 +15,13 @@ import sys
 
 import astropy.constants as const
 import astropy.units as u
-import dill
 import numpy as np
 import pytest
 
 from euvst_response import synthesis
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.synthesis import load_cube
+from euvst_response.synthesis_file import load_synthesis
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -77,7 +77,7 @@ def _atmosphere_file(tmp_path, shape, suffix="0270000"):
 
 def _synthesise(tmp_path, monkeypatch, shape, downsample, extra=()):
     """Run synthesis main() and return what it saved."""
-    output_name = f"out_{downsample}_{len(extra)}.pkl"
+    output_name = f"out_{downsample}_{len(extra)}.h5"
     argv = [
         "synthesise-spectra",
         "--output-dir", str(tmp_path / "out"),
@@ -99,8 +99,7 @@ def _synthesise(tmp_path, monkeypatch, shape, downsample, extra=()):
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
-    with open(tmp_path / "out" / output_name, "rb") as f:
-        return dill.load(f)
+    return load_synthesis(tmp_path / "out" / output_name)
 
 
 def _cdelt(saved):

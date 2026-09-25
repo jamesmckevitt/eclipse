@@ -1,17 +1,20 @@
-# Spectra from another code
+# From another code
 
-If another code has already synthesised the spectra, optically thick or thin, ECLIPSE can take them straight into the instrument simulation without a synthesis step of its own. The spectra go in as a spectra file, which holds the spectral radiance leaving the Sun at each pixel and wavelength, and ECLIPSE works out what EUVST would record from it.
+To simulate the instrument on spectra that another code has synthesised, write them as a synthesis file first, the same HDF5 file ECLIPSE's own synthesis writes, and then observe it as a [single snapshot](instrument-response.md). Any code will do, optically thin or thick, as long as it gives the spectral radiance leaving the Sun at each pixel and wavelength.
 
-## The spectra file
+## The synthesis file
 
-This is an HDF5 file laid out much like an [atmosphere file](synthesis.md#atmosphere-files). The root has a `format` attribute of `eclipse-spectra`, a `version` of `1`, and optionally a `source` saying where the spectra came from. Each dataset has a `unit` attribute that astropy can read.
+The file is laid out much like an [atmosphere file](synthesis.md#atmosphere-files). The root has a `format` attribute of `eclipse-synthesis`, a `version` of `1`, and optionally a `source` saying where the spectra came from. Each dataset has a `unit` attribute that astropy can read.
 
 | Dataset | Shape | What it holds |
 | --- | --- | --- |
-| `intensity` | `(ny, nx, n_wavelength)` | The spectral radiance at each pixel and wavelength |
-| `wavelength` | `(n_wavelength,)` | The wavelengths, increasing |
 | `x_edges` | `(nx + 1,)` | The pixel boundaries across the slit, evenly spaced |
 | `y_edges` | `(ny + 1,)` | The pixel boundaries along the slit, evenly spaced |
+| `lines/<name>/intensity` | `(ny, nx, n_wavelength)` | The spectral radiance at each pixel and wavelength |
+| `lines/<name>/wavelength` | `(n_wavelength,)` | The wavelengths, increasing |
+| `lines/<name>/rest_wavelength` | scalar | The wavelength the line's Doppler shifts are measured from |
+
+Each group under `lines` holds a line, named as `reference_line` names it in the instrument configuration. It can equally hold a whole spectral window with its blends, as most codes give it. ECLIPSE's own synthesis writes a group for each line, and a `synthesis` group of what it worked out on the way, which the instrument run does not read.
 
 The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons: `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)` all work. The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores, as Lightweaver and RH1.5D use, can go in as it is.
 
@@ -21,29 +24,31 @@ x runs across the slit, the direction a raster steps in, and y runs along it. Th
 
 ```python
 import astropy.units as u
-from euvst_response import Spectra, edges_from_centres, write_spectra
+from euvst_response import SpectralLine, Synthesis, edges_from_centres, write_synthesis
 
 # intensity[y, x, wavelength] from your code, with its wavelengths and pixel centres
-spectra = Spectra(
-    intensity=intensity * u.erg / (u.s * u.cm**2 * u.sr * u.AA),
-    wavelength=wavelength * u.AA,
+synthesis = Synthesis(
+    lines={"Fe12_195.1190": SpectralLine(
+        intensity=intensity * u.erg / (u.s * u.cm**2 * u.sr * u.AA),
+        wavelength=wavelength * u.AA,
+        rest_wavelength=195.119 * u.AA,
+    )},
     x_edges=edges_from_centres(x * u.Mm),
     y_edges=edges_from_centres(y * u.Mm),
     source="My code, snapshot 1200",
 )
-write_spectra(spectra, "spectra.h5")
+write_synthesis(synthesis, "my_code.h5")
 ```
 
 Any other HDF5 writer works too, as long as the attributes and units are there.
 
 ## Observing it
 
-In the instrument configuration, `spectra_file` takes the place of `synthesis_file`, and `rest_wavelength` gives the rest wavelength of the line whose velocity is measured:
+The instrument configuration names the file as `synthesis_file`, as it would ECLIPSE's own:
 
 ```yaml
 instrument: SWC
-spectra_file: ./spectra.h5
-rest_wavelength: 195.119 AA
+synthesis_file: ./my_code.h5
 n_iter: 100
 
 simulation:
@@ -53,12 +58,12 @@ simulation:
 ```
 
 ```bash
-eclipse --config spectra.yaml
+eclipse --config my_code.yaml
 ```
 
-The rest of the configuration is as for [a single snapshot](instrument-response.md). ECLIPSE resamples the spectra onto the detector's wavelength pixels, keeping the total intensity, and lays the pixels onto the slit and the plate scale as it does with its own synthesis.
+A file of one line needs no `reference_line`; one of several needs it to say which to observe. The rest of the configuration is as for [a single snapshot](instrument-response.md). ECLIPSE resamples the spectra onto the detector's wavelength pixels, keeping the total intensity, and lays the pixels onto the slit and the plate scale as it does with its own synthesis.
 
-The fit covers the whole wavelength range of the file, so give one spectral window per file, with room around the line for its Doppler shifts and the instrument's blurring. ECLIPSE's own windows reach 300 km/s either side of the line. Blends in the window are fitted with a `fitting` block, as for a synthesis file.
+The fit covers the wavelengths of the line it measures, and whatever other lines reach into them, so leave room around the line for its Doppler shifts and the instrument's blurring. ECLIPSE's own windows reach 300 km/s either side of the line. Blends in the window are fitted with a `fitting` block, as for ECLIPSE's own synthesis.
 
 The Doppler shifts are taken as they are in the spectra, so a redshift should be a motion away from the observer.
 
@@ -78,14 +83,14 @@ Object.render(0, M_PI);  // the viewing angles l and b; see below
 
 A window of 600000 m/s reaches 300 km/s either side of the line, as ECLIPSE's own windows do, and 121 wavelengths put the points 5 km/s apart, much finer than EUVST's pixels.
 
-Then read the rendering into a spectra file:
+Then read the rendering into a synthesis file:
 
 ```python
 import gzip
 
 import astropy.units as u
 import numpy as np
-from euvst_response import Spectra, edges_from_centres, write_spectra
+from euvst_response import SpectralLine, Synthesis, edges_from_centres, write_synthesis
 
 
 def read_fomo(path):
@@ -107,8 +112,8 @@ def read_fomo(path):
                          position).reshape(dim + n_vars, n_points).astype(float)
 
 
-def fomo_spectra(path, x_pixel, y_pixel, lambda_pixel):
-    """A FoMo-C rendering as Spectra, given the resolution it was rendered with."""
+def fomo_synthesis(path, x_pixel, y_pixel, lambda_pixel, line, rest_wavelength):
+    """A FoMo-C rendering of *line* as a Synthesis, given the resolution it was rendered with."""
     x, y, wavelength, intensity = read_fomo(path)
     shape = (y_pixel, x_pixel, lambda_pixel)  # FoMo's own order: y, then x, then wavelength
     # FoMo's image is the mirror image of the view along its line of sight,
@@ -116,41 +121,40 @@ def fomo_spectra(path, x_pixel, y_pixel, lambda_pixel):
     x = -x.reshape(shape)[0, ::-1, 0]
     y = y.reshape(shape)[:, 0, 0]
     wavelength = wavelength.reshape(shape)[0, 0, :]
-    return Spectra(
+    spectra = SpectralLine(
         # FoMo labels its spectra erg cm^-2 s^-1 A^-1, but they are per
         # steradian: its CHIANTI tables include the 1/(4 pi).
         intensity=intensity.reshape(shape)[:, ::-1, :] * u.erg / (u.s * u.cm**2 * u.sr * u.AA),
         # FoMo writes single precision, so its even grids come back slightly
         # uneven; they are rebuilt from their ends.
         wavelength=np.linspace(wavelength[0], wavelength[-1], lambda_pixel) * u.AA,
+        rest_wavelength=rest_wavelength,
+    )
+    return Synthesis(
+        lines={line: spectra},
         x_edges=edges_from_centres(np.linspace(x[0], x[-1], x_pixel) * u.Mm),
         y_edges=edges_from_centres(np.linspace(y[0], y[-1], y_pixel) * u.Mm),
-        source="FoMo, Fe XII 195.119",
+        source=f"FoMo, {line}",
     )
 
 
-spectra = fomo_spectra("fomo-output.txt", x_pixel=128, y_pixel=128, lambda_pixel=121)
-write_spectra(spectra, "fomo.h5")
+# The rest wavelength is the one on the second line of the FoMo table.
+synthesis = fomo_synthesis("fomo-output.txt", x_pixel=128, y_pixel=128, lambda_pixel=121,
+                           line="Fe12_195.1190", rest_wavelength=195.119 * u.AA)
+write_synthesis(synthesis, "fomo.h5")
 ```
 
-FoMo writes text unless told otherwise, and binary with `setwriteoutbinary()`, as in its own example; `read_fomo` reads either, zipped or not.
-
-In the configuration, `rest_wavelength` is the wavelength on the second line of the FoMo table the line was rendered with, 195.119 Angstrom for `goft_table_fe_12_0195_abco.dat`:
-
-```yaml
-spectra_file: ./fomo.h5
-rest_wavelength: 195.119 AA
-```
+FoMo writes text unless told otherwise, and binary with `setwriteoutbinary()`, as in its own example; `read_fomo` reads either, zipped or not. The file then goes into the instrument configuration as `synthesis_file: ./fomo.h5`.
 
 A few things to know about FoMo's side:
 
 - FoMo shifts a line to the red for a flow along its line of sight, which points away from the observer. For a simulation with height along z, `render(0, 0)` looks up from below, and `render(0, M_PI)` looks down from above, with upflows blueshifted.
-- FoMo renders one line at a time. For a window with blends, render each line on the same window and add them before writing the file.
+- FoMo renders one line at a time. For a window with blends, render each line on the same window, as its own line of the synthesis file or added into one.
 - FoMo's tables come from an older CHIANTI than ECLIPSE's own synthesis uses. On a block of the [Bifrost snapshot](synthesis.md#worked-example-bifrost-quiet-sun) from the synthesis page, FoMo's Fe XII 195 came out about 25 per cent fainter than ECLIPSE's synthesis of the same cells with the same abundances, with the same Doppler shifts to within about 0.5 km/s.
 
 ## Worked example: PINTofALE
 
-[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem-synthesis.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a spectra file.
+[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem-synthesis.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a synthesis file.
 
 In IDL, with PINTofALE set up as usual:
 
@@ -177,7 +181,7 @@ import numpy as np
 from mendeleev import element
 from scipy.io import readsav
 from scipy.special import erf
-from euvst_response import Spectra, write_spectra
+from euvst_response import SpectralLine, Synthesis, write_synthesis
 
 poa = readsav("pintofale_lines.sav")
 rest = np.abs(poa["wvl"]) * u.AA  # PINTofALE marks theoretical wavelengths negative
@@ -203,24 +207,26 @@ for line in np.flatnonzero(poa["flx"] > 0):
     profile = (0.5 * np.diff(erf(z), axis=0) * share).sum(axis=1) / np.diff(edges)
     spectrum += radiance[line] * profile
 
+# The line to measure, at the wavelength PINTofALE has it, to all its digits:
+# the line is placed there, so a rounded one would read as a Doppler shift.
+measured = np.argmin(np.abs(rest - 195.119 * u.AA))
+
 # A DEM has no structure on the sky, so the spectrum is laid over a patch
 # a few slit widths across.
 n = 20
-spectra = Spectra(
-    intensity=np.tile(spectrum, (n, n, 1)),
-    wavelength=0.5 * (edges[1:] + edges[:-1]),
+synthesis = Synthesis(
+    lines={"Fe12_195.1190": SpectralLine(
+        intensity=np.tile(spectrum, (n, n, 1)),
+        wavelength=0.5 * (edges[1:] + edges[:-1]),
+        rest_wavelength=rest[measured],
+    )},
     x_edges=np.arange(n + 1) * 0.1 * u.arcsec,
     y_edges=np.arange(n + 1) * 0.1 * u.arcsec,
     source="PINTofALE, Gaussian DEM",
 )
-write_spectra(spectra, "pintofale.h5")
+write_synthesis(synthesis, "pintofale.h5")
 ```
 
-In the configuration, `rest_wavelength` is the wavelength PINTofALE lists for the line, `abs(wvl)`, to all its digits. The line is placed there, so a rounded value reads as a Doppler shift: 195.119 instead of 195.1193 is 0.5 km/s.
-
-```yaml
-spectra_file: ./pintofale.h5
-rest_wavelength: 195.1193 AA
-```
+The file then goes into the instrument configuration as `synthesis_file: ./pintofale.h5`.
 
 PINTofALE's CHIANTI line database is from CHIANTI 7.1.2. With the same DEM and abundances, its intensities for thirteen lines from O V to Fe XXIV came out within about 5 per cent of ECLIPSE's own for most lines, and within 20 per cent for all of them.

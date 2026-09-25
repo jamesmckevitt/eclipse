@@ -25,7 +25,9 @@ from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
 from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centres,
                          read_atmosphere, write_atmosphere)
-from .spectra import Spectra, read_spectra, write_spectra
+from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, load_synthesis,
+                             read_synthesis, read_synthesis_products, write_line_cubes,
+                             write_synthesis)
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -33,8 +35,7 @@ from .analysis import (
     list_fit_components,
     get_results_for_combination,
     summary_table,
-    create_sunpy_maps_from_combo,
-    get_dem_data_from_results
+    create_sunpy_maps_from_combo
 )
 
 __all__ = [
@@ -57,15 +58,19 @@ __all__ = [
     "edges_from_centres",
     "read_atmosphere",
     "write_atmosphere",
-    "Spectra",
-    "read_spectra",
-    "write_spectra",
+    "SpectralLine",
+    "Synthesis",
+    "convert_synthesis_pickle",
+    "load_synthesis",
+    "read_synthesis_products",
+    "write_line_cubes",
+    "read_synthesis",
+    "write_synthesis",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 
     "list_fit_components",
     "get_results_for_combination",
     "summary_table",
-    "create_sunpy_maps_from_combo",
-    "get_dem_data_from_results"
+    "create_sunpy_maps_from_combo"
 ]

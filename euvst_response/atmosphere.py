@@ -565,8 +565,8 @@ def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
     if name != format_name:
         raise ValueError(
             f"{path} is not an ECLIPSE {kind} file: its 'format' "
-            f"attribute is {name!r}, not {format_name!r}. See the "
-            f"euvst_response.{kind} documentation for the layout.")
+            f"attribute is {name!r}, not {format_name!r}. See ECLIPSE's "
+            f"documentation of the {kind} file for the layout.")
     version = f.attrs.get("version")
     if version is None:
         raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "
@@ -583,16 +583,17 @@ def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
                          f"this ECLIPSE reads version {format_version}.")
 
 
-def _read_dataset(f: h5py.File, name: str,
+def _read_dataset(f: h5py.Group, name: str,
                   columns: Optional[slice] = None,
                   units: Dict[str, u.Unit] = UNITS) -> u.Quantity:
-    """A dataset with its unit; *columns* reads only that slice of a cube's x axis."""
+    """A dataset of a file or of a group in it, with its unit; *columns* reads only that slice of a cube's x axis."""
+    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
     if name not in f:
-        raise ValueError(f"{f.filename} has no '{name}' dataset.")
+        raise ValueError(f"{where} has no '{name}' dataset.")
     dataset = f[name]
     unit = dataset.attrs.get("unit")
     if unit is None:
-        raise ValueError(f"'{name}' in {f.filename} has no 'unit' attribute. "
+        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
                          f"Every dataset needs one, for instance "
                          f"'{units[name]}'.")
     if isinstance(unit, bytes):

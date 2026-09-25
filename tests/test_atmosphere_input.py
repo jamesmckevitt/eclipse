@@ -17,7 +17,6 @@ import types
 
 import astropy.constants as const
 import astropy.units as u
-import dill
 import h5py
 import numpy as np
 import pytest
@@ -39,6 +38,7 @@ from euvst_response.synthesis import (
     create_atmosphere_ndcube,
     load_cube,
 )
+from euvst_response.synthesis_file import load_synthesis
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -95,12 +95,11 @@ def _flat_goft(lines, **kwargs):
 def _synthesise(tmp_path, monkeypatch, name, *options):
     """Run synthesis main() with *options* and return what it saved."""
     argv = ["synthesise-spectra", "--output-dir", str(tmp_path / "out"),
-            "--output-name", f"{name}.pkl", "--lines", LINE, *options]
+            "--output-name", f"{name}.h5", "--lines", LINE, *options]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
-    with open(tmp_path / "out" / f"{name}.pkl", "rb") as f:
-        return dill.load(f)
+    return load_synthesis(tmp_path / "out" / f"{name}.h5")
 
 
 def _intensity(saved):

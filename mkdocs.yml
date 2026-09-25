@@ -31,11 +31,11 @@ nav:
       - From an MHD simulation: synthesis.md
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
-      - From another code: other-codes.md
       - From a single intensity: uniform-intensity.md
   - Simulating the instrument:
       - Single snapshot: instrument-response.md
       - Time series: time-series.md
+      - From another code: other-codes.md
   - Analysing the results: analysing-the-results.ipynb
   - Acknowledgements: acknowledgements.md
 

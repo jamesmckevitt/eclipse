@@ -19,7 +19,8 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
                               pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser
-from .spectra import read_spectra
+from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
+                             synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
@@ -38,7 +39,7 @@ import numpy as np
 _TOP_LEVEL_KEYS = {
     "instrument", "n_iter", "ncpu",
     "uniform_intensity", "rest_wavelength", "thermal_width",
-    "synthesis_file", "reference_line", "spectra_file",
+    "synthesis_file", "reference_line",
     "atmosphere_series", "synthesis", "raster",
     "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral",
     "offchip_bin_slit", "fit_signals",
@@ -475,17 +476,6 @@ def main() -> None:
     # Simulation mode
     uniform_intensity_mode = "uniform_intensity" in config
     raster_mode = "atmosphere_series" in config
-    spectra_mode = "spectra_file" in config
-    if spectra_mode:
-        for key in ("synthesis_file", "uniform_intensity", "atmosphere_series"):
-            if key in config:
-                raise ValueError(f"Give 'spectra_file' or '{key}', not both: each is "
-                                 f"what the instrument observes.")
-        for key in ("reference_line", "thermal_width"):
-            if key in config:
-                raise ValueError(f"'{key}' is not read with a 'spectra_file', whose "
-                                 f"spectra are observed as they are; 'rest_wavelength' "
-                                 f"says which line the velocities are measured from.")
     if raster_mode and uniform_intensity_mode:
         raise ValueError("Give 'atmosphere_series' or 'uniform_intensity', not both.")
     if raster_mode and "synthesis_file" in config:
@@ -522,34 +512,28 @@ def main() -> None:
         print(f"  Intensity: {uniform_intensity}")
         print(f"  Rest wavelength: {uniform_rest_wavelength}")
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
-    elif spectra_mode:
-        spectra_path = Path(config["spectra_file"])
-        if not spectra_path.is_file():
-            raise FileNotFoundError(
-                f"Spectra file not found: {spectra_path}. "
-                "Please check the 'spectra_file' path in your config file."
-            )
-        if "rest_wavelength" not in config:
-            raise ValueError("A 'spectra_file' needs a 'rest_wavelength': the rest "
-                             "wavelength of the line whose velocity is measured, "
-                             "such as '195.119 AA'.")
-        spectra_rest_wavelength = parse_yaml_input(config["rest_wavelength"])
-        if (not isinstance(spectra_rest_wavelength, u.Quantity)
-                or spectra_rest_wavelength.unit.physical_type != "length"
-                or spectra_rest_wavelength.ndim != 0):
-            raise ValueError(f"'rest_wavelength' must be one wavelength with its unit, "
-                             f"such as '195.119 AA', got {config['rest_wavelength']!r}.")
-        print("SPECTRA FILE MODE")
-        print(f"  Spectra file: {spectra_path}")
-        print(f"  Rest wavelength: {spectra_rest_wavelength}")
     else:
-        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.pkl")
-        reference_line = config.get("reference_line", "Fe12_195.1190")
+        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.h5")
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(
                 f"Synthesis file not found: {synthesis_file}. "
                 "Please check the 'synthesis_file' path in your config file."
             )
+        # A file of one line is observed at that line; otherwise the line
+        # has to be named, or the default one is used.
+        synthesis_is_hdf5 = is_synthesis_file(synthesis_file)
+        default_line = "Fe12_195.1190"
+        if synthesis_is_hdf5:
+            names = synthesis_line_names(synthesis_file)
+            if len(names) == 1:
+                default_line = names[0]
+        else:
+            warnings.warn(
+                f"{synthesis_file} is a synthesis pickle, as older versions of ECLIPSE "
+                f"wrote them. Pickles are deprecated and will not be read in a future "
+                f"release: re-run the synthesis, or convert the file with "
+                f"euvst_response.convert_synthesis_pickle.", FutureWarning, stacklevel=2)
+        reference_line = config.get("reference_line", default_line)
 
     # Pinhole config (fixed paired lists, not swept)
     (pinhole_sizes, pinhole_positions,
@@ -728,25 +712,10 @@ def main() -> None:
     raster = None
     raster_summed = {}
     raster_cubes = {}
+    synthesis = None
     if uniform_intensity_mode:
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
-    elif spectra_mode:
-        # The spectra go onto the detector grid per slit width inside the
-        # loop, straight from their own wavelengths.
-        cube_sim = None
-        print("\nReading the spectra...")
-        spectra = read_spectra(spectra_path)
-        wavelength = spectra.wavelength
-        if not wavelength[0] <= spectra_rest_wavelength <= wavelength[-1]:
-            raise ValueError(
-                f"'rest_wavelength' {spectra_rest_wavelength} is outside the "
-                f"spectra, which run from {wavelength[0]} to {wavelength[-1]}.")
-        ny, nx, n_wavelength = spectra.shape
-        print(f"  {ny} x {nx} pixels (y along the slit, x across it), "
-              f"{n_wavelength} wavelengths from {wavelength[0]} to {wavelength[-1]}")
-        if spectra.source:
-            print(f"  Source: {spectra.source}")
     elif raster_mode:
         # The cubes are synthesised per combination inside the loop, since
         # the slit width and the exposure time decide what the slit sees.
@@ -757,9 +726,26 @@ def main() -> None:
         raster = RasterSynthesiser(series, synthesis_settings)
         print(f"  CHIANTI database: {raster.goft_dbase_root}")
     else:
-        print("\nLoading atmosphere...")
+        print("\nLoading the synthesis...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
-        cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
+        if synthesis_is_hdf5:
+            # Only the lines that reach the reference line's window are read.
+            # They go onto the detector grid per slit width inside the loop,
+            # straight from their own wavelengths.
+            synthesis = read_synthesis(synthesis_file, reference_line)
+            print(f"  Lines in its window: {', '.join(synthesis.lines)}")
+            if synthesis.source:
+                print(f"  Source: {synthesis.source}")
+            products = read_synthesis_products(synthesis_file, keys=("dynamic_mode", "config"))
+            dynamic_mode_info = products.get("dynamic_mode", {"enabled": False})
+            summed_input = synthesis.summed(reference_line)
+            # Kept in the results as the spectra the instrument observed, where
+            # evenly spaced wavelengths let a WCS describe them.
+            view = (products.get("config") or {}).get("integration_axis") or "z"
+            cube_sim = (synthesis.summed_cube(reference_line, summed_input, view)
+                        if synthesis.evenly_spaced(reference_line) else None)
+        else:
+            cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
 
         is_dynamic_mode = dynamic_mode_info.get("enabled", False)
         if is_dynamic_mode:
@@ -950,8 +936,9 @@ def main() -> None:
                 # further than the synthesis window's margin allows, so the
                 # window is widened to hold what it spreads. Not for the
                 # reference slit, whose window is as it was.
-                rebinned = (rebin_spectra(spectra, spectra_rest_wavelength, DET, SIM_rebin)
-                            if spectra_mode else rebin_atmosphere(cube_sim, DET, SIM_rebin))
+                rebinned = (rebin_spectra(synthesis, reference_line, DET, SIM_rebin,
+                                          summed=summed_input)
+                            if synthesis is not None else rebin_atmosphere(cube_sim, DET, SIM_rebin))
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
 

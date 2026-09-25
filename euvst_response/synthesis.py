@@ -13,11 +13,11 @@ import psutil
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from mendeleev import element
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
                     velocity_centers_to_edges, VELOCITY_CONVENTION)
+from .synthesis_file import write_line_cubes
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
                          require_mass_per_electron)
 
@@ -1445,8 +1445,8 @@ def build_parser() -> argparse.ArgumentParser:
                             help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
-    parser.add_argument("--output-name", type=str, default="synthesised_spectra.pkl",
-                       help="Output filename")
+    parser.add_argument("--output-name", type=str, default="synthesised_spectra.h5",
+                       help="Output filename, an HDF5 synthesis file")
     
     # Line / abundance specification (fiasco)
     parser.add_argument("--lines", nargs="+", required=True,
@@ -1766,6 +1766,11 @@ def main(args=None) -> None:
 
     integration_axis = args.integration_axis.lower()
     check_atmosphere_options(args)
+    # Checked now rather than after the synthesis, which can take hours.
+    if Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill"):
+        raise ValueError(
+            f"--output-name {args.output_name} names a pickle, but the synthesis file "
+            f"is HDF5; give it a name ending in .h5.")
 
     # What the common processing below needs from whichever route reads the
     # atmosphere. Only an atmosphere file can give the electron density
@@ -2033,15 +2038,19 @@ def main(args=None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / args.output_name
     
-    # Save main results
-    results_data = {
-        "line_cubes": line_cubes,
+    # The line cubes are the file's spectra; everything else the synthesis
+    # worked out goes with them, so that the file is the whole synthesis.
+    products = {
         "dem_map": dem_map,
         "em_tv": em_tv,
         "logT_grid": logT_grid,
         "vel_grid": vel_grid,
         "logN_grid": logN_grid,
-        "goft": goft,
+        # Each line's spectra and wavelengths are the file's lines, so they
+        # are not kept a second time here.
+        "goft": {name: {key: value for key, value in info.items()
+                        if key not in ("si", "wl_grid")}
+                 for name, info in goft.items()},
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "dynamic_mode": dynamic_mode_metadata,
         "atmosphere": atmosphere_metadata,
@@ -2070,9 +2079,10 @@ def main(args=None) -> None:
         }
     }
     
-    with open(output_file, "wb") as f:
-        dill.dump(results_data, f)
-    
+    write_line_cubes(line_cubes, output_file,
+                     source=(atmosphere_metadata or {}).get("source") or "",
+                     products=products)
+
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
     print("Synthesis complete!")
 

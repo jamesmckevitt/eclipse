@@ -77,39 +77,43 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     elif metadata_line not in line_names:
         raise ValueError(f"Metadata line '{metadata_line}' not found. Available lines: {line_names}")
 
-    ref_cube = line_cubes[metadata_line]
-
-    # Refuse files written before the cube axis order was fixed (issue #12).
-    # Those store data as (x, y, wavelength); everything downstream now
-    # expects (y, x, wavelength), so an old file would come out transposed.
-    # The WCS axis order tells the two apart.
-    _old_first_spatial = {"z": "SOLY", "x": "SOLZ", "y": "SOLZ"}
-    _int_axis = ref_cube.meta.get("integration_axis") if ref_cube.meta else None
-    if (_int_axis in _old_first_spatial
-            and ref_cube.wcs.wcs.ctype[1] == _old_first_spatial[_int_axis]):
-        raise ValueError(
-            f"{pkl_file} was written by an older ECLIPSE that stored cubes "
-            "as (x, y, wavelength). Cubes are now (y, x, wavelength). "
-            "Re-run the synthesis with this version to regenerate the file."
-        )
-
-    # Refuse files written before the Doppler sign was fixed.  Those used the
-    # simulation velocity along the line of sight as it was, which for views
-    # along x and z gives every velocity the wrong sign.
-    if has_wrong_velocity_sign(ref_cube.meta):
-        axis = (ref_cube.meta or {}).get("integration_axis", "z")
-        raise ValueError(
-            f"{pkl_file} was written by an older ECLIPSE that used the "
-            "simulation velocity along the line of sight without turning it "
-            "into a velocity away from the observer. For this view along "
-            f"{axis}, every Doppler shift in it has the wrong sign: flows "
-            "towards the observer are redshifted. Re-run the synthesis with "
-            "this version to regenerate the file."
-        )
+    check_old_line_cubes({metadata_line: line_cubes[metadata_line]}, pkl_file)
 
     summed_cube = sum_line_cubes(line_cubes, metadata_line)
     summed_cube.meta["dynamic_mode"] = dynamic_mode_info
     return summed_cube, dynamic_mode_info
+
+
+def check_old_line_cubes(line_cubes: dict, path) -> None:
+    """Refuse line cubes that older versions of ECLIPSE wrote in a form it no longer reads right."""
+    for cube in line_cubes.values():
+        meta = cube.meta or {}
+        # Refuse files written before the cube axis order was fixed (issue
+        # #12). Those store data as (x, y, wavelength); everything downstream
+        # now expects (y, x, wavelength), so an old file would come out
+        # transposed. The WCS axis order tells the two apart.
+        old_first_spatial = {"z": "SOLY", "x": "SOLZ", "y": "SOLZ"}
+        axis = meta.get("integration_axis")
+        if axis in old_first_spatial and cube.wcs.wcs.ctype[1] == old_first_spatial[axis]:
+            raise ValueError(
+                f"{path} was written by an older ECLIPSE that stored cubes "
+                "as (x, y, wavelength). Cubes are now (y, x, wavelength). "
+                "Re-run the synthesis with this version to regenerate the file."
+            )
+
+        # Refuse files written before the Doppler sign was fixed. Those used
+        # the simulation velocity along the line of sight as it was, which for
+        # views along x and z gives every velocity the wrong sign.
+        if has_wrong_velocity_sign(meta):
+            axis = meta.get("integration_axis", "z")
+            raise ValueError(
+                f"{path} was written by an older ECLIPSE that used the "
+                "simulation velocity along the line of sight without turning it "
+                "into a velocity away from the observer. For this view along "
+                f"{axis}, every Doppler shift in it has the wrong sign: flows "
+                "towards the observer are redshifted. Re-run the synthesis with "
+                "this version to regenerate the file."
+            )
 
 
 def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
@@ -437,25 +441,31 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     return cube_det
 
 
-def rebin_spectra(spectra, rest_wavelength: u.Quantity, det, sim) -> NDCube:
+def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None) -> NDCube:
     """
-    Spectra from another code at instrument resolution and spatial sampling.
+    A synthesis file's spectra at instrument resolution and spatial sampling.
 
-    The same two steps as :func:`rebin_atmosphere`, taking the wavelengths
-    from the spectra rather than from a WCS: they are resampled conserving
-    flux straight from their own grid, which need not be evenly spaced, and
-    the pixels are then laid onto the plate scale and the slit.
+    The lines that reach the window of *reference_line* are added up on its
+    wavelengths, as :func:`sum_line_cubes` adds up line cubes, and then go
+    through the same two steps as :func:`rebin_atmosphere`, with the
+    wavelengths taken from the file rather than from a WCS: they are
+    resampled conserving flux straight from their own grid, which need not
+    be evenly spaced, and the pixels are then laid onto the plate scale and
+    the slit.
 
     Parameters
     ----------
-    spectra : euvst_response.spectra.Spectra
-        The spectra, as read from a spectra file.
-    rest_wavelength : u.Quantity
-        The rest wavelength of the line whose velocity is measured.
+    synthesis : euvst_response.synthesis_file.Synthesis
+        The spectra, as read from a synthesis file.
+    reference_line : str
+        The line whose window is observed and whose velocity is measured.
     det : Detector_SWC or Detector_EIS
         Detector configuration
     sim : Simulation
         Simulation configuration
+    summed : u.Quantity, optional
+        ``synthesis.summed(reference_line)``, if it has been worked out
+        already.
 
     Returns
     -------
@@ -463,8 +473,9 @@ def rebin_spectra(spectra, rest_wavelength: u.Quantity, det, sim) -> NDCube:
         Rebinned cube at instrument resolution
     """
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
-    radiance = spectra.radiance()
-    data, grid = resample_spectra(radiance.value, radiance.unit, spectra.wavelength,
+    reference = synthesis.lines[reference_line]
+    radiance = synthesis.summed(reference_line) if summed is None else summed
+    data, grid = resample_spectra(radiance.value, radiance.unit, reference.wavelength,
                                   det.wvl_res * u.pix, ncpu=sim.ncpu)
 
     # The cube a synthesis gives: wavelength in cm, then x and y on the Sun
@@ -475,14 +486,15 @@ def rebin_spectra(spectra, rest_wavelength: u.Quantity, det, sim) -> NDCube:
     wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
     wcs.wcs.cunit = ["cm", "Mm", "Mm"]
     wcs.wcs.crpix = [crpix_wave, (nx + 1) / 2, (ny + 1) / 2]
-    wcs.wcs.crval = [crval_wave, spectra.centre("x").to_value(u.Mm),
-                     spectra.centre("y").to_value(u.Mm)]
-    wcs.wcs.cdelt = [cdelt_wave, spectra.pixel_size("x").to_value(u.Mm),
-                     spectra.pixel_size("y").to_value(u.Mm)]
-    # The Doppler shifts are in the spectra as the other code put them, as
-    # seen by the observer, so they have the sign the fits expect.
+    wcs.wcs.crval = [crval_wave, synthesis.centre("x").to_value(u.Mm),
+                     synthesis.centre("y").to_value(u.Mm)]
+    wcs.wcs.cdelt = [cdelt_wave, synthesis.pixel_size("x").to_value(u.Mm),
+                     synthesis.pixel_size("y").to_value(u.Mm)]
+    # A synthesis file holds the spectra as the observer sees them, so the
+    # Doppler shifts have the sign the fits expect.
     cube_spec = NDCube(data, wcs=wcs, unit=radiance.unit,
-                       meta={"rest_wav": rest_wavelength, "source": spectra.source,
+                       meta={"rest_wav": reference.rest_wavelength, "line_name": reference_line,
+                             "source": synthesis.source,
                              "velocity_convention": VELOCITY_CONVENTION})
 
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")

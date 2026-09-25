@@ -227,7 +227,7 @@ synthesise-spectra \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
   --output-dir ./run/input \
-  --output-name synthesised_spectra.pkl \
+  --output-name synthesised_spectra.h5 \
   --vel-res "5.0 km/s" \
   --vel-lim "300.0 km/s" \
   --integration-axis z \
@@ -248,7 +248,7 @@ synthesise-spectra --help
 
 - `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in dynamic mode)
 - `--output-dir`: Output directory for results (default: `./run/input`)
-- `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+- `--output-name`: Output filename, an HDF5 synthesis file (default: `synthesised_spectra.h5`)
 
 **Line and Abundance Selection:**
 
@@ -324,33 +324,29 @@ The synthesis produces a pickle file containing:
 
 ## Working with synthesis results
 
-The synthesis results can be loaded and analysed using the package API:
+The synthesis file is HDF5. It holds each line's spectra over the image, which is what the [instrument run](instrument-response.md) observes, and everything the synthesis worked out on the way: the DEM, the emission measure in temperature and velocity, the contribution functions and the settings it ran with. `load_synthesis` reads it all back:
 
 ```python
 import euvst_response
 
-# Load synthesis results - this sums all line cubes into a single cube.
-# Returns a (cube, dynamic_mode_info) tuple, so unpack it.
-# The second argument is the reference line whose wavelength grid the other
-# lines are interpolated onto; omit it and the first line in the file is used.
-cube, dynamic_mode_info = euvst_response.load_atmosphere(
-    "./run/input/synthesised_spectra.pkl", "Fe12_195.1190"
-)
-print(f"Combined cube shape: {cube.data.shape}")
+data = euvst_response.load_synthesis("./run/input/synthesised_spectra.h5")
 
-# Access individual line cubes if needed
-import dill
-with open("./run/input/synthesised_spectra.pkl", "rb") as f:
-    data = dill.load(f)
-
-# Access individual line cubes
+# A line cube for each line, indexed [y, x, wavelength]
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]
 print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
 print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
+print(f"Available spectral lines: {list(data['line_cubes'])}")
 
-# List all available lines
-print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
+# What the synthesis worked out on the way
+print(f"DEM map (y, x, logT): {data['dem_map'].shape}, on log T {data['logT_grid']}")
+print(f"Settings: {data['config']}")
 ```
+
+`read_synthesis` reads just the spectra, and `read_synthesis_products` just the rest, or only the parts named in `keys`.
+
+??? note "Synthesis files from ECLIPSE 0.11.0 and earlier"
+
+    Older versions wrote the synthesis as a pickle. The instrument run still reads one, with a warning, until a future release stops it. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
 
 ??? note "Reading MURaM's own files (deprecated)"
 
