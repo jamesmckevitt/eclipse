@@ -65,7 +65,7 @@ flowchart LR
 
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating a single snapshot](instrument-response.md). To observe a series of atmosphere files as a raster or sit-and-stare, with each exposure seeing the atmosphere at its own time, see [Simulating a time series](time-series.md); the synthesis then happens inside this stage, one exposure at a time. A series of synthesis files, one per snapshot, can be observed in the same way.
 
-**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [worked example](analysing-the-results.ipynb).
+**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [worked example](worked-example.ipynb).
 
 ## Instruments
 
@@ -114,4 +114,4 @@ Every results file records the version and git commit that produced it, so `summ
 - [Simulating a single snapshot](instrument-response.md) - configuration file reference and the `eclipse` CLI
 - [Simulating a time series](time-series.md) - a raster or sit-and-stare over a series of atmosphere or synthesis files
 - [From another code](other-codes.md) - the instrument on spectra another code synthesised
-- [Worked example](analysing-the-results.ipynb) - a notebook taking an MHD snapshot through to the analysed results
+- [Worked example](worked-example.ipynb) - a notebook taking an MHD snapshot through to the analysed results
