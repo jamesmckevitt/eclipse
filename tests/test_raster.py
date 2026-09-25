@@ -657,6 +657,8 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
                              meta=meta)
     assert rebinned.data.shape[1] == 2
     assert rebinned.meta["raster"] is True
+    assert rebinned.meta["combined_lines"] == [LINE] and rebinned.meta["summed_intensity"]
+    assert rebinned.meta["integration_axis"] == "z"
     scan = rebinned.axis_world_coords(1)[0]
     expected = distance_to_angle(meta["positions"]).to_value(u.arcsec)
     assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)

@@ -14,8 +14,7 @@ from scipy.special import erf
 from tqdm import tqdm
 from .radiometric import spectral_psf_fwhm
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
-                    onto_wavelength_bins,
-                    VELOCITY_CONVENTION)
+                    onto_wavelength_bins)
 
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
@@ -420,8 +419,11 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
         ``synthesis.summed(reference_line)``, if it has been worked out
         already.
     meta : dict, optional
-        More metadata for the cube, such as a time series' ``raster``
-        entries, whose columns are its exposures and are kept as they are.
+        More metadata for the cube than
+        :meth:`~euvst_response.synthesis_file.Synthesis.summed_meta` gives,
+        such as the line's atom and ion, the synthesis's ``dynamic_mode``, or
+        a time series' ``raster`` entries, whose columns are its exposures
+        and are kept as they are.
 
     Returns
     -------
@@ -448,9 +450,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     # A synthesis file holds the spectra as the observer sees them, so the
     # Doppler shifts have the sign the fits expect.
     cube_spec = NDCube(data, wcs=wcs, unit=radiance.unit,
-                       meta={"rest_wav": reference.rest_wavelength, "line_name": reference_line,
-                             "source": synthesis.source,
-                             "velocity_convention": VELOCITY_CONVENTION, **(meta or {})})
+                       meta={**synthesis.summed_meta(reference_line), **(meta or {})})
 
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det, ncpu=sim.ncpu)

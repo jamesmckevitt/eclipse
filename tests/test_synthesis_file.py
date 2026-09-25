@@ -256,12 +256,24 @@ def _line_cubes():
             BLEND: _line_cube(_lines(rest=BLEND_REST, scale=0.1), BLEND_REST)}
 
 
+def _keeps_meta(got, expected):
+    """Whether *got* has every entry of *expected*, the same."""
+    for key, value in expected.items():
+        assert key in got, key
+        if isinstance(value, u.Quantity):
+            assert u.allclose(got[key], value, rtol=1e-12), key
+        else:
+            assert got[key] == value, key
+
+
 def test_line_cubes_become_a_synthesis_file_that_sums_as_they_did(tmp_path):
     cubes = _line_cubes()
     path = write_line_cubes(cubes, tmp_path / "synthesis.h5", source="a test")
     synthesis = read_synthesis(path)
     assert synthesis.pixel_size("x") == PIXEL and synthesis.centre("x") == 0 * u.Mm
-    assert np.array_equal(synthesis.summed(LINE).value, sum_line_cubes(cubes, LINE).data)
+    summed = sum_line_cubes(cubes, LINE)
+    assert np.array_equal(synthesis.summed(LINE).value, summed.data)
+    _keeps_meta(synthesis.summed_cube(LINE).meta, summed.meta)
 
     loaded = load_synthesis(path)
     cube = loaded["line_cubes"][BLEND]
@@ -544,9 +556,14 @@ def _run(tmp_path, monkeypatch, name, **inputs):
 
 
 def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch):
-    """Both runs start from the same unpickled cubes, so they see the same numbers."""
+    """Both runs start from the same unpickled cubes, so they see the same numbers, and describe them alike."""
+    cubes = _line_cubes()
+    for cube in cubes.values():
+        cube.meta.update(atom=26, ion=12)
     with open(tmp_path / "synthesis.pkl", "wb") as f:
-        dill.dump({"line_cubes": _line_cubes()}, f)
+        dill.dump({"line_cubes": cubes,
+                   "goft": {name: {"g_tn": np.ones((2, 3)), "atom": 26, "ion": 12}
+                            for name in cubes}}, f)
     convert_synthesis_pickle(tmp_path / "synthesis.pkl", tmp_path / "synthesis.h5")
 
     with pytest.warns(FutureWarning, match="synthesis pickle"):
@@ -560,6 +577,7 @@ def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch)
         got = from_file["cube_reb_dict"][key]
         assert np.array_equal(got.data, expected.data)
         assert got.wcs.to_header_string() == expected.wcs.to_header_string()
+        _keeps_meta(got.meta, expected.meta)
     pickle_runs = from_pickle["results"]["all_combinations"]
     file_runs = from_file["results"]["all_combinations"]
     assert file_runs.keys() == pickle_runs.keys()
@@ -570,6 +588,7 @@ def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch)
                               expected["ground_truth"]["fit_truth_data"], equal_nan=True)
     # The spectra the instrument observed are kept, as they were from a pickle.
     assert np.array_equal(from_file["cube_sim"].data, from_pickle["cube_sim"].data)
+    _keeps_meta(from_file["cube_sim"].meta, from_pickle["cube_sim"].meta)
 
 
 def test_a_file_of_one_line_needs_no_reference_line(tmp_path, monkeypatch):

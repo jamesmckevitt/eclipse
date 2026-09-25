@@ -317,36 +317,54 @@ class Synthesis:
             return False
         return True
 
+    def line_meta(self, name: str) -> dict:
+        """The metadata of line *name*, as ECLIPSE's line cubes carry it."""
+        from .utils import VELOCITY_CONVENTION
+
+        return {"line_name": name, "rest_wav": self.lines[name].rest_wavelength,
+                "integration_axis": self.integration_axis or "z", "source": self.source,
+                "velocity_convention": VELOCITY_CONVENTION}
+
+    def summed_meta(self, reference: str) -> dict:
+        """
+        The metadata of :meth:`summed`, as :func:`~euvst_response.data_processing.sum_line_cubes` gives it to a summed cube.
+
+        That is *reference*'s own, and the lines added up onto it, which are
+        those read.
+        """
+        return {**self.line_meta(reference), "combined_lines": list(self.lines),
+                "n_lines": len(self.lines), "metadata_source": reference,
+                "summed_intensity": True}
+
     def line_cube(self, name: str):
         """
         Line *name* as an NDCube like those of ECLIPSE's synthesis, indexed ``[y, x, wavelength]``.
 
         The wavelengths have to be evenly spaced for a WCS to describe them.
         """
-        line = self.lines[name]
-        return self._cube(line.intensity, name)
+        return self._cube(self.lines[name].intensity, name, self.line_meta(name))
 
-    def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None):
+    def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None,
+                    meta: Optional[Mapping] = None):
         """
         :meth:`summed` as an NDCube on the wavelengths of *reference*, which have to be evenly spaced.
 
-        *summed*, if given, is :meth:`summed` already worked out.
+        *summed*, if given, is :meth:`summed` already worked out, and *meta*
+        is added to :meth:`summed_meta`.
         """
-        return self._cube(self.summed(reference) if summed is None else summed, reference)
+        return self._cube(self.summed(reference) if summed is None else summed, reference,
+                          {**self.summed_meta(reference), **(meta or {})})
 
-    def _cube(self, data: u.Quantity, name: str):
+    def _cube(self, data: u.Quantity, name: str, meta: dict):
         from astropy.wcs import WCS
         from ndcube import NDCube
 
-        from .utils import VELOCITY_CONVENTION
-
-        view = self.integration_axis or "z"
         line = self.lines[name]
         step = require_uniform_grid(line.wavelength.to_value(u.cm), f"the wavelengths of {name}")
         ny, nx = self.shape
         n_wavelength = line.wavelength.size
         wcs = WCS(naxis=3)
-        wcs.wcs.ctype = ["WAVE", *_VIEW_CTYPES[view]]
+        wcs.wcs.ctype = ["WAVE", *_VIEW_CTYPES[self.integration_axis or "z"]]
         wcs.wcs.cunit = ["cm", "Mm", "Mm"]
         wcs.wcs.crpix = [(n_wavelength + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]
         middle = 0.5 * (line.wavelength[0] + line.wavelength[-1])
@@ -354,10 +372,7 @@ class Synthesis:
                          self.centre("y").to_value(u.Mm)]
         wcs.wcs.cdelt = [step, self.pixel_size("x").to_value(u.Mm),
                          self.pixel_size("y").to_value(u.Mm)]
-        return NDCube(data.value, wcs=wcs, unit=data.unit,
-                      meta={"line_name": name, "rest_wav": line.rest_wavelength,
-                            "integration_axis": view, "source": self.source,
-                            "velocity_convention": VELOCITY_CONVENTION})
+        return NDCube(data.value, wcs=wcs, unit=data.unit, meta=meta)
 
 
 def _check_axis(axis: str) -> str:
@@ -539,6 +554,21 @@ def _source(f: h5py.File) -> str:
 def _integration_axis(f: h5py.File) -> Optional[str]:
     axis = f.attrs.get("integration_axis")
     return None if axis is None else str(axis.decode() if isinstance(axis, bytes) else axis)
+
+
+def _line_identity(path: str | Path, name: str) -> dict:
+    """
+    The ``atom`` and ``ion`` of line *name*, as ECLIPSE's own synthesis records them in the file.
+
+    A file from another code records neither, and gives an empty dict.
+    """
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
+                      format_version=FORMAT_VERSION)
+        goft = f.get("synthesis/goft")
+        info = {} if goft is None else (_read_tree(goft, {name}).get(name) or {})
+    return {key: info[key] for key in ("atom", "ion") if key in info}
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:

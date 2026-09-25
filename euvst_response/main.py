@@ -19,8 +19,8 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
                               pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
-from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
-                             synthesis_line_names)
+from .synthesis_file import (_line_identity, is_synthesis_file, read_synthesis,
+                             read_synthesis_products, synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
@@ -745,6 +745,10 @@ def main() -> None:
     raster_summed = {}
     raster_cubes = {}
     synthesis = None
+    # What the cubes from a synthesis file carry beyond its spectra, as those
+    # from a pickle did: the measured line's atom and ion, which ECLIPSE's
+    # own synthesis records, and for a single snapshot its dynamic mode.
+    file_meta = {}
     if uniform_intensity_mode:
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
@@ -766,6 +770,7 @@ def main() -> None:
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         print(f"  Lines in the window of {reference_line}: {', '.join(series.lines)}")
         raster = SynthesisRaster(series)
+        file_meta = _line_identity(series.paths[0], reference_line)
     else:
         print("\nLoading the synthesis...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
@@ -782,7 +787,9 @@ def main() -> None:
             summed_input = synthesis.summed(reference_line)
             # Kept in the results as the spectra the instrument observed, where
             # evenly spaced wavelengths let a WCS describe them.
-            cube_sim = (synthesis.summed_cube(reference_line, summed_input)
+            file_meta = {**_line_identity(synthesis_file, reference_line),
+                         "dynamic_mode": dynamic_mode_info}
+            cube_sim = (synthesis.summed_cube(reference_line, summed_input, file_meta)
                         if synthesis.evenly_spaced(reference_line) else None)
         else:
             cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
@@ -955,8 +962,8 @@ def main() -> None:
             summed_input = synthesis.summed(reference_line)
             cube_sim = None
             if synthesis.evenly_spaced(reference_line):
-                cube_sim = synthesis.summed_cube(reference_line, summed_input)
-                cube_sim.meta.update(raster_meta)
+                cube_sim = synthesis.summed_cube(reference_line, summed_input,
+                                                 {**file_meta, **raster_meta})
             raster_summed[cube_reb_key] = cube_sim
             print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "
                   f"strips read so far")
@@ -994,9 +1001,9 @@ def main() -> None:
                 if synthesis is None:
                     rebinned = rebin_atmosphere(cube_sim, DET, SIM_rebin)
                 else:
-                    rebinned = rebin_spectra(synthesis, reference_line, DET, SIM_rebin,
-                                             summed=summed_input,
-                                             meta=raster_meta if synthesis_series_mode else None)
+                    rebinned = rebin_spectra(
+                        synthesis, reference_line, DET, SIM_rebin, summed=summed_input,
+                        meta={**file_meta, **(raster_meta if synthesis_series_mode else {})})
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
 
