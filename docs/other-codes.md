@@ -147,3 +147,80 @@ A few things to know about FoMo's side:
 - FoMo shifts a line to the red for a flow along its line of sight, which points away from the observer. For a simulation with height along z, `render(0, 0)` looks up from below, and `render(0, M_PI)` looks down from above, with upflows blueshifted.
 - FoMo renders one line at a time. For a window with blends, render each line on the same window and add them before writing the file.
 - FoMo's tables come from an older CHIANTI than ECLIPSE's own synthesis uses. On a block of the [Bifrost snapshot](synthesis.md#worked-example-bifrost-quiet-sun) from the synthesis page, FoMo's Fe XII 195 came out about 25 per cent fainter than ECLIPSE's synthesis of the same cells with the same abundances, with the same Doppler shifts to within about 0.5 km/s.
+
+## Worked example: PINTofALE
+
+[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem-synthesis.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a spectra file.
+
+In IDL, with PINTofALE set up as usual:
+
+```idl
+; Every line in the window, with its ion balance, at n_e = 1e9 cm^-3
+ff = rd_line(wrange=[194.8, 195.45], n_e=1e9, wvl=wvl, logT=logT, Z=Z, ion=ion, jon=jon)
+ff = fold_ioneq(ff, Z, jon, logT=logT)
+
+; Your DEM per kelvin [cm^-5 K^-1] at each temperature of logT
+dem = 1d21 * exp(-0.5d * ((logT - 6.2d) / 0.15d)^2)
+
+flx = lineflx(ff, 10d^logT, abs(wvl), Z, DEM=dem, /temp, abund=getabund('schmelz'), /noph)
+save, file='pintofale_lines.sav', wvl, flx, Z, logT, ff, dem
+```
+
+Give the DEM per kelvin with `/temp`, as here. Without it, LINEFLX takes the DEM per unit natural log of T, which is T times the DEM per kelvin, so a DEM per unit log10 T would come out 2.3 times too bright.
+
+Then in Python:
+
+```python
+import astropy.constants as const
+import astropy.units as u
+import numpy as np
+from mendeleev import element
+from scipy.io import readsav
+from scipy.special import erf
+from euvst_response import Spectra, write_spectra
+
+poa = readsav("pintofale_lines.sav")
+rest = np.abs(poa["wvl"]) * u.AA  # PINTofALE marks theoretical wavelengths negative
+# LINEFLX gives what each line emits into all directions: a radiance is
+# that over the 4 pi steradians.
+radiance = poa["flx"] / (4 * np.pi) * u.erg / (u.s * u.cm**2 * u.sr)
+
+# Where each line forms: its emissivity times the emission measure at each
+# temperature, on the grid in log T.
+weight = poa["ff"] * poa["dem"] * 10.0 ** poa["logt"]  # (line, temperature)
+temperature = 10.0 ** poa["logt"] * u.K
+mass = np.array([element(int(z)).atomic_weight for z in poa["z"]]) * u.u
+
+# Each line is thermally broadened at every temperature it forms at, as in
+# ECLIPSE's own synthesis, and integrated over each bin of a grid much finer
+# than EUVST's pixels.
+edges = np.arange(194.8, 195.45, 0.002) * u.AA
+spectrum = np.zeros(edges.size - 1) * u.erg / (u.s * u.cm**2 * u.sr * u.AA)
+for line in np.flatnonzero(poa["flx"] > 0):
+    sigma = rest[line] * np.sqrt(const.k_B * temperature / mass[line]) / const.c
+    z = ((edges[:, None] - rest[line]) / (np.sqrt(2) * sigma)).decompose().value
+    share = weight[line] / weight[line].sum()
+    profile = (0.5 * np.diff(erf(z), axis=0) * share).sum(axis=1) / np.diff(edges)
+    spectrum += radiance[line] * profile
+
+# A DEM has no structure on the sky, so the spectrum is laid over a patch
+# a few slit widths across.
+n = 20
+spectra = Spectra(
+    intensity=np.tile(spectrum, (n, n, 1)),
+    wavelength=0.5 * (edges[1:] + edges[:-1]),
+    x_edges=np.arange(n + 1) * 0.1 * u.arcsec,
+    y_edges=np.arange(n + 1) * 0.1 * u.arcsec,
+    source="PINTofALE, Gaussian DEM",
+)
+write_spectra(spectra, "pintofale.h5")
+```
+
+In the configuration, `rest_wavelength` is the wavelength PINTofALE lists for the line, `abs(wvl)`, to all its digits. The line is placed there, so a rounded value reads as a Doppler shift: 195.119 instead of 195.1193 is 0.5 km/s.
+
+```yaml
+spectra_file: ./pintofale.h5
+rest_wavelength: 195.1193 AA
+```
+
+PINTofALE's CHIANTI line database is from CHIANTI 7.1.2. With the same DEM and abundances, its intensities for thirteen lines from O V to Fe XXIV came out within about 5 per cent of ECLIPSE's own for most lines, and within 20 per cent for all of them.
