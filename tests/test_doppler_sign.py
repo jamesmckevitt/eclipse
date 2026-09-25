@@ -180,7 +180,8 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
                            {"z": np.full(SHAPE, FLOW.to_value(u.cm / u.s))},
                            suffix=suffix, time=time)
 
-    saved = _load(_synthesise(tmp_path, monkeypatch, "z", DYNAMIC))
+    with pytest.warns(FutureWarning, match="Dynamic mode .*deprecated"):
+        saved = _load(_synthesise(tmp_path, monkeypatch, "z", DYNAMIC))
 
     assert saved["dynamic_mode"]["enabled"]
     assert _doppler_velocity(saved["line_cubes"][LINE]) == pytest.approx(

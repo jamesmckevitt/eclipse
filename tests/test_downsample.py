@@ -201,8 +201,9 @@ def test_dynamic_mode_downsamples_the_same_way(tmp_path, monkeypatch):
     shape = (8, 8, 8)
     _write_muram_series(tmp_path / "atmosphere", shape)
 
-    full = _synthesise(tmp_path, monkeypatch, shape, 1, DYNAMIC)
-    reduced = _synthesise(tmp_path, monkeypatch, shape, 2, DYNAMIC)
+    with pytest.warns(FutureWarning, match="Dynamic mode .*deprecated"):
+        full = _synthesise(tmp_path, monkeypatch, shape, 1, DYNAMIC)
+        reduced = _synthesise(tmp_path, monkeypatch, shape, 2, DYNAMIC)
 
     assert _cdelt(reduced)[0] == pytest.approx(2 * _cdelt(full)[0])
     assert _intensity(reduced).shape[1] * _cdelt(reduced)[0] == pytest.approx(
@@ -221,6 +222,7 @@ def test_load_cube_refuses_a_factor_that_does_not_divide_the_cube(tmp_path):
                   voxel_dz=VOXEL["dz"], create_ndcube=True)
 
 
+@pytest.mark.filterwarnings("ignore:Dynamic mode:FutureWarning")
 @pytest.mark.parametrize("mode", [[], DYNAMIC], ids=["static", "dynamic"])
 def test_synthesis_refuses_a_factor_that_does_not_divide_the_cube(
         tmp_path, monkeypatch, mode):

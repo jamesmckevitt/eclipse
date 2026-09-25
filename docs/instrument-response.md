@@ -1,6 +1,8 @@
-# Simulating the instrument
+# Simulating a single snapshot
 
 This is the second stage of a run. It takes the spectra produced when you [synthesised an atmosphere](index.md#how-eclipse-works), puts them through the telescope and detector, adds the noise, and fits the result the same way you would fit real data. Because the noise is random, a Monte Carlo simulation gives a distribution of measured intensities, velocities, and line widths to compare against the known truth.
+
+To observe a series of atmosphere files instead, see [Simulating a time series](time-series.md). The rest of this page applies to that too.
 
 ## Choosing an instrument
 
@@ -77,6 +79,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
 - `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only), covered in [pinhole stray light](pinholes.md)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
+- `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [Simulating a time series](time-series.md)
 
 Here's a complete example configuration file:
 
@@ -181,7 +184,7 @@ Without `components`, a single-Gaussian fit is used.
 
     Separately, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two, because the dip between them never falls below half maximum and the initial width then covers the whole blend. `constrain_positive_intensity` does not help here and can make it worse.
 
-If you synthesised data in dynamic mode, your configuration must specify:
+If you synthesised data in the deprecated dynamic mode, your configuration must specify:
 
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time

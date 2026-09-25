@@ -319,7 +319,7 @@ def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path,
     ("temperature", np.ones(SHAPE) * u.m, "convertible"),
     ("mass_density", None, "needs a mass_density or an electron_density"),
     ("z_edges", np.arange(SHAPE[0] + 1)[::-1] * u.Mm, "must increase"),
-    ("x_edges", np.arange(2) * u.Mm, "at least 2 cells"),
+    ("x_edges", np.arange(1) * u.Mm, "at least 1 cell"),
     ("time", np.arange(2) * u.s, "0 dimensions"),
 ])
 def test_an_atmosphere_checks_what_it_is_given(field, value, message):
