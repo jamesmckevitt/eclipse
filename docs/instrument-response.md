@@ -2,7 +2,7 @@
 
 This is the second stage of a run. It takes the spectra produced when you [synthesised an atmosphere](index.md#how-eclipse-works), puts them through the telescope and detector, adds the noise, and fits the result the same way you would fit real data. Because the noise is random, a Monte Carlo simulation gives a distribution of measured intensities, velocities, and line widths to compare against the known truth.
 
-To observe a series of atmosphere files instead, see [Simulating a time series](time-series.md), and for spectra that another code synthesised, [From another code](other-codes.md). The rest of this page applies to those too.
+To observe a series of atmosphere or synthesis files instead, see [Simulating a time series](time-series.md), and for spectra that another code synthesised, [From another code](other-codes.md). The rest of this page applies to those too.
 
 ## Choosing an instrument
 
@@ -80,6 +80,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 - `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
 - `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [Simulating a time series](time-series.md)
+- `synthesis_series`: a time series of synthesis files, one per snapshot, observed with a `raster` plan in the same way (alternative to a synthesis file), see [From synthesis files](time-series.md#from-synthesis-files)
 
 Here's a complete example configuration file:
 

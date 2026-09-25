@@ -18,7 +18,7 @@ import h5py
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
 from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
                               pad_spectral_axis, rebin_spectra)
-from .raster import AtmosphereSeries, RasterSynthesiser
+from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
@@ -40,15 +40,16 @@ _TOP_LEVEL_KEYS = {
     "instrument", "n_iter", "ncpu",
     "uniform_intensity", "rest_wavelength", "thermal_width",
     "synthesis_file", "reference_line",
-    "atmosphere_series", "synthesis", "raster",
+    "atmosphere_series", "synthesis_series", "synthesis", "raster",
     "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral",
     "offchip_bin_slit", "fit_signals",
     "simulation", "detector", "telescope", "filter", "fitting",
 }
 
-# What a time series of atmosphere files is synthesised with, and how it is
-# observed. The synthesis keys are those of synthesise-spectra; the raster
-# keys are the observing plan of euvst_response.raster.RasterPlan.
+# What a time series of atmosphere files is synthesised with, and how a time
+# series, of atmosphere or of synthesis files, is observed. The synthesis keys
+# are those of synthesise-spectra; the raster keys are the observing plan of
+# euvst_response.raster.RasterPlan.
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
                    "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
                    "goft_temperature_chunk"}
@@ -246,8 +247,8 @@ def _parse_raster_plan(config: dict):
 
     section = config.get("raster")
     if section is None:
-        raise ValueError("An 'atmosphere_series' needs a 'raster:' section saying at "
-                         "least when the observation starts ('start').")
+        raise ValueError("A time series needs a 'raster:' section saying at least when "
+                         "the observation starts ('start').")
     start = _quantity_or_none(section, "start", u.s, "raster")
     if start is None:
         raise ValueError("'raster.start' is needed: the simulation time at which the "
@@ -262,24 +263,37 @@ def _parse_raster_plan(config: dict):
     return RasterPlan(**plan)
 
 
-def _atmosphere_series_paths(config: dict) -> list:
-    """The files of 'atmosphere_series': a list of paths, or a glob pattern."""
+def _series_paths(config: dict, key: str) -> list:
+    """The files of 'atmosphere_series' or 'synthesis_series': a list of paths, or a glob pattern."""
     import glob
 
-    value = config["atmosphere_series"]
+    value = config[key]
     if isinstance(value, str):
         paths = sorted(glob.glob(value))
         if not paths:
-            raise FileNotFoundError(f"'atmosphere_series' matches no file: {value}")
+            raise FileNotFoundError(f"'{key}' matches no file: {value}")
         return paths
     if isinstance(value, list) and value and all(isinstance(p, str) for p in value):
         missing = [p for p in value if not Path(p).is_file()]
         if missing:
-            raise FileNotFoundError(f"'atmosphere_series' names files that do not exist: "
-                                    f"{missing}")
+            raise FileNotFoundError(f"'{key}' names files that do not exist: {missing}")
         return list(value)
-    raise ValueError("'atmosphere_series' must be a glob pattern or a list of atmosphere "
-                     "files, e.g. './data/bifrost/*.h5'.")
+    kind = "atmosphere" if key == "atmosphere_series" else "synthesis"
+    raise ValueError(f"'{key}' must be a glob pattern or a list of {kind} files, "
+                     f"e.g. './data/bifrost/*.h5'.")
+
+
+# The line observed when the configuration names none and the synthesis holds
+# more than one.
+DEFAULT_REFERENCE_LINE = "Fe12_195.1190"
+
+
+def _reference_line(config: dict, synthesis_path) -> str:
+    """'reference_line', or else the synthesis file's only line, or else the default line."""
+    if "reference_line" in config:
+        return config["reference_line"]
+    names = synthesis_line_names(synthesis_path)
+    return names[0] if len(names) == 1 else DEFAULT_REFERENCE_LINE
 
 
 def _parse_pinhole_config(config: dict) -> tuple:
@@ -473,22 +487,25 @@ def main() -> None:
         if _mpi_rank == 0:
             print(f"MPI: ncpu={ncpu} per rank")
 
-    # Simulation mode
+    # Simulation mode. A time series is either atmosphere files, synthesised
+    # in this run, or synthesis files, synthesised beforehand.
     uniform_intensity_mode = "uniform_intensity" in config
-    raster_mode = "atmosphere_series" in config
-    if raster_mode and uniform_intensity_mode:
-        raise ValueError("Give 'atmosphere_series' or 'uniform_intensity', not both.")
-    if raster_mode and "synthesis_file" in config:
-        raise ValueError("Give 'atmosphere_series' or 'synthesis_file', not both: a time "
-                        "series is synthesised in this run, a synthesis file beforehand.")
-    if not raster_mode:
-        for key in ("synthesis", "raster"):
-            if key in config:
-                raise ValueError(f"The '{key}:' section belongs to an 'atmosphere_series' "
-                                 f"run and would not be read here.")
+    atmosphere_series_mode = "atmosphere_series" in config
+    synthesis_series_mode = "synthesis_series" in config
+    raster_mode = atmosphere_series_mode or synthesis_series_mode
+    given = [key for key in ("uniform_intensity", "synthesis_file", "atmosphere_series",
+                             "synthesis_series") if key in config]
+    if raster_mode and len(given) > 1:
+        raise ValueError(f"Give only one of {given}: each says what is observed.")
+    if not atmosphere_series_mode and "synthesis" in config:
+        raise ValueError("The 'synthesis:' section belongs to an 'atmosphere_series' run "
+                         "and would not be read here.")
+    if not raster_mode and "raster" in config:
+        raise ValueError("The 'raster:' section belongs to an 'atmosphere_series' or "
+                         "'synthesis_series' run and would not be read here.")
 
-    if raster_mode:
-        series_paths = _atmosphere_series_paths(config)
+    if atmosphere_series_mode:
+        series_paths = _series_paths(config, "atmosphere_series")
         synthesis_settings = _parse_synthesis_settings(config)
         raster_plan = _parse_raster_plan(config)
         reference_line = config.get("reference_line", synthesis_settings.lines[0])
@@ -498,6 +515,16 @@ def main() -> None:
         print("TIME SERIES MODE")
         print(f"  Atmosphere files: {len(series_paths)}")
         print(f"  Lines: {list(synthesis_settings.lines)}, reference {reference_line}")
+        print(f"  Raster: {raster_plan.steps} step(s), {raster_plan.repeats} repeat(s), "
+              f"starting at {raster_plan.start}")
+    elif synthesis_series_mode:
+        series_paths = _series_paths(config, "synthesis_series")
+        synthesis_settings = None
+        raster_plan = _parse_raster_plan(config)
+        reference_line = _reference_line(config, series_paths[0])
+        print("TIME SERIES MODE")
+        print(f"  Synthesis files: {len(series_paths)}")
+        print(f"  Reference line: {reference_line}")
         print(f"  Raster: {raster_plan.steps} step(s), {raster_plan.repeats} repeat(s), "
               f"starting at {raster_plan.start}")
     elif uniform_intensity_mode:
@@ -519,21 +546,16 @@ def main() -> None:
                 f"Synthesis file not found: {synthesis_file}. "
                 "Please check the 'synthesis_file' path in your config file."
             )
-        # A file of one line is observed at that line; otherwise the line
-        # has to be named, or the default one is used.
         synthesis_is_hdf5 = is_synthesis_file(synthesis_file)
-        default_line = "Fe12_195.1190"
         if synthesis_is_hdf5:
-            names = synthesis_line_names(synthesis_file)
-            if len(names) == 1:
-                default_line = names[0]
+            reference_line = _reference_line(config, synthesis_file)
         else:
             warnings.warn(
                 f"{synthesis_file} is a synthesis pickle, as older versions of ECLIPSE "
                 f"wrote them. Pickles are deprecated and will not be read in a future "
                 f"release: re-run the synthesis, or convert the file with "
                 f"euvst_response.convert_synthesis_pickle.", FutureWarning, stacklevel=2)
-        reference_line = config.get("reference_line", default_line)
+            reference_line = config.get("reference_line", DEFAULT_REFERENCE_LINE)
 
     # Pinhole config (fixed paired lists, not swept)
     (pinhole_sizes, pinhole_positions,
@@ -716,7 +738,7 @@ def main() -> None:
     if uniform_intensity_mode:
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
-    elif raster_mode:
+    elif atmosphere_series_mode:
         # The cubes are synthesised per combination inside the loop, since
         # the slit width and the exposure time decide what the slit sees.
         cube_sim = None
@@ -725,6 +747,17 @@ def main() -> None:
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         raster = RasterSynthesiser(series, synthesis_settings)
         print(f"  CHIANTI database: {raster.goft_dbase_root}")
+    elif synthesis_series_mode:
+        # The spectra are read per combination inside the loop, a strip of
+        # columns at a time, and each column once.
+        cube_sim = None
+        print("\nReading the synthesis series...")
+        series = SynthesisSeries(series_paths, reference_line)
+        print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
+        print(f"  Lines in the window of {reference_line}: {', '.join(series.lines)}")
+        raster = SynthesisRaster(series)
+        view = (read_synthesis_products(series.paths[0], keys=("config",)).get("config")
+                or {}).get("integration_axis") or "z"
     else:
         print("\nLoading the synthesis...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
@@ -897,7 +930,7 @@ def main() -> None:
             cube_reb_key = sampling_key
         rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
 
-        if raster_mode and cube_reb_key not in cube_reb_cache:
+        if atmosphere_series_mode and cube_reb_key not in cube_reb_cache:
             print(f"\nSynthesising the time series as observed "
                   f"(slit_width={slit_width}, expos={expos})...")
             cube_sim = raster.summed_cube(raster_plan, slit_width, expos, reference_line,
@@ -905,6 +938,21 @@ def main() -> None:
             raster_summed[cube_reb_key] = cube_sim
             print(f"  {cube_sim.data.shape[1]} exposures, {raster.strips_synthesised} "
                   f"strips synthesised so far")
+        if synthesis_series_mode and cube_reb_key not in cube_reb_cache:
+            print(f"\nReading the time series as observed "
+                  f"(slit_width={slit_width}, expos={expos})...")
+            # The exposures, as a synthesis whose columns they are, go onto
+            # the detector as a single snapshot does.
+            synthesis, raster_meta = raster.synthesis(raster_plan, slit_width, expos,
+                                                      repeat=raster_repeat)
+            summed_input = synthesis.summed(reference_line)
+            cube_sim = None
+            if synthesis.evenly_spaced(reference_line):
+                cube_sim = synthesis.summed_cube(reference_line, summed_input, view)
+                cube_sim.meta.update(raster_meta)
+            raster_summed[cube_reb_key] = cube_sim
+            print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "
+                  f"strips read so far")
 
         if cube_reb_key not in cube_reb_cache:
             print(
@@ -936,9 +984,12 @@ def main() -> None:
                 # further than the synthesis window's margin allows, so the
                 # window is widened to hold what it spreads. Not for the
                 # reference slit, whose window is as it was.
-                rebinned = (rebin_spectra(synthesis, reference_line, DET, SIM_rebin,
-                                          summed=summed_input)
-                            if synthesis is not None else rebin_atmosphere(cube_sim, DET, SIM_rebin))
+                if synthesis is None:
+                    rebinned = rebin_atmosphere(cube_sim, DET, SIM_rebin)
+                else:
+                    rebinned = rebin_spectra(synthesis, reference_line, DET, SIM_rebin,
+                                             summed=summed_input,
+                                             meta=raster_meta if synthesis_series_mode else None)
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
 
@@ -1098,7 +1149,7 @@ def main() -> None:
                 "settings": synthesis_settings,
                 "series": [str(p) for p in series.paths],
                 "times": series.times,
-                "hdf5_dbase_root": raster.goft_dbase_root,
+                "hdf5_dbase_root": raster.goft_dbase_root if atmosphere_series_mode else None,
                 "cubes": raster_cubes,
             }
 

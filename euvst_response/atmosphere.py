@@ -585,8 +585,9 @@ def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
 
 def _read_dataset(f: h5py.Group, name: str,
                   columns: Optional[slice] = None,
-                  units: Dict[str, u.Unit] = UNITS) -> u.Quantity:
-    """A dataset of a file or of a group in it, with its unit; *columns* reads only that slice of a cube's x axis."""
+                  units: Dict[str, u.Unit] = UNITS,
+                  axis: int = -1) -> u.Quantity:
+    """A dataset of a file or of a group in it, with its unit; *columns* reads only that slice of its x axis, *axis*."""
     where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
     if name not in f:
         raise ValueError(f"{where} has no '{name}' dataset.")
@@ -598,7 +599,12 @@ def _read_dataset(f: h5py.Group, name: str,
                          f"'{units[name]}'.")
     if isinstance(unit, bytes):
         unit = unit.decode()
-    values = dataset[()] if columns is None else dataset[:, :, columns]
+    if columns is None:
+        values = dataset[()]
+    else:
+        index = [slice(None)] * dataset.ndim
+        index[axis] = columns
+        values = dataset[tuple(index)]
     return u.Quantity(values, u.Unit(unit))
 
 

@@ -441,7 +441,7 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     return cube_det
 
 
-def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None) -> NDCube:
+def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=None) -> NDCube:
     """
     A synthesis file's spectra at instrument resolution and spatial sampling.
 
@@ -466,6 +466,9 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None) -> NDCu
     summed : u.Quantity, optional
         ``synthesis.summed(reference_line)``, if it has been worked out
         already.
+    meta : dict, optional
+        More metadata for the cube, such as a time series' ``raster``
+        entries, whose columns are its exposures and are kept as they are.
 
     Returns
     -------
@@ -495,7 +498,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None) -> NDCu
     cube_spec = NDCube(data, wcs=wcs, unit=radiance.unit,
                        meta={"rest_wav": reference.rest_wavelength, "line_name": reference_line,
                              "source": synthesis.source,
-                             "velocity_convention": VELOCITY_CONVENTION})
+                             "velocity_convention": VELOCITY_CONVENTION, **(meta or {})})
 
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det, ncpu=sim.ncpu)

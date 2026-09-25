@@ -85,7 +85,7 @@ def test_a_synthesis_file_round_trips(tmp_path):
                           _grid(BLEND_REST), BLEND_REST),
              "Fe10_184.5370": _line(_lines(rest=184.537 * u.AA) * RADIANCE_UNIT,
                                     _grid(184.537 * u.AA), 184.537 * u.AA)}
-    synthesis = _synthesis(lines, source="another code, snapshot 12")
+    synthesis = _synthesis(lines, source="another code, snapshot 12", time=1250 * u.s)
     read = read_synthesis(write_synthesis(synthesis, tmp_path / "synthesis.h5"))
     # The lines keep the order they were written in, not HDF5's by name.
     assert list(read.lines) == [LINE, BLEND, "Fe10_184.5370"]
@@ -94,7 +94,24 @@ def test_a_synthesis_file_round_trips(tmp_path):
             assert u.allclose(getattr(read.lines[name], field), getattr(line, field), rtol=0)
     assert u.allclose(read.x_edges, synthesis.x_edges, rtol=0)
     assert read.source == "another code, snapshot 12"
+    assert read.time == 1250 * u.s
     assert read_synthesis_products(tmp_path / "synthesis.h5") == {}
+    # The time is optional, as a single snapshot does not need one.
+    assert read_synthesis(write_synthesis(_synthesis(), tmp_path / "untimed.h5")).time is None
+
+
+def test_a_strip_of_columns_reads_as_that_part_of_the_image(tmp_path):
+    """A time series reads only the columns under the slit."""
+    path = write_synthesis(_synthesis(time=10 * u.s), tmp_path / "synthesis.h5")
+    whole = read_synthesis(path)
+    strip = read_synthesis(path, LINE, columns=slice(1, 3))
+    assert strip.shape == (NY, 2)
+    assert np.array_equal(strip.lines[LINE].intensity.value, whole.lines[LINE].intensity.value[:, 1:3])
+    assert u.allclose(strip.x_edges, whole.x_edges[1:4], rtol=0)
+    assert u.allclose(strip.y_edges, whole.y_edges, rtol=0)
+    assert strip.time == 10 * u.s
+    with pytest.raises(ValueError, match="neighbouring pixels"):
+        read_synthesis(path, columns=slice(0, 4, 2))
 
 
 def test_only_the_lines_that_reach_the_window_are_read(tmp_path):
@@ -184,6 +201,9 @@ def test_a_line_is_checked(change, error, match):
     (dict(y_edges=_edges(NY + 1)), ValueError, r"\(y, x, wavelength\)"),
     (dict(lines={}), ValueError, "at least one line"),
     (dict(lines={"Fe/12": None}), ValueError, "without '/'"),
+    (dict(time=5 * u.m), u.UnitConversionError, "unit of time"),
+    (dict(time=[0.0, 5.0] * u.s), ValueError, "0 dimensions"),
+    (dict(time=np.nan * u.s), ValueError, "NaN or infinite"),
 ])
 def test_a_synthesis_is_checked(change, error, match):
     fields = {"lines": {LINE: _line()}, "x_edges": _edges(NX), "y_edges": _edges(NY), **change}
@@ -242,8 +262,11 @@ def test_an_old_pickle_converts_with_everything_it_held(tmp_path):
                    "goft": {LINE: {"g_tn": np.ones((2, 3)), "si": cubes[LINE].data,
                                    "wl_grid": cubes[LINE].axis_world_coords(-1)[0]}},
                    "config": {"integration_axis": "z", "vel_res": 5 * u.km / u.s},
+                   "atmosphere": {"source": "a simulation", "time": 42.0 * u.s},
                    "dynamic_mode": {"enabled": False}}, f)
     loaded = load_synthesis(convert_synthesis_pickle(tmp_path / "old.pkl", tmp_path / "new.h5"))
+    # The snapshot's time goes with the spectra, as the synthesis now writes it.
+    assert read_synthesis(tmp_path / "new.h5").time == 42.0 * u.s
     assert list(loaded["line_cubes"]) == [LINE, BLEND]
     assert np.array_equal(loaded["line_cubes"][LINE].data, cubes[LINE].data)
     assert np.array_equal(loaded["dem_map"], np.ones((NY, NX, 3)))

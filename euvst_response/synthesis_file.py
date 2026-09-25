@@ -20,6 +20,8 @@ Datasets, each with a ``unit`` attribute astropy can parse, and groups:
 - ``x_edges``, ``y_edges``: the pixel boundaries of the image, 1D,
   increasing and evenly spaced. Lengths on the Sun, or angles as seen from
   1 AU. x runs across the slit, the way a raster steps, and y along it.
+- ``time``: a scalar, the time of the snapshot, optional. A time series of
+  synthesis files needs it to place each file.
 - ``lines/<name>``: one group per line, named as ``reference_line`` names it
   in the instrument configuration, holding
 
@@ -61,6 +63,7 @@ __all__ = [
     "SpectralLine",
     "Synthesis",
     "read_synthesis",
+    "read_synthesis_layout",
     "write_synthesis",
     "read_synthesis_products",
     "load_synthesis",
@@ -86,7 +89,7 @@ AXES = ("x", "y")
 EDGES = {axis: f"{axis}_edges" for axis in AXES}
 # A unit of the right kind for each dataset, for the messages that ask for one.
 UNITS = {"intensity": u.erg / (u.s * u.cm**2 * u.sr * u.AA), "wavelength": u.AA,
-         "rest_wavelength": u.AA, "x_edges": u.Mm, "y_edges": u.Mm}
+         "rest_wavelength": u.AA, "x_edges": u.Mm, "y_edges": u.Mm, "time": u.s}
 # The image axes of a view along each axis of a simulation, as ECLIPSE's line
 # cubes name them.
 _VIEW_CTYPES = {"z": ("SOLX", "SOLY"), "x": ("SOLY", "SOLZ"), "y": ("SOLX", "SOLZ")}
@@ -204,14 +207,20 @@ class Synthesis:
         seen from 1 AU. x runs across the slit and y along it.
     source : str, optional
         Free text naming the code and the model, kept in the file.
+    time : u.Quantity, optional
+        The time of the snapshot, which a time series of synthesis files
+        needs to place it.
     """
 
     lines: Mapping[str, SpectralLine]
     x_edges: u.Quantity
     y_edges: u.Quantity
     source: str = ""
+    time: Optional[u.Quantity] = None
 
     def __post_init__(self):
+        if self.time is not None:
+            _checked(self.time, "time", ndim=0, kinds=("time",))
         for axis in AXES:
             name = EDGES[axis]
             edges = _checked(getattr(self, name), name, ndim=1, kinds=("length", "angle"))
@@ -376,6 +385,8 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
         f.attrs["source"] = synthesis.source
         for axis in AXES:
             _write_dataset(f, EDGES[axis], getattr(synthesis, EDGES[axis]))
+        if synthesis.time is not None:
+            _write_dataset(f, "time", synthesis.time)
         # The lines keep the order they were given in, which HDF5 would
         # otherwise sort by name.
         group = f.create_group("lines", track_order=True)
@@ -389,7 +400,8 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
     return path
 
 
-def read_synthesis(path: str | Path, reference_line: Optional[str] = None) -> Synthesis:
+def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
+                   columns: Optional[slice] = None) -> Synthesis:
     """
     Read a synthesis file's spectra.
 
@@ -401,39 +413,96 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None) -> Sy
         wavelengths reach its window are read, since the others add nothing
         to it, which keeps a synthesis of many lines cheap to observe one at
         a time. None reads them all.
+    columns : slice, optional
+        Which pixels along x to read, as a slice of neighbouring x indices,
+        as a time series reads the strip under the slit. None reads the
+        whole image.
     """
     path = Path(path)
     with h5py.File(path, "r") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
         edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
-        group = f.get("lines")
-        if group is None or len(group) == 0:
-            raise ValueError(f"{path} holds no lines.")
-        names = list(group)
-        if reference_line is not None:
-            if reference_line not in group:
-                raise ValueError(f"'reference_line' {reference_line!r} is not in {path}; "
-                                 f"its lines are {names}.")
-            window = _read_dataset(group[reference_line], "wavelength", units=UNITS)
-            names = [name for name in names
-                     if _reaches(_read_dataset(group[name], "wavelength", units=UNITS), window)]
+        if columns is not None:
+            first, last, step = columns.indices(edges["x_edges"].size - 1)
+            if step != 1 or last <= first:
+                raise ValueError(f"columns must be a slice of neighbouring pixels, got {columns}.")
+            edges["x_edges"] = edges["x_edges"][first:last + 1]
+            columns = slice(first, last)
+        group, names = _lines_reaching(f, path, reference_line)
         lines = {}
         for name in names:
             entry = group[name]
-            fields = {key: _read_dataset(entry, key, units=UNITS)
-                      for key in ("intensity", "wavelength", "rest_wavelength")}
+            fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
+                      "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
+                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS)}
             try:
                 lines[name] = SpectralLine(**fields)
             except (TypeError, ValueError) as error:
                 raise type(error)(f"{path}, line {name!r}: {error}") from None
-        source = f.attrs.get("source", "")
-        if isinstance(source, bytes):
-            source = source.decode()
+        source = _source(f)
+        time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
     try:
-        return Synthesis(lines=lines, source=str(source), **edges)
+        return Synthesis(lines=lines, source=source, time=time, **edges)
     except (TypeError, ValueError) as error:
         raise type(error)(f"{path}: {error}") from None
+
+
+def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None) -> dict:
+    """
+    What a synthesis file holds, without reading its spectra.
+
+    Gives ``x_edges``, ``y_edges``, ``time`` (None if the file has none),
+    ``source`` and ``lines``, which maps each line, or each one reaching the
+    window of *reference_line* if given, to its ``wavelength``, its
+    ``rest_wavelength`` and the ``shape`` of its intensity. A time series
+    checks its files with it before reading any spectra.
+    """
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
+                      format_version=FORMAT_VERSION)
+        layout = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
+        layout["time"] = None
+        if "time" in f:
+            try:
+                layout["time"] = _checked(_read_dataset(f, "time", units=UNITS), "time",
+                                          ndim=0, kinds=("time",))
+            except (TypeError, ValueError) as error:
+                raise type(error)(f"{path}: {error}") from None
+        layout["source"] = _source(f)
+        group, names = _lines_reaching(f, path, reference_line)
+        layout["lines"] = {}
+        for name in names:
+            entry = group[name]
+            if "intensity" not in entry:
+                raise ValueError(f"{path}, line {name!r} has no 'intensity' dataset.")
+            layout["lines"][name] = {
+                "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
+                "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
+                "shape": entry["intensity"].shape}
+    return layout
+
+
+def _lines_reaching(f: h5py.File, path: Path, reference_line: Optional[str]):
+    """The file's ``lines`` group, and the names of its lines that reach the window of *reference_line*, or all of them."""
+    group = f.get("lines")
+    if group is None or len(group) == 0:
+        raise ValueError(f"{path} holds no lines.")
+    names = list(group)
+    if reference_line is not None:
+        if reference_line not in group:
+            raise ValueError(f"'reference_line' {reference_line!r} is not in {path}; "
+                             f"its lines are {names}.")
+        window = _read_dataset(group[reference_line], "wavelength", units=UNITS)
+        names = [name for name in names
+                 if _reaches(_read_dataset(group[name], "wavelength", units=UNITS), window)]
+    return group, names
+
+
+def _source(f: h5py.File) -> str:
+    source = f.attrs.get("source", "")
+    return str(source.decode() if isinstance(source, bytes) else source)
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
@@ -562,7 +631,8 @@ def _unjson(value: dict):
 # From ECLIPSE's line cubes
 # ----------------------------------------------------------------------
 def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
-                     products: Optional[Mapping] = None) -> Path:
+                     products: Optional[Mapping] = None,
+                     time: Optional[u.Quantity] = None) -> Path:
     """
     Write line cubes, as ECLIPSE's synthesis builds them, as a synthesis file.
 
@@ -579,6 +649,8 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
         Free text naming the simulation.
     products : mapping, optional
         What the synthesis worked out on the way; see :func:`write_synthesis`.
+    time : u.Quantity, optional
+        The time of the snapshot.
     """
     cubes = dict(line_cubes)
     if not cubes:
@@ -593,7 +665,7 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
         lines[name] = SpectralLine(intensity=np.asarray(cube.data) * cube.unit,
                                    wavelength=cube.axis_world_coords(-1)[0],
                                    rest_wavelength=cube.meta["rest_wav"])
-    return write_synthesis(Synthesis(lines=lines, source=source, **edges), path,
+    return write_synthesis(Synthesis(lines=lines, source=source, time=time, **edges), path,
                            products=products)
 
 
@@ -632,5 +704,8 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
         products["goft"] = {name: {key: value for key, value in info.items()
                                    if key not in ("si", "wl_grid")}
                             for name, info in goft.items()}
-    source = ((products.get("atmosphere") or {}).get("source") or "")
-    return write_line_cubes(saved["line_cubes"], path, source=str(source), products=products)
+    atmosphere = products.get("atmosphere") or {}
+    time = atmosphere.get("time")
+    return write_line_cubes(saved["line_cubes"], path, source=str(atmosphere.get("source") or ""),
+                            products=products,
+                            time=time if isinstance(time, u.Quantity) else None)

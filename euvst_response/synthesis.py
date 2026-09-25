@@ -2079,9 +2079,12 @@ def main(args=None) -> None:
         }
     }
     
+    # The snapshot's time goes with the spectra, so that syntheses of a
+    # series of snapshots can be observed as a time series.
     write_line_cubes(line_cubes, output_file,
                      source=(atmosphere_metadata or {}).get("source") or "",
-                     products=products)
+                     products=products,
+                     time=(atmosphere_metadata or {}).get("time"))
 
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
     print("Synthesis complete!")

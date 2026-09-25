@@ -308,7 +308,7 @@ does not match the pattern at all raises `ValueError` immediately.
 
 ## Output
 
-The synthesis writes a [synthesis file](other-codes.md#the-synthesis-file), the same HDF5 file the instrument run takes from another code, with the DEM, emission measure, contribution functions and settings kept alongside the spectra. [Working with synthesis results](#working-with-synthesis-results) shows how to read it.
+The synthesis writes a [synthesis file](other-codes.md#the-synthesis-file), the same HDF5 file the instrument run takes from another code, with the DEM, emission measure, contribution functions and settings kept alongside the spectra. It keeps the atmosphere file's time too, so the syntheses of a series of snapshots can be observed as a [time series](time-series.md#from-synthesis-files). [Working with synthesis results](#working-with-synthesis-results) shows how to read it.
 
 ## Performance tips
 

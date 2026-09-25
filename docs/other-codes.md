@@ -1,8 +1,6 @@
 # From another code
 
-To simulate the instrument on spectra that another code has synthesised, write them as a synthesis file first, the same HDF5 file ECLIPSE's own synthesis writes. The instrument run treats the two alike, so the file is then observed as a [single snapshot](instrument-response.md), named as `synthesis_file` in the configuration. Any code will do, optically thin or thick, as long as it gives the spectral radiance leaving the Sun at each pixel and wavelength.
-
-A [time series](time-series.md) doesn't take synthesis files: ECLIPSE synthesises each exposure there itself, from atmosphere files.
+To simulate the instrument on spectra that another code has synthesised, write them as a synthesis file first, the same HDF5 file ECLIPSE's own synthesis writes. The instrument run treats the two alike, so the file is then observed as a [single snapshot](instrument-response.md), named as `synthesis_file` in the configuration, and a file per snapshot, each with its time, is observed as a [time series](time-series.md#from-synthesis-files). Any code will do, optically thin or thick, as long as it gives the spectral radiance leaving the Sun at each pixel and wavelength.
 
 ## The synthesis file
 
@@ -12,6 +10,7 @@ The file is laid out much like an [atmosphere file](synthesis.md#atmosphere-file
 | --- | --- | --- |
 | `x_edges` | `(nx + 1,)` | The pixel boundaries across the slit, evenly spaced |
 | `y_edges` | `(ny + 1,)` | The pixel boundaries along the slit, evenly spaced |
+| `time` | scalar | The time of the snapshot, which only a time series needs |
 | `lines/<name>/intensity` | `(ny, nx, n_wavelength)` | The spectral radiance at each pixel and wavelength |
 | `lines/<name>/wavelength` | `(n_wavelength,)` | The wavelengths, increasing |
 | `lines/<name>/rest_wavelength` | scalar | The wavelength the line's Doppler shifts are measured from |
@@ -40,11 +39,12 @@ synthesis = Synthesis(
     x_edges=edges_from_centres(x * u.Mm),
     y_edges=edges_from_centres(y * u.Mm),
     source="My code, snapshot 1200",
+    time=1200 * u.s,  # needed only for a time series
 )
 write_synthesis(synthesis, "my_code.h5")
 ```
 
-Any other HDF5 writer works too, as long as the attributes and units are there. Then observe the file as a [single snapshot](instrument-response.md), with `synthesis_file: ./my_code.h5`.
+Any other HDF5 writer works too, as long as the attributes and units are there. Then observe the file as a [single snapshot](instrument-response.md), with `synthesis_file: ./my_code.h5`, or a file for each snapshot as a [time series](time-series.md#from-synthesis-files), with `synthesis_series: ./my_code_*.h5`.
 
 ## Worked example: FoMo
 

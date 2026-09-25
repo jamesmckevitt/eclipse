@@ -1,5 +1,5 @@
 """
-Observing a time series of atmospheres with a slit.
+Observing a time series of atmospheres, or of their spectra, with a slit.
 
 A slit spectrograph sees one strip of the Sun at a time. Over a raster each
 exposure sees a different strip at a later time, and over a sit-and-stare
@@ -7,7 +7,8 @@ the same strip again and again. Given a series of atmosphere files, each
 with its time, this module synthesises only the columns under the slit for
 each exposure, from the snapshots that overlap it, so an observation of a
 long series costs about one snapshot's worth of columns rather than every
-snapshot in full.
+snapshot in full. Given a series of synthesis files instead, from ECLIPSE or
+from another code, it reads those columns' spectra.
 
 The observing plan is a :class:`RasterPlan`: when the first exposure starts,
 how many slit positions a raster has, how far apart they are, how often the
@@ -46,10 +47,12 @@ from .synthesis import (
     line_of_sight_velocity,
     synthesise_cubes,
 )
+from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _to_length,
+                             read_synthesis, read_synthesis_layout, read_synthesis_products)
 from .utils import VELOCITY_CONVENTION, angle_to_distance
 
 __all__ = ["SynthesisSettings", "RasterPlan", "Exposure", "AtmosphereSeries",
-           "RasterSynthesiser"]
+           "RasterSynthesiser", "SynthesisSeries", "SynthesisRaster"]
 
 INTENSITY_UNIT = u.erg / u.s / u.cm**2 / u.sr / u.cm
 
@@ -192,8 +195,9 @@ class RasterPlan:
         expos : u.Quantity
             The exposure time; the cadence when none was given.
         atmosphere_centre : u.Quantity
-            The heliocentric x of the middle of the atmosphere; the raster's
-            centre when none was given.
+            The heliocentric x of the middle of the atmosphere, or of the
+            image of a series of synthesis files; the raster's centre when
+            none was given.
         repeat : int, optional
             Which raster, counting from 0. A plan of one raster needs none;
             a plan of several needs one, since each raster is observed on
@@ -225,37 +229,22 @@ class RasterPlan:
         return exposures
 
 
-class AtmosphereSeries:
+class _Series:
     """
-    Atmosphere files ordered by the time each records.
+    Snapshot files ordered by the time each records.
 
-    Every file must carry a time, and all must share one grid, since the
-    columns of one snapshot stand in for those of another in an exposure.
+    Each snapshot stands for the Sun from its time until the next one's, and
+    the last for as long again as the gap before it.
     """
 
-    def __init__(self, paths: Sequence[str | Path]):
-        if not paths:
-            raise ValueError("An atmosphere series needs at least one file.")
-        timed = []
-        for path in paths:
-            time = read_time(path)
-            if time is None:
-                raise ValueError(f"{path} records no time, which a series needs to place "
-                                 f"its snapshots; write one into the file.")
-            timed.append((time.to_value(u.s), Path(path)))
-        timed.sort(key=lambda item: item[0])
+    def __init__(self, timed: Sequence[Tuple[float, Path]]):
+        timed = sorted(timed, key=lambda item: item[0])
         times = np.array([t for t, _ in timed])
         if np.any(np.diff(times) <= 0):
             same = [str(p) for (t, p), (t2, _) in zip(timed[:-1], timed[1:]) if t == t2]
             raise ValueError(f"Two files of the series record the same time: {same[0]}")
         self.paths: List[Path] = [p for _, p in timed]
         self.times: u.Quantity = times * u.s
-        # The grid comes from the first file; the others are checked as they
-        # are read.
-        edges = read_edges(self.paths[0])
-        self.x_edges = edges["x"]
-        self.y_edges = edges["y"]
-        self.z_edges = edges["z"]
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -293,6 +282,128 @@ class AtmosphereSeries:
         return [(int(k), float(f)) for k, f in enumerate(fractions) if f > 0.0]
 
 
+class AtmosphereSeries(_Series):
+    """
+    Atmosphere files ordered by the time each records.
+
+    Every file must carry a time, and all must share one grid, since the
+    columns of one snapshot stand in for those of another in an exposure.
+    """
+
+    def __init__(self, paths: Sequence[str | Path]):
+        if not paths:
+            raise ValueError("An atmosphere series needs at least one file.")
+        timed = []
+        for path in paths:
+            time = read_time(path)
+            if time is None:
+                raise ValueError(f"{path} records no time, which a series needs to place "
+                                 f"its snapshots; write one into the file.")
+            timed.append((time.to_value(u.s), Path(path)))
+        super().__init__(timed)
+        # The grid comes from the first file; the others are checked as they
+        # are read.
+        edges = read_edges(self.paths[0])
+        self.x_edges = edges["x"]
+        self.y_edges = edges["y"]
+        self.z_edges = edges["z"]
+
+
+# Two grids that should be one are compared allowing only for the rounding of
+# a change of unit, as between files written in Angstrom and in nm.
+_SAME_GRID = 1e-12
+
+
+def _same_grid(found: u.Quantity, expected: u.Quantity) -> bool:
+    if found.shape != expected.shape:
+        return False
+    values = found.to_value(expected.unit)
+    return bool(np.all(np.abs(values - expected.value)
+                       <= _SAME_GRID * np.abs(expected.value).max()))
+
+
+class SynthesisSeries(_Series):
+    """
+    Synthesis files ordered by the time each records, as far as one line's window.
+
+    Every file must carry a time, and all must share one image and the same
+    lines on the same wavelengths, since the columns of one snapshot stand
+    in for those of another in an exposure and their spectra are added up.
+    Only the lines that reach the window of *reference_line* are read, as
+    for a single synthesis file.
+
+    Parameters
+    ----------
+    paths : sequence of str or Path
+    reference_line : str
+        The line the instrument measures.
+    """
+
+    def __init__(self, paths: Sequence[str | Path], reference_line: str):
+        if not paths:
+            raise ValueError("A synthesis series needs at least one file.")
+        layouts = {}
+        timed = []
+        for path in paths:
+            path = Path(path)
+            layout = read_synthesis_layout(path, reference_line)
+            if layout["time"] is None:
+                raise ValueError(f"{path} records no time, which a series needs to place "
+                                 f"its snapshots; write one into the file.")
+            dynamic = read_synthesis_products(path, keys=("dynamic_mode",)).get("dynamic_mode")
+            if (dynamic or {}).get("enabled"):
+                raise ValueError(f"{path} was synthesised in dynamic mode, which already "
+                                 f"scanned a slit over time; a series takes one snapshot "
+                                 f"per file.")
+            layouts[path] = layout
+            timed.append((layout["time"].to_value(u.s), path))
+        super().__init__(timed)
+        self.reference_line = reference_line
+        first = self.paths[0]
+        layout = layouts[first]
+        # x in Mm, as the slit positions are; y as the files give it.
+        self.x_edges: u.Quantity = _to_length(layout["x_edges"])
+        self.y_edges: u.Quantity = layout["y_edges"]
+        self.wavelengths: Dict[str, u.Quantity] = {
+            name: info["wavelength"] for name, info in layout["lines"].items()}
+        self.rest_wavelengths: Dict[str, u.Quantity] = {
+            name: info["rest_wavelength"] for name, info in layout["lines"].items()}
+        shape = (self.y_edges.size - 1, self.x_edges.size - 1)
+        for name, info in layout["lines"].items():
+            if tuple(info["shape"]) != shape + (info["wavelength"].size,):
+                raise ValueError(
+                    f"{first}, line {name!r}: the intensity is {tuple(info['shape'])}, but "
+                    f"the edges and wavelengths give (ny, nx, n_wavelength) = "
+                    f"{shape + (info['wavelength'].size,)}.")
+        for path in self.paths[1:]:
+            other = layouts[path]
+            for axis, edges in (("x", self.x_edges), ("y", self.y_edges)):
+                found = other[f"{axis}_edges"]
+                if not _same_grid(_to_length(found), _to_length(edges)):
+                    raise ValueError(f"{path} has a different {axis} grid from {first}; a "
+                                     f"series must share one image.")
+            if list(other["lines"]) != list(layout["lines"]):
+                raise ValueError(f"{path} has the lines {list(other['lines'])} in the window "
+                                 f"of {reference_line}, and {first} has "
+                                 f"{list(layout['lines'])}; a series must have the same.")
+            for name, info in other["lines"].items():
+                if not _same_grid(info["wavelength"], self.wavelengths[name]):
+                    raise ValueError(f"{path} has different wavelengths for {name} from "
+                                     f"{first}; a series must keep each line on one grid.")
+                if not _same_grid(info["rest_wavelength"], self.rest_wavelengths[name]):
+                    raise ValueError(f"{path} gives {name} a different rest wavelength from "
+                                     f"{first}.")
+                if tuple(info["shape"]) != tuple(layout["lines"][name]["shape"]):
+                    raise ValueError(f"{path}, line {name!r}: the intensity is "
+                                     f"{tuple(info['shape'])}, not "
+                                     f"{tuple(layout['lines'][name]['shape'])} as in {first}.")
+
+    @property
+    def lines(self) -> List[str]:
+        """The lines read, those that reach the window of the reference line."""
+        return list(self.wavelengths)
+
+
 def _runs(indices: Sequence[int]) -> List[Tuple[int, int]]:
     """The runs of consecutive numbers in the ascending *indices*, each as its first and its last plus one."""
     runs: List[Tuple[int, int]] = []
@@ -304,42 +415,31 @@ def _runs(indices: Sequence[int]) -> List[Tuple[int, int]]:
     return runs
 
 
-class RasterSynthesiser:
+class _SlitRaster:
     """
-    Synthesises the spectra a slit sees over a plan, one exposure at a time.
+    What a slit sees over a plan, from the columns of a series of snapshots.
 
-    The contribution functions are computed once. Each column of each
-    snapshot is synthesised the first time an exposure needs it and kept,
-    so a sweep over exposure times or slit widths reuses most of the work.
-
-    Parameters
-    ----------
-    series : AtmosphereSeries
-    settings : SynthesisSettings
+    Each column of each snapshot is fetched the first time an exposure needs
+    it and kept, so a sweep over exposure times or slit widths reuses most of
+    the work. How a strip of columns is fetched is up to the subclass.
     """
 
-    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings):
+    # What the x grid spans, for the message when a slit reaches beyond it.
+    _extent = "atmosphere"
+
+    def __init__(self, series: _Series):
         self.series = series
-        self.settings = settings
-        self.vel_grid = settings.velocity_grid()
-        print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines")
-        self.goft, self.logT_grid, self.logN_grid = compute_goft_fiasco(
-            list(settings.lines), abundance=settings.abundance,
-            precision=settings.precision, n_workers=settings.n_workers,
-            hdf5_dbase_root=settings.hdf5_dbase_root,
-            temperature_chunk=settings.goft_temperature_chunk)
-        self.goft_dbase_root = next(iter(self.goft.values()))["hdf5_dbase_root"]
-        self._mass_per_electron: Optional[Tuple[float, str]] = None
         self._columns: Dict[Tuple[int, int], Dict[str, np.ndarray]] = {}
-        self._wl_grids: Dict[str, u.Quantity] = {}
-        self._rows: Optional[u.Quantity] = None
-        self._row_pitch: Optional[u.Quantity] = None
-        self.strips_synthesised = 0
+
+    def _load_strip(self, snapshot: int, first: int, last: int) -> None:
+        """Put columns *first* to *last* of one snapshot into the cache."""
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Geometry
     # ------------------------------------------------------------------
     def atmosphere_centre(self) -> u.Quantity:
+        """The heliocentric x of the middle of the series' x grid."""
         edges = self.series.x_edges
         return 0.5 * (edges[0] + edges[-1])
 
@@ -355,7 +455,8 @@ class RasterSynthesiser:
         if low < edges[0] or high > edges[-1]:
             raise ValueError(
                 f"A slit {width:.4g} Mm wide at x = {position.to_value(u.Mm):.4g} Mm reaches "
-                f"outside the atmosphere, which spans x = {edges[0]:.4g} to {edges[-1]:.4g} Mm.")
+                f"outside the {self._extent}, which spans x = {edges[0]:.4g} to "
+                f"{edges[-1]:.4g} Mm.")
         overlap = np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low), 0.0, None)
         # A slit edge that lands on a cell boundary, as it does when the slit
         # is a whole number of cells wide, must not pull in the cell beyond
@@ -365,6 +466,95 @@ class RasterSynthesiser:
         inside = np.flatnonzero(overlap > tolerance)
         first, last = int(inside[0]), int(inside[-1]) + 1
         return first, last, overlap[first:last] / overlap[first:last].sum()
+
+    # ------------------------------------------------------------------
+    # Exposures
+    # ------------------------------------------------------------------
+    def column_spectra(self, snapshot: int, column: int) -> Dict[str, np.ndarray]:
+        """The spectra of one column of one snapshot, ``(rows, wavelength)`` per line."""
+        if (snapshot, column) not in self._columns:
+            self._load_strip(snapshot, column, column + 1)
+        return self._columns[(snapshot, column)]
+
+    def exposure_spectra(self, exposure: Exposure, slit_width: u.Quantity) -> Dict[str, np.ndarray]:
+        """
+        What the slit collects in one exposure: the columns under it, averaged over
+        the slit, and the snapshots it spans, weighted by the time each covers.
+        """
+        first, last, fractions = self.columns_under(exposure.position, slit_width)
+        spectra: Dict[str, np.ndarray] = {}
+        for snapshot, weight in self.series.coverage(exposure.start, exposure.end):
+            missing = [c for c in range(first, last) if (snapshot, c) not in self._columns]
+            # Each run of neighbouring columns not yet fetched is one strip,
+            # so a wider slit around columns a narrower one has already seen
+            # fetches only the columns either side.
+            for run_first, run_last in _runs(missing):
+                self._load_strip(snapshot, run_first, run_last)
+            for column, fraction in zip(range(first, last), fractions):
+                for name, si in self._columns[(snapshot, column)].items():
+                    contribution = weight * fraction * si
+                    spectra[name] = contribution if name not in spectra else spectra[name] + contribution
+        return spectra
+
+    def _observe(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
+                 repeat: Optional[int]) -> Tuple[List[Dict[str, np.ndarray]], u.Quantity, u.Quantity, dict]:
+        """
+        One raster of the plan: each exposure's spectra, the slit positions, the distance
+        between them, and what the cube of the raster records about it.
+
+        The columns are the raster's exposures in order, at the slit
+        positions, which advance by the step. A sit-and-stare is a raster of
+        one exposure, so its cube has one column, as wide as the slit.
+        """
+        exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
+        collected = [self.exposure_spectra(exposure, slit_width) for exposure in exposures]
+        positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
+        pitch = (positions[1] - positions[0] if plan.steps > 1
+                 else angle_to_distance(slit_width).to(u.Mm))
+        meta_raster = {
+            "raster": True,
+            "repeat": 0 if repeat is None else repeat,
+            "positions": positions,
+            "starts": u.Quantity([e.start for e in exposures]).to(u.s),
+            "ends": u.Quantity([e.end for e in exposures]).to(u.s),
+            "steps": plan.steps,
+            "repeats": plan.repeats,
+            "slit_width": slit_width,
+            "expos": expos,
+        }
+        return collected, positions, pitch, meta_raster
+
+
+class RasterSynthesiser(_SlitRaster):
+    """
+    Synthesises the spectra a slit sees over a plan, one exposure at a time.
+
+    The contribution functions are computed once. Each column of each
+    snapshot is synthesised the first time an exposure needs it and kept,
+    so a sweep over exposure times or slit widths reuses most of the work.
+
+    Parameters
+    ----------
+    series : AtmosphereSeries
+    settings : SynthesisSettings
+    """
+
+    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings):
+        super().__init__(series)
+        self.settings = settings
+        self.vel_grid = settings.velocity_grid()
+        print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines")
+        self.goft, self.logT_grid, self.logN_grid = compute_goft_fiasco(
+            list(settings.lines), abundance=settings.abundance,
+            precision=settings.precision, n_workers=settings.n_workers,
+            hdf5_dbase_root=settings.hdf5_dbase_root,
+            temperature_chunk=settings.goft_temperature_chunk)
+        self.goft_dbase_root = next(iter(self.goft.values()))["hdf5_dbase_root"]
+        self._mass_per_electron: Optional[Tuple[float, str]] = None
+        self._wl_grids: Dict[str, u.Quantity] = {}
+        self._rows: Optional[u.Quantity] = None
+        self._row_pitch: Optional[u.Quantity] = None
+        self.strips_synthesised = 0
 
     # ------------------------------------------------------------------
     # Synthesis
@@ -380,6 +570,9 @@ class RasterSynthesiser:
                     mass_per_electron(self.settings.abundance, self.settings.hdf5_dbase_root),
                     f"fully ionised plasma with {self.settings.abundance} abundances")
         return self._mass_per_electron
+
+    def _load_strip(self, snapshot: int, first: int, last: int) -> None:
+        self._synthesise_strip(snapshot, first, last)
 
     def _synthesise_strip(self, snapshot: int, first: int, last: int) -> None:
         """Synthesise columns *first* to *last* of one snapshot into the cache."""
@@ -421,32 +614,6 @@ class RasterSynthesiser:
             self._columns[(snapshot, first + offset)] = {
                 name: info["si"][:, offset, :] for name, info in lines.items()}
 
-    def column_spectra(self, snapshot: int, column: int) -> Dict[str, np.ndarray]:
-        """The spectra of one column of one snapshot, ``(rows, wavelength)`` per line."""
-        if (snapshot, column) not in self._columns:
-            self._synthesise_strip(snapshot, column, column + 1)
-        return self._columns[(snapshot, column)]
-
-    def exposure_spectra(self, exposure: Exposure, slit_width: u.Quantity) -> Dict[str, np.ndarray]:
-        """
-        What the slit collects in one exposure: the columns under it, averaged over
-        the slit, and the snapshots it spans, weighted by the time each covers.
-        """
-        first, last, fractions = self.columns_under(exposure.position, slit_width)
-        spectra: Dict[str, np.ndarray] = {}
-        for snapshot, weight in self.series.coverage(exposure.start, exposure.end):
-            missing = [c for c in range(first, last) if (snapshot, c) not in self._columns]
-            # Each run of neighbouring columns not yet synthesised is one
-            # strip, so a wider slit around columns a narrower one has
-            # already seen synthesises only the columns either side.
-            for run_first, run_last in _runs(missing):
-                self._synthesise_strip(snapshot, run_first, run_last)
-            for column, fraction in zip(range(first, last), fractions):
-                for name, si in self._columns[(snapshot, column)].items():
-                    contribution = weight * fraction * si
-                    spectra[name] = contribution if name not in spectra else spectra[name] + contribution
-        return spectra
-
     def line_cubes(self, plan: RasterPlan, slit_width: u.Quantity,
                    expos: u.Quantity, repeat: Optional[int] = None) -> Dict[str, NDCube]:
         """
@@ -457,24 +624,9 @@ class RasterSynthesiser:
         one exposure, so its cube has one column, as wide as the slit; its
         repeats are separate cubes, one per exposure.
         """
-        exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
-        collected = [self.exposure_spectra(exposure, slit_width) for exposure in exposures]
-        positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
-        pitch = (positions[1] - positions[0] if plan.steps > 1
-                 else angle_to_distance(slit_width).to(u.Mm))
+        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat)
         rows = self._rows.to(u.Mm)
         row_pitch = self._row_pitch.to(u.Mm)
-        meta_raster = {
-            "raster": True,
-            "repeat": 0 if repeat is None else repeat,
-            "positions": positions,
-            "starts": u.Quantity([e.start for e in exposures]).to(u.s),
-            "ends": u.Quantity([e.end for e in exposures]).to(u.s),
-            "steps": plan.steps,
-            "repeats": plan.repeats,
-            "slit_width": slit_width,
-            "expos": expos,
-        }
         n_columns, n_rows = positions.size, rows.size
         cubes = {}
         for name in self.settings.lines:
@@ -510,3 +662,55 @@ class RasterSynthesiser:
             raise ValueError(f"The reference line {reference_line!r} is not among the "
                              f"synthesised lines {list(self.settings.lines)}.")
         return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat), reference_line)
+
+
+class SynthesisRaster(_SlitRaster):
+    """
+    Reads the spectra a slit sees over a plan from a series of synthesis files.
+
+    Each column of each snapshot is read the first time an exposure needs
+    it and kept, in the radiance ECLIPSE works in, so a sweep over exposure
+    times or slit widths reads each column once.
+
+    Parameters
+    ----------
+    series : SynthesisSeries
+    """
+
+    _extent = "image"
+
+    def __init__(self, series: SynthesisSeries):
+        super().__init__(series)
+        self.strips_read = 0
+
+    def _load_strip(self, snapshot: int, first: int, last: int) -> None:
+        """Read columns *first* to *last* of one snapshot into the cache."""
+        strip = read_synthesis(self.series.paths[snapshot], self.series.reference_line,
+                               columns=slice(first, last))
+        radiance = {name: strip.lines[name].radiance().to_value(RADIANCE_UNIT)
+                    for name in self.series.lines}
+        self.strips_read += 1
+        for offset in range(last - first):
+            self._columns[(snapshot, first + offset)] = {
+                name: values[:, offset, :] for name, values in radiance.items()}
+
+    def synthesis(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
+                  repeat: Optional[int] = None) -> Tuple[Synthesis, dict]:
+        """
+        One raster of the plan as a synthesis whose columns are its exposures, and what
+        the cube of the raster records about it.
+
+        The columns sit at the slit positions, which advance by the step; a
+        sit-and-stare is a raster of one exposure, so its image has one
+        column, as wide as the slit. The synthesis goes onto the detector as
+        a single snapshot's does, with the raster entries in the cube's
+        metadata so that the columns stay one per exposure.
+        """
+        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat)
+        x_edges = positions[0] - pitch / 2 + np.arange(positions.size + 1) * pitch
+        lines = {name: SpectralLine(
+                     intensity=np.stack([c[name] for c in collected], axis=1) * RADIANCE_UNIT,
+                     wavelength=self.series.wavelengths[name],
+                     rest_wavelength=self.series.rest_wavelengths[name])
+                 for name in self.series.lines}
+        return Synthesis(lines=lines, x_edges=x_edges, y_edges=self.series.y_edges), meta_raster

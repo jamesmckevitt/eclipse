@@ -7,6 +7,10 @@ build small series in which the temperature, density and velocity of each
 snapshot are known, so what an exposure should collect can be worked out by
 hand, and run the synthesis with a flat contribution function in place of
 fiasco, so the intensity of a column is its emission measure.
+
+A series of synthesis files is observed the same way, with each column's
+spectra read rather than synthesised, whether ECLIPSE or another code wrote
+them.
 """
 import subprocess
 import sys
@@ -25,9 +29,12 @@ from euvst_response.raster import (
     AtmosphereSeries,
     RasterPlan,
     RasterSynthesiser,
+    SynthesisRaster,
+    SynthesisSeries,
     SynthesisSettings,
 )
-from euvst_response.synthesis_file import load_synthesis
+from euvst_response.synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, load_synthesis,
+                                           read_synthesis, write_synthesis)
 from euvst_response.utils import angle_to_distance
 
 LINE = "Fe12_195.1190"
@@ -459,7 +466,7 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
         monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
         run_main()
 
-    with pytest.raises(ValueError, match="not both"):
+    with pytest.raises(ValueError, match="only one of"):
         run(synthesis_file="x.pkl")
     with pytest.raises(ValueError, match="'raster.start' is needed"):
         run(raster={"steps": 2})
@@ -469,9 +476,291 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
         run(reference_line="Fe09_171.0730")
     with pytest.raises(FileNotFoundError, match="matches no file"):
         run(atmosphere_series=str(tmp_path / "nowhere" / "*.h5"))
-    with pytest.raises(ValueError, match="belongs to an 'atmosphere_series' run"):
+    with pytest.raises(ValueError, match="belongs to an 'atmosphere_series' or 'synthesis_series' run"):
         config = tmp_path / "plain.yaml"
         config.write_text(yaml.safe_dump({"instrument": "SWC", "uniform_intensity": "100 erg / (s cm2 sr)",
                                           "raster": {"start": "0 s"}}))
         monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
         run_main()
+
+
+# ----------------------------------------------------------------------
+# A series of synthesis files
+# ----------------------------------------------------------------------
+# On the detector, the two routes resample from the same wavelengths reached
+# through WCSs referenced at different pixels, which differ in the last bit,
+# about 4e-22 cm at 195 Angstrom. Against the 5 km/s bins of the synthesis,
+# 3e-11 cm, that is about a part in 1e11 of a bin, which is how far apart the
+# resampled spectra can then be.
+DETECTOR_ROUNDING = 1e-10
+
+
+def _assert_close(found, expected, rel=1e-12):
+    """Equal but for rounding: no element further from *expected* than *rel* of its largest."""
+    found, expected = np.asarray(found), np.asarray(expected)
+    assert found.shape == expected.shape
+    assert np.max(np.abs(found - expected)) <= rel * np.max(np.abs(expected))
+
+
+def _synthesise(out_dir, atmospheres, monkeypatch):
+    """ECLIPSE's synthesis of each atmosphere file, with the flat contribution function."""
+    from euvst_response import synthesis
+    monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
+    paths = []
+    for index, atmosphere in enumerate(atmospheres):
+        name = f"synth_{index}.h5"
+        monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(atmosphere),
+                                          "--lines", LINE, "--output-dir", str(out_dir),
+                                          "--output-name", name])
+        synthesis.main()
+        paths.append(out_dir / name)
+    return paths
+
+
+def _ramp(times=(0.0, 10.0, 20.0, 30.0)):
+    """Snapshots that brighten and speed up with time, with two columns of their own."""
+    return [_snapshot(t, density_scale=1.0 + t / 10, velocity=t / 2,
+                      columns={5: (2.0 + t / 10, -10.0), 8: (0.5, 30.0)}) for t in times]
+
+
+def test_a_series_of_eclipse_syntheses_is_seen_as_the_atmospheres_they_came_from(tmp_path, monkeypatch, flat_goft):
+    """Synthesising each snapshot first and observing the files gives what synthesising under the slit gives."""
+    from euvst_response.config import Detector_SWC, Simulation
+    from euvst_response.data_processing import rebin_atmosphere, rebin_spectra
+
+    atmospheres = _series(tmp_path / "atmospheres", _ramp())
+    syntheses = _synthesise(tmp_path / "syntheses", atmospheres, monkeypatch)
+    # The synthesis keeps each snapshot's time, which places it in the series.
+    assert read_synthesis(syntheses[2]).time == 20.0 * u.s
+
+    from_atmospheres = RasterSynthesiser(AtmosphereSeries(atmospheres), _settings())
+    from_syntheses = SynthesisRaster(SynthesisSeries(syntheses, LINE))
+    # Exposures of 7 s from 2 s, some within one snapshot and some across two.
+    plan = RasterPlan(start=2 * u.s, steps=4, centre=0.5 * CELL)
+    for slit_width in (0.2 * u.arcsec, 0.4 * u.arcsec):
+        cube = from_atmospheres.summed_cube(plan, slit_width, 7 * u.s, LINE)
+        synthesis, meta = from_syntheses.synthesis(plan, slit_width, 7 * u.s)
+        _assert_close(synthesis.summed(LINE).to_value(RADIANCE_UNIT), cube.data)
+        assert meta["positions"].to_value(u.Mm) == pytest.approx(cube.meta["positions"].to_value(u.Mm))
+        assert meta["starts"].to_value(u.s) == pytest.approx(cube.meta["starts"].to_value(u.s))
+
+        # And on the detector, where the columns stay one per exposure.
+        sim = Simulation(instrument="SWC", slit_width=slit_width, ncpu=1)
+        expected = rebin_atmosphere(cube, Detector_SWC(), sim)
+        found = rebin_spectra(synthesis, LINE, Detector_SWC(), sim, meta=meta)
+        assert found.data.shape[1] == 4
+        _assert_close(found.data, expected.data, rel=DETECTOR_ROUNDING)
+        assert list(found.wcs.wcs.ctype) == list(expected.wcs.wcs.ctype)
+        for field in ("crpix", "crval", "cdelt"):
+            assert getattr(found.wcs.wcs, field) == pytest.approx(getattr(expected.wcs.wcs, field),
+                                                                  rel=1e-12)
+
+
+def test_an_instrument_run_observes_a_synthesis_series_as_its_atmosphere_series(tmp_path, monkeypatch, flat_goft):
+    atmospheres = _series(tmp_path / "atmospheres", _ramp())
+    _synthesise(tmp_path / "syntheses", atmospheres, monkeypatch)
+    noise_free = {"slit_width": "0.4 arcsec", "expos": ["5 s", "10 s"], "psf": False, "noise": False}
+    by_atmosphere = _config(tmp_path, str(tmp_path / "atmospheres" / "*.h5"), simulation=noise_free,
+                            n_iter=1)
+    config = yaml.safe_load(by_atmosphere.read_text())
+    del config["atmosphere_series"], config["synthesis"]
+    config["synthesis_series"] = str(tmp_path / "syntheses" / "*.h5")
+    by_synthesis = tmp_path / "syntheses.yaml"
+    by_synthesis.write_text(yaml.safe_dump(config))
+
+    monkeypatch.chdir(tmp_path)
+    from euvst_response.main import main as run_main
+    saved = {}
+    for path in (by_atmosphere, by_synthesis):
+        monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
+        run_main()
+        with open(tmp_path / "run" / "result" / f"{path.stem}.pkl", "rb") as f:
+            saved[path.stem] = dill.load(f)
+    atmosphere_run, synthesis_run = saved["series"], saved["syntheses"]
+
+    assert sorted(synthesis_run["cube_reb_dict"]) == sorted(atmosphere_run["cube_reb_dict"])
+    for key, cube in atmosphere_run["cube_reb_dict"].items():
+        _assert_close(synthesis_run["cube_reb_dict"][key].data, cube.data, rel=DETECTOR_ROUNDING)
+        seen = synthesis_run["raster"]["cubes"][key]
+        _assert_close(seen.data, atmosphere_run["raster"]["cubes"][key].data)
+        assert seen.meta["starts"].to_value(u.s) == pytest.approx(
+            atmosphere_run["raster"]["cubes"][key].meta["starts"].to_value(u.s))
+    for key, combo in atmosphere_run["results"]["all_combinations"].items():
+        assert np.array_equal(synthesis_run["results"]["all_combinations"][key]["first_dn_signal_data"],
+                              combo["first_dn_signal_data"])
+    raster = synthesis_run["raster"]
+    assert raster["times"].to_value(u.s) == pytest.approx([0.0, 10.0, 20.0, 30.0])
+    assert [p.split("/")[-1] for p in raster["series"]] == [f"synth_{i}.h5" for i in range(4)]
+    assert raster["settings"] is None and raster["hdf5_dbase_root"] is None
+
+
+# A line profile on wavelengths that are denser in the core, as optically
+# thick codes give them, bright enough for the detector to count.
+UNEVEN = REST + np.concatenate([np.linspace(-0.3, -0.05, 6), np.linspace(-0.04, 0.04, 17),
+                                np.linspace(0.05, 0.3, 6)]) * u.Angstrom
+PEAK = 2.0e4 * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom)
+
+
+def _other_code_file(path, time, scale, wavelength=UNEVEN, x_edges=None, extra=None):
+    """A synthesis file as another code might write it: each column the line profile times its *scale*."""
+    ny = SHAPE[1]
+    profile = np.exp(-0.5 * ((wavelength - REST) / (0.02 * u.Angstrom)).decompose().value ** 2)
+    intensity = np.ones((ny, 1, 1)) * np.asarray(scale, float)[None, :, None] * profile
+    lines = {LINE: SpectralLine(intensity=intensity * PEAK, wavelength=wavelength,
+                                rest_wavelength=REST), **(extra or {})}
+    edges = _edges()
+    synthesis = Synthesis(lines=lines, x_edges=edges["x_edges"] if x_edges is None else x_edges,
+                          y_edges=edges["y_edges"], source="another code",
+                          time=None if time is None else time * u.s)
+    return write_synthesis(synthesis, path)
+
+
+def test_an_exposure_of_a_synthesis_series_averages_over_the_slit_and_over_time(tmp_path):
+    nx = SHAPE[2]
+    first = np.ones(nx)
+    first[7] = 2.0
+    paths = [_other_code_file(tmp_path / "a.h5", 0.0, first),
+             _other_code_file(tmp_path / "b.h5", 10.0, 3.0 * np.ones(nx))]
+    raster = SynthesisRaster(SynthesisSeries(paths, LINE))
+    profile = raster.column_spectra(0, 6)[LINE]
+    # In the radiance ECLIPSE works in, per cm rather than per Angstrom.
+    assert profile.max() == pytest.approx(PEAK.to_value(RADIANCE_UNIT))
+
+    # A slit two cells wide on the boundary of columns 6 and 7, open for
+    # half its exposure in each snapshot.
+    exposure = raster_module.Exposure(0, CELL, 5 * u.s, 15 * u.s)
+    spectra = raster.exposure_spectra(exposure, 0.4 * u.arcsec)[LINE]
+    expected = 0.5 * (0.5 * 1.0 + 0.5 * 2.0) + 0.5 * 3.0
+    assert spectra == pytest.approx(expected * profile, rel=1e-12)
+    # Column 6 of the first snapshot was read already; then 7 of the first,
+    # and 6 and 7 of the second as one strip.
+    assert raster.strips_read == 3
+    with pytest.raises(ValueError, match="outside the image"):
+        raster.columns_under(10 * CELL, 0.4 * u.arcsec)
+
+
+def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_path):
+    from euvst_response.config import Detector_SWC, Simulation
+    from euvst_response.data_processing import rebin_spectra
+    from euvst_response.utils import distance_to_angle
+
+    nx = SHAPE[2]
+    paths = [_other_code_file(tmp_path / f"{i}.h5", t, (1.0 + t / 10) * np.ones(nx))
+             for i, t in enumerate((0.0, 10.0, 20.0))]
+    raster = SynthesisRaster(SynthesisSeries(paths, LINE))
+    synthesis, meta = raster.synthesis(RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL),
+                                       0.4 * u.arcsec, 10 * u.s)
+    assert synthesis.shape == (SHAPE[1], 2)
+    assert not synthesis.evenly_spaced(LINE)
+    rebinned = rebin_spectra(synthesis, LINE, Detector_SWC(),
+                             Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1),
+                             meta=meta)
+    assert rebinned.data.shape[1] == 2
+    assert rebinned.meta["raster"] is True
+    scan = rebinned.axis_world_coords(1)[0]
+    expected = distance_to_angle(meta["positions"]).to_value(u.arcsec)
+    assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
+    # The second exposure, from 10 to 20 s, saw the second snapshot, twice as bright.
+    columns = rebinned.data.sum(axis=(0, 2))
+    assert columns[1] / columns[0] == pytest.approx(2.0, rel=1e-9)
+
+
+def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
+    import dataclasses
+
+    from euvst_response.utils import distance_to_angle
+
+    nx = SHAPE[2]
+    ones = np.ones(nx)
+    good = [_other_code_file(tmp_path / "a.h5", 0.0, ones),
+            _other_code_file(tmp_path / "b.h5", 10.0, ones)]
+    with pytest.raises(ValueError, match="records no time"):
+        SynthesisSeries(good + [_other_code_file(tmp_path / "untimed.h5", None, ones)], LINE)
+    with pytest.raises(ValueError, match="same time"):
+        SynthesisSeries(good + [_other_code_file(tmp_path / "twin.h5", 10.0, ones)], LINE)
+    shifted = _edges()["x_edges"] + 0.5 * CELL
+    with pytest.raises(ValueError, match="different x grid"):
+        SynthesisSeries(good + [_other_code_file(tmp_path / "shifted.h5", 20.0, ones,
+                                                 x_edges=shifted)], LINE)
+    with pytest.raises(ValueError, match="different wavelengths"):
+        SynthesisSeries(good + [_other_code_file(tmp_path / "regridded.h5", 20.0, ones,
+                                                 wavelength=UNEVEN * (1 + 1e-6))], LINE)
+    blend = SpectralLine(intensity=np.ones((SHAPE[1], nx, UNEVEN.size)) * PEAK,
+                         wavelength=UNEVEN, rest_wavelength=REST + 0.06 * u.Angstrom)
+    with pytest.raises(ValueError, match="must have the same"):
+        SynthesisSeries(good + [_other_code_file(tmp_path / "blended.h5", 20.0, ones,
+                                                 extra={"Fe12_195.1790": blend})], LINE)
+    dynamic = dataclasses.replace(read_synthesis(good[1]), time=20.0 * u.s)
+    with pytest.raises(ValueError, match="dynamic mode"):
+        SynthesisSeries(good + [write_synthesis(dynamic, tmp_path / "dynamic.h5",
+                                                products={"dynamic_mode": {"enabled": True}})],
+                        LINE)
+    # The same image given in arcsec is the same image.
+    in_arcsec = distance_to_angle(_edges()["x_edges"]).to(u.arcsec)
+    series = SynthesisSeries(good + [_other_code_file(tmp_path / "arcsec.h5", 20.0, ones,
+                                                      x_edges=in_arcsec)], LINE)
+    assert len(series) == 3
+
+
+def test_an_instrument_run_observes_another_codes_series(tmp_path, monkeypatch):
+    nx = SHAPE[2]
+    for index, time in enumerate((0.0, 10.0, 20.0, 30.0)):
+        _other_code_file(tmp_path / "other" / f"snap_{index}.h5", time,
+                         (1.0 + time / 10) * np.ones(nx))
+    config = {"instrument": "SWC", "synthesis_series": str(tmp_path / "other" / "*.h5"),
+              "n_iter": 2, "ncpu": 1, "fit_signals": "dn",
+              "raster": {"start": "0 s", "steps": 2, "repeats": 2},
+              "simulation": {"slit_width": "0.4 arcsec", "expos": "10 s", "psf": False}}
+    path = tmp_path / "other.yaml"
+    path.write_text(yaml.safe_dump(config))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
+    from euvst_response.main import main as run_main
+    run_main()
+
+    with open(tmp_path / "run" / "result" / "other.pkl", "rb") as f:
+        saved = dill.load(f)
+    # The files hold one line, which is observed without a reference_line.
+    assert len(saved["results"]["all_combinations"]) == 2
+    for cube in saved["cube_reb_dict"].values():
+        assert cube.data.shape[1] == 2
+        assert cube.meta["line_name"] == LINE
+    # The second raster starts at 20 s and sees the third and fourth snapshots.
+    keys = sorted(saved["cube_reb_dict"])
+    first, second = (saved["cube_reb_dict"][k].data.sum(axis=(0, 2)) for k in keys)
+    assert second / first == pytest.approx([3.0 / 1.0, 4.0 / 2.0], rel=1e-9)
+    # Uneven wavelengths have no WCS, so the spectra before the instrument are
+    # not kept as a cube, as for a single synthesis file.
+    assert all(cube is None for cube in saved["raster"]["cubes"].values())
+
+
+def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch):
+    nx = SHAPE[2]
+    for index, time in enumerate((0.0, 10.0)):
+        _other_code_file(tmp_path / "other" / f"snap_{index}.h5", time, np.ones(nx))
+    monkeypatch.chdir(tmp_path)
+    from euvst_response.main import main as run_main
+
+    def run(**changes):
+        config = {"instrument": "SWC", "synthesis_series": str(tmp_path / "other" / "*.h5"),
+                  "n_iter": 2, "ncpu": 1, "raster": {"start": "0 s"},
+                  "simulation": {"slit_width": "0.4 arcsec", "expos": "5 s", "psf": False}}
+        config.update(changes)
+        config = {key: value for key, value in config.items() if value is not None}
+        path = tmp_path / "refused.yaml"
+        path.write_text(yaml.safe_dump(config))
+        monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
+        run_main()
+
+    with pytest.raises(ValueError, match="only one of"):
+        run(atmosphere_series=str(tmp_path / "other" / "*.h5"))
+    with pytest.raises(ValueError, match="only one of"):
+        run(synthesis_file=str(tmp_path / "other" / "snap_0.h5"))
+    with pytest.raises(ValueError, match="belongs to an 'atmosphere_series' run"):
+        run(synthesis={"lines": [LINE]})
+    with pytest.raises(ValueError, match="needs a 'raster:' section"):
+        run(raster=None)
+    with pytest.raises(ValueError, match="is not in"):
+        run(reference_line="Fe09_171.0730")
+    with pytest.raises(ValueError, match="outside the image"):
+        run(raster={"start": "0 s", "centre": "5 Mm"})
