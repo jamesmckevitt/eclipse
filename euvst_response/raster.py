@@ -313,9 +313,10 @@ class SynthesisSeries(_Series):
     """
     Synthesis files ordered by the time each records, as far as one line's window.
 
-    Every file must carry a time, and all must share one image and the same
-    lines on the same wavelengths, since the columns of one snapshot stand
-    in for those of another in an exposure and their spectra are added up.
+    Every file must carry a time, and all must share one image, seen along
+    one axis, and the same lines on the same wavelengths, since the columns
+    of one snapshot stand in for those of another in an exposure and their
+    spectra are added up.
     Only the lines that reach the window of *reference_line* are read, as
     for a single synthesis file.
 
@@ -351,6 +352,7 @@ class SynthesisSeries(_Series):
         # x in Mm, as the slit positions are; y as the files give it.
         self.x_edges: u.Quantity = _to_length(layout["x_edges"])
         self.y_edges: u.Quantity = layout["y_edges"]
+        self.integration_axis: Optional[str] = layout["integration_axis"]
         self.wavelengths: Dict[str, u.Quantity] = {
             name: info["wavelength"] for name, info in layout["lines"].items()}
         self.rest_wavelengths: Dict[str, u.Quantity] = {
@@ -369,6 +371,10 @@ class SynthesisSeries(_Series):
                 if not _same_grid(_to_length(found), _to_length(edges)):
                     raise ValueError(f"{path} has a different {axis} grid from {first}; a "
                                      f"series must share one image.")
+            if (other["integration_axis"] or "z") != (self.integration_axis or "z"):
+                raise ValueError(f"{path} was seen along {other['integration_axis'] or 'z'}, "
+                                 f"and {first} along {self.integration_axis or 'z'}; a series "
+                                 f"must share one view.")
             if set(other["lines"]) != set(layout["lines"]):
                 raise ValueError(f"{path} has the lines {list(other['lines'])} in the window "
                                  f"of {reference_line}, and {first} has "
@@ -700,4 +706,5 @@ class SynthesisRaster(_SlitRaster):
                      wavelength=self.series.wavelengths[name],
                      rest_wavelength=self.series.rest_wavelengths[name])
                  for name in self.series.lines}
-        return Synthesis(lines=lines, x_edges=x_edges, y_edges=self.series.y_edges), meta_raster
+        return Synthesis(lines=lines, x_edges=x_edges, y_edges=self.series.y_edges,
+                         integration_axis=self.series.integration_axis), meta_raster

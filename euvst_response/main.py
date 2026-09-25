@@ -766,8 +766,6 @@ def main() -> None:
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         print(f"  Lines in the window of {reference_line}: {', '.join(series.lines)}")
         raster = SynthesisRaster(series)
-        view = (read_synthesis_products(series.paths[0], keys=("config",)).get("config")
-                or {}).get("integration_axis") or "z"
     else:
         print("\nLoading the synthesis...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
@@ -779,13 +777,12 @@ def main() -> None:
             print(f"  Lines in its window: {', '.join(synthesis.lines)}")
             if synthesis.source:
                 print(f"  Source: {synthesis.source}")
-            products = read_synthesis_products(synthesis_file, keys=("dynamic_mode", "config"))
+            products = read_synthesis_products(synthesis_file, keys=("dynamic_mode",))
             dynamic_mode_info = products.get("dynamic_mode", {"enabled": False})
             summed_input = synthesis.summed(reference_line)
             # Kept in the results as the spectra the instrument observed, where
             # evenly spaced wavelengths let a WCS describe them.
-            view = (products.get("config") or {}).get("integration_axis") or "z"
-            cube_sim = (synthesis.summed_cube(reference_line, summed_input, view)
+            cube_sim = (synthesis.summed_cube(reference_line, summed_input)
                         if synthesis.evenly_spaced(reference_line) else None)
         else:
             cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
@@ -958,7 +955,7 @@ def main() -> None:
             summed_input = synthesis.summed(reference_line)
             cube_sim = None
             if synthesis.evenly_spaced(reference_line):
-                cube_sim = synthesis.summed_cube(reference_line, summed_input, view)
+                cube_sim = synthesis.summed_cube(reference_line, summed_input)
                 cube_sim.meta.update(raster_meta)
             raster_summed[cube_reb_key] = cube_sim
             print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "

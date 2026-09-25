@@ -664,6 +664,14 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
     columns = rebinned.data.sum(axis=(0, 2))
     assert columns[1] / columns[0] == pytest.approx(2.0, rel=1e-9)
 
+    # The exposures are seen along the axis their files were.
+    import dataclasses
+    along_x = [write_synthesis(dataclasses.replace(read_synthesis(path), integration_axis="x"),
+                               tmp_path / f"along_x_{i}.h5") for i, path in enumerate(paths)]
+    synthesis, _ = SynthesisRaster(SynthesisSeries(along_x, LINE)).synthesis(
+        RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL), 0.4 * u.arcsec, 10 * u.s)
+    assert synthesis.integration_axis == "x"
+
 
 def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
     import dataclasses
@@ -695,6 +703,9 @@ def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
         SynthesisSeries(good + [write_synthesis(dynamic, tmp_path / "dynamic.h5",
                                                 products={"dynamic_mode": {"enabled": True}})],
                         LINE)
+    along_x = dataclasses.replace(read_synthesis(good[1]), time=20.0 * u.s, integration_axis="x")
+    with pytest.raises(ValueError, match="share one view"):
+        SynthesisSeries(good + [write_synthesis(along_x, tmp_path / "along_x.h5")], LINE)
     # The same image given in arcsec is the same image.
     in_arcsec = distance_to_angle(_edges()["x_edges"]).to(u.arcsec)
     series = SynthesisSeries(good + [_other_code_file(tmp_path / "arcsec.h5", 20.0, ones,

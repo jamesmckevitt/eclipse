@@ -271,6 +271,35 @@ def test_line_cubes_become_a_synthesis_file_that_sums_as_they_did(tmp_path):
     assert cube.meta["rest_wav"] == BLEND_REST.to(u.cm)
 
 
+def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
+    """A view along x reloads with the image axes of a view along x, however the file was written."""
+    cubes = {LINE: _line_cube(_lines(), view="x"),
+             BLEND: _line_cube(_lines(rest=BLEND_REST, scale=0.1), BLEND_REST, view="x")}
+    path = write_line_cubes(cubes, tmp_path / "along_x.h5")
+    assert read_synthesis(path).integration_axis == "x"
+    for name, cube in load_synthesis(path)["line_cubes"].items():
+        assert list(cube.wcs.wcs.ctype) == ["WAVE", "SOLY", "SOLZ"]
+        assert cube.meta["integration_axis"] == "x"
+        assert np.array_equal(cube.data, cubes[name].data)
+
+    # A pickle holding nothing but its line cubes converts the same way.
+    with open(tmp_path / "along_x.pkl", "wb") as f:
+        dill.dump({"line_cubes": cubes}, f)
+    converted = convert_synthesis_pickle(tmp_path / "along_x.pkl", tmp_path / "converted.h5")
+    assert read_synthesis(converted).integration_axis == "x"
+
+    # Another code's file names no view, and is taken as seen along z.
+    path = write_synthesis(_synthesis(), tmp_path / "other_code.h5")
+    assert read_synthesis(path).integration_axis is None
+    assert list(load_synthesis(path)["line_cubes"][LINE].wcs.wcs.ctype) == ["WAVE", "SOLX", "SOLY"]
+
+    cubes[BLEND] = _line_cube(_lines(rest=BLEND_REST, scale=0.1), BLEND_REST, view="z")
+    with pytest.raises(ValueError, match="seen along different axes"):
+        write_line_cubes(cubes, tmp_path / "mixed.h5")
+    with pytest.raises(ValueError, match="integration_axis must be one of"):
+        _synthesis(integration_axis="w")
+
+
 def test_line_cubes_must_share_one_image(tmp_path):
     """Every line is written onto the first one's pixels, so a cube laid elsewhere is refused."""
     cubes = _line_cubes()
@@ -444,6 +473,32 @@ def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
     # A grid finer than the pixels, as ECLIPSE's own is, needs none added.
     _, fine = resample_spectra(_lines(), _grid(), pitch)
     assert fine[0] == _grid()[0].to(u.AA)
+
+
+@pytest.mark.parametrize("spacing", ["even", "dense in the core"])
+def test_each_detector_pixel_gets_the_mean_of_the_line_over_it(spacing):
+    """A finely sampled Gaussian, resampled, gives each pixel the Gaussian's exact mean over it."""
+    from scipy.special import erf
+
+    centre, sigma, pitch = REST.value + 0.0117, 0.03, 0.0223  # Angstrom
+    t = np.linspace(-1.0, 1.0, 3001)
+    # Out to 10 sigma either side, evenly or, as another code might, from
+    # 0.00006 Angstrom apart in the core to 0.0006 in the wings.
+    wavelength = REST.value + (0.3 * t if spacing == "even" else 0.3 * np.sinh(3 * t) / np.sinh(3))
+    intensity = np.exp(-0.5 * ((wavelength - centre) / sigma) ** 2)
+
+    resampled, grid = resample_spectra(intensity[np.newaxis], wavelength * u.AA, pitch * u.AA)
+
+    def integral(lower, upper):
+        scale = np.sqrt(2) * sigma
+        return 0.5 * np.sqrt(np.pi) * scale * (erf((upper - centre) / scale)
+                                               - erf((lower - centre) / scale))
+
+    exact = integral(grid.value - pitch / 2, grid.value + pitch / 2) / pitch
+    # What is left is the sampling of the Gaussian, 2e-6 of its peak;
+    # pixels labelled one sample off would be out by 1e-3 or more.
+    assert resampled[0] == pytest.approx(exact, rel=0, abs=1e-4)
+    assert grid.value[np.argmax(resampled[0])] == pytest.approx(centre, abs=pitch / 2)
 
 
 def test_angles_give_the_same_cube_as_the_lengths_they_stand_for():

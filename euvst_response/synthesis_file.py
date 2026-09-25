@@ -14,6 +14,10 @@ Root attributes:
 - ``format``: ``"eclipse-synthesis"``
 - ``version``: ``1``
 - ``source``: free text naming the code and the model, optional
+- ``integration_axis``: ``"x"``, ``"y"`` or ``"z"``, the axis of the
+  simulation the image was seen along, optional. It names the image axes
+  of the cubes made from the file, as ECLIPSE's own synthesis records it;
+  a file without it is taken as seen along z.
 
 Datasets, each with a ``unit`` attribute astropy can parse, and groups:
 
@@ -225,6 +229,10 @@ class Synthesis:
     time : u.Quantity, optional
         The time of the snapshot, which a time series of synthesis files
         needs to place it.
+    integration_axis : str, optional
+        ``"x"``, ``"y"`` or ``"z"``, the axis of the simulation the image was
+        seen along, which names the image axes of the cubes made from it.
+        None takes it as seen along z.
     """
 
     lines: Mapping[str, SpectralLine]
@@ -232,10 +240,14 @@ class Synthesis:
     y_edges: u.Quantity
     source: str = ""
     time: Optional[u.Quantity] = None
+    integration_axis: Optional[str] = None
 
     def __post_init__(self):
         if self.time is not None:
             _checked(self.time, "time", ndim=0, kinds=("time",))
+        if self.integration_axis is not None and self.integration_axis not in _VIEW_CTYPES:
+            raise ValueError(f"integration_axis must be one of {tuple(_VIEW_CTYPES)} or None, "
+                             f"got {self.integration_axis!r}.")
         for axis in AXES:
             name = EDGES[axis]
             edges = _checked(getattr(self, name), name, ndim=1, kinds=("length", "angle"))
@@ -305,31 +317,30 @@ class Synthesis:
             return False
         return True
 
-    def line_cube(self, name: str, view: str = "z"):
+    def line_cube(self, name: str):
         """
         Line *name* as an NDCube like those of ECLIPSE's synthesis, indexed ``[y, x, wavelength]``.
 
         The wavelengths have to be evenly spaced for a WCS to describe them.
-        *view* is the simulation axis the image was seen along, which names
-        the image axes.
         """
         line = self.lines[name]
-        return self._cube(line.intensity, name, view)
+        return self._cube(line.intensity, name)
 
-    def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None, view: str = "z"):
+    def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None):
         """
         :meth:`summed` as an NDCube on the wavelengths of *reference*, which have to be evenly spaced.
 
         *summed*, if given, is :meth:`summed` already worked out.
         """
-        return self._cube(self.summed(reference) if summed is None else summed, reference, view)
+        return self._cube(self.summed(reference) if summed is None else summed, reference)
 
-    def _cube(self, data: u.Quantity, name: str, view: str):
+    def _cube(self, data: u.Quantity, name: str):
         from astropy.wcs import WCS
         from ndcube import NDCube
 
         from .utils import VELOCITY_CONVENTION
 
+        view = self.integration_axis or "z"
         line = self.lines[name]
         step = require_uniform_grid(line.wavelength.to_value(u.cm), f"the wavelengths of {name}")
         ny, nx = self.shape
@@ -398,6 +409,8 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
         f.attrs["format"] = FORMAT_NAME
         f.attrs["version"] = FORMAT_VERSION
         f.attrs["source"] = synthesis.source
+        if synthesis.integration_axis is not None:
+            f.attrs["integration_axis"] = synthesis.integration_axis
         for axis in AXES:
             _write_dataset(f, EDGES[axis], getattr(synthesis, EDGES[axis]))
         if synthesis.time is not None:
@@ -455,10 +468,11 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
                 lines[name] = SpectralLine(**fields)
             except (TypeError, ValueError) as error:
                 raise type(error)(f"{path}, line {name!r}: {error}") from None
-        source = _source(f)
+        source, integration_axis = _source(f), _integration_axis(f)
         time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
     try:
-        return Synthesis(lines=lines, source=source, time=time, **edges)
+        return Synthesis(lines=lines, source=source, time=time,
+                         integration_axis=integration_axis, **edges)
     except (TypeError, ValueError) as error:
         raise type(error)(f"{path}: {error}") from None
 
@@ -468,7 +482,8 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
     What a synthesis file holds, without reading its spectra.
 
     Gives ``x_edges``, ``y_edges``, ``time`` (None if the file has none),
-    ``source`` and ``lines``, which maps each line, or each one reaching the
+    ``source``, ``integration_axis`` (None if the file has none) and
+    ``lines``, which maps each line, or each one reaching the
     window of *reference_line* if given, to its ``wavelength``, its
     ``rest_wavelength`` and the ``shape`` of its intensity. A time series
     checks its files with it before reading any spectra.
@@ -486,6 +501,7 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
             except (TypeError, ValueError) as error:
                 raise type(error)(f"{path}: {error}") from None
         layout["source"] = _source(f)
+        layout["integration_axis"] = _integration_axis(f)
         group, names = _lines_reaching(f, path, reference_line)
         layout["lines"] = {}
         for name in names:
@@ -518,6 +534,11 @@ def _lines_reaching(f: h5py.File, path: Path, reference_line: Optional[str]):
 def _source(f: h5py.File) -> str:
     source = f.attrs.get("source", "")
     return str(source.decode() if isinstance(source, bytes) else source)
+
+
+def _integration_axis(f: h5py.File) -> Optional[str]:
+    axis = f.attrs.get("integration_axis")
+    return None if axis is None else str(axis.decode() if isinstance(axis, bytes) else axis)
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
@@ -583,10 +604,9 @@ def load_synthesis(path: str | Path) -> dict:
             f"the WCS of an NDCube cannot describe. Read the file with read_synthesis, "
             f"which keeps each line's wavelengths as they are.")
     products = read_synthesis_products(path)
-    view = (products.get("config") or {}).get("integration_axis") or "z"
     line_cubes = {}
     for name in synthesis.lines:
-        cube = synthesis.line_cube(name, view)
+        cube = synthesis.line_cube(name)
         line_info = (products.get("goft") or {}).get(name, {})
         cube.meta.update({key: line_info[key] for key in ("atom", "ion") if key in line_info})
         line_cubes[name] = cube
@@ -673,7 +693,8 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
     Write line cubes, as ECLIPSE's synthesis builds them, as a synthesis file.
 
     Each cube keeps its values, its wavelengths and its rest wavelength; the
-    image grid is read off the first cube's WCS, which every cube shares.
+    image grid is read off the first cube's WCS, which every cube shares, and
+    the axis the image was seen along off their ``integration_axis``.
 
     Parameters
     ----------
@@ -709,8 +730,14 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
         lines[name] = SpectralLine(intensity=np.asarray(cube.data) * cube.unit,
                                    wavelength=cube.axis_world_coords(-1)[0],
                                    rest_wavelength=cube.meta["rest_wav"])
-    return write_synthesis(Synthesis(lines=lines, source=source, time=time, **edges), path,
-                           products=products)
+    # The view names the image axes, so that the cubes come back as they were.
+    views = {(cube.meta or {}).get("integration_axis") for cube in cubes.values()} - {None}
+    if len(views) > 1:
+        raise ValueError(f"The line cubes were seen along different axes, {sorted(views)}; "
+                         f"the lines of a synthesis file share one image.")
+    synthesis = Synthesis(lines=lines, source=source, time=time,
+                          integration_axis=views.pop() if views else None, **edges)
+    return write_synthesis(synthesis, path, products=products)
 
 
 def _pixel_edges(cube, wcs_axis: int) -> u.Quantity:
