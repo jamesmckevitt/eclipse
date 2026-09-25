@@ -154,7 +154,7 @@ synthesise-spectra --atmosphere muram_300000.h5 \
   --output-dir ./run/input
 ```
 
-The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.4 GB, with cells twice the size.
+The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 540 MB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 130 MB, with cells twice the size.
 
 ### Worked example: Bifrost quiet Sun
 
@@ -209,7 +209,7 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
   --output-dir ./run/input
 ```
 
-This needs about 130 GB of memory and writes a 25 GB synthesis file, or about 40 GB and 6.4 GB with `--downsample 2`.
+This needs about 120 GB of memory and writes a 620 MB synthesis file, or about 35 GB and 150 MB with `--downsample 2`.
 
 ## Basic usage
 
@@ -308,11 +308,7 @@ does not match the pattern at all raises `ValueError` immediately.
 
 ## Output
 
-The synthesis produces a pickle file containing:
-
-- `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
-- `config`: Runtime configuration for reproducibility
-- Additional technical data for internal use
+The synthesis writes a [synthesis file](other-codes.md#the-synthesis-file), the same HDF5 file the instrument run takes from another code, with the DEM, emission measure, contribution functions and settings kept alongside the spectra. [Working with synthesis results](#working-with-synthesis-results) shows how to read it.
 
 ## Performance tips
 
