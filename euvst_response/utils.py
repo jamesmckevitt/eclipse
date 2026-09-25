@@ -176,6 +176,40 @@ def multi_gaussian(wave, *params, n_components=1):
     return result
 
 
+def _bin_edges(centres: np.ndarray) -> np.ndarray:
+    """Boundaries of the bins centred on *centres*: halfway between neighbours, and the outer ones as far out as the inner ones are in."""
+    inner = 0.5 * (centres[1:] + centres[:-1])
+    return np.concatenate([[centres[0] - (inner[0] - centres[0])], inner,
+                           [centres[-1] + (centres[-1] - inner[-1])]])
+
+
+def onto_wavelength_bins(spectra: np.ndarray, wavelength: np.ndarray,
+                         reference: np.ndarray) -> np.ndarray:
+    """
+    *spectra*, sampled at *wavelength* along their last axis, averaged over the bins of *reference*.
+
+    Each sample stands for the bin halfway to its neighbours, as the
+    flux-conserving resampling onto the detector takes it, and each bin of
+    *reference* gets the mean over it of whatever overlaps it, with nothing
+    beyond the samples. The integral over the reference bins is kept, so a
+    line narrower than a reference bin, or falling between two reference
+    wavelengths, is not lost as it would be to interpolation. Spectra already
+    on the reference wavelengths come back as they are.
+
+    *wavelength* and *reference* are plain increasing arrays in one unit.
+    """
+    spectra = np.asarray(spectra, dtype=float)
+    if wavelength.shape == reference.shape and np.array_equal(wavelength, reference):
+        return spectra
+    source, target = _bin_edges(wavelength), _bin_edges(reference)
+    overlap = (np.minimum(source[1:, None], target[None, 1:])
+               - np.maximum(source[:-1, None], target[None, :-1]))
+    weights = np.clip(overlap, 0.0, None) / np.diff(target)[None, :]
+    if not weights.any():
+        return np.zeros(spectra.shape[:-1] + reference.shape)
+    return spectra @ weights
+
+
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     """Convert angular size to linear distance at 1 AU."""
     if angle.unit.physical_type != "angle":

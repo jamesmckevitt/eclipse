@@ -20,7 +20,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from euvst_response.analysis import load_instrument_response_results
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
+from euvst_response.atmosphere import Atmosphere, edges_from_centres, write_atmosphere
 from euvst_response.config import Detector_SWC, Simulation
 from euvst_response.data_processing import rebin_spectra, resample_spectra, sum_line_cubes
 from euvst_response.synthesis_file import (
@@ -253,6 +253,65 @@ def test_line_cubes_become_a_synthesis_file_that_sums_as_they_did(tmp_path):
     assert u.allclose(cube.axis_world_coords(-1)[0], cubes[BLEND].axis_world_coords(-1)[0],
                       rtol=1e-12)
     assert cube.meta["rest_wav"] == BLEND_REST.to(u.cm)
+
+
+def test_line_cubes_must_share_one_image(tmp_path):
+    """Every line is written onto the first one's pixels, so a cube laid elsewhere is refused."""
+    cubes = _line_cubes()
+    cubes[BLEND].wcs.wcs.crval[1] += 0.5 * PIXEL.to_value(u.Mm)
+    with pytest.raises(ValueError, match="other pixel positions along x"):
+        write_line_cubes(cubes, tmp_path / "shifted.h5")
+    cubes = _line_cubes()
+    cubes[BLEND].wcs.wcs.cdelt[2] *= 2
+    with pytest.raises(ValueError, match="other pixel positions along y"):
+        write_line_cubes(cubes, tmp_path / "stretched.h5")
+
+
+def test_uneven_wavelengths_are_read_with_read_synthesis_not_as_line_cubes(tmp_path):
+    uneven = REST + np.concatenate([np.linspace(-0.3, -0.05, 6), np.linspace(-0.04, 0.04, 17),
+                                    np.linspace(0.05, 0.3, 6)]) * u.AA
+    line = SpectralLine(intensity=np.ones((NY, NX, uneven.size)) * RADIANCE_UNIT,
+                        wavelength=uneven, rest_wavelength=REST)
+    path = write_synthesis(_synthesis({LINE: line}), tmp_path / "uneven.h5")
+    with pytest.raises(ValueError, match="Read the file with read_synthesis"):
+        load_synthesis(path)
+    assert u.allclose(read_synthesis(path).lines[LINE].wavelength, uneven, rtol=0)
+
+
+def test_blends_keep_their_flux_on_the_reference_wavelengths():
+    """A narrow blend between two of the reference line's wavelengths is added, not lost."""
+    from euvst_response.utils import onto_wavelength_bins
+
+    # By hand: samples standing for 0.5-1.5, 1.5-2.5 and 2.5-3.5, averaged
+    # over bins 0.5-2.5 and 2.5-4.5, with nothing beyond 3.5.
+    assert onto_wavelength_bins(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]),
+                                np.array([1.5, 3.5])) == pytest.approx([1.5, 1.5])
+    same = np.arange(6.0).reshape(2, 3)
+    assert np.array_equal(onto_wavelength_bins(same, np.array([1.0, 2.0, 3.0]),
+                                               np.array([1.0, 2.0, 3.0])), same)
+
+    # A reference line sampled every 0.05 Angstrom, and a blend 0.005
+    # Angstrom wide, sampled finely, centred between two of its wavelengths.
+    coarse = REST + np.arange(-0.3, 0.3001, 0.05) * u.AA
+    fine = REST + 0.025 * u.AA + np.arange(-0.05, 0.0501, 0.001) * u.AA
+    ref_profile = np.exp(-0.5 * ((coarse - REST) / (0.04 * u.AA)).decompose().value ** 2)
+    blend_profile = np.exp(-0.5 * ((fine - REST - 0.025 * u.AA) / (0.005 * u.AA)).decompose().value ** 2)
+    reference = SpectralLine(intensity=np.ones((NY, NX, 1)) * ref_profile * RADIANCE_UNIT,
+                             wavelength=coarse, rest_wavelength=REST)
+    blend = SpectralLine(intensity=np.ones((NY, NX, 1)) * blend_profile * RADIANCE_UNIT,
+                         wavelength=fine, rest_wavelength=REST + 0.025 * u.AA)
+
+    alone = _synthesis({LINE: reference}).summed(LINE).value
+    assert np.array_equal(alone, reference.intensity.value)
+    together = _synthesis({LINE: reference, BLEND: blend}).summed(LINE).value
+    widths = np.diff(edges_from_centres(coarse)).value
+    added = ((together - alone) * widths).sum(-1)
+    blend_flux = (blend_profile * np.diff(edges_from_centres(fine)).value).sum()
+    assert added == pytest.approx(np.full((NY, NX), blend_flux), rel=1e-12)
+    # Interpolating the blend onto the reference wavelengths, which fall
+    # 5 of its widths from its centre, would have kept almost none of it.
+    interpolated = np.interp(coarse.value, fine.value, blend_profile, left=0.0, right=0.0)
+    assert (interpolated * widths).sum() < 1e-4 * blend_flux
 
 
 def test_an_old_pickle_converts_with_everything_it_held(tmp_path):

@@ -338,7 +338,7 @@ print(f"DEM map (y, x, logT): {data['dem_map'].shape}, on log T {data['logT_grid
 print(f"Settings: {data['config']}")
 ```
 
-`read_synthesis` reads just the spectra, and `read_synthesis_products` just the rest, or only the parts named in `keys`.
+`read_synthesis` reads just the spectra, and `read_synthesis_products` just the rest, or only the parts named in `keys`. The line cubes need evenly spaced wavelengths, as ECLIPSE's own synthesis gives them; a file from [another code](other-codes.md) with uneven ones is read with `read_synthesis`, which keeps each line's wavelengths as they are.
 
 ??? note "Synthesis files from ECLIPSE 0.11.0 and earlier"
 

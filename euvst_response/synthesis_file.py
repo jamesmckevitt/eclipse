@@ -54,7 +54,7 @@ import h5py
 import numpy as np
 
 from .atmosphere import _check_format, _read_dataset, _write_dataset
-from .utils import angle_to_distance, require_uniform_grid
+from .utils import angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
     "FORMAT_NAME",
@@ -137,6 +137,21 @@ def _to_length(value: u.Quantity) -> u.Quantity:
     if value.unit.physical_type == "angle":
         return angle_to_distance(value).to(u.Mm)
     return value.to(u.Mm)
+
+
+# Two grids that should be one are compared allowing only for rounding, as
+# from a change of unit between files written in Angstrom and in nm, or from
+# edges worked out from two WCSs.
+_SAME_GRID = 1e-12
+
+
+def _same_grid(found: u.Quantity, expected: u.Quantity) -> bool:
+    """Whether *found* is the grid *expected* but for rounding."""
+    if found.shape != expected.shape:
+        return False
+    values = found.to_value(expected.unit)
+    return bool(np.all(np.abs(values - expected.value)
+                       <= _SAME_GRID * np.abs(expected.value).max()))
 
 
 @dataclass(frozen=True)
@@ -266,9 +281,10 @@ class Synthesis:
         Every line's radiance on the wavelengths of *reference*, added up.
 
         This is what the instrument observes when it measures *reference*.
-        Each line is interpolated onto the reference line's wavelengths and
-        is zero beyond its own, so the lines that reach the reference line's
-        window add to it, as blends do, and the others add nothing.
+        Each line is averaged over the bins of the reference line's
+        wavelengths, keeping its flux, and is zero beyond its own, so the
+        lines that reach the reference line's window add to it, as blends
+        do, and the others add nothing.
         """
         if reference not in self.lines:
             raise ValueError(f"No line is named {reference!r}; the lines are "
@@ -276,10 +292,9 @@ class Synthesis:
         wavelength = self.lines[reference].wavelength
         total = np.zeros(self.shape + (wavelength.size,))
         for line in self.lines.values():
-            own = line.wavelength.to_value(wavelength.unit)
-            spectra = line.radiance().to_value(RADIANCE_UNIT).reshape(-1, own.size)
-            total += np.array([np.interp(wavelength.value, own, spectrum, left=0.0, right=0.0)
-                               for spectrum in spectra]).reshape(total.shape)
+            total += onto_wavelength_bins(line.radiance().to_value(RADIANCE_UNIT),
+                                          line.wavelength.to_value(wavelength.unit),
+                                          wavelength.value)
         return total * RADIANCE_UNIT
 
     def evenly_spaced(self, name: str) -> bool:
@@ -544,8 +559,19 @@ def load_synthesis(path: str | Path) -> dict:
     ``line_cubes`` maps each line to an NDCube indexed ``[y, x, wavelength]``,
     and the rest is :func:`read_synthesis_products`. Handy for looking at a
     synthesis; the instrument run reads the file itself.
+
+    An NDCube's WCS describes evenly spaced wavelengths, as ECLIPSE's own
+    synthesis writes them, so a file whose wavelengths are not evenly spaced
+    is refused here; :func:`read_synthesis` reads any synthesis file, with
+    its wavelengths as they are.
     """
     synthesis = read_synthesis(path)
+    uneven = [name for name in synthesis.lines if not synthesis.evenly_spaced(name)]
+    if uneven:
+        raise ValueError(
+            f"{path}: the wavelengths of {', '.join(uneven)} are not evenly spaced, which "
+            f"the WCS of an NDCube cannot describe. Read the file with read_synthesis, "
+            f"which keeps each line's wavelengths as they are.")
     products = read_synthesis_products(path)
     view = (products.get("config") or {}).get("integration_axis") or "z"
     line_cubes = {}
@@ -655,13 +681,21 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
     cubes = dict(line_cubes)
     if not cubes:
         raise ValueError("There are no line cubes to write.")
-    first = next(iter(cubes.values()))
+    first_name, first = next(iter(cubes.items()))
     edges = {"x_edges": _pixel_edges(first, 1), "y_edges": _pixel_edges(first, 2)}
     lines = {}
     for name, cube in cubes.items():
         if cube.data.shape[:2] != first.data.shape[:2]:
             raise ValueError(f"Line {name!r} has an image of {cube.data.shape[:2]} "
                              f"pixels, not {first.data.shape[:2]} as the others.")
+        # The file has one image for all its lines, so a cube of the same
+        # shape laid somewhere else, or with other pixel sizes, would be
+        # written onto the wrong pixels.
+        for axis, wcs_axis in (("x", 1), ("y", 2)):
+            if not _same_grid(_pixel_edges(cube, wcs_axis), edges[f"{axis}_edges"]):
+                raise ValueError(f"Line {name!r} has other pixel positions along {axis} "
+                                 f"than {first_name!r}; the lines of a synthesis file "
+                                 f"share one image.")
         lines[name] = SpectralLine(intensity=np.asarray(cube.data) * cube.unit,
                                    wavelength=cube.axis_world_coords(-1)[0],
                                    rest_wavelength=cube.meta["rest_wav"])

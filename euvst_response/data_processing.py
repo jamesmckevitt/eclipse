@@ -17,6 +17,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 from .radiometric import spectral_psf_fwhm
 from .utils import (tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
+                    onto_wavelength_bins,
                     VELOCITY_CONVENTION)
 
 
@@ -36,8 +37,8 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     Load synthetic atmosphere cube from pickle file.
     
     Creates a summed cube from all line cubes in the synthesis results.
-    All line cubes are interpolated onto the wavelength grid of the metadata_line
-    before summing to handle different wavelength grids for different lines.
+    All line cubes are put onto the wavelength grid of the metadata_line,
+    keeping their flux, before summing, as :func:`sum_line_cubes` does.
     
     Parameters
     ----------
@@ -120,10 +121,10 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
     """
     Every line's cube summed onto the wavelength grid of *reference_line*.
 
-    Each cube is interpolated onto the reference line's grid, with zero
-    outside its own, so lines outside the reference window contribute
-    nothing. The summed cube keeps the reference cube's WCS, unit and
-    metadata, plus the names of the lines it holds.
+    Each cube is averaged over the bins of the reference line's grid,
+    keeping its flux, with zero outside its own, so lines outside the
+    reference window contribute nothing. The summed cube keeps the reference
+    cube's WCS, unit and metadata, plus the names of the lines it holds.
     """
     ref_cube = line_cubes[reference_line]
     ref_wavelengths = ref_cube.axis_world_coords(-1)[0]
@@ -144,18 +145,9 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
         if ny_cube != ny or nx_cube != nx:
             raise ValueError(f"Spatial dimensions mismatch for {line_name}: expected ({ny}, {nx}), got ({ny_cube}, {nx_cube})")
 
-        # Vectorized interpolation for the entire cube
-        # Reshape data to (n_pixels, n_wavelengths) for batch interpolation
-        cube_data_reshaped = cube.data.reshape(-1, len(cube_wavelengths))
-
-        # Batch interpolation using numpy.interp
-        interpolated = np.array([
-            np.interp(ref_wavelengths.value, cube_wavelengths.value, spectrum, left=0.0, right=0.0)
-            for spectrum in cube_data_reshaped
-        ])
-
-        # Add to summed data
-        summed_data += interpolated.reshape(ny, nx, len(ref_wavelengths))
+        summed_data += onto_wavelength_bins(cube.data,
+                                            cube_wavelengths.to_value(ref_wavelengths.unit),
+                                            ref_wavelengths.value)
 
     # Create new metadata combining info from all lines
     combined_meta = ref_cube.meta.copy()

@@ -47,7 +47,7 @@ from .synthesis import (
     line_of_sight_velocity,
     synthesise_cubes,
 )
-from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _to_length,
+from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
 from .utils import VELOCITY_CONVENTION, angle_to_distance
 
@@ -307,19 +307,6 @@ class AtmosphereSeries(_Series):
         self.x_edges = edges["x"]
         self.y_edges = edges["y"]
         self.z_edges = edges["z"]
-
-
-# Two grids that should be one are compared allowing only for the rounding of
-# a change of unit, as between files written in Angstrom and in nm.
-_SAME_GRID = 1e-12
-
-
-def _same_grid(found: u.Quantity, expected: u.Quantity) -> bool:
-    if found.shape != expected.shape:
-        return False
-    values = found.to_value(expected.unit)
-    return bool(np.all(np.abs(values - expected.value)
-                       <= _SAME_GRID * np.abs(expected.value).max()))
 
 
 class SynthesisSeries(_Series):
