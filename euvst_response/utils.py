@@ -13,6 +13,7 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 import joblib
+from scipy import sparse
 from tqdm import tqdm
 
 
@@ -202,12 +203,23 @@ def onto_wavelength_bins(spectra: np.ndarray, wavelength: np.ndarray,
     if wavelength.shape == reference.shape and np.array_equal(wavelength, reference):
         return spectra
     source, target = _bin_edges(wavelength), _bin_edges(reference)
-    overlap = (np.minimum(source[1:, None], target[None, 1:])
-               - np.maximum(source[:-1, None], target[None, :-1]))
-    weights = np.clip(overlap, 0.0, None) / np.diff(target)[None, :]
-    if not weights.any():
-        return np.zeros(spectra.shape[:-1] + reference.shape)
-    return spectra @ weights
+    # Each bin overlaps only the few bins of the other grid that it spans, so
+    # the weights are worked out for those alone. Every pair would take
+    # memory and time growing as the product of the two grids' sizes, and
+    # would carry a NaN in one sample into every bin.
+    last_bin = reference.size - 1
+    first = np.clip(np.searchsorted(target, source[:-1], side="right") - 1, 0, last_bin)
+    last = np.clip(np.searchsorted(target, source[1:], side="left") - 1, 0, last_bin)
+    count = last - first + 1
+    rows = np.repeat(np.arange(wavelength.size), count)
+    cols = np.repeat(first, count) + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    overlap = np.minimum(source[rows + 1], target[cols + 1]) - np.maximum(source[rows], target[cols])
+    kept = overlap > 0
+    weights = sparse.csr_matrix(
+        (overlap[kept] / np.diff(target)[cols[kept]], (rows[kept], cols[kept])),
+        shape=(wavelength.size, reference.size))
+    flat = spectra.reshape(-1, wavelength.size)
+    return np.asarray((weights.T @ flat.T).T).reshape(spectra.shape[:-1] + reference.shape)
 
 
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:

@@ -72,7 +72,7 @@ def main():
     # 7. Synthesise.
     synthesise_spectra(goft, em_tv, vel_grid.to(u.cm / u.s), logT)
 
-    # 8. Wrap as ECLIPSE line cubes and write them, with the DEM, as a synthesis file.
+    # 8. Wrap as ECLIPSE line cubes and write them, with the emission measure, as a synthesis file.
     plate_scale = 1.0 * u.arcsec * (1.0 + 50.0 * np.finfo(float).eps)
     voxel = angle_to_distance(plate_scale).to(u.Mm)
     reference = create_atmosphere_ndcube(

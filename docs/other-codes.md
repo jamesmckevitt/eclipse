@@ -15,9 +15,9 @@ The file is laid out much like an [atmosphere file](synthesis.md#atmosphere-file
 | `lines/<name>/wavelength` | `(n_wavelength,)` | The wavelengths, increasing |
 | `lines/<name>/rest_wavelength` | scalar | The wavelength the line's Doppler shifts are measured from |
 
-Each group under `lines` holds a line, named as `reference_line` names it in the instrument configuration. It can equally hold a whole spectral window with its blends, as most codes give it, and the blends are fitted with a `fitting` block as on the [single snapshot](instrument-response.md) page. ECLIPSE's own synthesis writes a group for each line, and a `synthesis` group of what it worked out on the way, which a file from another code can leave out.
+Each group under `lines` holds a line, named as `reference_line` names it in the instrument configuration. It can equally hold a whole spectral window with its blends, as most codes give it, and the blends are fitted with a `fitting` block as on the [single snapshot](instrument-response.md) page. ECLIPSE's own synthesis writes a group for each line, with its `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the axis it looked along, and a `synthesis` group of what it worked out on the way, all of which a file from another code can leave out.
 
-The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons (e.g. `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)`). The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores can be input.
+The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons (e.g. `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)`). The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores can be input. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
 
 x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`. If your code gives pixel centres, `edges_from_centres` places the edges halfway between them.
 

@@ -65,10 +65,10 @@ def _lines(ny=NY, nx=NX, rest=REST, scale=1.0):
     return scale * 1e13 * brightness * np.exp(-0.5 * ((offsets - centres) / sigma) ** 2)
 
 
-def _line(intensity=None, wavelength=None, rest_wavelength=REST):
+def _line(intensity=None, wavelength=None, rest_wavelength=REST, **identity):
     return SpectralLine(intensity=_lines() * RADIANCE_UNIT if intensity is None else intensity,
                         wavelength=_grid() if wavelength is None else wavelength,
-                        rest_wavelength=rest_wavelength)
+                        rest_wavelength=rest_wavelength, **identity)
 
 
 def _synthesis(lines=None, **fields):
@@ -113,6 +113,10 @@ def test_a_strip_of_columns_reads_as_that_part_of_the_image(tmp_path):
     assert strip.time == 10 * u.s
     with pytest.raises(ValueError, match="neighbouring pixels"):
         read_synthesis(path, columns=slice(0, 4, 2))
+    # Columns beyond the image are refused, not dropped.
+    for outside in (slice(2, NX + 1), slice(-1, None)):
+        with pytest.raises(ValueError, match=f"among the {NX} along x"):
+            read_synthesis(path, columns=outside)
 
 
 def test_only_the_lines_that_reach_the_window_are_read(tmp_path):
@@ -141,6 +145,17 @@ def test_only_the_lines_that_reach_the_window_are_read(tmp_path):
     assert added[..., -1] == pytest.approx(np.full((NY, NX), 1e13), rel=1e-9)
     assert np.abs(added[..., :-1]).max() <= 1e-9 * 1e13
 
+    # A blend whose wavelengths could not be read is refused rather than
+    # passed over as outside the window.
+    path = write_synthesis(_synthesis({LINE: _line(), BLEND: _line(rest_wavelength=BLEND_REST)}),
+                           tmp_path / "broken.h5")
+    for broken, match in ((_grid().to_value(u.AA)[::-1], "must increase"),
+                          (np.full(N_WAVE, np.nan), "NaN or infinite")):
+        with h5py.File(path, "r+") as f:
+            f[f"lines/{BLEND}/wavelength"][...] = broken
+        with pytest.raises(ValueError, match=f"line '{BLEND}': .*{match}"):
+            read_synthesis(path, reference_line=LINE)
+
 
 def test_the_products_come_back_as_they_went_in(tmp_path):
     products = {
@@ -165,8 +180,14 @@ def test_the_products_come_back_as_they_went_in(tmp_path):
     assert read["dynamic_mode"]["slit_width"] == 0.4 * u.arcsec
     assert read["config"]["vel_res"] == 5 * u.km / u.s
     assert read["config"]["crop_params"] == {"crop_x": None}
-    # The instrument run reads only what it needs.
+    # The instrument run reads only what it needs, named alone or in a list.
     assert set(read_synthesis_products(path, keys=("dynamic_mode",))) == {"dynamic_mode"}
+    assert set(read_synthesis_products(path, keys="dynamic_mode")) == {"dynamic_mode"}
+    # The lines keep their order, as the pickles kept it.
+    goft = {name: {"g_tn": np.ones((2, 4)), "atom": 26, "ion": 12}
+            for name in ("Fe12_195.1190", "Fe09_171.0730", "Fe24_192.0280")}
+    path = write_synthesis(_synthesis(), tmp_path / "ordered.h5", products={"goft": goft})
+    assert list(read_synthesis_products(path)["goft"]) == list(goft)
 
 
 def test_the_intensity_may_be_per_frequency_or_in_photons():
@@ -187,6 +208,10 @@ def test_the_intensity_may_be_per_frequency_or_in_photons():
         radiance = _line(given, wavelength).radiance()
         assert radiance.unit == RADIANCE_UNIT
         assert np.allclose(radiance.value, per_wavelength.value, rtol=1e-12, atol=0)
+        # And a line cube, on a wavelength axis, is in it too.
+        cube = _synthesis({LINE: _line(given, wavelength)}).line_cube(LINE)
+        assert cube.unit == RADIANCE_UNIT
+        assert np.allclose(cube.data, per_wavelength.value, rtol=1e-12, atol=0)
 
 
 @pytest.mark.parametrize("change, error, match", [
@@ -308,8 +333,31 @@ def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
     cubes[BLEND] = _line_cube(_lines(rest=BLEND_REST, scale=0.1), BLEND_REST, view="z")
     with pytest.raises(ValueError, match="seen along different axes"):
         write_line_cubes(cubes, tmp_path / "mixed.h5")
+    # A cube that names no view is seen along z, so it cannot join one along x.
+    cubes[BLEND].meta.pop("integration_axis")
+    with pytest.raises(ValueError, match="seen along different axes"):
+        write_line_cubes(cubes, tmp_path / "unnamed.h5")
     with pytest.raises(ValueError, match="integration_axis must be one of"):
         _synthesis(integration_axis="w")
+
+
+def test_each_line_keeps_its_atom_and_ion(tmp_path):
+    cubes = _line_cubes()
+    cubes[LINE].meta.update(atom=np.int64(26), ion=12)
+    path = write_line_cubes(cubes, tmp_path / "identified.h5")
+    lines = read_synthesis(path).lines
+    assert (lines[LINE].atom, lines[LINE].ion) == (26, 12)
+    assert (lines[BLEND].atom, lines[BLEND].ion) == (None, None)
+    loaded = load_synthesis(path)["line_cubes"]
+    assert (loaded[LINE].meta["atom"], loaded[LINE].meta["ion"]) == (26, 12)
+    assert "atom" not in loaded[BLEND].meta
+
+    for atom, ion, message in ((0, 1, "atom must be"), (26, 0, "ion must be"),
+                               (26.0, 12, "atom must be"), (True, 1, "atom must be"),
+                               (26, 28, "beyond the last stage")):
+        with pytest.raises(ValueError, match=message):
+            _line(atom=atom, ion=ion)
+    assert _line(atom=26, ion=27).ion == 27
 
 
 def test_line_cubes_must_share_one_image(tmp_path):
@@ -343,6 +391,10 @@ def test_blends_keep_their_flux_on_the_reference_wavelengths():
     # over bins 0.5-2.5 and 2.5-4.5, with nothing beyond 3.5.
     assert onto_wavelength_bins(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]),
                                 np.array([1.5, 3.5])) == pytest.approx([1.5, 1.5])
+    # A sample that is not a number spoils only the bins it overlaps.
+    spoilt = onto_wavelength_bins(np.array([1.0, np.nan, 3.0, 4.0, 5.0, 6.0]),
+                                  np.arange(1.0, 7.0), np.array([1.5, 3.5, 5.5]))
+    assert np.isnan(spoilt[0]) and np.all(np.isfinite(spoilt[1:]))
     same = np.arange(6.0).reshape(2, 3)
     assert np.array_equal(onto_wavelength_bins(same, np.array([1.0, 2.0, 3.0]),
                                                np.array([1.0, 2.0, 3.0])), same)
@@ -415,13 +467,18 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
         electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
         velocity_z=np.zeros((2, 2, 2)) * u.km / u.s, x_edges=np.arange(3) * u.Mm,
         y_edges=np.arange(3) * u.Mm, z_edges=np.arange(3) * u.Mm), tmp_path / "box.h5")
-    for name in ("old.pkl", "new.h5"):
+    for name in ("old.pkl", "new.h5", "plain"):
         monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(atmosphere),
                                           "--lines", LINE, "--output-dir", str(tmp_path),
                                           "--output-name", name])
         if name.endswith(".pkl"):
             with pytest.warns(FutureWarning, match="Writing one is deprecated"):
                 synthesis.main()
+        elif name == "plain":
+            # Any other name got a pickle from older versions, so it is told.
+            with pytest.warns(UserWarning, match="gets a synthesis file, which is HDF5"):
+                synthesis.main()
+            assert h5py.is_hdf5(tmp_path / "plain")
         else:
             synthesis.main()
 
@@ -449,12 +506,13 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
     for key, expected in named["cube_reb_dict"].items():
         assert np.array_equal(by_default["cube_reb_dict"][key].data, expected.data)
 
-    # Once there is a synthesis file where the synthesis now writes it, that is the one.
+    # Once there is a synthesis file where the synthesis now writes it, that
+    # is the one, and the run says which it chose.
     convert_synthesis_pickle(tmp_path / "run" / "input" / "synthesised_spectra.pkl",
                              tmp_path / "run" / "input" / "synthesised_spectra.h5")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", FutureWarning)
+    with pytest.warns(UserWarning, match="observing ./run/input/synthesised_spectra.h5") as seen:
         _run(tmp_path, monkeypatch, "new_default", reference_line=LINE)
+    assert not any(issubclass(warning.category, FutureWarning) for warning in seen)
 
 
 # ----------------------------------------------------------------------
@@ -561,9 +619,7 @@ def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch)
     for cube in cubes.values():
         cube.meta.update(atom=26, ion=12)
     with open(tmp_path / "synthesis.pkl", "wb") as f:
-        dill.dump({"line_cubes": cubes,
-                   "goft": {name: {"g_tn": np.ones((2, 3)), "atom": 26, "ion": 12}
-                            for name in cubes}}, f)
+        dill.dump({"line_cubes": cubes}, f)
     convert_synthesis_pickle(tmp_path / "synthesis.pkl", tmp_path / "synthesis.h5")
 
     with pytest.warns(FutureWarning, match="synthesis pickle"):
@@ -591,11 +647,56 @@ def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch)
     _keeps_meta(from_file["cube_sim"].meta, from_pickle["cube_sim"].meta)
 
 
+def test_a_uniform_intensity_run_says_it_ignores_a_synthesis_file(tmp_path, monkeypatch):
+    """The uniform intensity is what is observed, as it always was, but not silently."""
+    with pytest.warns(UserWarning, match="'synthesis_file' is ignored"):
+        results = _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
+                       synthesis_file=str(tmp_path / "nowhere.h5"))
+    assert len(results["results"]["all_combinations"]) == 2
+
+
 def test_a_file_of_one_line_needs_no_reference_line(tmp_path, monkeypatch):
     write_synthesis(_synthesis({"Fe12_195.1193": _line(rest_wavelength=195.1193 * u.AA)}),
                     tmp_path / "one.h5")
     results = _run(tmp_path, monkeypatch, "one", synthesis_file=str(tmp_path / "one.h5"))
     assert results["cube_sim"].meta["rest_wav"] == 195.1193 * u.AA
+
+
+def test_a_file_of_several_lines_needs_the_reference_line_it_lacks(tmp_path, monkeypatch):
+    lines = {"Fe10_184.5370": _line(_lines(rest=184.537 * u.AA) * RADIANCE_UNIT,
+                                    _grid(184.537 * u.AA), 184.537 * u.AA),
+             "Fe09_171.0730": _line(_lines(rest=171.073 * u.AA) * RADIANCE_UNIT,
+                                    _grid(171.073 * u.AA), 171.073 * u.AA)}
+    write_synthesis(_synthesis(lines), tmp_path / "two.h5")
+    with pytest.raises(ValueError, match="no 'reference_line' says which to observe"):
+        _run(tmp_path, monkeypatch, "unsaid", synthesis_file=str(tmp_path / "two.h5"))
+    # Left empty, it is the first line, as older versions took it.
+    results = _run(tmp_path, monkeypatch, "empty", synthesis_file=str(tmp_path / "two.h5"),
+                   reference_line=None)
+    assert results["cube_sim"].meta["line_name"] == "Fe10_184.5370"
+
+
+def test_load_atmosphere_reads_a_synthesis_file_as_it_read_the_pickle(tmp_path):
+    from euvst_response.data_processing import load_atmosphere
+
+    with open(tmp_path / "synthesis.pkl", "wb") as f:
+        dill.dump({"line_cubes": _line_cubes(), "dynamic_mode": {"enabled": False}}, f)
+    convert_synthesis_pickle(tmp_path / "synthesis.pkl", tmp_path / "synthesis.h5")
+    for line in (LINE, None):
+        expected, expected_mode = load_atmosphere(tmp_path / "synthesis.pkl", line)
+        got, mode = load_atmosphere(tmp_path / "synthesis.h5", line)
+        assert mode == expected_mode == {"enabled": False}
+        assert np.array_equal(got.data, expected.data)
+        # The WCS is built again from the file's wavelengths, so the same
+        # axes but for rounding.
+        assert list(got.wcs.wcs.ctype) == list(expected.wcs.wcs.ctype)
+        for axis, n in enumerate(got.data.shape[::-1]):
+            pixels = np.zeros((n, 3))
+            pixels[:, axis] = np.arange(n)
+            assert np.allclose(got.wcs.pixel_to_world_values(*pixels.T)[axis],
+                               expected.wcs.pixel_to_world_values(*pixels.T)[axis],
+                               rtol=1e-12, atol=0)
+        _keeps_meta(got.meta, expected.meta)
 
 
 def test_an_instrument_run_names_a_line_the_file_lacks(tmp_path, monkeypatch):

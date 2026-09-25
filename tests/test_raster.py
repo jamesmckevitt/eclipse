@@ -674,6 +674,17 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
         RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL), 0.4 * u.arcsec, 10 * u.s)
     assert synthesis.integration_axis == "x"
 
+    # And each line is the ion its files say it is.
+    identified = []
+    for i, path in enumerate(paths):
+        base = read_synthesis(path)
+        identified.append(write_synthesis(dataclasses.replace(base, lines={
+            LINE: dataclasses.replace(base.lines[LINE], atom=26, ion=12)}),
+            tmp_path / f"identified_{i}.h5"))
+    synthesis, _ = SynthesisRaster(SynthesisSeries(identified, LINE)).synthesis(
+        RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL), 0.4 * u.arcsec, 10 * u.s)
+    assert synthesis.summed_meta(LINE)["atom"] == 26 and synthesis.summed_meta(LINE)["ion"] == 12
+
 
 def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
     import dataclasses
@@ -708,6 +719,20 @@ def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
     along_x = dataclasses.replace(read_synthesis(good[1]), time=20.0 * u.s, integration_axis="x")
     with pytest.raises(ValueError, match="share one view"):
         SynthesisSeries(good + [write_synthesis(along_x, tmp_path / "along_x.h5")], LINE)
+    base = read_synthesis(good[1])
+    identified = dataclasses.replace(base, time=20.0 * u.s, lines={
+        LINE: dataclasses.replace(base.lines[LINE], atom=26, ion=12)})
+    with pytest.raises(ValueError, match="the atom and ion"):
+        SynthesisSeries(good + [write_synthesis(identified, tmp_path / "identified.h5")], LINE)
+    # A series of one file cannot say how long it stands for.
+    with pytest.raises(ValueError, match="as a single snapshot, with 'synthesis_file'"):
+        SynthesisSeries(good[:1], LINE).valid_until()
+    # The slit is laid over pixels of one size, from the first file on.
+    uneven = _other_code_file(tmp_path / "uneven.h5", -10.0, ones)
+    with h5py.File(uneven, "r+") as f:
+        f["x_edges"][1] += 0.25 * CELL.to_value(f["x_edges"].attrs["unit"])
+    with pytest.raises(ValueError, match="uneven.h5: x_edges must be evenly spaced"):
+        SynthesisSeries([uneven] + good, LINE)
     # The same image given in arcsec is the same image.
     in_arcsec = distance_to_angle(_edges()["x_edges"]).to(u.arcsec)
     series = SynthesisSeries(good + [_other_code_file(tmp_path / "arcsec.h5", 20.0, ones,

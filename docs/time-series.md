@@ -71,7 +71,7 @@ simulation:
 
 Each file needs a `time`, and all of them must share one image and hold the same lines on the same wavelengths. ECLIPSE's synthesis writes the time of the atmosphere file into the synthesis file. `reference_line` works as it does for a [single snapshot](instrument-response.md), defaulting to the files' only line. The observing plan and what each exposure sees are the same as for atmosphere files.
 
-Synthesising every snapshot with `synthesise-spectra` and observing the files gives the same result as observing the atmosphere files, but synthesises every column of every snapshot rather than only those under the slit.
+Synthesising every snapshot with `synthesise-spectra` and observing the files with the same `reference_line` gives the same result as observing the atmosphere files, but synthesises every column of every snapshot rather than only those under the slit.
 
 ## The observing plan
 

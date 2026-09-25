@@ -19,8 +19,8 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
                               pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
-from .synthesis_file import (_line_identity, is_synthesis_file, read_synthesis,
-                             read_synthesis_products, synthesis_line_names)
+from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
+                             synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
@@ -293,11 +293,26 @@ LEGACY_SYNTHESIS_FILE = "./run/input/synthesised_spectra.pkl"
 
 
 def _reference_line(config: dict, synthesis_path) -> str:
-    """'reference_line', or else the synthesis file's only line, or else the default line."""
-    if "reference_line" in config:
+    """
+    'reference_line', or the line a synthesis file is observed in without one.
+
+    Left empty, it is the file's first line, as older versions took it. Not
+    given, it is the file's only line, or else the default line, which the
+    file must then hold.
+    """
+    if config.get("reference_line") is not None:
         return config["reference_line"]
     names = synthesis_line_names(synthesis_path)
-    return names[0] if len(names) == 1 else DEFAULT_REFERENCE_LINE
+    if not names:
+        # Refused when the file is read, as holding no lines.
+        return DEFAULT_REFERENCE_LINE
+    if "reference_line" in config or len(names) == 1:
+        return names[0]
+    if DEFAULT_REFERENCE_LINE not in names:
+        raise ValueError(f"{synthesis_path} holds the lines {names} and no 'reference_line' "
+                         f"says which to observe; the default, {DEFAULT_REFERENCE_LINE}, is "
+                         f"not among them.")
+    return DEFAULT_REFERENCE_LINE
 
 
 def _parse_pinhole_config(config: dict) -> tuple:
@@ -494,6 +509,9 @@ def main() -> None:
     # Simulation mode. A time series is either atmosphere files, synthesised
     # in this run, or synthesis files, synthesised beforehand.
     uniform_intensity_mode = "uniform_intensity" in config
+    if uniform_intensity_mode and "synthesis_file" in config:
+        warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
+                      UserWarning, stacklevel=2)
     atmosphere_series_mode = "atmosphere_series" in config
     synthesis_series_mode = "synthesis_series" in config
     raster_mode = atmosphere_series_mode or synthesis_series_mode
@@ -548,9 +566,15 @@ def main() -> None:
         # A run set up for an older version, whose synthesis wrote the pickle
         # and whose configuration leaves the file to the default, still finds
         # it.
-        if ("synthesis_file" not in config and not Path(synthesis_file).is_file()
-                and Path(LEGACY_SYNTHESIS_FILE).is_file()):
-            synthesis_file = LEGACY_SYNTHESIS_FILE
+        if "synthesis_file" not in config and Path(LEGACY_SYNTHESIS_FILE).is_file():
+            if not Path(synthesis_file).is_file():
+                synthesis_file = LEGACY_SYNTHESIS_FILE
+            else:
+                warnings.warn(f"Both {DEFAULT_SYNTHESIS_FILE} and {LEGACY_SYNTHESIS_FILE} exist "
+                              f"and 'synthesis_file' names neither; observing "
+                              f"{DEFAULT_SYNTHESIS_FILE}, where the synthesis now writes. "
+                              f"Name the one to observe with 'synthesis_file'.",
+                              UserWarning, stacklevel=2)
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(
                 f"Synthesis file not found: {synthesis_file}. "
@@ -745,9 +769,8 @@ def main() -> None:
     raster_summed = {}
     raster_cubes = {}
     synthesis = None
-    # What the cubes from a synthesis file carry beyond its spectra, as those
-    # from a pickle did: the measured line's atom and ion, which ECLIPSE's
-    # own synthesis records, and for a single snapshot its dynamic mode.
+    # What the cubes from a single synthesis file carry beyond its spectra,
+    # as those from a pickle did: its dynamic mode.
     file_meta = {}
     if uniform_intensity_mode:
         cube_sim = None
@@ -770,14 +793,13 @@ def main() -> None:
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         print(f"  Lines in the window of {reference_line}: {', '.join(series.lines)}")
         raster = SynthesisRaster(series)
-        file_meta = _line_identity(series.paths[0], reference_line)
     else:
-        print("\nLoading the synthesis...")
+        print(f"\nLoading the synthesis from {synthesis_file}...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
         if synthesis_is_hdf5:
-            # Only the lines that reach the reference line's window are read.
-            # They go onto the detector grid per slit width inside the loop,
-            # straight from their own wavelengths.
+            # Only the lines that reach the reference line's window are read,
+            # and added up on its wavelengths here. The sum is resampled onto
+            # the detector grid per slit width inside the loop.
             synthesis = read_synthesis(synthesis_file, reference_line)
             print(f"  Lines in its window: {', '.join(synthesis.lines)}")
             if synthesis.source:
@@ -787,8 +809,7 @@ def main() -> None:
             summed_input = synthesis.summed(reference_line)
             # Kept in the results as the spectra the instrument observed, where
             # evenly spaced wavelengths let a WCS describe them.
-            file_meta = {**_line_identity(synthesis_file, reference_line),
-                         "dynamic_mode": dynamic_mode_info}
+            file_meta = {"dynamic_mode": dynamic_mode_info}
             cube_sim = (synthesis.summed_cube(reference_line, summed_input, file_meta)
                         if synthesis.evenly_spaced(reference_line) else None)
         else:
@@ -962,8 +983,7 @@ def main() -> None:
             summed_input = synthesis.summed(reference_line)
             cube_sim = None
             if synthesis.evenly_spaced(reference_line):
-                cube_sim = synthesis.summed_cube(reference_line, summed_input,
-                                                 {**file_meta, **raster_meta})
+                cube_sim = synthesis.summed_cube(reference_line, summed_input, raster_meta)
             raster_summed[cube_reb_key] = cube_sim
             print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "
                   f"strips read so far")
@@ -1003,7 +1023,7 @@ def main() -> None:
                 else:
                     rebinned = rebin_spectra(
                         synthesis, reference_line, DET, SIM_rebin, summed=summed_input,
-                        meta={**file_meta, **(raster_meta if synthesis_series_mode else {})})
+                        meta=raster_meta if synthesis_series_mode else file_meta)
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
 

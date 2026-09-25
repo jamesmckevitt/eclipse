@@ -37,6 +37,8 @@ Datasets, each with a ``unit`` attribute astropy can parse, and groups:
     evenly spaced.
   - ``rest_wavelength``: a scalar, the wavelength the line's Doppler shifts
     are measured from.
+  - ``atom``, ``ion``: attributes, the atomic number and the ionisation
+    stage of the ion emitting the line, 26 and 12 for Fe XII, optional.
 
   A group can hold a whole spectral window, blends and all, as another code
   often gives it; the instrument run adds up whatever lines reach the
@@ -49,6 +51,7 @@ Datasets, each with a ``unit`` attribute astropy can parse, and groups:
 from __future__ import annotations
 
 import json
+import numbers
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
@@ -94,6 +97,8 @@ EDGES = {axis: f"{axis}_edges" for axis in AXES}
 # A unit of the right kind for each dataset, for the messages that ask for one.
 UNITS = {"intensity": u.erg / (u.s * u.cm**2 * u.sr * u.AA), "wavelength": u.AA,
          "rest_wavelength": u.AA, "x_edges": u.Mm, "y_edges": u.Mm, "time": u.s}
+# What says which ion emits a line, as ECLIPSE's line cubes carry it.
+IDENTITY = ("atom", "ion")
 # The image axes of a view along each axis of a simulation, as ECLIPSE's line
 # cubes name them.
 _VIEW_CTYPES = {"z": ("SOLX", "SOLY"), "x": ("SOLY", "SOLZ"), "y": ("SOLX", "SOLZ")}
@@ -158,6 +163,18 @@ def _same_grid(found: u.Quantity, expected: u.Quantity) -> bool:
                        <= _SAME_GRID * np.abs(expected.value).max()))
 
 
+def _check_wavelength(wavelength) -> u.Quantity:
+    """*wavelength*, which must be a finite, increasing 1D Quantity of lengths with at least 2 values."""
+    wavelength = _checked(wavelength, "wavelength", ndim=1, kinds=("length",))
+    if wavelength.size < 2:
+        raise ValueError(f"wavelength must have at least 2 values, got {wavelength.size}.")
+    if np.any(np.diff(wavelength.value) <= 0):
+        raise ValueError("wavelength must increase; a grid that decreases, as "
+                         "one converted from increasing frequencies does, "
+                         "needs it and the intensity reversed along it.")
+    return wavelength
+
+
 @dataclass(frozen=True)
 class SpectralLine:
     """
@@ -174,21 +191,27 @@ class SpectralLine:
     rest_wavelength : u.Quantity
         The wavelength the line's Doppler shifts are measured from, within
         the range of *wavelength*.
+    atom, ion : int, optional
+        The atomic number and the ionisation stage of the ion emitting the
+        line, 26 and 12 for Fe XII, which the results then carry.
     """
 
     intensity: u.Quantity
     wavelength: u.Quantity
     rest_wavelength: u.Quantity
+    atom: Optional[int] = None
+    ion: Optional[int] = None
 
     def __post_init__(self):
-        wavelength = _checked(self.wavelength, "wavelength", ndim=1, kinds=("length",))
-        if wavelength.size < 2:
-            raise ValueError(f"wavelength must have at least 2 values, got "
-                             f"{wavelength.size}.")
-        if np.any(np.diff(wavelength.value) <= 0):
-            raise ValueError("wavelength must increase; a grid that decreases, as "
-                             "one converted from increasing frequencies does, "
-                             "needs it and the intensity reversed along it.")
+        wavelength = _check_wavelength(self.wavelength)
+        for name in IDENTITY:
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool)
+                                      or not isinstance(value, numbers.Integral) or value < 1):
+                raise ValueError(f"{name} must be a whole number from 1, got {value!r}.")
+        if self.atom is not None and self.ion is not None and self.ion > self.atom + 1:
+            raise ValueError(f"ion {self.ion} is beyond the last stage of atom {self.atom}, "
+                             f"{self.atom + 1}.")
         rest = _checked(self.rest_wavelength, "rest_wavelength", ndim=0, kinds=("length",))
         if not wavelength[0] <= rest <= wavelength[-1]:
             raise ValueError(f"rest_wavelength {rest} is outside the wavelengths, "
@@ -321,9 +344,12 @@ class Synthesis:
         """The metadata of line *name*, as ECLIPSE's line cubes carry it."""
         from .utils import VELOCITY_CONVENTION
 
-        return {"line_name": name, "rest_wav": self.lines[name].rest_wavelength,
+        line = self.lines[name]
+        return {"line_name": name, "rest_wav": line.rest_wavelength,
                 "integration_axis": self.integration_axis or "z", "source": self.source,
-                "velocity_convention": VELOCITY_CONVENTION}
+                "velocity_convention": VELOCITY_CONVENTION,
+                **{key: getattr(line, key) for key in IDENTITY
+                   if getattr(line, key) is not None}}
 
     def summed_meta(self, reference: str) -> dict:
         """
@@ -338,11 +364,11 @@ class Synthesis:
 
     def line_cube(self, name: str):
         """
-        Line *name* as an NDCube like those of ECLIPSE's synthesis, indexed ``[y, x, wavelength]``.
+        Line *name* as an NDCube like those of ECLIPSE's synthesis, indexed ``[y, x, wavelength]``, in erg / (s cm2 sr cm).
 
         The wavelengths have to be evenly spaced for a WCS to describe them.
         """
-        return self._cube(self.lines[name].intensity, name, self.line_meta(name))
+        return self._cube(self.lines[name].radiance(), name, self.line_meta(name))
 
     def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None,
                     meta: Optional[Mapping] = None):
@@ -438,8 +464,11 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
             _write_dataset(entry, "intensity", line.intensity, compression=compression)
             _write_dataset(entry, "wavelength", line.wavelength)
             _write_dataset(entry, "rest_wavelength", line.rest_wavelength)
+            for key in IDENTITY:
+                if getattr(line, key) is not None:
+                    entry.attrs[key] = int(getattr(line, key))
         if products:
-            _write_tree(f.create_group("synthesis"), products)
+            _write_tree(f.create_group("synthesis", track_order=True), products)
     return path
 
 
@@ -467,9 +496,12 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
                       format_version=FORMAT_VERSION)
         edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
         if columns is not None:
-            first, last, step = columns.indices(edges["x_edges"].size - 1)
-            if step != 1 or last <= first:
-                raise ValueError(f"columns must be a slice of neighbouring pixels, got {columns}.")
+            nx = edges["x_edges"].size - 1
+            first = 0 if columns.start is None else columns.start
+            last = nx if columns.stop is None else columns.stop
+            if columns.step not in (None, 1) or not 0 <= first < last <= nx:
+                raise ValueError(f"columns must be a slice of neighbouring pixels among the "
+                                 f"{nx} along x, got {columns}.")
             edges["x_edges"] = edges["x_edges"][first:last + 1]
             columns = slice(first, last)
         group, names = _lines_reaching(f, path, reference_line)
@@ -478,7 +510,8 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
             entry = group[name]
             fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
                       "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
-                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS)}
+                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
+                      **_identity(entry)}
             try:
                 lines[name] = SpectralLine(**fields)
             except (TypeError, ValueError) as error:
@@ -500,7 +533,8 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
     ``source``, ``integration_axis`` (None if the file has none) and
     ``lines``, which maps each line, or each one reaching the
     window of *reference_line* if given, to its ``wavelength``, its
-    ``rest_wavelength`` and the ``shape`` of its intensity. A time series
+    ``rest_wavelength``, its ``identity`` (its ``atom`` and ``ion``, as far
+    as the file gives them) and the ``shape`` of its intensity. A time series
     checks its files with it before reading any spectra.
     """
     path = Path(path)
@@ -526,7 +560,7 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
             layout["lines"][name] = {
                 "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
                 "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
-                "shape": entry["intensity"].shape}
+                "identity": _identity(entry), "shape": entry["intensity"].shape}
     return layout
 
 
@@ -540,10 +574,24 @@ def _lines_reaching(f: h5py.File, path: Path, reference_line: Optional[str]):
         if reference_line not in group:
             raise ValueError(f"'reference_line' {reference_line!r} is not in {path}; "
                              f"its lines are {names}.")
-        window = _read_dataset(group[reference_line], "wavelength", units=UNITS)
+        window = _line_wavelength(group, reference_line, path)
         names = [name for name in names
-                 if _reaches(_read_dataset(group[name], "wavelength", units=UNITS), window)]
+                 if _reaches(_line_wavelength(group, name, path), window)]
     return group, names
+
+
+def _line_wavelength(group: h5py.Group, name: str, path: Path) -> u.Quantity:
+    """
+    Line *name*'s wavelengths, checked as reading the line checks them.
+
+    Whether a line reaches the window is judged from them, so a line whose
+    wavelengths could not be read is refused rather than passed over.
+    """
+    wavelength = _read_dataset(group[name], "wavelength", units=UNITS)
+    try:
+        return _check_wavelength(wavelength)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"{path}, line {name!r}: {error}") from None
 
 
 def _source(f: h5py.File) -> str:
@@ -551,24 +599,14 @@ def _source(f: h5py.File) -> str:
     return str(source.decode() if isinstance(source, bytes) else source)
 
 
+def _identity(entry: h5py.Group) -> dict:
+    """A line's atom and ion, as far as its group gives them."""
+    return {key: int(entry.attrs[key]) for key in IDENTITY if key in entry.attrs}
+
+
 def _integration_axis(f: h5py.File) -> Optional[str]:
     axis = f.attrs.get("integration_axis")
     return None if axis is None else str(axis.decode() if isinstance(axis, bytes) else axis)
-
-
-def _line_identity(path: str | Path, name: str) -> dict:
-    """
-    The ``atom`` and ``ion`` of line *name*, as ECLIPSE's own synthesis records them in the file.
-
-    A file from another code records neither, and gives an empty dict.
-    """
-    path = Path(path)
-    with h5py.File(path, "r") as f:
-        _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
-                      format_version=FORMAT_VERSION)
-        goft = f.get("synthesis/goft")
-        info = {} if goft is None else (_read_tree(goft, {name}).get(name) or {})
-    return {key: info[key] for key in ("atom", "ion") if key in info}
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
@@ -595,7 +633,10 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
     ``logT_grid``, ``vel_grid``, ``logN_grid``, ``goft`` (each line's
     contribution functions), ``voxel_sizes``, ``atmosphere``,
     ``dynamic_mode`` and ``config``, as the pickles of older versions held
-    them. A file from another code has none, and gives an empty dict.
+    them but for what JSON cannot keep, as tuples come back as lists and
+    dictionary keys as strings, and for each line's ``si`` and ``wl_grid``
+    in ``goft``, which are its spectra and their wavelengths, the lines
+    themselves. A file from another code has none, and gives an empty dict.
 
     Parameters
     ----------
@@ -610,15 +651,17 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
                       format_version=FORMAT_VERSION)
         if "synthesis" not in f:
             return {}
+        if isinstance(keys, str):
+            keys = [keys]
         return _read_tree(f["synthesis"], None if keys is None else set(keys))
 
 
 def load_synthesis(path: str | Path) -> dict:
     """
-    Everything in a synthesis file, as the pickles of older versions held it.
+    Everything in a synthesis file, much as the pickles of older versions held it.
 
-    ``line_cubes`` maps each line to an NDCube indexed ``[y, x, wavelength]``,
-    and the rest is :func:`read_synthesis_products`. Handy for looking at a
+    ``line_cubes`` maps each line to an NDCube indexed ``[y, x, wavelength]``
+    in erg / (s cm2 sr cm), and the rest is :func:`read_synthesis_products`. Handy for looking at a
     synthesis; the instrument run reads the file itself.
 
     An NDCube's WCS describes evenly spaced wavelengths, as ECLIPSE's own
@@ -633,14 +676,8 @@ def load_synthesis(path: str | Path) -> dict:
             f"{path}: the wavelengths of {', '.join(uneven)} are not evenly spaced, which "
             f"the WCS of an NDCube cannot describe. Read the file with read_synthesis, "
             f"which keeps each line's wavelengths as they are.")
-    products = read_synthesis_products(path)
-    line_cubes = {}
-    for name in synthesis.lines:
-        cube = synthesis.line_cube(name)
-        line_info = (products.get("goft") or {}).get(name, {})
-        cube.meta.update({key: line_info[key] for key in ("atom", "ion") if key in line_info})
-        line_cubes[name] = cube
-    return {"line_cubes": line_cubes, **products}
+    line_cubes = {name: synthesis.line_cube(name) for name in synthesis.lines}
+    return {"line_cubes": line_cubes, **read_synthesis_products(path)}
 
 
 # The products are nested dicts of arrays and plain values. Arrays and
@@ -657,7 +694,7 @@ def _write_tree(group: h5py.Group, tree: Mapping) -> None:
             if isinstance(value, u.Quantity):
                 dataset.attrs["unit"] = value.unit.to_string()
         elif isinstance(value, Mapping) and any(_holds_array(v) for v in value.values()):
-            _write_tree(group.create_group(key), value)
+            _write_tree(group.create_group(key, track_order=True), value)
         else:
             group.attrs[key] = json.dumps(_jsonable(value))
 
@@ -722,9 +759,10 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
     """
     Write line cubes, as ECLIPSE's synthesis builds them, as a synthesis file.
 
-    Each cube keeps its values, its wavelengths and its rest wavelength; the
-    image grid is read off the first cube's WCS, which every cube shares, and
-    the axis the image was seen along off their ``integration_axis``.
+    Each cube keeps its values, its wavelengths, its rest wavelength and its
+    atom and ion; the image grid is read off the first cube's WCS, which
+    every cube shares, and the axis the image was seen along off their
+    ``integration_axis``.
 
     Parameters
     ----------
@@ -757,16 +795,20 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
                 raise ValueError(f"Line {name!r} has other pixel positions along {axis} "
                                  f"than {first_name!r}; the lines of a synthesis file "
                                  f"share one image.")
+        meta = cube.meta or {}
         lines[name] = SpectralLine(intensity=np.asarray(cube.data) * cube.unit,
                                    wavelength=cube.axis_world_coords(-1)[0],
-                                   rest_wavelength=cube.meta["rest_wav"])
-    # The view names the image axes, so that the cubes come back as they were.
-    views = {(cube.meta or {}).get("integration_axis") for cube in cubes.values()} - {None}
+                                   rest_wavelength=meta["rest_wav"],
+                                   **{key: int(meta[key]) for key in IDENTITY
+                                      if meta.get(key) is not None})
+    # The view names the image axes, so that the cubes come back as they
+    # were. A cube that names none is seen along z, as everywhere else.
+    views = {(cube.meta or {}).get("integration_axis") or "z" for cube in cubes.values()}
     if len(views) > 1:
         raise ValueError(f"The line cubes were seen along different axes, {sorted(views)}; "
                          f"the lines of a synthesis file share one image.")
     synthesis = Synthesis(lines=lines, source=source, time=time,
-                          integration_axis=views.pop() if views else None, **edges)
+                          integration_axis=views.pop(), **edges)
     return write_synthesis(synthesis, path, products=products)
 
 
@@ -784,8 +826,11 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
     """
     Rewrite a synthesis pickle, as older versions wrote them, as a synthesis file.
 
-    Everything the pickle holds is kept: its line cubes as the spectra and
-    the rest as the synthesis products. A pickle whose line cubes have the
+    Everything the pickle holds is kept, its line cubes as the spectra and
+    the rest as the synthesis products, but for what repeats something
+    kept: each line's ``si`` and ``wl_grid`` in ``goft``, its spectra, and
+    the atmosphere's metadata each line cube carried as
+    ``spatial_reference``. A pickle whose line cubes have the
     old axis order or the old Doppler sign is refused, as the instrument
     run refuses it.
     """

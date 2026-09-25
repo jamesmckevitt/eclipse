@@ -49,7 +49,7 @@ from .synthesis import (
 )
 from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
-from .utils import VELOCITY_CONVENTION, angle_to_distance
+from .utils import VELOCITY_CONVENTION, angle_to_distance, require_uniform_grid
 
 __all__ = ["SynthesisSettings", "RasterPlan", "Exposure", "AtmosphereSeries",
            "RasterSynthesiser", "SynthesisSeries", "SynthesisRaster"]
@@ -237,6 +237,10 @@ class _Series:
     the last for as long again as the gap before it.
     """
 
+    # What to do instead with a single snapshot, for the message refusing a
+    # series of one.
+    _alone = "observe a single snapshot as a static atmosphere"
+
     def __init__(self, timed: Sequence[Tuple[float, Path]]):
         timed = sorted(timed, key=lambda item: item[0])
         times = np.array([t for t, _ in timed])
@@ -254,9 +258,8 @@ class _Series:
         and for the last, as long again as the gap before it."""
         times = self.times.to_value(u.s)
         if times.size == 1:
-            raise ValueError("A series of one snapshot cannot say how long it stands for; "
-                             "give at least two, or observe a single snapshot as a static "
-                             "atmosphere.")
+            raise ValueError(f"A series of one snapshot cannot say how long it stands for; "
+                             f"give at least two, or {self._alone}.")
         ends = np.append(times[1:], times[-1] + (times[-1] - times[-2]))
         return ends * u.s
 
@@ -327,6 +330,8 @@ class SynthesisSeries(_Series):
         The line the instrument measures.
     """
 
+    _alone = "observe the one file as a single snapshot, with 'synthesis_file'"
+
     def __init__(self, paths: Sequence[str | Path], reference_line: str):
         if not paths:
             raise ValueError("A synthesis series needs at least one file.")
@@ -349,6 +354,11 @@ class SynthesisSeries(_Series):
         self.reference_line = reference_line
         first = self.paths[0]
         layout = layouts[first]
+        for axis in ("x", "y"):
+            try:
+                require_uniform_grid(layout[f"{axis}_edges"].value, f"{axis}_edges")
+            except ValueError as error:
+                raise ValueError(f"{first}: {error}") from None
         # x in Mm, as the slit positions are; y as the files give it.
         self.x_edges: u.Quantity = _to_length(layout["x_edges"])
         self.y_edges: u.Quantity = layout["y_edges"]
@@ -357,6 +367,8 @@ class SynthesisSeries(_Series):
             name: info["wavelength"] for name, info in layout["lines"].items()}
         self.rest_wavelengths: Dict[str, u.Quantity] = {
             name: info["rest_wavelength"] for name, info in layout["lines"].items()}
+        self.identities: Dict[str, dict] = {
+            name: info["identity"] for name, info in layout["lines"].items()}
         shape = (self.y_edges.size - 1, self.x_edges.size - 1)
         for name, info in layout["lines"].items():
             if tuple(info["shape"]) != shape + (info["wavelength"].size,):
@@ -386,6 +398,10 @@ class SynthesisSeries(_Series):
                 if not _same_grid(info["rest_wavelength"], self.rest_wavelengths[name]):
                     raise ValueError(f"{path} gives {name} a different rest wavelength from "
                                      f"{first}.")
+                if info["identity"] != self.identities[name]:
+                    raise ValueError(f"{path} gives {name} the atom and ion "
+                                     f"{info['identity']}, and {first} "
+                                     f"{self.identities[name]}.")
                 if tuple(info["shape"]) != tuple(layout["lines"][name]["shape"]):
                     raise ValueError(f"{path}, line {name!r}: the intensity is "
                                      f"{tuple(info['shape'])}, not "
@@ -704,7 +720,8 @@ class SynthesisRaster(_SlitRaster):
         lines = {name: SpectralLine(
                      intensity=np.stack([c[name] for c in collected], axis=1) * RADIANCE_UNIT,
                      wavelength=self.series.wavelengths[name],
-                     rest_wavelength=self.series.rest_wavelengths[name])
+                     rest_wavelength=self.series.rest_wavelengths[name],
+                     **self.series.identities[name])
                  for name in self.series.lines}
         return Synthesis(lines=lines, x_edges=x_edges, y_edges=self.series.y_edges,
                          integration_axis=self.series.integration_axis), meta_raster

@@ -1777,6 +1777,11 @@ def main(args=None) -> None:
             f"wrote the synthesis. Writing one is deprecated and will stop in a future "
             f"release: give the output a name ending in .h5 for a synthesis file.",
             FutureWarning, stacklevel=2)
+    elif Path(args.output_name).suffix.lower() not in (".h5", ".hdf5", ".hdf"):
+        warnings.warn(
+            f"--output-name {args.output_name} gets a synthesis file, which is HDF5. Older "
+            f"versions of ECLIPSE wrote a pickle under any name; a name ending in .pkl "
+            f"still gets one, until that is removed.", UserWarning, stacklevel=2)
 
     # What the common processing below needs from whichever route reads the
     # atmosphere. Only an atmosphere file can give the electron density

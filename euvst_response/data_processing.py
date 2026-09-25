@@ -19,7 +19,7 @@ from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_vel
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
-    Load synthetic atmosphere cube from pickle file.
+    Load synthetic atmosphere cube from a synthesis file, or from a pickle as older versions wrote.
     
     Creates a summed cube from all line cubes in the synthesis results.
     All line cubes are put onto the wavelength grid of the metadata_line,
@@ -28,7 +28,7 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     Parameters
     ----------
     pkl_file : str
-        Path to the synthesized spectra pickle file.
+        Path to the synthesis file, or to a synthesis pickle.
     metadata_line : str, optional
         Name of the line to use for metadata and wavelength grid reference. 
         If None, uses the first line.
@@ -40,6 +40,23 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
         - summed_cube: NDCube with summed line intensities
         - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
     """
+    from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
+                                 synthesis_line_names)
+
+    if is_synthesis_file(pkl_file):
+        names = synthesis_line_names(pkl_file)
+        if metadata_line is None and names:
+            metadata_line = names[0]
+        synthesis = read_synthesis(pkl_file, metadata_line)
+        if not synthesis.evenly_spaced(metadata_line):
+            raise ValueError(
+                f"{pkl_file}: the wavelengths of {metadata_line} are not evenly spaced, which "
+                f"the WCS of an NDCube cannot describe. Read the file with read_synthesis.")
+        dynamic_mode_info = read_synthesis_products(pkl_file, keys="dynamic_mode").get(
+            "dynamic_mode", {"enabled": False})
+        return (synthesis.summed_cube(metadata_line, meta={"dynamic_mode": dynamic_mode_info}),
+                dynamic_mode_info)
+
     with open(pkl_file, "rb") as f:
         tmp = dill.load(f)
     
@@ -421,9 +438,9 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     meta : dict, optional
         More metadata for the cube than
         :meth:`~euvst_response.synthesis_file.Synthesis.summed_meta` gives,
-        such as the line's atom and ion, the synthesis's ``dynamic_mode``, or
-        a time series' ``raster`` entries, whose columns are its exposures
-        and are kept as they are.
+        such as the synthesis's ``dynamic_mode``, or a time series'
+        ``raster`` entries, whose columns are its exposures and are kept as
+        they are.
 
     Returns
     -------
