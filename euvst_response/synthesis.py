@@ -1137,6 +1137,94 @@ def synthesise_spectra(
         data["si"] = spec_map / (4 * np.pi)
 
 
+def synthesise_cubes(
+    temperature: np.ndarray,
+    electron_density: np.ndarray,
+    los_velocity: np.ndarray,
+    dh_cm,
+    goft: Dict[str, dict],
+    logT_grid: np.ndarray,
+    logN_grid: np.ndarray,
+    vel_grid: u.Quantity,
+    integration_axis: str,
+    precision: type,
+) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
+    """
+    The spectra of every line from one set of cubes: a whole box or a strip of it.
+
+    Parameters
+    ----------
+    temperature : np.ndarray
+        Temperature of every cell in K, ``(nz, ny, nx)``.
+    electron_density : np.ndarray
+        Electron density of every cell in cm^-3, the same shape.
+    los_velocity : np.ndarray
+        Velocity away from the observer in cm/s, the same shape.
+    dh_cm : float or np.ndarray
+        Depth of the cells along the line of sight in cm, one value for all
+        or one per cell along that axis.
+    goft : dict
+        Contribution functions from :func:`compute_goft_fiasco`, on the
+        temperature grid *logT_grid* and density grid *logN_grid*. Not
+        modified: the entries are copied before the interpolated function
+        and the spectra are added to them.
+    logT_grid, logN_grid : np.ndarray
+        The grids the contribution functions are tabulated on; the DEM uses
+        the same temperature grid.
+    vel_grid : u.Quantity
+        Velocity bin centres, evenly spaced.
+    integration_axis : str
+        ``"x"``, ``"y"`` or ``"z"``.
+    precision : type
+        np.float32 or np.float64.
+
+    Returns
+    -------
+    lines : dict
+        A copy of *goft* whose entries also hold ``"g"``, the contribution
+        function on the DEM, ``"wl_grid"`` and ``"si"``, the specific
+        intensity ``(rows, columns, wavelength)``.
+    dem_map : np.ndarray
+        As :func:`compute_dem` returns it.
+    em_tv : np.ndarray
+        As :func:`build_em_tv` returns it.
+    """
+    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
+                         out=np.zeros_like(electron_density)).astype(precision)
+    logT_cube = np.log10(temperature, where=temperature > 0.0,
+                         out=np.zeros_like(temperature)).astype(precision)
+
+    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
+
+    lines = {name: dict(info) for name, info in goft.items()}
+    interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
+
+    ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
+                * along_line_of_sight(dh_cm, integration_axis))
+    em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis)
+
+    synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+    return lines, dem_map, em_tv
+
+
+def _cell_size_mm(cube: NDCube, pixel_axis: int) -> float:
+    """The world distance across one pixel of *cube* along *pixel_axis*, in Mm.
+
+    Measured between the two edges of the first pixel, so it needs no second
+    pixel and no access to a CDELT, which a cropped cube's WCS does not have.
+    """
+    # A cropped cube wraps its WCS in a high-level object; the pixel-to-world
+    # conversion of plain numbers is on the low-level one underneath.
+    wcs = getattr(cube.wcs, "low_level_wcs", cube.wcs)
+    low = [0.0] * wcs.pixel_n_dim
+    high = [0.0] * wcs.pixel_n_dim
+    low[pixel_axis], high[pixel_axis] = -0.5, 0.5
+    world_low = wcs.pixel_to_world_values(*low)
+    world_high = wcs.pixel_to_world_values(*high)
+    unit = u.Unit(wcs.world_axis_units[pixel_axis])
+    return ((world_high[pixel_axis] - world_low[pixel_axis]) * unit).to_value(u.Mm)
+
+
 def _world_at(coords: u.Quantity, crpix: float) -> float:
     """
     The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
@@ -1145,6 +1233,8 @@ def _world_at(coords: u.Quantity, crpix: float) -> float:
     there is an even number of them, so the reference value has to be read
     off the grid there rather than taken from the pixel below.
     """
+    if coords.size == 1:
+        return coords[0].value
     step = (coords[1] - coords[0]).value
     return coords[0].value + (crpix - 1) * step
 
@@ -1196,6 +1286,11 @@ def create_line_cube(
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
 
+    # The cell size of each axis comes from the reference cube's own WCS, so
+    # that an axis a single cell wide has one too. It is read as the world
+    # distance across one pixel, which any WCS answers, cropped ones included.
+    cell_size = [_cell_size_mm(spatial_cube, pixel_axis) for pixel_axis in range(3)]
+
     # The WCS below carries a single linear CDELT taken from the first
     # wavelength step, so the grid has to be uniform for that to describe it.
     # Checked here as well as in synthesise_spectra because this is a public
@@ -1214,8 +1309,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[1],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
@@ -1234,8 +1329,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            z_coords[1].to(u.Mm).value - z_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[2],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
@@ -1254,8 +1349,8 @@ def create_line_cube(
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
             np.diff(line_data["wl_grid"].to(u.cm).value)[0],
-            x_coords[1].to(u.Mm).value - x_coords[0].to(u.Mm).value,
-            y_coords[1].to(u.Mm).value - y_coords[0].to(u.Mm).value
+            cell_size[0],
+            cell_size[1],
         ]
         spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
@@ -1309,6 +1404,9 @@ DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_fi
 
 # Where the documentation describes the atmosphere file and how to write one.
 ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
+# Where it describes observing a time series of atmosphere files, which
+# replaces the deprecated dynamic mode.
+TIME_SERIES_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/time-series/"
 
 
 class _NotedOption(argparse.Action):
@@ -1406,8 +1504,10 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
     # own files and so carries the options describing their layout.
-    dynamic_group = parser.add_argument_group("Dynamic atmosphere mode",
-        "Options for synthesising with time-varying atmosphere (raster scanning)")
+    dynamic_group = parser.add_argument_group("Dynamic atmosphere mode (deprecated)",
+        "Options for synthesising with time-varying atmosphere (raster scanning). "
+        "Deprecated: observe a time series of atmosphere files with the "
+        "instrument run instead.")
     dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
                        help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
@@ -1481,14 +1581,21 @@ def check_atmosphere_options(args) -> None:
     Refuse an atmosphere given alongside options it makes meaningless, and warn when there is none.
 
     The synthesis reads its atmosphere from an atmosphere file. Without one,
-    static mode still reads MURaM's own files, which is deprecated. The
-    MURaM layout options describe those files and the ones dynamic mode
-    builds its time series from, and the dynamic mode options only apply to
-    dynamic mode, so one of either given with --atmosphere would be ignored
-    without a word.
+    static mode still reads MURaM's own files, and dynamic mode reads a
+    time series of them; both are deprecated. The MURaM layout options
+    describe those files, and the dynamic mode options only apply to dynamic
+    mode, so one of either given with --atmosphere would be ignored without
+    a word.
     """
     if not args.atmosphere:
-        if args.slit_rest_time is None:
+        if args.slit_rest_time is not None:
+            warnings.warn(
+                f"Dynamic mode (--slit-rest-time) is deprecated and will be "
+                f"removed in a future release: write the snapshots as atmosphere "
+                f"files and observe them as a time series in the instrument run, "
+                f"as described at {TIME_SERIES_DOCS}.",
+                FutureWarning, stacklevel=2)
+        else:
             warnings.warn(
                 f"No --atmosphere was given, so the synthesis is reading "
                 f"MURaM's own files from {args.data_dir}. This is deprecated "
@@ -1509,8 +1616,9 @@ def check_atmosphere_options(args) -> None:
             f"own files.")
     if args.slit_rest_time is not None:
         raise ValueError(
-            "Dynamic mode reads its time series from MURaM files and cannot "
-            "yet take an atmosphere file. Give the MURaM options instead.")
+            f"Dynamic mode reads its time series from MURaM files and cannot "
+            f"take an atmosphere file. A time series of atmosphere files is "
+            f"observed by the instrument run instead: see {TIME_SERIES_DOCS}.")
     given = [name for name in DYNAMIC_OPTIONS if name in noted]
     if given:
         flags = ", ".join("--" + name.replace("_", "-") for name in given)
@@ -1632,7 +1740,8 @@ def main(args=None) -> None:
     - Static mode: Single timestep synthesis, from an atmosphere file
       (--atmosphere), or from MURaM's own files, which is deprecated
     - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
-      own files
+      own files, which is deprecated: the instrument run observes a time
+      series of atmosphere files instead (see euvst_response.raster)
 
     Parameters
     ----------
@@ -1709,7 +1818,7 @@ def main(args=None) -> None:
         temp_dir = args.temp_dir or "temp"
         rho_dir = args.rho_dir or "rho"
         
-        print(f"DYNAMIC MODE - Time-varying synthesis at MHD resolution")
+        print(f"DYNAMIC MODE - Time-varying synthesis at MHD resolution (deprecated)")
         print(f"  Slit width: {slit_width}")
         print(f"  Slit rest time: {slit_rest_time}")
         print(f"  Voxel dx: {voxel_dx}")
@@ -1873,12 +1982,6 @@ def main(args=None) -> None:
         mass_per_electron_source = "not needed: the atmosphere gives the electron density"
         print("Electron density taken from the atmosphere")
 
-    # Convert to log10 temperature and density
-    logN_cube = np.log10(ne_values, where=ne_values > 0.0,
-                        out=np.zeros_like(ne_values)).astype(precision)
-    logT_cube = np.log10(temp_cube.data, where=temp_cube.data > 0.0,
-                        out=np.zeros_like(temp_cube.data)).astype(precision)
-    
     # The velocity files hold the velocity along each axis; the Doppler shift
     # needs the velocity away from the observer.
     vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
@@ -1909,22 +2012,11 @@ def main(args=None) -> None:
         los_thickness = {"x": voxel_dx, "y": voxel_dy, "z": voxel_dz}[integration_axis]
     dh_cm = los_thickness.to_value(u.cm)
 
-    # ---------------- Calculate DEM -----------------
-    print(f"Calculating DEM and average density per bin ({print_mem()})")
-    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
-
-    print(f"Interpolating contribution function on the DEM ({print_mem()})")
-    interpolate_g_on_dem(goft, avg_ne_map, logT_grid, logN_grid, logT_goft, precision)
-
-    # ---------------- Build EM(T,v) cube -----------------
-    ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
-                * along_line_of_sight(dh_cm, integration_axis))
-    print(f"Calculating emission measure cube in (T,v) space ({print_mem()})")
-    em_tv = build_em_tv(logT_cube, vel_data, logT_grid, vel_grid, ne_sq_dh, integration_axis)
-
-    # ---------------- Synthesise spectra -----------------
-    print(f"Synthesising spectra ({print_mem()})")
-    synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
+    # ---------------- DEM, EM(T,v) and spectra -----------------
+    print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
+    goft, dem_map, em_tv = synthesise_cubes(
+        temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
+        vel_grid, integration_axis, precision)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")

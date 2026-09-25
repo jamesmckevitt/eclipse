@@ -306,45 +306,6 @@ Check that line. A large difference means the transition you meant is not in the
 database for that ion, and a neighbouring one was picked up instead. A name that
 does not match the pattern at all raises `ValueError` immediately.
 
-## Dynamic mode (time-varying atmospheres)
-
-For simulating raster scans over evolving atmospheres, use dynamic mode which combines MHD timesteps based on instrument scanning. Dynamic mode reads MURaM's own files rather than an atmosphere file:
-
-```bash
-synthesise-spectra \
-  --data-dir ./data/atmosphere \
-  --lines Fe12_195.1190 \
-  --abundance sun_coronal_2021_chianti \
-  --output-dir ./run/input \
-  --slit-rest-time "40 s" \
-  --slit-width "0.2 arcsec" \
-  --temp-dir temp \
-  --temp-filename eosT \
-  --rho-dir rho \
-  --rho-filename result_prim_0 \
-  --vz-dir vz \
-  --vz-filename result_prim_2 \
-  --time-dir time \
-  --time-filename tau_slice_0.100 \
-  --cube-shape 512 768 256 \
-  --voxel-dx "0.192 Mm" \
-  --voxel-dy "0.192 Mm" \
-  --voxel-dz "0.064 Mm" \
-  --vel-res "5.0 km/s" \
-  --vel-lim "300.0 km/s" \
-  --integration-axis z
-```
-
-**Dynamic Mode Options:**
-
-- `--slit-rest-time`: Slit rest time per position - enables dynamic mode
-- `--slit-width`: Slit width
-- `--data-dir`: Directory containing the MURaM files (default: `data/atmosphere`)
-- `--cube-shape`: Cube dimensions as three integers in the order the files store them, `(nx nz ny)`, so the vertical axis is the second one and not the last (default: `512 768 256`). The reader rearranges the cube after reading it, so `--voxel-dx`, `--voxel-dy` and `--voxel-dz` always name the physical axes whatever order is given here. Getting this the wrong way round still reshapes without error when the two sizes differ, and puts the simulation on a box of the wrong shape.
-- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Voxel sizes with units (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
-- `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directories containing timestep files
-- `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: Filename prefix before timestep suffix
-
 ## Output
 
 The synthesis produces a pickle file containing:
@@ -414,3 +375,26 @@ print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
     - `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Cell sizes (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
 
     x and y are centred on zero, and z = 0 is the centre of the bottom cell, which is what `--crop-x`, `--crop-y` and `--crop-z` refer to.
+
+??? note "Dynamic mode (deprecated)"
+
+    Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Simulating a time series](time-series.md).
+
+    ```bash
+    synthesise-spectra \
+      --data-dir ./data/atmosphere \
+      --lines Fe12_195.1190 \
+      --slit-rest-time "40 s" \
+      --slit-width "0.2 arcsec" \
+      --cube-shape 512 768 256 \
+      --voxel-dx "0.192 Mm" --voxel-dy "0.192 Mm" --voxel-dz "0.064 Mm" \
+      --output-dir ./run/input
+    ```
+
+    - `--slit-rest-time`: Time the slit rests at each position, which turns dynamic mode on
+    - `--slit-width`: Slit width
+    - `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directory of each quantity's files, relative to `--data-dir` (default: `temp`, `rho`, `vx`, `vy`, `vz` and `header`)
+    - `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: File name before the snapshot suffix (default: `eosT`, `result_prim_0`, `result_prim_1`, `result_prim_3`, `result_prim_2` and `Header`)
+    - `--cube-shape`, `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: As for reading MURaM's own files above
+
+    The instrument run on the synthesis file has to use the same slit width, and an exposure equal to `--slit-rest-time`.
