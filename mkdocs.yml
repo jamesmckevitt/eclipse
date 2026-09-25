@@ -5,6 +5,7 @@ repo_name: jamesmckevitt/eclipse
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -31,13 +32,19 @@ nav:
       - From a DEM: dem-synthesis.md
       - From a VDEM: vdem-synthesis.md
       - From a single intensity: uniform-intensity.md
-  - Simulating the instrument: instrument-response.md
-  - Tutorials:
-      - Basic results analysis: basic-results-analysis.ipynb
-      - Reproducing McKevitt+2026: reproducing-mckevitt-2026.ipynb
-  - Advanced topics:
-      - Pinhole stray light: pinholes.md
+  - Simulating the instrument:
+      - Single snapshot: instrument-response.md
+      - Time series: time-series.md
+      - From another code: other-codes.md
+  - Worked example: worked-example.ipynb
   - Acknowledgements: acknowledgements.md
+
+# docs/internal/ holds pages for the instrument team, reached only by a link.
+# They stay out of the nav, and out of the site search, Read the Docs' search
+# and search engines through their front matter, .readthedocs.yaml and
+# overrides/main.html.
+not_in_nav: |
+  /internal/
 
 extra_css:
   - stylesheets/extra.css

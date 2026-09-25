@@ -1,6 +1,8 @@
-# Simulating the instrument
+# Simulating a single snapshot
 
 This is the second stage of a run. It takes the spectra produced when you [synthesised an atmosphere](index.md#how-eclipse-works), puts them through the telescope and detector, adds the noise, and fits the result the same way you would fit real data. Because the noise is random, a Monte Carlo simulation gives a distribution of measured intensities, velocities, and line widths to compare against the known truth.
+
+To observe a series of atmosphere or synthesis files instead, see [Simulating a time series](time-series.md), and for spectra that another code synthesised, [From another code](other-codes.md). The rest of this page applies to those too.
 
 ## Choosing an instrument
 
@@ -13,7 +15,7 @@ Three things are specific to `SWC` and are handled as follows under `EIS`:
 
 - The `filter:` section describes the EUVST-SW aluminium filter. The EIS effective area comes from the instrument's own calibration tables, which already fold in its filters, so engineering values cannot be varied for it and the whole section is ignored with a warning for EIS. See [EIS effective area](#eis-effective-area) below.
 - `telescope.microroughness_sigma` is an engineering parameter specific to the EUVST-primary mirror. For EIS, it is ignored with a warning.
-- Pinhole effects are specific to EUVST-SW. Setting `pinhole_sizes`, or `simulation.enable_pinholes: True`, raises an error for EIS. Note that `pinhole_positions` on its own does not: without `pinhole_sizes` it is ignored for either instrument.
+- Pinhole effects are specific to EUVST-SW. Any pinhole setting, `enable_pinholes` or a `pinhole_*` list, raises an error for EIS.
 
 The EIS point spread function is not well characterised. ECLIPSE uses a symmetrical Gaussian with a FWHM of 3 pixels, following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
 
@@ -43,6 +45,24 @@ telescope:
   date: ["2008-01-01", "2013-01-01", "2018-01-01"]
 ```
 
+### The spectral PSF and the slit
+
+With `psf: True` a line is blurred along the dispersion by the optics and by the image of the slit, so the spectral PSF depends on the slit width. For SWC, `telescope.psf_params` gives the spectral FWHM with the 0.2 arcsec slit.
+
+`simulation.spectral_psf` sets how the slit enters the line profile:
+
+- `quadrature` (default): a Gaussian with the FWHM above.
+- `convolution`: a Gaussian from the optical design convolved with the slit's rectangular image.
+
+```yaml
+simulation:
+  slit_width: [0.2 arcsec, 1.6 arcsec]
+  psf: True
+  spectral_psf: convolution
+```
+
+The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
+
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
@@ -52,20 +72,22 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 **Top-level keys**:
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
-- `synthesis_file`: path to the synthesised spectra file (ASDF; pickle files from older versions also load)
-- `reference_line`: spectral line used as the wavelength-grid reference (default `Fe12_195.1190`). All lines in the synthesis file are interpolated onto this line's wavelength grid and summed, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
+- `synthesis_file`: the synthesis file to observe, from ECLIPSE's own synthesis or [another code](other-codes.md) (default `./run/input/synthesised_spectra.h5`). Pickles written by ECLIPSE 0.11.0 and earlier are still read, with a warning
+- `reference_line`: spectral line used as the wavelength-grid reference (default: the file's only line if it has one, otherwise `Fe12_195.1190`, which is always the default for a pickle). All lines in the synthesis file are added onto this line's wavelength grid, each keeping its flux, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)
 - `offchip_bin_slit`: off-chip slit binning factor (default `1`), see [off-chip slit binning](#off-chip-slit-binning)
-- `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only), covered in [pinhole stray light](pinholes.md)
+- `pinhole_sizes`, `pinhole_positions`, `pinhole_positions_spectral`: paired lists describing filter pinholes (SWC only)
 - `uniform_intensity`, `rest_wavelength`, `thermal_width`: uniform-intensity mode (alternative to synthesis file)
+- `atmosphere_series`, `synthesis`, `raster`: a time series of atmosphere files observed by the run itself, with its synthesis settings and observing plan (alternative to a synthesis file), see [Simulating a time series](time-series.md)
+- `synthesis_series`: a time series of synthesis files, one per snapshot, observed with a `raster` plan in the same way (alternative to a synthesis file), see [From synthesis files](time-series.md#from-synthesis-files)
 
 Here's a complete example configuration file:
 
 ```yaml
 # Input
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.asdf
+synthesis_file: ./run/input/synthesised_spectra.h5
 reference_line: Fe12_195.1190
 
 # Global settings (apply to all combinations)
@@ -113,7 +135,7 @@ For guidance on recommended values, see
 
 !!! warning "Parameters must go inside their section"
 
-    Only `simulation`, `detector`, `telescope`, and `filter` are read as sections. A parameter written at the top level instead - `expos:` or `ccd_temperature:` directly under the document root - is **silently ignored**, and the run proceeds with the default value. There is no warning. If a sweep produces suspiciously identical results across combinations, check the indentation first.
+    A parameter written at the top level instead - `expos:` or `ccd_temperature:` directly under the document root - stops the run with an error naming the section it belongs in. Any other key ECLIPSE does not read, such as a misspelt parameter name, is rejected the same way.
 
 By default, both the DN and photon signals are fitted at every Monte Carlo iteration. To speed up the simulation when only one is needed, use the `fit_signals` option:
 
@@ -133,7 +155,9 @@ fitting:
   max_iter: 1000                 # optimiser iterations before it gives up
   components:
     - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
+      name: Fe XII 195.119
     - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
+      name: Fe XII 195.179
       tie_center: 0
       tie_width: 0
 ```
@@ -145,10 +169,15 @@ Each entry in `components` corresponds to one Gaussian. Optional per-component k
 - `tie_center: <i>`: fit this component at the same velocity as component *i*. Centres are scaled by the ratio of the two rest wavelengths rather than offset by a fixed wavelength, so a single velocity is correct across the whole window.
 - `tie_width: <i>`: fit this component with the same line width as component *i*.
 - `amplitude_greater_than: <i>`: constrain amplitude to exceed that of component *i*
+- `name: <text>`: the component's name in the results. Defaults to its rest wavelength, e.g. `195.1190 Angstrom`.
 
-Omitting the `fitting` block fits a single Gaussian, with `max_iter` at its default.
+Without `components`, a single-Gaussian fit is used.
 
-`max_iter` limits how many iterations the optimiser may take on one spectrum. If it runs out it returns whatever it has reached. There is no warning.
+`max_iter` limits how many iterations the optimiser may take on one spectrum. A fit that runs out, or fails for any other reason, is left out of the mean and standard deviation, and the run prints how many fits failed and in how many pixels.
+
+`bessel_correction: true` divides the standard deviation over the Monte Carlo iterations by n - 1 rather than n.
+
+`save_iterations: true` keeps every iteration's fitted parameters in the results as well as their statistics, which makes the results about `n_iter` times larger.
 
 !!! warning "The primary component must be present in the data"
 
@@ -156,7 +185,7 @@ Omitting the `fitting` block fits a single Gaussian, with `max_iter` at its defa
 
     Separately, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two, because the dip between them never falls below half maximum and the initial width then covers the whole blend. `constrain_positive_intensity` does not help here and can make it worse.
 
-If you synthesised data in dynamic mode, your configuration must specify:
+If you synthesised data in the deprecated dynamic mode, your configuration must specify:
 
 - Exactly one slit width matching the synthesis slit width
 - Exactly one exposure time matching the synthesis exposure time
@@ -250,17 +279,13 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are written to `run/result/<config name>.asdf`.
-
-[ASDF](https://asdf-standard.readthedocs.io/) is a YAML tree with the arrays stored as binary blocks alongside it, so the metadata stays readable in a text editor, other languages can read it, and opening a file cannot run code the way unpickling can. Pickle result files from older versions still load: the format is taken from the file's own first bytes, not its name.
-
-The output includes:
+Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
 
 - Simulated detector signals (DN and photon counts)
-- Fitted spectral line parameters (intensity, velocity, width)
+- For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel
 - Statistical analysis of velocity precision vs. exposure time
 - Ground truth comparisons
 - Full config objects (`Detector`, `Telescope`, `Simulation`) for each parameter combination
 - The git commit ID and software version used to produce the results
 
-Use `summary_table(results)` after loading to see all parameter combinations and the run metadata.
+Use `summary_table(results)` after loading to see all parameter combinations, the fitted components and the run metadata. `list_fit_components` gives the component names, and `analyse_fit_statistics` and `create_sunpy_maps_from_combo` take `component=` to choose one, defaulting to the primary component.

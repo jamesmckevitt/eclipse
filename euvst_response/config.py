@@ -79,24 +79,104 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: st
 # ------------------------------------------------------------------
 #  Throughput helpers & AluminiumFilter
 # ------------------------------------------------------------------
+# Throughput tables already read, by path.
+_THROUGHPUT_TABLES: dict = {}
+
+
 def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
-    """Return (lambda, T) arrays from a 2-col ASCII table (skip comments). lambda is in nm."""
-    content = path.read_text()
-    lines = content.strip().split('\n')[2:]  # Skip first 2 lines
-    data = []
-    for line in lines:
-        if line.strip() and not line.strip().startswith('#'):
-            data.append([float(x) for x in line.split()])
-    arr = np.array(data)
-    wl = arr[:, 0] * u.nm
-    tr = arr[:, 1]
-    return wl, tr
+    """
+    Return (lambda, T) arrays from a 2-col ASCII table (skip comments). lambda is in nm.
+
+    Each table is read once: the effective area is asked for at every
+    wavelength of a spectrum, and reading five tables again for each one made
+    a spectrum take minutes.  The arrays are shared, so they are read-only.
+    """
+    key = str(path)
+    if key not in _THROUGHPUT_TABLES:
+        content = path.read_text()
+        lines = content.strip().split('\n')[2:]  # Skip first 2 lines
+        data = []
+        for line in lines:
+            if line.strip() and not line.strip().startswith('#'):
+                data.append([float(x) for x in line.split()])
+        arr = np.array(data)
+        wl = arr[:, 0] * u.nm
+        tr = arr[:, 1]
+        wl.flags.writeable = False
+        tr.flags.writeable = False
+        _THROUGHPUT_TABLES[key] = (wl, tr)
+    return _THROUGHPUT_TABLES[key]
 
 
-def _interp_tr(wavelength_nm: float, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float:
-    """Linear interpolation."""
+def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float | np.ndarray:
+    """Linear interpolation: a float for one wavelength, an array for several."""
     f = scipy.interpolate.interp1d(wl_tab, tr_tab, bounds_error=False, fill_value=np.nan)
-    return float(f(wavelength_nm))
+    out = f(wavelength_nm)
+    return float(out) if np.ndim(out) == 0 else out
+
+
+def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[list, list]:
+    """
+    Validate the paired pinhole lists and return the positions as floats.
+
+    Configuration files and a directly built ``Simulation`` both go through
+    this, so they cannot disagree about what a valid pinhole is.
+
+    Parameters
+    ----------
+    sizes, positions : list
+        Pinhole diameters and positions along the slit, one entry per pinhole.
+    spectral : list
+        Positions along the spectral axis, one per pinhole, or empty to put
+        every pinhole at the centre of the spectral window.
+
+    Returns
+    -------
+    tuple of list
+        ``(positions, spectral)``, each entry converted to float.
+    """
+    # Compared unconditionally. Guarding this on the sizes let positions alone
+    # through, and the run then produced no pinholes and said nothing about it.
+    if len(sizes) != len(positions):
+        raise ValueError(
+            f"pinhole_sizes and pinhole_positions are a paired list, one entry "
+            f"per pinhole, so they must have the same length. Got "
+            f"{len(sizes)} size(s) and {len(positions)} position(s)."
+        )
+    if spectral and len(spectral) != len(sizes):
+        raise ValueError(
+            f"pinhole_positions_spectral, when given, must have the same "
+            f"length as pinhole_sizes. Got {len(spectral)} spectral "
+            f"position(s) and {len(sizes)} size(s)."
+        )
+    return (_fractions(positions, "pinhole_positions"),
+            _fractions(spectral, "pinhole_positions_spectral"))
+
+
+def _fractions(values: list, name: str) -> list:
+    """Return *values* as floats, rejecting any that do not lie in [0, 1].
+
+    Both position lists are a fraction of the way across the detector. Out of
+    range puts the pinhole off it, where it looks like a working pinhole whose
+    light merely happens to be missing. Converting also stops a quoted YAML
+    value such as '0.3' reaching the diffraction code as a string.
+    """
+    out = []
+    for idx, value in enumerate(values):
+        try:
+            as_float = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{name}[{idx}] is {value!r}. Positions are a plain fraction "
+                f"of the detector, so they carry no units."
+            ) from None
+        if not 0.0 <= as_float <= 1.0:
+            raise ValueError(
+                f"{name}[{idx}] is {as_float}. Positions are a fraction of the "
+                f"way across the detector and must lie in [0, 1]."
+            )
+        out.append(as_float)
+    return out
 
 
 @dataclass
@@ -111,8 +191,8 @@ class AluminiumFilter:
     c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
 
-    def total_throughput(self, wl0: u.Quantity) -> float:
-        """Calculate throughput at a given central wavelength (wl0, astropy Quantity)."""
+    def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
+        """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""
         wl_nm = wl0.to_value(u.nm)
         wl_al, tr_al = _load_throughput_table(self.al_table)
         wl_ox, tr_ox = _load_throughput_table(self.oxide_table)
@@ -143,6 +223,14 @@ class Detector_SWC:
     _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K
     gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
+    # Peak charge storage of the CCD42-40 in non-inverted mode, the signal at
+    # which resolution begins to degrade: 150 ke- typical, 80 ke- minimum
+    # (Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January
+    # 2024). It is below the 182 ke- the FEE accepts, so a pixel fills before
+    # the digitiser does. Nothing is clipped or spilled at it; it says which
+    # pixels a frame would saturate. Keyword-only, so that the fields after it
+    # keep their places in the constructor.
+    full_well: u.Quantity = field(default=150000 * u.electron / u.pixel, kw_only=True)
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
@@ -210,7 +298,13 @@ class Telescope_EUVST:
     psf_type: str = "gaussian"
     # psf_params: list = field(default_factory=lambda: [1.26 * u.pixel, 1.95 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.200 arcsec (w/ slit-scan; FOV2) and 33.00 mA in RSC-2022021 (Oct 2023) and RSC-2022021B (Feb 2024).
     psf_params: list = field(default_factory=lambda: [2.66 * u.pixel, 2.54 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels. From 0.423 arcsec (w/ slit-scan; FOV2) and 43.00 mA in RSC-2022021C (Mar 2025).
-    
+    # The slit width the spectral FWHM in psf_params is for. RSC-2022021C
+    # quotes the spectral resolution with the 0.2 arcsec slit, as the optics
+    # FWHM after the slit (0.352 arcsec at 212.3 A) added in quadrature to the
+    # slit width (giving 0.405 arcsec, 43.00 mA), so the spectral PSF of any
+    # other slit is worked out from it; see radiometric.spectral_psf_fwhm.
+    psf_slit_width: u.Quantity = 0.2 * u.arcsec
+
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
     grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
@@ -219,43 +313,45 @@ class Telescope_EUVST:
     def collecting_area(self) -> u.Quantity:
         return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
 
-    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float:
+    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate wavelength-dependent primary mirror efficiency.
-        
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Primary mirror efficiency (dimensionless)
+        float or np.ndarray
+            Primary mirror efficiency (dimensionless), one per wavelength
+            for an array.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_pm, eff_pm = _load_throughput_table(self.pm_table)
         return _interp_tr(wl_nm, wl_pm, eff_pm)
 
-    def grating_efficiency(self, wl0: u.Quantity) -> float:
+    def grating_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate wavelength-dependent grating efficiency.
-        
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Grating efficiency (dimensionless)
+        float or np.ndarray
+            Grating efficiency (dimensionless), one per wavelength for an
+            array.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_grat, eff_grat = _load_throughput_table(self.grating_table)
         return _interp_tr(wl_nm, wl_grat, eff_grat)
 
-    def microroughness_efficiency(self, wl0: u.Quantity) -> float:
+    def microroughness_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
         Calculate the efficiency reduction due to primary mirror microroughness.
         
@@ -268,12 +364,13 @@ class Telescope_EUVST:
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Microroughness efficiency factor (dimensionless)
+        float or np.ndarray
+            Microroughness efficiency factor (dimensionless), one per
+            wavelength for an array.
         """
         # Convert both wavelength and sigma to the same units (nm for convenience)
         wl_nm = wl0.to(u.nm)
@@ -285,19 +382,20 @@ class Telescope_EUVST:
         # Return exp(-(4*pi*sigma/lambda)^2)  [Debye-Waller specular efficiency]
         return np.exp(-roughness_term.value)
 
-    def throughput(self, wl0: u.Quantity) -> float:
+    def throughput(self, wl0: u.Quantity) -> u.Quantity:
         """
         Calculate total telescope throughput including wavelength-dependent efficiencies.
-        
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength
-            
+            Wavelength, or an array of them.
+
         Returns
         -------
-        float
-            Total telescope throughput (dimensionless)
+        u.Quantity
+            Total telescope throughput, dimensionless: one value, or one per
+            wavelength for an array.
         """
         # Get wavelength-dependent efficiencies
         pm_eff_wl = self.primary_mirror_efficiency(wl0)
@@ -353,6 +451,10 @@ class Telescope_EIS:
     """
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
+    # The EIS PSF is not tied to a slit width, so its spectral FWHM stays the
+    # same whichever slit is used. Setting this says which slit psf_params was
+    # measured with, and the spectral PSF then follows the slit as for SWC.
+    psf_slit_width: u.Quantity | None = None
     calibration: str = "ground"
     date: str | None = None
 
@@ -425,10 +527,26 @@ class Simulation:
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
     psf: bool = False
+    # What the spatial PSF convolution assumes lies beyond the ends of the
+    # slit. "replicate" continues the edge rows outward, which says the Sun
+    # goes on looking much as it does at the edge of the field. "zero" treats
+    # everything outside as dark, which is what ECLIPSE did before and which
+    # removes real signal from the outermost rows. The spectral direction is
+    # zero-filled either way: the wavelength grid runs several sigma past the
+    # line, so there is nothing at its ends to lose.
+    psf_boundary: str = "replicate"
+    # How the slit enters the spectral PSF. "quadrature" keeps the PSF a
+    # Gaussian and adds the slit's width to the optics FWHM in quadrature,
+    # which is how RSC-2022021C quotes the spectral resolution. "convolution"
+    # convolves the optics Gaussian with the slit's rectangular image, which
+    # is how the same document defines the line profile; it gives the
+    # flat-topped profile of a wide slit, and a narrower one than quadrature
+    # for the 0.2 arcsec slit. See radiometric.spectral_line_spread.
+    spectral_psf: str = "quadrature"
     # With noise False every random draw in the detector chain is replaced by
     # its own mean, so the run returns the signal the instrument would measure
     # on average. Deterministic quantisation stays: DN are still rounded and
-    # still clip at the full well.
+    # still clip at the digitiser's maximum, max_dn.
     noise: bool = True
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
@@ -458,21 +576,21 @@ class Simulation:
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
 
+        if self.psf_boundary not in ("replicate", "zero"):
+            raise ValueError(
+                f"psf_boundary must be 'replicate' or 'zero', got "
+                f"{self.psf_boundary!r}."
+            )
+        if self.spectral_psf not in ("quadrature", "convolution"):
+            raise ValueError(
+                f"spectral_psf must be 'quadrature' or 'convolution', got "
+                f"{self.spectral_psf!r}."
+            )
+
         # The pinhole lists are paired, and both pipelines zip them together.
-        # zip stops at the shortest, so a mismatch would drop the trailing
-        # pinholes from the run without saying anything. main() checks this
-        # for configuration files, but Simulation is also constructed directly.
-        if self.pinhole_positions_spectral and (
-                len(self.pinhole_positions_spectral) != len(self.pinhole_sizes)):
-            raise ValueError(
-                "pinhole_positions_spectral, when given, needs one entry per "
-                f"pinhole: got {len(self.pinhole_positions_spectral)} for "
-                f"{len(self.pinhole_sizes)} pinhole_sizes."
-            )
-        if self.pinhole_sizes and (
-                len(self.pinhole_sizes) != len(self.pinhole_positions)):
-            raise ValueError(
-                "pinhole_sizes and pinhole_positions are paired and must be "
-                f"the same length: got {len(self.pinhole_sizes)} and "
-                f"{len(self.pinhole_positions)}."
-            )
+        # zip stops at the shortest, so a mismatch would drop pinholes from
+        # the run without saying anything. main() runs the same check on
+        # configuration files, but Simulation is also constructed directly.
+        self.pinhole_positions, self.pinhole_positions_spectral = check_pinhole_lists(
+            self.pinhole_sizes, self.pinhole_positions,
+            self.pinhole_positions_spectral)

@@ -26,7 +26,7 @@ from euvst_response.synthesis import (
     create_line_cube,
     create_atmosphere_ndcube,
 )
-from euvst_response.io import save_results
+from euvst_response.synthesis_file import write_line_cubes
 from euvst_response.utils import angle_to_distance
 
 INTENSITY_UNIT = u.erg / u.s / u.cm ** 2 / u.sr / u.cm
@@ -72,7 +72,7 @@ def main():
     # 7. Synthesise.
     synthesise_spectra(goft, em_tv, vel_grid.to(u.cm / u.s), logT)
 
-    # 8. Wrap as ECLIPSE line cubes and save in the synthesis format.
+    # 8. Wrap as ECLIPSE line cubes and write them, with the emission measure, as a synthesis file.
     plate_scale = 1.0 * u.arcsec * (1.0 + 50.0 * np.finfo(float).eps)
     voxel = angle_to_distance(plate_scale).to(u.Mm)
     reference = create_atmosphere_ndcube(
@@ -84,12 +84,11 @@ def main():
         for name, info in goft.items()
     }
 
-    out_path = Path("./run/input/dem_synth.asdf")
-    save_results(out_path, {
-        "line_cubes": line_cubes,
-        "dynamic_mode": {"enabled": False},
-        "config": {"lines": lines,
-                   "abundance": "sun_coronal_2021_chianti"},
+    write_line_cubes(line_cubes, Path("./run/input/dem_synth.h5"), products={
+        "em_tv": em_tv,
+        "logT_grid": logT,
+        "vel_grid": vel_grid,
+        "config": {"lines": lines, "abundance": "sun_coronal_2021_chianti"},
     })
 
 
@@ -115,12 +114,12 @@ if __name__ == "__main__":
 
 ## Running the instrument response
 
-The file is in the normal synthesis format, so the [instrument response](instrument-response.md) stage can use it. One run per spectral window:
+The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it. One run per spectral window:
 
 ```yaml
 # configs/eis_si10.yaml
 instrument: EIS
-synthesis_file: ./run/input/dem_synth.asdf
+synthesis_file: ./run/input/dem_synth.h5
 reference_line: Si10_258.3750   # selects the Si X 258 window
 
 n_iter: 500
@@ -136,4 +135,4 @@ simulation:
 eclipse --config configs/eis_si10.yaml
 ```
 
-Then you can perform analysis, like the example in [analysis tutorial](basic-results-analysis.ipynb).
+Then you can perform analysis, like the [worked example](worked-example.ipynb).

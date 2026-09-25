@@ -4,6 +4,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 
 from __future__ import annotations
 import contextlib
+import difflib
 import dataclasses
 import subprocess
 from pathlib import Path
@@ -12,11 +13,43 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 import joblib
+from scipy import sparse
 from tqdm import tqdm
 
 
 # Global debug flag - can be set by command line or configuration
 DEBUG_MODE = False
+
+# Recorded in every synthesised line cube.  Before it was, ECLIPSE used the
+# simulation velocity along the integration axis as the line-of-sight
+# velocity, which has the wrong sign for views along x and z and happens to be
+# right for views along y.
+VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
+
+
+def has_wrong_velocity_sign(meta) -> bool:
+    """
+    Whether a synthesised cube's Doppler shifts have the wrong sign.
+
+    A cube that records :data:`VELOCITY_CONVENTION` is right.  One that does
+    not was written before the simulation velocity was turned into velocity
+    away from the observer, which reversed the sign for views along x and z
+    and left views along y as they were.  A cube that records no integration
+    axis was written before the side views existed, so it is a view along z.
+
+    Parameters
+    ----------
+    meta : dict or None
+        The cube's metadata.
+
+    Returns
+    -------
+    bool
+    """
+    meta = meta or {}
+    if meta.get("velocity_convention") == VELOCITY_CONVENTION:
+        return False
+    return meta.get("integration_axis", "z") != "y"
 
 
 def _get_mpi_info():
@@ -142,6 +175,51 @@ def multi_gaussian(wave, *params, n_components=1):
         result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
     result += params[-1]  # background
     return result
+
+
+def _bin_edges(centres: np.ndarray) -> np.ndarray:
+    """Boundaries of the bins centred on *centres*: halfway between neighbours, and the outer ones as far out as the inner ones are in."""
+    inner = 0.5 * (centres[1:] + centres[:-1])
+    return np.concatenate([[centres[0] - (inner[0] - centres[0])], inner,
+                           [centres[-1] + (centres[-1] - inner[-1])]])
+
+
+def onto_wavelength_bins(spectra: np.ndarray, wavelength: np.ndarray,
+                         reference: np.ndarray) -> np.ndarray:
+    """
+    *spectra*, sampled at *wavelength* along their last axis, averaged over the bins of *reference*.
+
+    Each sample stands for the bin halfway to its neighbours, as the
+    flux-conserving resampling onto the detector takes it, and each bin of
+    *reference* gets the mean over it of whatever overlaps it, with nothing
+    beyond the samples. The integral over the reference bins is kept, so a
+    line narrower than a reference bin, or falling between two reference
+    wavelengths, is not lost as it would be to interpolation. Spectra already
+    on the reference wavelengths come back as they are.
+
+    *wavelength* and *reference* are plain increasing arrays in one unit.
+    """
+    spectra = np.asarray(spectra, dtype=float)
+    if wavelength.shape == reference.shape and np.array_equal(wavelength, reference):
+        return spectra
+    source, target = _bin_edges(wavelength), _bin_edges(reference)
+    # Each bin overlaps only the few bins of the other grid that it spans, so
+    # the weights are worked out for those alone. Every pair would take
+    # memory and time growing as the product of the two grids' sizes, and
+    # would carry a NaN in one sample into every bin.
+    last_bin = reference.size - 1
+    first = np.clip(np.searchsorted(target, source[:-1], side="right") - 1, 0, last_bin)
+    last = np.clip(np.searchsorted(target, source[1:], side="left") - 1, 0, last_bin)
+    count = last - first + 1
+    rows = np.repeat(np.arange(wavelength.size), count)
+    cols = np.repeat(first, count) + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    overlap = np.minimum(source[rows + 1], target[cols + 1]) - np.maximum(source[rows], target[cols])
+    kept = overlap > 0
+    weights = sparse.csr_matrix(
+        (overlap[kept] / np.diff(target)[cols[kept]], (rows[kept], cols[kept])),
+        shape=(wavelength.size, reference.size))
+    flat = spectra.reshape(-1, wavelength.size)
+    return np.asarray((weights.T @ flat.T).T).reshape(spectra.shape[:-1] + reference.shape)
 
 
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
@@ -344,7 +422,7 @@ _SECTION_STRING_FIELDS = {
     # instrument is chosen by the top-level key and main() builds both
     # Simulation objects from that, so a value here would be parsed, swept and
     # then discarded. main() rejects it rather than letting it look effective.
-    "simulation": [],
+    "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date"],
     "filter": [],
@@ -482,3 +560,235 @@ def tqdm_joblib(tqdm_object):
 def _fwhm_to_sigma(fwhm: float) -> float:
     """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
     return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+
+
+# Keys that moved or were renamed, so that a config written against an older
+# layout gets told where the setting went rather than just that it is unknown.
+_RENAMED_CONFIG_KEYS = {
+    "aluminium_thickness": "filter.al_thickness",
+    "slit_bin_pairs": "offchip_bin_slit",
+    "exposure": "simulation.expos",
+}
+
+
+def _describe_key(key: str, where: str) -> str:
+    """Phrase naming *key* in section *where* ('' meaning the top level)."""
+    if where:
+        return f"'{key}' in the '{where}:' section"
+    return f"'{key}' at the top level"
+
+
+def suggest_config_key(key: str, allowed, elsewhere: dict | None = None):
+    """
+    Best guess at what an unrecognised config key was meant to be.
+
+    Looks for a rename first, then for the same name in another section, then
+    for a near miss.  The section lookup is the one that matters in practice:
+    the old flat config layout put parameters like ``expos`` and
+    ``ccd_temperature`` at the top level, and they are perfectly valid names,
+    just at the wrong depth.
+
+    Parameters
+    ----------
+    key : str
+        The unrecognised key.
+    allowed : iterable of str
+        Keys that are valid where this one appeared.
+    elsewhere : dict, optional
+        ``{section_name: valid_keys}`` for the other places a key could live.
+        A section name of ``''`` means the top level.
+
+    Returns
+    -------
+    str or None
+        A phrase naming the suggestion, or None if nothing looks close.
+    """
+    if key in _RENAMED_CONFIG_KEYS:
+        return f"'{_RENAMED_CONFIG_KEYS[key]}'"
+
+    for where, fields in (elsewhere or {}).items():
+        if key in fields:
+            return _describe_key(key, where)
+
+    close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.7)
+    if close:
+        return f"'{close[0]}'"
+
+    for where, fields in (elsewhere or {}).items():
+        close = difflib.get_close_matches(key, sorted(fields), n=1, cutoff=0.8)
+        if close:
+            return _describe_key(close[0], where)
+
+    return None
+
+
+def check_config_keys(provided, allowed, context: str,
+                      elsewhere: dict | None = None) -> None:
+    """
+    Raise if *provided* holds any key that is not in *allowed*.
+
+    A key ECLIPSE does not read is not a harmless typo: the run continues on
+    the default value, produces plausible output, and says nothing.  A sweep
+    written at the wrong depth is the worst version, because it still returns
+    results, they are just identical across every combination.
+
+    Parameters
+    ----------
+    provided : iterable of str
+        Keys found in the config.
+    allowed : iterable of str
+        Keys that are valid here.
+    context : str
+        Where this is, for the error message, e.g. ``"top-level"``.
+    elsewhere : dict, optional
+        Passed to :func:`suggest_config_key`.
+
+    Raises
+    ------
+    ValueError
+        If any key is unrecognised, listing each one with a suggestion.
+    """
+    allowed = set(allowed)
+    unknown = [k for k in provided if k not in allowed]
+    if not unknown:
+        return
+
+    lines = []
+    for key in sorted(unknown, key=str):
+        guess = suggest_config_key(str(key), allowed, elsewhere)
+        if guess:
+            lines.append(f"  {key!r}: did you mean {guess}?")
+        else:
+            lines.append(f"  {key!r}")
+
+    visible = sorted(k for k in allowed if not k.startswith("_"))
+    plural = "keys" if len(unknown) > 1 else "key"
+    raise ValueError(
+        f"Unrecognised {context} config {plural}:\n"
+        + "\n".join(lines)
+        + f"\n\nECLIPSE never reads these, so the run would have used the "
+        f"default for whatever each was meant to set.\n"
+        f"Valid {context} keys: {', '.join(visible)}"
+    )
+
+
+def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
+    """
+    Check that *values* is a finite, increasing, evenly spaced 1D grid.
+
+    Both the velocity binning and the wavelength WCS take the first spacing
+    of the grid and apply it everywhere, so an uneven grid is not
+    approximated, it is silently misread.  A decreasing grid is worse: the
+    bin edges come out in descending order and every ``>= low & < high`` test
+    fails, so the emission measure is zero everywhere.
+
+    Parameters
+    ----------
+    values : np.ndarray or u.Quantity
+        1D grid of bin centres.
+    name : str
+        Name to use in the error message.
+    rtol : float, optional
+        How far any spacing may differ from the first spacing, relative to
+        the first spacing.  The default admits the rounding in ``np.arange``
+        and ``np.linspace`` without admitting a grid anyone built unevenly on
+        purpose.
+
+    Returns
+    -------
+    float
+        The first spacing, in the units of *values*.
+    """
+    plain = np.asarray(getattr(values, "value", values), dtype=float)
+
+    if plain.ndim != 1:
+        raise ValueError(f"{name} must be 1D, got {plain.ndim} dimensions.")
+    if plain.size < 2:
+        raise ValueError(f"{name} must have at least 2 elements, "
+                         f"got {plain.size}.")
+
+    # Comparisons with NaN are always false, so a NaN or inf in the grid can
+    # slip past the spacing checks below and come back as the spacing.
+    non_finite = np.flatnonzero(~np.isfinite(plain))
+    if non_finite.size:
+        first_bad = int(non_finite[0])
+        raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
+                         f"at index {first_bad}.")
+
+    diffs = np.diff(plain)
+    step = float(diffs[0])
+
+    if step <= 0.0:
+        raise ValueError(
+            f"{name} must increase. Bin edges are built by stepping out from "
+            f"the first spacing, so a decreasing grid produces edges in "
+            f"descending order and every bin ends up empty."
+        )
+
+    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
+    if uneven.size:
+        first_uneven = int(uneven[0])
+        raise ValueError(
+            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
+            f"but the spacing between elements {first_uneven} and "
+            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
+            f"the first spacing and uses it for every bin edge and for the "
+            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
+            f"bins and writes wrong wavelength coordinates. Resample onto a "
+            f"uniform grid first."
+        )
+
+    return step
+
+
+def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
+    """
+    Convert velocity grid centers to bin edges.
+
+    Parameters
+    ----------
+    vel_grid : np.ndarray
+        1D array of velocity centers.  Must be evenly spaced and increasing.
+
+    Returns
+    -------
+    np.ndarray
+        1D array of velocity bin edges (length = len(vel_grid) + 1).
+    """
+    dv = require_uniform_grid(vel_grid, "vel_grid")
+
+    return np.concatenate([
+        [vel_grid[0] - 0.5 * dv],
+        vel_grid[:-1] + 0.5 * dv,
+        [vel_grid[-1] + 0.5 * dv]
+    ])
+
+def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
+    """
+    Check that *downsample* divides every dimension of *shape*.
+
+    Downsampling keeps every *downsample*-th cell and gives each kept cell
+    *downsample* times the voxel size.  Where a dimension is not a multiple of
+    the factor, the last kept cell stands for fewer cells than that, so the
+    domain would come out too large, and so would the emission measure when
+    that axis is the line of sight.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Cube dimensions, in any order.
+    downsample : int
+        Downsampling factor.
+    """
+    if (isinstance(downsample, bool) or not isinstance(downsample, (int, np.integer))
+            or downsample < 1):
+        raise ValueError(f"The downsampling factor must be a whole number of 1 or "
+                         f"more, got {downsample!r}.")
+    uneven = [n for n in shape if n % downsample]
+    if uneven:
+        raise ValueError(
+            f"--downsample {downsample} does not divide the cube shape "
+            f"{tuple(shape)}: {uneven} not a multiple of {downsample}. Choose "
+            f"a factor that divides every dimension."
+        )
+

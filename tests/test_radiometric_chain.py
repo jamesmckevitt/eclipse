@@ -17,6 +17,8 @@ is held constant by a stub telescope where the point is the chain arithmetic;
 the real wavelength- and date-dependent areas are checked against IDL in
 test_eis_effective_area.py.
 """
+import inspect
+
 import astropy.units as u
 import numpy as np
 import pytest
@@ -404,7 +406,7 @@ def test_electron_conversion_applies_quantum_efficiency_and_fano_gain():
     assert out.data.mean() == pytest.approx(expected, rel=0.01)
 
 
-def test_dn_conversion_divides_by_gain_and_clips_at_full_well():
+def test_dn_conversion_divides_by_gain_and_clips_at_max_dn():
     """DN = electrons / gain, rounded, and never above max_dn."""
     det = Detector_EIS()
     wcs = make_radiance_cube().wcs
@@ -422,6 +424,25 @@ def test_dn_conversion_divides_by_gain_and_clips_at_full_well():
     assert out.data.ravel()[2] == pytest.approx(round(63.0 / gain))
     assert out.data.ravel()[3] == det.max_dn.to_value(u.DN / u.pix)
     assert np.all(out.data <= det.max_dn.to_value(u.DN / u.pix))
+
+
+def test_swc_pixel_fills_before_the_digitiser():
+    """
+    The SW CCD's full well is the datasheet's 150 ke-, below the charge the
+    FEE can digitise.
+    """
+    det = Detector_SWC()
+    assert det.full_well == 150000 * u.electron / u.pix
+    assert det.full_well < det.max_dn * det.gain_e_per_dn
+
+
+def test_swc_full_well_moves_no_constructor_argument():
+    """The full well is keyword-only, so every field after it kept its place."""
+    parameters = inspect.signature(Detector_SWC).parameters
+    assert parameters["full_well"].kind is inspect.Parameter.KEYWORD_ONLY
+    positional = [name for name, p in parameters.items()
+                  if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    assert positional[positional.index("max_dn") + 1] == "pix_size"
 
 
 def test_eis_and_swc_differ_only_by_their_numbers():

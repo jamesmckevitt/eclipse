@@ -4,16 +4,15 @@ A velocity differential emission measure (VDEM) is a DEM resolved in line-of-sig
 
 This is ECLIPSE's native internal format. The [MHD route](synthesis.md) does that binning itself, and produces this object before folding it with `G(T, n_e)`. Providing one directly just skips that first step.
 
-Two reasons to take this route rather than the [MHD route](synthesis.md):
+When to take this route rather than the [MHD route](synthesis.md):
 
-- **Your simulation is not MURaM.** ECLIPSE's reader currently expects MURaM output. Reducing your own simulation to a VDEM is the way to use it in the meantime.
 - **The reduction is already done.** A VDEM is far smaller than the MHD cubes it came from, and easy to re-synthesise from with different lines or abundances.
 
 A DEM carries no velocity information, so the [DEM route](dem-synthesis.md) puts all the emission in the zero-velocity bin. A VDEM fills the velocity bins in, and the synthesised lines come out Doppler shifted and broadened by the bulk motions along the line of sight, as well as thermally.
 
 !!! note "This is not the route for another code's spectra"
 
-    A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer on it, optically thin. If another code has already synthesised the *spectra* from an atmosphere - Lightweaver, RH1.5D, or anything else - that is a different input. The synthesis stage is skipped altogether and the spectra go straight into the [instrument response](instrument-response.md). Reading those directly is coming soon.
+    A VDEM describes the *plasma*, and ECLIPSE still does the radiative transfer on it, optically thin. If another code has already synthesised the *spectra* from an atmosphere - Lightweaver, RH1.5D, or anything else - that is a different input. The synthesis stage is skipped altogether and the spectra go straight into the instrument simulation, written as a [synthesis file](other-codes.md).
 
 ## Minimal example
 
@@ -52,7 +51,7 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 **Bin centres, not edges.** Both `logT` and `vel_grid` hold bin centres.
 
-**Use a uniformly spaced velocity grid.** Non-uniform spacing is not supported. Bin edges are derived by applying the *first* spacing to the whole grid, and the output cube's WCS is written with a single linear `CDELT` taken from the first wavelength step. An unevenly spaced grid therefore gets both its bin widths and its wavelength coordinates silently wrong.
+**Use a uniformly spaced velocity grid.** Non-uniform spacing is not supported. Bin edges are derived by applying the *first* spacing to the whole grid, and the output cube's WCS is written with a single linear `CDELT` taken from the first wavelength step. The grid also has to increase.
 
 **Grid alignment.** As on the DEM page, force the `G(T)` grid to match your temperature grid by passing `logT_min`, `logT_max`, and `nT` to `compute_goft_fiasco`, and make sure they agree.
 
@@ -60,4 +59,4 @@ Then continue from step 7 (`synthesise_spectra`) unchanged.
 
 ## Running the instrument response
 
-The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [analysis tutorial](basic-results-analysis.ipynb).
+The output is an ordinary synthesis file, so the [instrument response](instrument-response.md) stage can use it, and the results are analysed exactly as in the [worked example](worked-example.ipynb).
