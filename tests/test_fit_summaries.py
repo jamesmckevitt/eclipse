@@ -373,7 +373,7 @@ def test_a_run_writes_named_results_that_the_analysis_reads(tmp_path,
     main()
     assert "DN fits: " in capsys.readouterr().out
 
-    results = load_instrument_response_results(tmp_path / "run/result/uniform.pkl")
+    results = load_instrument_response_results(tmp_path / "run/result/uniform.asdf")
     combination = next(iter(results["results"]["all_combinations"].values()))
 
     assert list_fit_components(combination) == ["195.1190 Angstrom"]

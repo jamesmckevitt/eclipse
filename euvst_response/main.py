@@ -9,7 +9,6 @@ import sys
 import warnings
 from itertools import product as itertools_product
 from pathlib import Path
-import dill
 import yaml
 import astropy.units as u
 import gzip
@@ -22,6 +21,7 @@ from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, Synthe
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
+from .io import save_results
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
 from .utils import (
@@ -1162,8 +1162,7 @@ def main() -> None:
         git_commit_id = get_git_commit_id()
         software_version = _get_software_version()
 
-        output_file = Path(f"run/result/{Path(args.config).stem}.pkl")
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = Path(f"run/result/{Path(args.config).stem}.asdf")
 
         print(f"\nSaving results to {output_file}")
         save_data = {
@@ -1187,8 +1186,7 @@ def main() -> None:
                 "cubes": raster_cubes,
             }
 
-        with open(output_file, "wb") as f:
-            dill.dump(save_data, f)
+        output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")

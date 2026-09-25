@@ -7,7 +7,6 @@ instrument response simulation results.
 
 import warnings
 
-import dill
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -21,6 +20,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
+from .io import load_results
 from .utils import has_wrong_velocity_sign
 
 
@@ -76,7 +76,8 @@ def load_instrument_response_results(filepath: str | Path,
     Parameters
     ----------
     filepath : str or Path
-        Path to the pickled results file.
+        Path to the results file, ASDF, or a pickle as older versions of
+        ECLIPSE wrote them, which is read with a warning.
     allow_wrong_velocity_sign : bool, optional
         Load a results file made from a synthesis file that an older ECLIPSE
         wrote for a view along x or z, with a warning instead of an error.
@@ -91,8 +92,7 @@ def load_instrument_response_results(filepath: str | Path,
     dict
         Dictionary containing all results and metadata with reconstructed signals.
     """
-    with open(filepath, "rb") as f:
-        data = dill.load(f)
+    data = load_results(filepath)
 
     # Refuse results made from synthesis files written before the Doppler
     # sign was fixed, for the views whose sign it changed.  Uniform intensity

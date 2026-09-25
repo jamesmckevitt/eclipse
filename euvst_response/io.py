@@ -1,11 +1,13 @@
 """
-Reading and writing ECLIPSE result files.
+Reading and writing ECLIPSE's instrument response results.
 
-ECLIPSE writes ASDF. Loading a pickle runs whatever code the file asks for,
-which is a poor property for a data format that gets emailed around and kept
-for years; ASDF is a YAML tree with the arrays in binary blocks alongside, so
-reading one cannot execute anything, other languages can read it, and the
-metadata stays legible in a text editor.
+The instrument simulation writes its results as ASDF. Loading a pickle runs
+whatever code the file asks for, which is a poor property for a data format
+that gets emailed around and kept for years; ASDF is a YAML tree with the
+arrays in binary blocks alongside, so reading one cannot execute anything,
+other languages can read it, and the metadata stays legible in a text
+editor. The synthesis the simulation observes is a separate HDF5 file; see
+:mod:`euvst_response.synthesis_file`.
 
 Not everything ECLIPSE holds has an ASDF representation, so a few types are
 written as tagged mappings and rebuilt on the way back in:
@@ -24,6 +26,10 @@ written as tagged mappings and rebuilt on the way back in:
     classes in :func:`_dataclass_registry` can be rebuilt, so a file cannot
     name an arbitrary class and have it constructed.
 
+``numpy_type``
+    A NumPy scalar type, such as the precision a time series was
+    synthesised in, by its name. Only NumPy's own types are rebuilt.
+
 ``map``
     A dict that does not have string keys. ECLIPSE keys its results by the
     tuple of parameters that produced them, and ASDF only permits str, int
@@ -34,8 +40,14 @@ written as tagged mappings and rebuilt on the way back in:
     relative to the package and resolved against the reader's own copy. The
     absolute path would name the installation that wrote the file.
 
-Files written by older versions are pickles. They still load: the reader
-picks the format from the file's own magic bytes rather than its name.
+ASDF writes a mapping's keys sorted, so a mapping whose keys were in another
+order, as the sweep dimensions and parameters are, keeps that order in an
+``__eclipse_order__`` entry.
+
+Results written by older versions are pickles. They still load, with a
+warning, until a future release stops reading them: the reader picks the
+format from the file's own first bytes rather than its name, and
+:func:`convert_results_pickle` rewrites one as ASDF.
 """
 
 from __future__ import annotations
@@ -53,11 +65,17 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from ndcube import NDCube
 
+__all__ = ["save_results", "load_results", "convert_results_pickle", "is_asdf"]
+
 # Bumped when the tree layout changes in a way a reader has to know about.
 FORMAT_VERSION = 1
 
 # Marks a mapping that this module wrote and has to decode.
 TAG = "__eclipse__"
+
+# Beside the keys of a mapping that were not in sorted order, the order they
+# were in: ASDF writes a mapping's keys sorted.
+ORDER = "__eclipse_order__"
 
 ASDF_MAGIC = b"#ASDF"
 
@@ -71,10 +89,12 @@ def _dataclass_registry() -> dict:
     from .config import (AluminiumFilter, Detector_EIS, Detector_SWC,
                          Simulation, Telescope_EIS, Telescope_EUVST)
     from .fitting import FitComponent, FitConfig
+    from .raster import RasterPlan, SynthesisSettings
 
     return {cls.__name__: cls for cls in (
         AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
         Telescope_EIS, Telescope_EUVST, FitComponent, FitConfig,
+        RasterPlan, SynthesisSettings,
     )}
 
 
@@ -152,6 +172,9 @@ def _encode(obj):
                        for f in dataclasses.fields(obj) if f.init},
         }
 
+    if isinstance(obj, type) and issubclass(obj, np.generic):
+        return {TAG: "numpy_type", "value": np.dtype(obj).name}
+
     if isinstance(obj, u.Quantity):
         # Left to asdf-astropy, which has a tag for it.
         return obj
@@ -176,7 +199,13 @@ def _encode(obj):
 
     if isinstance(obj, dict):
         if all(isinstance(k, str) for k in obj):
-            return {k: _encode(v) for k, v in obj.items()}
+            encoded = {k: _encode(v) for k, v in obj.items()}
+            # ASDF writes a mapping's keys sorted, so the order they were in,
+            # which the sweep dimensions and parameters are listed in, is kept
+            # beside them.
+            if list(obj) != sorted(obj):
+                encoded[ORDER] = list(obj)
+            return encoded
         return {TAG: "map",
                 "items": [[_encode(k), _encode(v)] for k, v in obj.items()]}
 
@@ -224,6 +253,9 @@ def _decode(obj):
             fields = {k: _decode(v) for k, v in obj["fields"].items()}
             return registry[name](**fields)
 
+        if tag == "numpy_type":
+            return np.dtype(obj["value"]).type
+
         if tag == "unit":
             return u.Unit(obj["value"])
 
@@ -239,7 +271,8 @@ def _decode(obj):
         if tag == "map":
             return {_decode(k): _decode(v) for k, v in obj["items"]}
 
-        return {k: _decode(v) for k, v in obj.items()}
+        decoded = {k: _decode(v) for k, v in obj.items() if k != ORDER}
+        return decoded if ORDER not in obj else {k: decoded[k] for k in obj[ORDER]}
 
     if isinstance(obj, list):
         return [_decode(v) for v in obj]
@@ -271,8 +304,8 @@ def save_results(path: str | Path, payload: dict, *,
     ----------
     path : str or Path
         Where to write. A ``.pkl`` suffix is replaced with ``.asdf``, since
-        the contents are no longer a pickle and a name that says otherwise
-        is worse than a renamed file.
+        the contents are not a pickle and a name that says otherwise is
+        worse than a renamed file.
     payload : dict
         The tree to write. Keys must be strings.
     compression : str or None, optional
@@ -295,7 +328,7 @@ def save_results(path: str | Path, payload: dict, *,
 
     tree = {
         "eclipse_format_version": FORMAT_VERSION,
-        **{key: _encode(value) for key, value in payload.items()},
+        **_encode(dict(payload)),
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,11 +339,13 @@ def save_results(path: str | Path, payload: dict, *,
 
 def load_results(path: str | Path) -> dict:
     """
-    Read a result file, ASDF or pickle.
+    Read a results file, ASDF or pickle.
 
-    The format is taken from the file's magic bytes rather than its name, so
+    The format is taken from the file's first bytes rather than its name, so
     a file written before ECLIPSE moved to ASDF still loads whatever it is
-    called.
+    called, with a warning. A ``.pkl`` name that no longer exists, as a
+    script written for an older version asks for, reads the ``.asdf`` file
+    the simulation now writes in its place, also with a warning.
 
     Parameters
     ----------
@@ -323,18 +358,21 @@ def load_results(path: str | Path) -> dict:
         The stored payload.
     """
     path = Path(path)
+    if path.suffix == ".pkl" and not path.exists() and path.with_suffix(".asdf").is_file():
+        warnings.warn(
+            f"{path} does not exist, so {path.with_suffix('.asdf')}, which the instrument "
+            f"simulation now writes in its place, is read instead. Name the .asdf file to "
+            f"read it without this warning.", FutureWarning, stacklevel=2)
+        path = path.with_suffix(".asdf")
 
     if not is_asdf(path):
-        import dill
-
         warnings.warn(
-            f"{path.name} is a pickle, written before ECLIPSE moved to ASDF. "
-            f"Reading it executes whatever the file contains, so only do "
-            f"this for files you produced. Re-running writes ASDF.",
-            UserWarning,
-        )
-        with open(path, "rb") as handle:
-            return dill.load(handle)
+            f"{path} is a results pickle, as older versions of ECLIPSE wrote them. "
+            f"Pickles are deprecated and will not be read in a future release: convert "
+            f"it with euvst_response.convert_results_pickle, or re-run the simulation. "
+            f"Reading a pickle runs whatever code it holds, so only read files you trust.",
+            FutureWarning, stacklevel=2)
+        return _load_pickle(path)
 
     # lazy_load and memmap off: the arrays have to outlive the open file.
     with asdf.open(path, lazy_load=False, memmap=False) as af:
@@ -344,4 +382,38 @@ def load_results(path: str | Path) -> dict:
     tree.pop("history", None)
     tree.pop("eclipse_format_version", None)
 
-    return {key: _decode(value) for key, value in tree.items()}
+    return _decode(tree)
+
+
+def _load_pickle(path: Path) -> dict:
+    import dill
+
+    with open(path, "rb") as handle:
+        return dill.load(handle)
+
+
+def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = None) -> Path:
+    """
+    Rewrite a results pickle, as older versions wrote them, as an ASDF results file.
+
+    Everything the pickle holds is kept. Reading a pickle runs whatever code
+    it holds, so only convert files you trust.
+
+    Parameters
+    ----------
+    pickle_path : str or Path
+        The pickle.
+    path : str or Path, optional
+        The ASDF file to write. None writes it beside the pickle, with the
+        same name ending in ``.asdf``.
+
+    Returns
+    -------
+    Path
+        The file written.
+    """
+    pickle_path = Path(pickle_path)
+    if is_asdf(pickle_path):
+        raise ValueError(f"{pickle_path} is already an ASDF file.")
+    return save_results(pickle_path.with_suffix(".asdf") if path is None else path,
+                        _load_pickle(pickle_path))

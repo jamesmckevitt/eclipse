@@ -26,6 +26,7 @@ from euvst_response import synthesis
 from euvst_response.analysis import load_instrument_response_results
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.data_processing import load_atmosphere
+from euvst_response.io import save_results
 from euvst_response.synthesis_file import load_synthesis
 from euvst_response.utils import VELOCITY_CONVENTION
 
@@ -214,9 +215,7 @@ def _write_results_file(path, meta):
     """A results file whose atmosphere cube carries *meta*; None means uniform intensity mode."""
     cube_sim = None if meta is None else NDCube(np.ones((2, 2, 3)),
                                                 wcs=WCS(naxis=3), meta=meta)
-    with open(path, "wb") as f:
-        dill.dump({"results": {"all_combinations": {}}, "cube_sim": cube_sim}, f)
-    return path
+    return save_results(path, {"results": {"all_combinations": {}}, "cube_sim": cube_sim})
 
 
 @pytest.mark.parametrize("meta", [
@@ -225,7 +224,7 @@ def _write_results_file(path, meta):
     {},  # written before the side views existed, so a view along z
 ], ids=["z", "x", "no axis"])
 def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
-    old = _write_results_file(tmp_path / "old.pkl", meta)
+    old = _write_results_file(tmp_path / "old.asdf", meta)
     with pytest.raises(ValueError, match="wrong sign"):
         load_instrument_response_results(old)
     with pytest.warns(UserWarning, match="wrong sign"):
@@ -238,7 +237,7 @@ def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta
     None,  # uniform intensity mode, with no synthesis file
 ], ids=["current", "older view along y", "uniform intensity"])
 def test_results_whose_velocities_are_right_load_without_a_warning(tmp_path, meta):
-    path = _write_results_file(tmp_path / "results.pkl", meta)
+    path = _write_results_file(tmp_path / "results.asdf", meta)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         load_instrument_response_results(path)

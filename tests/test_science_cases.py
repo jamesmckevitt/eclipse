@@ -232,6 +232,6 @@ def test_a_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
     main()
 
     results = load_instrument_response_results(
-        tmp_path / "run" / "result" / f"{config.stem}.pkl")
+        tmp_path / "run" / "result" / f"{config.stem}.asdf")
     combinations = results["results"]["all_combinations"].values()
     assert sorted(c["parameters"]["offchip_bin_slit"] for c in combinations) == [1, 2]

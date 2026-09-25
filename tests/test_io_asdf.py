@@ -23,6 +23,7 @@ from euvst_response.config import (AluminiumFilter, Detector_EIS,
                                    Telescope_EUVST)
 from euvst_response.fitting import FitComponent, FitConfig
 from euvst_response.io import is_asdf, load_results, save_results
+from euvst_response.raster import RasterPlan, SynthesisSettings
 
 REST = 195.119 * u.Angstrom
 
@@ -260,6 +261,16 @@ def _same(before, after):
                     psf_params=[2.0 * u.pixel, 2.5 * u.pixel]),
     Telescope_EIS(psf_params=[2.0 * u.pixel, 2.5 * u.pixel],
                   calibration="dz2025", date="2012-06-03"),
+    RasterPlan(start=100 * u.s, steps=4, step=0.3 * u.arcsec, repeats=2,
+               cadence=12 * u.s, centre=1.5 * u.Mm),
+    # A time series' synthesis settings, the precision being a NumPy type.
+    SynthesisSettings(lines=("Fe12_195.1190", "Fe09_171.0730"),
+                      abundance="sun_photospheric_2015_scott",
+                      vel_res=10 * u.km / u.s, vel_lim=500 * u.km / u.s,
+                      crop_y=(-1 * u.Mm, 1 * u.Mm), crop_z=(0 * u.Mm, 10 * u.Mm),
+                      precision=np.float32, mass_per_electron=1.2,
+                      hdf5_dbase_root="/somewhere/chianti", n_workers=4,
+                      goft_temperature_chunk=16),
 ], ids=lambda obj: type(obj).__name__)
 def test_every_config_field_survives(tmp_path, config_object):
     """Every field, Simulation.noise included, comes back unchanged.
@@ -374,7 +385,7 @@ def test_an_old_pickle_still_loads(tmp_path):
     with open(path, "wb") as handle:
         dill.dump({"instrument": "EIS", "cube": _cube()}, handle)
 
-    with pytest.warns(UserWarning, match="pickle"):
+    with pytest.warns(FutureWarning, match="results pickle"):
         out = load_results(path)
 
     assert out["instrument"] == "EIS"
@@ -390,7 +401,7 @@ def test_the_format_is_detected_from_content_not_the_name(tmp_path):
         dill.dump({"instrument": "EIS"}, handle)
 
     assert not is_asdf(misnamed)
-    with pytest.warns(UserWarning, match="pickle"):
+    with pytest.warns(FutureWarning, match="results pickle"):
         assert load_results(misnamed)["instrument"] == "EIS"
 
 

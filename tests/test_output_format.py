@@ -1,214 +1,185 @@
-"""Both pipeline stages write ASDF and read it back.
+"""The instrument simulation writes its results as ASDF, and reads back what it wrote.
 
 The unit tests in test_io_asdf.py check the encoder against objects built for
-the purpose. These two run the real thing end to end, which is the only way
-to find out whether the tree ECLIPSE actually produces survives the trip.
+the purpose. These run the real thing end to end, which is the only way to
+find out whether the tree ECLIPSE actually produces survives the trip: each
+run keeps what it saved, and what comes back from the file is compared with
+it entry by entry.
 """
+import dataclasses
 import importlib
 import sys
 from pathlib import Path
 
+import astropy.constants as const
 import astropy.units as u
 import numpy as np
 import pytest
+import yaml
+from astropy.wcs import WCS
+from ndcube import NDCube
 
-from euvst_response.analysis import load_instrument_response_results
-from euvst_response.data_processing import load_atmosphere
-from euvst_response.io import is_asdf, save_results
-from euvst_response.synthesis import (create_atmosphere_ndcube,
-                                      create_line_cube, synthesise_spectra)
+from euvst_response.analysis import load_instrument_response_results, summary_table
+from euvst_response.io import convert_results_pickle, is_asdf, load_results
+from euvst_response.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
 
+LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
-INTENSITY_UNIT = u.erg / u.s / u.cm**2 / u.sr / u.cm
-
-CONFIG = """
-instrument: SWC
-uniform_intensity: 5000 erg / (s cm2 sr)
-rest_wavelength: 195.119 AA
-n_iter: 2
-ncpu: 1
-simulation:
-  slit_width: 0.2 arcsec
-  expos: 10 s
-"""
+NY, NX, N_WAVE = 6, 8, 121
+PIXEL = 0.1875 * u.Mm
+STEP = (5 * u.km / u.s / const.c * REST).to(u.AA)
 
 
-def test_an_instrument_run_writes_asdf_and_reads_back(tmp_path, monkeypatch):
-    from euvst_response.main import main
-
-    config_path = tmp_path / "run.yaml"
-    config_path.write_text(CONFIG)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config_path)])
-
-    main()
-
-    written = tmp_path / "run" / "result" / "run.asdf"
-    assert written.exists(), "the result file should carry the .asdf suffix"
-    assert is_asdf(written)
-    assert not (tmp_path / "run" / "result" / "run.pkl").exists()
-
-    results = load_instrument_response_results(written)
-
-    assert results["instrument"] == "SWC"
-    assert results["software_version"]
-    combos = results["results"]["all_combinations"]
-    assert len(combos) == 1
-
-    combo = next(iter(combos.values()))
-    # The parameter key is a tuple of pairs, which ASDF cannot use as a
-    # mapping key, so this is the part most likely to have been flattened.
-    key = next(iter(combos))
-    assert isinstance(key, tuple)
-    assert all(isinstance(pair, tuple) and len(pair) == 2 for pair in key)
-
-    assert combo["parameters"]["simulation.expos"] == 10 * u.s
-    assert combo["config_objects"]["detector"].qe_euv > 0
-    assert combo["dn_fit_stats"]["mean_data"].shape[-1] == 4
-
-    # load_instrument_response_results rebuilds these from the stored arrays,
-    # so they exercise the unit and the WCS together.
-    signal = combo["first_dn_signal"]
-    assert signal.unit.is_equivalent(u.DN / u.pix)
-    assert np.all(np.isfinite(signal.data))
-
-    # Checked as coordinates rather than as CUNIT: astropy normalises a WCS
-    # to SI in place the first time it is used to compute coordinates, so by
-    # the time a run is saved its spectral axis is already in m whatever it
-    # was built in. What has to survive is where the axis points.
-    wavelengths = signal.axis_world_coords(-1)[0].to_value(u.Angstrom)
-    assert wavelengths.min() < 195.119 < wavelengths.max()
+def _synthesis_file(path, time=None, scale=1.0):
+    """A Gaussian line whose Doppler shift changes from pixel to pixel."""
+    offsets = (np.arange(N_WAVE) - N_WAVE // 2) * STEP
+    shifts = np.linspace(-30, 30, NY * NX).reshape(NY, NX, 1) * u.km / u.s
+    centres = (shifts / const.c * REST).to(u.AA)
+    sigma = (20 * u.km / u.s / const.c * REST).to(u.AA)
+    profile = np.exp(-0.5 * ((offsets - centres) / sigma).decompose().value ** 2)
+    line = SpectralLine(intensity=scale * 1e13 * profile * RADIANCE_UNIT,
+                        wavelength=REST + offsets, rest_wavelength=REST, atom=26, ion=12)
+    edges = lambda n: (np.arange(n + 1) - n / 2) * PIXEL  # noqa: E731
+    return write_synthesis(Synthesis(lines={LINE: line}, x_edges=edges(NX), y_edges=edges(NY),
+                                     source="a test", time=time), path)
 
 
-class _Loaded(Exception):
-    """Raised in place of loading the atmosphere, carrying the path given."""
-
-
-def _run_main_until_loading(tmp_path, monkeypatch, config, synthesis_files):
-    """Run main() in *tmp_path* up to the point it reads the synthesis file.
-
-    *synthesis_files* are created, empty, in ./run/input. Loading is replaced
-    by raising _Loaded, so nothing is simulated.
-    """
+def _run(tmp_path, monkeypatch, name, **config):
+    """Run the instrument simulation, and return what it saved and where."""
     main_module = importlib.import_module("euvst_response.main")
 
-    for name in synthesis_files:
-        path = tmp_path / "run" / "input" / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"")
+    saved = {}
 
-    config_path = tmp_path / "run.yaml"
-    config_path.write_text(config)
+    def keep(path, payload, **kwargs):
+        saved["payload"] = payload
+        saved["path"] = save(path, payload, **kwargs)
+        return saved["path"]
+
+    save = main_module.save_results
+    monkeypatch.setattr(main_module, "save_results", keep)
+    path = tmp_path / f"{name}.yaml"
+    path.write_text(yaml.safe_dump({"instrument": "SWC", "n_iter": 2, "ncpu": 1, **config}))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config_path)])
-
-    def load_atmosphere(path, reference_line):
-        raise _Loaded(path)
-
-    monkeypatch.setattr(main_module, "load_atmosphere", load_atmosphere)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
     main_module.main()
+    return saved["payload"], saved["path"]
 
 
-SYNTHESIS_CONFIG = """
-instrument: SWC
-n_iter: 1
-ncpu: 1
-"""
+def _same_wcs(got, expected, where):
+    # On copies: astropy puts a WCS into SI units in place the first time it
+    # works anything out with it, and the payload shares WCSs between cubes.
+    got, expected = got.deepcopy().wcs, expected.deepcopy().wcs
+    assert list(got.ctype) == list(expected.ctype), where
+    assert [str(c) for c in got.cunit] == [str(c) for c in expected.cunit], where
+    for name in ("crval", "cdelt", "crpix"):
+        assert np.allclose(getattr(got, name), getattr(expected, name), rtol=1e-12, atol=0), \
+            f"{where}: {name}"
+    assert np.allclose(got.get_pc(), expected.get_pc(), rtol=1e-12, atol=1e-15), where
 
 
-def test_the_default_synthesis_file_falls_back_to_the_old_pickle(
-        tmp_path, monkeypatch):
-    """A config relying on the default still finds a pre-ASDF synthesis."""
-    with pytest.raises(_Loaded) as loaded:
-        _run_main_until_loading(tmp_path, monkeypatch, SYNTHESIS_CONFIG,
-                                ["synthesised_spectra.pkl"])
-    assert Path(loaded.value.args[0]) == Path(
-        "run/input/synthesised_spectra.pkl")
+def _same(got, expected, where="payload"):
+    """That *got* is what *expected* was, entry by entry."""
+    if isinstance(expected, NDCube):
+        assert isinstance(got, NDCube), where
+        assert got.unit == expected.unit, where
+        assert got.data.dtype == np.asarray(expected.data).dtype, where
+        assert np.array_equal(got.data, expected.data, equal_nan=True), where
+        _same_wcs(got.wcs, expected.wcs, f"{where}.wcs")
+        _same(dict(got.meta), dict(expected.meta or {}), f"{where}.meta")
+    elif isinstance(expected, WCS):
+        _same_wcs(got, expected, where)
+    elif dataclasses.is_dataclass(expected) and not isinstance(expected, type):
+        assert type(got) is type(expected), where
+        for field in dataclasses.fields(expected):
+            if field.init:
+                _same(getattr(got, field.name), getattr(expected, field.name),
+                      f"{where}.{field.name}")
+    elif isinstance(expected, u.Quantity):
+        assert isinstance(got, u.Quantity) and got.unit == expected.unit, where
+        assert np.array_equal(got.value, expected.value, equal_nan=True), where
+    elif isinstance(expected, np.ndarray):
+        assert isinstance(got, np.ndarray) and got.dtype == expected.dtype, where
+        assert np.array_equal(got, expected, equal_nan=expected.dtype.kind == "f"), where
+    elif isinstance(expected, dict):
+        assert isinstance(got, dict) and list(got) == list(expected), where
+        for key in expected:
+            _same(got[key], expected[key], f"{where}[{key!r}]")
+    elif isinstance(expected, (list, tuple)):
+        assert type(got) is type(expected) and len(got) == len(expected), where
+        for index, (a, b) in enumerate(zip(got, expected)):
+            _same(a, b, f"{where}[{index}]")
+    elif isinstance(expected, float) and np.isnan(expected):
+        assert np.isnan(got), where
+    elif isinstance(expected, type):
+        assert got is expected, where
+    else:
+        assert got == expected, f"{where}: {got!r} != {expected!r}"
 
 
-def test_the_asdf_default_is_preferred_to_the_old_pickle(tmp_path,
-                                                         monkeypatch):
-    with pytest.raises(_Loaded) as loaded:
-        _run_main_until_loading(tmp_path, monkeypatch, SYNTHESIS_CONFIG,
-                                ["synthesised_spectra.asdf",
-                                 "synthesised_spectra.pkl"])
-    assert Path(loaded.value.args[0]) == Path(
-        "run/input/synthesised_spectra.asdf")
+def test_a_uniform_intensity_run_reads_back_what_it_saved(tmp_path, monkeypatch):
+    payload, path = _run(tmp_path, monkeypatch, "uniform",
+                         uniform_intensity="5000 erg / (s cm2 sr)",
+                         simulation={"slit_width": "0.2 arcsec", "expos": ["5 s", "10 s"]})
+    assert path == Path("run/result/uniform.asdf") and is_asdf(path)
+    assert not Path("run/result/uniform.pkl").exists()
+    _same(load_results(path), payload)
 
 
-def test_a_missing_synthesis_file_named_in_the_config_is_not_replaced(
-        tmp_path, monkeypatch):
-    """Only the default falls back; a path the user wrote is taken as meant."""
-    config = SYNTHESIS_CONFIG + "synthesis_file: ./run/input/mine.asdf\n"
-    with pytest.raises(FileNotFoundError, match="mine.asdf"):
-        _run_main_until_loading(tmp_path, monkeypatch, config,
-                                ["synthesised_spectra.pkl"])
+def test_a_synthesis_file_run_reads_back_what_it_saved(tmp_path, monkeypatch):
+    _synthesis_file(tmp_path / "synthesis.h5")
+    payload, path = _run(tmp_path, monkeypatch, "file", synthesis_file=str(tmp_path / "synthesis.h5"),
+                         simulation={"slit_width": ["0.2 arcsec", "0.4 arcsec"], "expos": "5 s"})
+    loaded = load_results(path)
+    _same(loaded, payload)
+
+    # And the analysis reads it as it read a pickle.
+    results = load_instrument_response_results(path)
+    combination = next(iter(results["results"]["all_combinations"].values()))
+    signal = combination["first_dn_signal"]
+    assert signal.unit.is_equivalent(u.DN / u.pix) and np.all(np.isfinite(signal.data))
+    wavelength = signal.axis_world_coords(-1)[0].to_value(u.AA)
+    assert wavelength.min() < REST.value < wavelength.max()
+    assert results["cube_sim"].meta["atom"] == 26
+    summary_table(results)
 
 
-def test_a_synthesis_file_round_trips_through_load_atmosphere(tmp_path):
-    """The synthesis stage writes line cubes, which the next stage reads."""
-    nx, ny, n_temp = 2, 2, 2
-    logT_grid = np.array([6.0, 6.2])
-    vel_grid = np.arange(-50.0, 50.0 + 25.0, 25.0) * u.km / u.s
-
-    em_tv = np.zeros((nx, ny, n_temp, vel_grid.size))
-    em_tv[:, :, 0, vel_grid.size // 2] = 1.0e27
-    goft = {"Fe12_195.1190": {"wl0": REST.to(u.cm),
-                              "g": np.ones((nx, ny, n_temp)),
-                              "atom": 26, "ion": 12}}
-    synthesise_spectra(goft, em_tv, vel_grid.to(u.cm / u.s), logT_grid)
-
-    reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 2)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
-    line_cubes = {name: create_line_cube(name, info, reference,
-                                         INTENSITY_UNIT, integration_axis="z")
-                  for name, info in goft.items()}
-
-    path = save_results(tmp_path / "synth.asdf", {
-        "line_cubes": line_cubes,
-        "dynamic_mode": {"enabled": False},
-        "vel_grid": vel_grid.to(u.cm / u.s),
-        "logT_grid": logT_grid,
-        "goft": goft,
-        "config": {"lines": ["Fe12_195.1190"], "abundance": "sun_coronal"},
-    })
-    assert is_asdf(path)
-
-    cube, dynamic = load_atmosphere(str(path), "Fe12_195.1190")
-
-    assert dynamic == {"enabled": False}
-    assert cube.data.shape == (nx, ny, vel_grid.size)
-    assert np.allclose(cube.data,
-                       line_cubes["Fe12_195.1190"].data, rtol=1e-12)
-    assert cube.meta["rest_wav"] == REST.to(u.cm)
-    assert cube.meta["combined_lines"] == ["Fe12_195.1190"]
-    # The wavelength axis has to survive, because everything downstream
-    # builds photon energies from it.
-    before = line_cubes["Fe12_195.1190"].axis_world_coords(-1)[0]
-    after = cube.axis_world_coords(-1)[0]
-    assert np.allclose(after.to_value(u.cm), before.to_value(u.cm),
-                       rtol=1e-12, atol=0.0)
+def test_a_synthesis_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
+    for index, time in enumerate((0.0, 10.0)):
+        _synthesis_file(tmp_path / "series" / f"snap_{index}.h5", time * u.s, 1.0 + index)
+    payload, path = _run(tmp_path, monkeypatch, "series",
+                         synthesis_series=str(tmp_path / "series" / "*.h5"),
+                         raster={"start": "0 s", "steps": 2},
+                         simulation={"slit_width": "0.4 arcsec", "expos": "5 s", "psf": False})
+    assert payload["raster"]["plan"].steps == 2
+    _same(load_results(path), payload)
 
 
-def test_a_legacy_synthesis_pickle_still_loads(tmp_path):
-    """Existing synthesis files predate the format change."""
+def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
+    """Results that older versions pickled read with a warning, and convert to ASDF."""
     import dill
 
-    nx, ny = 2, 2
-    reference = create_atmosphere_ndcube(
-        np.zeros((nx, ny, 2)) * u.K, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
-    line_data = {"si": np.ones((nx, ny, 3)),
-                 "wl_grid": np.array([195.0, 195.1, 195.2]) * u.Angstrom,
-                 "wl0": REST.to(u.cm), "atom": 26, "ion": 12}
-    cube = create_line_cube("Fe12_195.1190", line_data, reference,
-                            INTENSITY_UNIT, integration_axis="z")
+    payload, path = _run(tmp_path, monkeypatch, "uniform",
+                         uniform_intensity="5000 erg / (s cm2 sr)",
+                         simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
+    old = tmp_path / "old.pkl"
+    with open(old, "wb") as f:
+        dill.dump(payload, f)
+    with pytest.warns(FutureWarning, match="results pickle"):
+        results = load_instrument_response_results(old)
+    assert len(results["results"]["all_combinations"]) == 1
 
-    path = tmp_path / "old_synth.pkl"
-    with open(path, "wb") as handle:
-        dill.dump({"line_cubes": {"Fe12_195.1190": cube},
-                   "dynamic_mode": {"enabled": False}}, handle)
+    converted = convert_results_pickle(old)
+    assert converted == tmp_path / "old.asdf" and is_asdf(converted)
+    _same(load_results(converted), payload)
+    with pytest.raises(ValueError, match="already an ASDF file"):
+        convert_results_pickle(converted)
 
-    with pytest.warns(UserWarning, match="pickle"):
-        loaded, _ = load_atmosphere(str(path), "Fe12_195.1190")
 
-    assert np.allclose(loaded.data, cube.data)
+def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, monkeypatch):
+    _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
+         simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
+    with pytest.warns(FutureWarning, match="uniform.asdf, which the instrument simulation now"):
+        results = load_instrument_response_results("run/result/uniform.pkl")
+    assert results["instrument"] == "SWC"
+    with pytest.raises(FileNotFoundError):
+        load_results("run/result/elsewhere.pkl")
