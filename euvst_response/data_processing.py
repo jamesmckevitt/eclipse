@@ -11,25 +11,11 @@ import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from scipy.special import erf
-from specutils import Spectrum
-from specutils.manipulation import FluxConservingResampler
-from joblib import Parallel, delayed
 from tqdm import tqdm
 from .radiometric import spectral_psf_fwhm
-from .utils import (tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
+from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins,
                     VELOCITY_CONVENTION)
-
-
-def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
-    """Resample a chunk of pixels (module-level for efficient pickling)."""
-    resampler = FluxConservingResampler(extrapolation_treatment="zero_fill")
-    batch_results = np.empty((flat_chunk.shape[0], n_spec))
-    for i in range(flat_chunk.shape[0]):
-        spec = Spectrum(flux=flat_chunk[i] * unit, spectral_axis=spectral_world)
-        res = resampler(spec, new_spec_grid)
-        batch_results[i] = res.flux.value
-    return batch_results
 
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
@@ -169,7 +155,7 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
 
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
     """
-    Resample the spectral axis of an NDCube using FluxConservingResampler.
+    Resample the spectral axis of an NDCube conserving flux, as :func:`resample_spectra` does.
 
     Parameters
     ----------
@@ -180,7 +166,8 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     output_resolution : astropy.units.Quantity
         The desired output spectral resolution (e.g., 0.01 * u.nm).
     ncpu : int, optional
-        Number of CPU cores to use for parallel processing. Default is -1 (use all cores).
+        Kept so that existing calls still work; the resampling is one matrix
+        product, which uses the threads numpy is given.
 
     Returns
     -------
@@ -192,8 +179,7 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
 
     # Move spectral axis to last for easier iteration
     data = np.moveaxis(ndcube.data, spectral_axis, -1)
-    resampled, new_spec_grid = resample_spectra(data, ndcube.unit, spectral_world,
-                                                output_resolution, ncpu=ncpu)
+    resampled, new_spec_grid = resample_spectra(data, spectral_world, output_resolution)
 
     # Move spectral axis back to original position
     resampled = np.moveaxis(resampled, -1, spectral_axis)
@@ -221,26 +207,27 @@ def _even_grid_wcs(grid: u.Quantity, unit) -> tuple:
     return center_pixel, grid[0].to_value(unit) + (center_pixel - 1) * cdelt, cdelt
 
 
-def resample_spectra(data: np.ndarray, unit, spectral_world: u.Quantity,
-                     output_resolution: u.Quantity, ncpu: int = -1) -> tuple:
+def resample_spectra(data: np.ndarray, spectral_world: u.Quantity,
+                     output_resolution: u.Quantity) -> tuple:
     """
     Spectra resampled onto an evenly spaced wavelength grid, conserving flux.
+
+    Each input wavelength stands for the interval halfway to its neighbours,
+    and each pixel of the new grid gets the mean over it of whatever
+    overlaps it, so the integral over wavelength is kept exactly, out to the
+    outermost intervals.
 
     Parameters
     ----------
     data : np.ndarray
         Any number of spectra, with the wavelength on the last axis.
-    unit : astropy.units.Unit
-        The unit of *data*.
     spectral_world : astropy.units.Quantity
         The wavelength of each pixel along the last axis, increasing. The
-        pixels need not be evenly spaced: each stands for the interval
-        halfway to its neighbours.
+        pixels need not be evenly spaced.
     output_resolution : astropy.units.Quantity
         The spacing of the new grid, which starts at the first wavelength
-        and runs to the last.
-    ncpu : int, optional
-        Number of CPU cores to use; -1 uses them all.
+        and runs to the last, and further by whole pixels where the
+        outermost intervals reach beyond.
 
     Returns
     -------
@@ -248,50 +235,22 @@ def resample_spectra(data: np.ndarray, unit, spectral_world: u.Quantity,
         ``(resampled, new_grid)``: the spectra on the new grid, with the
         wavelength last, and the new grid in the unit of *output_resolution*.
     """
-    spectral_world = spectral_world.to(output_resolution.unit)
+    centres = spectral_world.to_value(output_resolution.unit)
+    step = output_resolution.value
+    grid = np.arange(centres.min(), centres.max() + step, step)
 
-    # Define new spectral grid
-    new_spec_grid = np.arange(
-        spectral_world.min().value,
-        spectral_world.max().value + output_resolution.value,
-        output_resolution.value
-    ) * output_resolution.unit
+    # The outermost intervals of a grid coarser than the pixels at its ends
+    # reach past the pixels at the first and last wavelength, and would lose
+    # what they hold, so pixels are added either side, keeping the grid where
+    # it is. A reach within a part in 1e9 of a pixel is rounding.
+    edges = _bin_edges(centres)
+    below = max(0, int(np.ceil((grid[0] - step / 2 - edges[0]) / step - 1e-9)))
+    above = max(0, int(np.ceil((edges[-1] - (grid[-1] + step / 2)) / step - 1e-9)))
+    grid = np.concatenate([grid[0] - step * np.arange(below, 0, -1), grid,
+                           grid[-1] + step * np.arange(1, above + 1)])
 
-    n_spec = len(new_spec_grid)
-
-    shape = data.shape
-    flat_data = data.reshape(-1, shape[-1])
-    n_pixels = flat_data.shape[0]
-
-    # Determine number of workers
-    import os
-    if ncpu == -1:
-        n_workers = os.cpu_count() or 1
-    else:
-        n_workers = ncpu
-    
-    # Calculate batch size: aim for ~4 batches per worker to balance load
-    # but ensure each batch has enough work to justify overhead
-    min_pixels_per_batch = 100
-    n_batches = max(1, min(n_pixels // min_pixels_per_batch, n_workers * 4))
-    batch_size = (n_pixels + n_batches - 1) // n_batches  # ceiling division
-    
-    # Create batch indices
-    batch_indices = [(i, min(i + batch_size, n_pixels)) for i in range(0, n_pixels, batch_size)]
-
-    # Pass .copy() slices so loky pickles only the small chunk, not the full array
-    with tqdm_joblib(tqdm(total=len(batch_indices), desc="Resampling spectral axis", unit="batch", leave=False)):
-        results = Parallel(n_jobs=ncpu)(
-            delayed(_resample_batch)(
-                flat_data[start:end].copy(), unit, spectral_world, new_spec_grid, n_spec
-            )
-            for start, end in batch_indices
-        )
-    resampled = np.vstack(results)
-
-    # Reshape back to original spatial shape, but with new spectral length
-    new_shape = list(shape[:-1]) + [n_spec]
-    return resampled.reshape(new_shape), new_spec_grid
+    resampled = onto_wavelength_bins(data.reshape(-1, data.shape[-1]), centres, grid)
+    return resampled.reshape(data.shape[:-1] + grid.shape), grid * output_resolution.unit
 
 
 def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
@@ -470,8 +429,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
     reference = synthesis.lines[reference_line]
     radiance = synthesis.summed(reference_line) if summed is None else summed
-    data, grid = resample_spectra(radiance.value, radiance.unit, reference.wavelength,
-                                  det.wvl_res * u.pix, ncpu=sim.ncpu)
+    data, grid = resample_spectra(radiance.value, reference.wavelength, det.wvl_res * u.pix)
 
     # The cube a synthesis gives: wavelength in cm, then x and y on the Sun
     # in Mm, referenced to the middle of each axis.
@@ -611,7 +569,7 @@ def create_uniform_intensity_cube(
 
     # --- Gaussian profile -----------------------------------------------
     # Each pixel holds the line integrated between its edges and divided by
-    # its width, which is what FluxConservingResampler gives a synthesised
+    # its width, which is what resample_spectra gives a synthesised
     # spectrum, so the pixels add up to all of the line on the grid whatever
     # its width: total_intensity, less the tails beyond n_sigma_extent.
     # The Gaussian sampled at pixel centres only does that for a line more

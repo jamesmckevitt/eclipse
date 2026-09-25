@@ -334,7 +334,7 @@ print(f"Settings: {data['config']}")
 
 ??? note "Synthesis files from ECLIPSE 0.11.0 and earlier"
 
-    Older versions wrote the synthesis as a pickle. The instrument run still reads one, with a warning, until a future release stops it. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
+    Older versions wrote the synthesis as a pickle. The instrument run still reads one, and `synthesise-spectra` still writes one for an `--output-name` ending in `.pkl`, with a warning, until a future release stops both. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
 
 ??? note "Reading MURaM's own files (deprecated)"
 

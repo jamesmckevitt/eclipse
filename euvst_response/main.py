@@ -287,6 +287,10 @@ def _series_paths(config: dict, key: str) -> list:
 # more than one.
 DEFAULT_REFERENCE_LINE = "Fe12_195.1190"
 
+# Where synthesise-spectra writes by default, and where older versions did.
+DEFAULT_SYNTHESIS_FILE = "./run/input/synthesised_spectra.h5"
+LEGACY_SYNTHESIS_FILE = "./run/input/synthesised_spectra.pkl"
+
 
 def _reference_line(config: dict, synthesis_path) -> str:
     """'reference_line', or else the synthesis file's only line, or else the default line."""
@@ -540,7 +544,13 @@ def main() -> None:
         print(f"  Rest wavelength: {uniform_rest_wavelength}")
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
     else:
-        synthesis_file = config.get("synthesis_file", "./run/input/synthesised_spectra.h5")
+        synthesis_file = config.get("synthesis_file", DEFAULT_SYNTHESIS_FILE)
+        # A run set up for an older version, whose synthesis wrote the pickle
+        # and whose configuration leaves the file to the default, still finds
+        # it.
+        if ("synthesis_file" not in config and not Path(synthesis_file).is_file()
+                and Path(LEGACY_SYNTHESIS_FILE).is_file()):
+            synthesis_file = LEGACY_SYNTHESIS_FILE
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(
                 f"Synthesis file not found: {synthesis_file}. "

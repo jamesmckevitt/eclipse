@@ -13,6 +13,7 @@ import psutil
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from mendeleev import element
+import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
@@ -1446,7 +1447,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
     parser.add_argument("--output-name", type=str, default="synthesised_spectra.h5",
-                       help="Output filename, an HDF5 synthesis file")
+                       help="Output filename, an HDF5 synthesis file; a name ending in .pkl "
+                            "writes the deprecated pickle instead")
     
     # Line / abundance specification (fiasco)
     parser.add_argument("--lines", nargs="+", required=True,
@@ -1766,11 +1768,15 @@ def main(args=None) -> None:
 
     integration_axis = args.integration_axis.lower()
     check_atmosphere_options(args)
-    # Checked now rather than after the synthesis, which can take hours.
-    if Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill"):
-        raise ValueError(
-            f"--output-name {args.output_name} names a pickle, but the synthesis file "
-            f"is HDF5; give it a name ending in .h5.")
+    # A name ending in .pkl still gets the pickle older versions wrote, so
+    # that scripts written for them keep working until it is removed.
+    write_pickle = Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill")
+    if write_pickle:
+        warnings.warn(
+            f"--output-name {args.output_name} names a pickle, as older versions of ECLIPSE "
+            f"wrote the synthesis. Writing one is deprecated and will stop in a future "
+            f"release: give the output a name ending in .h5 for a synthesis file.",
+            FutureWarning, stacklevel=2)
 
     # What the common processing below needs from whichever route reads the
     # atmosphere. Only an atmosphere file can give the electron density
@@ -2079,12 +2085,17 @@ def main(args=None) -> None:
         }
     }
     
-    # The snapshot's time goes with the spectra, so that syntheses of a
-    # series of snapshots can be observed as a time series.
-    write_line_cubes(line_cubes, output_file,
-                     source=(atmosphere_metadata or {}).get("source") or "",
-                     products=products,
-                     time=(atmosphere_metadata or {}).get("time"))
+    if write_pickle:
+        # As older versions wrote it, contribution functions and all.
+        with open(output_file, "wb") as f:
+            dill.dump({"line_cubes": line_cubes, **products, "goft": goft}, f)
+    else:
+        # The snapshot's time goes with the spectra, so that syntheses of a
+        # series of snapshots can be observed as a time series.
+        write_line_cubes(line_cubes, output_file,
+                         source=(atmosphere_metadata or {}).get("source") or "",
+                         products=products,
+                         time=(atmosphere_metadata or {}).get("time"))
 
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
     print("Synthesis complete!")

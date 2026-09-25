@@ -54,7 +54,7 @@ import h5py
 import numpy as np
 
 from .atmosphere import _check_format, _read_dataset, _write_dataset
-from .utils import angle_to_distance, onto_wavelength_bins, require_uniform_grid
+from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
     "FORMAT_NAME",
@@ -521,9 +521,19 @@ def _source(f: h5py.File) -> str:
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
-    """Whether a line on *wavelength* has any part inside *window*."""
-    own = wavelength.to_value(window.unit)
-    return own.max() >= window.value.min() and own.min() <= window.value.max()
+    """
+    Whether a line on *wavelength* has any part inside *window*.
+
+    Each wavelength stands for the bin halfway to its neighbours, as the sum
+    of the lines takes it, so a line whose outermost bin overlaps the
+    window's reaches it even when all its wavelengths lie outside.
+    """
+    own, window = wavelength.to_value(window.unit), window.value
+    if own.size < 2 or window.size < 2:
+        # Too few to have bins; the line is refused when it is read.
+        return own.max() >= window.min() and own.min() <= window.max()
+    own, window = _bin_edges(own), _bin_edges(window)
+    return own[-1] > window[0] and own[0] < window[-1]
 
 
 def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = None) -> dict:

@@ -8,6 +8,7 @@ run observes a synthesis file exactly as it observed the pickles of older
 versions holding the same line cubes.
 """
 import sys
+import warnings
 
 import astropy.constants as const
 import astropy.units as u
@@ -124,6 +125,21 @@ def test_only_the_lines_that_reach_the_window_are_read(tmp_path):
     assert list(read_synthesis(path, reference_line=LINE).lines) == [LINE, BLEND]
     with pytest.raises(ValueError, match="is not in"):
         read_synthesis(path, reference_line="Fe99_100.0000")
+
+    # A line on a coarse grid whose wavelengths all lie beyond the window,
+    # but whose first bin reaches back into it, adds what lies inside.
+    coarse = REST + np.array([61.0, 64.0]) * STEP
+    edge = SpectralLine(intensity=np.ones((NY, NX, 2)) * 1e13 * RADIANCE_UNIT,
+                        wavelength=coarse, rest_wavelength=coarse[0])
+    path = write_synthesis(_synthesis({LINE: _line(), "edge": edge}), tmp_path / "edge.h5")
+    synthesis = read_synthesis(path, reference_line=LINE)
+    assert list(synthesis.lines) == [LINE, "edge"]
+    # Its first bin runs from 59.5 steps out; the window's last from 59.5 to
+    # 60.5. The edges agree to the rounding of wavelengths in Angstrom, about
+    # a part in 1e11 of a step.
+    added = synthesis.summed(LINE).value - _line().radiance().value
+    assert added[..., -1] == pytest.approx(np.full((NY, NX), 1e13), rel=1e-9)
+    assert np.abs(added[..., :-1]).max() <= 1e-9 * 1e13
 
 
 def test_the_products_come_back_as_they_went_in(tmp_path):
@@ -341,42 +357,93 @@ def test_an_old_pickle_converts_with_everything_it_held(tmp_path):
         convert_synthesis_pickle(tmp_path / "wrong.pkl", tmp_path / "wrong.h5")
 
 
-def test_the_synthesis_will_not_write_a_pickle(tmp_path, monkeypatch):
-    from euvst_response.synthesis import main
+def _flat_goft(lines, **kwargs):
+    """A contribution function the same at every temperature and density, in place of fiasco."""
+    logT_grid, logN_grid = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
+    return ({name: {"wl0": REST.to(u.cm), "g_tn": np.full((21, 21), 1e-24), "atom": 26,
+                    "ion": 12, "hdf5_dbase_root": None} for name in lines},
+            logT_grid, logN_grid)
 
-    temperature = np.full((2, 2, 2), 1e6) * u.K
+
+def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monkeypatch):
+    from euvst_response import synthesis
+
+    monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     atmosphere = write_atmosphere(Atmosphere(
-        temperature=temperature, electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
+        temperature=np.full((2, 2, 2), 1e6) * u.K,
+        electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
         velocity_z=np.zeros((2, 2, 2)) * u.km / u.s, x_edges=np.arange(3) * u.Mm,
         y_edges=np.arange(3) * u.Mm, z_edges=np.arange(3) * u.Mm), tmp_path / "box.h5")
-    monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(atmosphere),
-                                      "--lines", LINE, "--output-dir", str(tmp_path),
-                                      "--output-name", "old.pkl"])
-    with pytest.raises(ValueError, match="ending in .h5"):
-        main()
+    for name in ("old.pkl", "new.h5"):
+        monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(atmosphere),
+                                          "--lines", LINE, "--output-dir", str(tmp_path),
+                                          "--output-name", name])
+        if name.endswith(".pkl"):
+            with pytest.warns(FutureWarning, match="Writing one is deprecated"):
+                synthesis.main()
+        else:
+            synthesis.main()
+
+    with open(tmp_path / "old.pkl", "rb") as f:
+        saved = dill.load(f)
+    assert list(saved) == ["line_cubes", "dem_map", "em_tv", "logT_grid", "vel_grid",
+                           "logN_grid", "goft", "voxel_sizes", "dynamic_mode", "atmosphere",
+                           "config"]
+    # Contribution functions and all, as older versions kept them.
+    assert {"si", "wl_grid"} <= set(saved["goft"][LINE])
+    assert np.array_equal(saved["line_cubes"][LINE].data,
+                          load_synthesis(tmp_path / "new.h5")["line_cubes"][LINE].data)
+
+
+def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch):
+    """With no synthesis_file, a pickle where older versions wrote it is observed, with a warning."""
+    (tmp_path / "run" / "input").mkdir(parents=True)
+    with open(tmp_path / "run" / "input" / "synthesised_spectra.pkl", "wb") as f:
+        dill.dump({"line_cubes": _line_cubes()}, f)
+    with pytest.warns(FutureWarning, match="synthesis pickle"):
+        by_default = _run(tmp_path, monkeypatch, "default", reference_line=LINE)
+    with pytest.warns(FutureWarning, match="synthesis pickle"):
+        named = _run(tmp_path, monkeypatch, "named", reference_line=LINE,
+                     synthesis_file="./run/input/synthesised_spectra.pkl")
+    for key, expected in named["cube_reb_dict"].items():
+        assert np.array_equal(by_default["cube_reb_dict"][key].data, expected.data)
+
+    # Once there is a synthesis file where the synthesis now writes it, that is the one.
+    convert_synthesis_pickle(tmp_path / "run" / "input" / "synthesised_spectra.pkl",
+                             tmp_path / "run" / "input" / "synthesised_spectra.h5")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        _run(tmp_path, monkeypatch, "new_default", reference_line=LINE)
 
 
 # ----------------------------------------------------------------------
 # Onto the detector
 # ----------------------------------------------------------------------
 def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
-    """Each input wavelength stands for the interval halfway to its neighbours, as in a synthesis."""
+    """Each input wavelength stands for the interval halfway to its neighbours, as in a synthesis, out to the outermost."""
     rng = np.random.default_rng(107)
-    wavelength = np.sort(194.9 + 0.4 * rng.random(300)) * u.AA
-    # Zero near the ends, so that every interval with intensity lies inside
-    # the detector grid, which starts at the first wavelength.
-    intensity = np.where((wavelength > 195.0 * u.AA) & (wavelength < 195.2 * u.AA),
-                         1e13 * rng.random(300), 0.0)
-    edges = np.concatenate([[wavelength[0].value - 0.5 * (wavelength[1] - wavelength[0]).value],
-                            0.5 * (wavelength[1:] + wavelength[:-1]).value,
-                            [wavelength[-1].value + 0.5 * (wavelength[-1] - wavelength[-2]).value]])
+    # Dense in the middle and, at the ends, coarser than the detector's
+    # pixels, with intensity all the way out.
+    wavelength = np.concatenate([[194.80, 194.86], np.sort(194.9 + 0.4 * rng.random(300)),
+                                 [195.34, 195.40]]) * u.AA
+    intensity = 1e13 * rng.random(wavelength.size)
+    edges = edges_from_centres(wavelength).value
     given = np.sum(intensity * np.diff(edges))
 
     pitch = 22.3e-3 * u.AA
-    resampled, grid = resample_spectra(intensity[np.newaxis], RADIANCE_UNIT, wavelength,
-                                       pitch, ncpu=1)
+    resampled, grid = resample_spectra(intensity[np.newaxis], wavelength, pitch)
     assert np.allclose(np.diff(grid.value), pitch.value)
     assert np.sum(resampled) * pitch.value == pytest.approx(given, rel=1e-12)
+    # The grid still steps from the first wavelength, and reaches past it by
+    # whole pixels only as far as the outermost intervals need.
+    steps = (grid.value - wavelength[0].value) / pitch.value
+    assert steps == pytest.approx(np.round(steps), abs=1e-6)
+    assert grid.value[0] - pitch.value / 2 <= edges[0] < grid.value[0] + pitch.value / 2
+    assert grid.value[-1] - pitch.value / 2 < edges[-1] <= grid.value[-1] + pitch.value / 2
+
+    # A grid finer than the pixels, as ECLIPSE's own is, needs none added.
+    _, fine = resample_spectra(_lines(), _grid(), pitch)
+    assert fine[0] == _grid()[0].to(u.AA)
 
 
 def test_angles_give_the_same_cube_as_the_lengths_they_stand_for():

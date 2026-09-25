@@ -35,7 +35,8 @@ from .analysis import (
     list_fit_components,
     get_results_for_combination,
     summary_table,
-    create_sunpy_maps_from_combo
+    create_sunpy_maps_from_combo,
+    get_dem_data_from_results
 )
 
 __all__ = [
@@ -72,5 +73,6 @@ __all__ = [
     "list_fit_components",
     "get_results_for_combination",
     "summary_table",
-    "create_sunpy_maps_from_combo"
+    "create_sunpy_maps_from_combo",
+    "get_dem_data_from_results"
 ]
