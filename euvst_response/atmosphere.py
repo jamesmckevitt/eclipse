@@ -555,33 +555,37 @@ def describe_atmosphere_file(path: str | Path) -> str:
     return _describe(edges, cubes, time, str(source))
 
 
-def _check_format(f: h5py.File, path: Path) -> None:
+def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
+                  format_name: str = FORMAT_NAME,
+                  format_version: int = FORMAT_VERSION) -> None:
+    """Refuse a file that is not an ECLIPSE *kind* file of the version this ECLIPSE reads."""
     name = f.attrs.get("format")
     if isinstance(name, bytes):
         name = name.decode()
-    if name != FORMAT_NAME:
+    if name != format_name:
         raise ValueError(
-            f"{path} is not an ECLIPSE atmosphere file: its 'format' "
-            f"attribute is {name!r}, not {FORMAT_NAME!r}. See the "
-            f"euvst_response.atmosphere documentation for the layout.")
+            f"{path} is not an ECLIPSE {kind} file: its 'format' "
+            f"attribute is {name!r}, not {format_name!r}. See the "
+            f"euvst_response.{kind} documentation for the layout.")
     version = f.attrs.get("version")
     if version is None:
         raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "
-                         f"atmosphere file has version {FORMAT_VERSION}.")
+                         f"{kind} file has version {format_version}.")
     # An integer, which some HDF5 writers store as an array of one element;
     # a string or a float is not a version even when it reads as 1.
     value = np.asarray(version)
     if value.size != 1 or not np.issubdtype(value.dtype, np.integer):
         raise ValueError(f"{path} has a 'version' attribute of {version} "
                          f"({type(version).__name__}); it must be the integer "
-                         f"{FORMAT_VERSION}.")
-    if value.item() != FORMAT_VERSION:
-        raise ValueError(f"{path} is atmosphere format version {value.item()}; "
-                         f"this ECLIPSE reads version {FORMAT_VERSION}.")
+                         f"{format_version}.")
+    if value.item() != format_version:
+        raise ValueError(f"{path} is {kind} format version {value.item()}; "
+                         f"this ECLIPSE reads version {format_version}.")
 
 
 def _read_dataset(f: h5py.File, name: str,
-                  columns: Optional[slice] = None) -> u.Quantity:
+                  columns: Optional[slice] = None,
+                  units: Dict[str, u.Unit] = UNITS) -> u.Quantity:
     """A dataset with its unit; *columns* reads only that slice of a cube's x axis."""
     if name not in f:
         raise ValueError(f"{f.filename} has no '{name}' dataset.")
@@ -590,7 +594,7 @@ def _read_dataset(f: h5py.File, name: str,
     if unit is None:
         raise ValueError(f"'{name}' in {f.filename} has no 'unit' attribute. "
                          f"Every dataset needs one, for instance "
-                         f"'{UNITS[name]}'.")
+                         f"'{units[name]}'.")
     if isinstance(unit, bytes):
         unit = unit.decode()
     values = dataset[()] if columns is None else dataset[:, :, columns]

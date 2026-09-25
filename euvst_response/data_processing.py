@@ -16,7 +16,8 @@ from specutils.manipulation import FluxConservingResampler
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from .radiometric import spectral_psf_fwhm
-from .utils import tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign
+from .utils import (tqdm_joblib, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
+                    VELOCITY_CONVENTION)
 
 
 def _resample_batch(flat_chunk, unit, spectral_world, new_spec_grid, n_spec):
@@ -192,6 +193,65 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     """
     # Get the world coordinates of the spectral axis
     spectral_world = ndcube.axis_world_coords(spectral_axis)[0]
+
+    # Move spectral axis to last for easier iteration
+    data = np.moveaxis(ndcube.data, spectral_axis, -1)
+    resampled, new_spec_grid = resample_spectra(data, ndcube.unit, spectral_world,
+                                                output_resolution, ncpu=ncpu)
+
+    # Move spectral axis back to original position
+    resampled = np.moveaxis(resampled, -1, spectral_axis)
+
+    # Update WCS for new spectral axis
+    new_wcs = ndcube.wcs.deepcopy()
+
+    wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # Reverse axis order for WCS
+    unit = new_wcs.wcs.cunit[wcs_axis]
+    (new_wcs.wcs.crpix[wcs_axis], new_wcs.wcs.crval[wcs_axis],
+     new_wcs.wcs.cdelt[wcs_axis]) = _even_grid_wcs(new_spec_grid, unit)
+
+    return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
+
+
+def _even_grid_wcs(grid: u.Quantity, unit) -> tuple:
+    """The CRPIX, CRVAL and CDELT, in *unit*, that describe the evenly spaced *grid*."""
+    cdelt = (grid[1] - grid[0]).to_value(unit)
+    # The reference pixel is the centre of the axis, which falls between two
+    # pixels when there is an even number of them. The reference value has
+    # to be the wavelength at that point, not at the pixel below it, or the
+    # whole axis is labelled half a pixel low and every fitted velocity comes
+    # out half a pixel blue.
+    center_pixel = (len(grid) + 1) / 2  # 1-based index (FITS convention)
+    return center_pixel, grid[0].to_value(unit) + (center_pixel - 1) * cdelt, cdelt
+
+
+def resample_spectra(data: np.ndarray, unit, spectral_world: u.Quantity,
+                     output_resolution: u.Quantity, ncpu: int = -1) -> tuple:
+    """
+    Spectra resampled onto an evenly spaced wavelength grid, conserving flux.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Any number of spectra, with the wavelength on the last axis.
+    unit : astropy.units.Unit
+        The unit of *data*.
+    spectral_world : astropy.units.Quantity
+        The wavelength of each pixel along the last axis, increasing. The
+        pixels need not be evenly spaced: each stands for the interval
+        halfway to its neighbours.
+    output_resolution : astropy.units.Quantity
+        The spacing of the new grid, which starts at the first wavelength
+        and runs to the last.
+    ncpu : int, optional
+        Number of CPU cores to use; -1 uses them all.
+
+    Returns
+    -------
+    tuple
+        ``(resampled, new_grid)``: the spectra on the new grid, with the
+        wavelength last, and the new grid in the unit of *output_resolution*.
+    """
     spectral_world = spectral_world.to(output_resolution.unit)
 
     # Define new spectral grid
@@ -203,8 +263,6 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
 
     n_spec = len(new_spec_grid)
 
-    # Move spectral axis to last for easier iteration
-    data = np.moveaxis(ndcube.data, spectral_axis, -1)
     shape = data.shape
     flat_data = data.reshape(-1, shape[-1])
     n_pixels = flat_data.shape[0]
@@ -226,8 +284,6 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
     batch_indices = [(i, min(i + batch_size, n_pixels)) for i in range(0, n_pixels, batch_size)]
 
     # Pass .copy() slices so loky pickles only the small chunk, not the full array
-    unit = ndcube.unit
-
     with tqdm_joblib(tqdm(total=len(batch_indices), desc="Resampling spectral axis", unit="batch", leave=False)):
         results = Parallel(n_jobs=ncpu)(
             delayed(_resample_batch)(
@@ -239,28 +295,20 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
 
     # Reshape back to original spatial shape, but with new spectral length
     new_shape = list(shape[:-1]) + [n_spec]
-    resampled = resampled.reshape(new_shape)
+    return resampled.reshape(new_shape), new_spec_grid
 
-    # Move spectral axis back to original position
-    resampled = np.moveaxis(resampled, -1, spectral_axis)
 
-    # Update WCS for new spectral axis
-    new_wcs = ndcube.wcs.deepcopy()
+def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
+    """
+    How many pixels of *pitch* fit in *extent*.
 
-    wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # Reverse axis order for WCS
-    unit = new_wcs.wcs.cunit[wcs_axis]
-    cdelt = (new_spec_grid[1] - new_spec_grid[0]).to_value(unit)
-    # The reference pixel is the centre of the axis, which falls between two
-    # pixels when there is an even number of them. The reference value has
-    # to be the wavelength at that point, not at the pixel below it, or the
-    # whole axis is labelled half a pixel low and every fitted velocity comes
-    # out half a pixel blue.
-    center_pixel = (n_spec + 1) / 2  # 1-based index (FITS convention)
-    new_wcs.wcs.crpix[wcs_axis] = center_pixel
-    new_wcs.wcs.crval[wcs_axis] = new_spec_grid[0].to_value(unit) + (center_pixel - 1) * cdelt
-    new_wcs.wcs.cdelt[wcs_axis] = cdelt
-
-    return NDCube(resampled, wcs=new_wcs, unit=ndcube.unit, meta=ndcube.meta)
+    A field of view that is a whole number of pixels, as round angles often
+    are, comes out a rounding error either side of it once converted to a
+    length and back, so a count within a part in 1e9 of the next whole
+    number is taken as reaching it rather than losing the last pixel.
+    """
+    ratio = (extent / pitch).decompose().value
+    return int(np.floor(ratio * (1 + 1e-9)))
 
 
 def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1):
@@ -315,8 +363,8 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     raster = bool((new_cube_spec.meta or {}).get("raster"))
     pitch_x = x_angle if raster else sim.slit_width
     pitch_y = det.plate_scale_angle
-    nx_out = nx_in if raster else int(np.floor((fov_x / pitch_x).decompose().value))
-    ny_out = int(np.floor((fov_y / pitch_y).decompose().value))
+    nx_out = nx_in if raster else _whole_pixels(fov_x, pitch_x)
+    ny_out = _whole_pixels(fov_y, pitch_y)
     if nx_out < 1 or ny_out < 1:
         raise ValueError(
             f"The field of view, {fov_x.to(u.arcsec):.3f} by {fov_y.to(u.arcsec):.3f}, "
@@ -387,6 +435,58 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     )
 
     return cube_det
+
+
+def rebin_spectra(spectra, rest_wavelength: u.Quantity, det, sim) -> NDCube:
+    """
+    Spectra from another code at instrument resolution and spatial sampling.
+
+    The same two steps as :func:`rebin_atmosphere`, taking the wavelengths
+    from the spectra rather than from a WCS: they are resampled conserving
+    flux straight from their own grid, which need not be evenly spaced, and
+    the pixels are then laid onto the plate scale and the slit.
+
+    Parameters
+    ----------
+    spectra : euvst_response.spectra.Spectra
+        The spectra, as read from a spectra file.
+    rest_wavelength : u.Quantity
+        The rest wavelength of the line whose velocity is measured.
+    det : Detector_SWC or Detector_EIS
+        Detector configuration
+    sim : Simulation
+        Simulation configuration
+
+    Returns
+    -------
+    NDCube
+        Rebinned cube at instrument resolution
+    """
+    print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
+    radiance = spectra.radiance()
+    data, grid = resample_spectra(radiance.value, radiance.unit, spectra.wavelength,
+                                  det.wvl_res * u.pix, ncpu=sim.ncpu)
+
+    # The cube a synthesis gives: wavelength in cm, then x and y on the Sun
+    # in Mm, referenced to the middle of each axis.
+    ny, nx, _ = data.shape
+    crpix_wave, crval_wave, cdelt_wave = _even_grid_wcs(grid, u.cm)
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
+    wcs.wcs.cunit = ["cm", "Mm", "Mm"]
+    wcs.wcs.crpix = [crpix_wave, (nx + 1) / 2, (ny + 1) / 2]
+    wcs.wcs.crval = [crval_wave, spectra.centre("x").to_value(u.Mm),
+                     spectra.centre("y").to_value(u.Mm)]
+    wcs.wcs.cdelt = [cdelt_wave, spectra.pixel_size("x").to_value(u.Mm),
+                     spectra.pixel_size("y").to_value(u.Mm)]
+    # The Doppler shifts are in the spectra as the other code put them, as
+    # seen by the observer, so they have the sign the fits expect.
+    cube_spec = NDCube(data, wcs=wcs, unit=radiance.unit,
+                       meta={"rest_wav": rest_wavelength, "source": spectra.source,
+                             "velocity_convention": VELOCITY_CONVENTION})
+
+    print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
+    return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det, ncpu=sim.ncpu)
 
 
 def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:

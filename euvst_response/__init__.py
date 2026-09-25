@@ -25,6 +25,7 @@ from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
 from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centres,
                          read_atmosphere, write_atmosphere)
+from .spectra import Spectra, read_spectra, write_spectra
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -56,6 +57,9 @@ __all__ = [
     "edges_from_centres",
     "read_atmosphere",
     "write_atmosphere",
+    "Spectra",
+    "read_spectra",
+    "write_spectra",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 
