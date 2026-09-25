@@ -5,6 +5,7 @@ repo_name: jamesmckevitt/eclipse
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -35,10 +36,14 @@ nav:
       - Single snapshot: instrument-response.md
       - Time series: time-series.md
   - Analysing the results: analysing-the-results.ipynb
-  - Advanced topics:
-      - Science cases: science-cases.md
-      - Pinhole stray light: pinholes.md
   - Acknowledgements: acknowledgements.md
+
+# docs/internal/ holds pages for the instrument team, reached only by a link.
+# They stay out of the nav, and out of the site search, Read the Docs' search
+# and search engines through their front matter, .readthedocs.yaml and
+# overrides/main.html.
+not_in_nav: |
+  /internal/
 
 extra_css:
   - stylesheets/extra.css
