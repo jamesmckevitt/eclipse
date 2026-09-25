@@ -154,8 +154,6 @@ synthesise-spectra --atmosphere muram_300000.h5 \
   --output-dir ./run/input
 ```
 
-The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 540 MB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 130 MB, with cells twice the size.
-
 ### Worked example: Bifrost quiet Sun
 
 This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
@@ -208,8 +206,6 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
   --crop-z "0 Mm" "20 Mm" \
   --output-dir ./run/input
 ```
-
-This needs about 120 GB of memory and writes a 620 MB synthesis file, or about 35 GB and 150 MB with `--downsample 2`.
 
 ## Basic usage
 
@@ -306,10 +302,6 @@ Check that line. A large difference means the transition you meant is not in the
 database for that ion, and a neighbouring one was picked up instead. A name that
 does not match the pattern at all raises `ValueError` immediately.
 
-## Output
-
-The synthesis writes a [synthesis file](other-codes.md#the-synthesis-file), the same HDF5 file the instrument run takes from another code, with the DEM, emission measure, contribution functions and settings kept alongside the spectra. It keeps the atmosphere file's time too, so the syntheses of a series of snapshots can be observed as a [time series](time-series.md#from-synthesis-files). [Working with synthesis results](#working-with-synthesis-results) shows how to read it.
-
 ## Performance tips
 
 - Use `--downsample 2` or `--downsample 4` for initial testing
@@ -320,7 +312,7 @@ The synthesis writes a [synthesis file](other-codes.md#the-synthesis-file), the 
 
 ## Working with synthesis results
 
-The synthesis file is HDF5. It holds each line's spectra over the image, which is what the [instrument run](instrument-response.md) observes, and everything the synthesis worked out on the way: the DEM, the emission measure in temperature and velocity, the contribution functions and the settings it ran with. `load_synthesis` reads it all back:
+The synthesis file is HDF5. It holds each line's spectra over the image, which is what the [instrument run](instrument-response.md) observes, and everything needed to calculate this (the DEM, the emission measure in temperature and velocity, the contribution functions and the settings it ran with). `load_synthesis` can be used to read this:
 
 ```python
 import euvst_response

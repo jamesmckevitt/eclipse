@@ -63,8 +63,6 @@ flowchart LR
 | Spectra from any other code | [From another code](other-codes.md) | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
 
-The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced, written as the same kind of file. The last has no synthesis step at all and is set directly in the instrument configuration.
-
 **2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating a single snapshot](instrument-response.md). To observe a series of atmosphere files as a raster or sit-and-stare, with each exposure seeing the atmosphere at its own time, see [Simulating a time series](time-series.md); the synthesis then happens inside this stage, one exposure at a time. A series of synthesis files, one per snapshot, can be observed in the same way.
 
 **3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](analysing-the-results.ipynb).

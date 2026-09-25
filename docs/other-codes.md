@@ -1,6 +1,6 @@
 # From another code
 
-To simulate the instrument on spectra that another code has synthesised, write them as a synthesis file first, the same HDF5 file ECLIPSE's own synthesis writes. The instrument run treats the two alike, so the file is then observed as a [single snapshot](instrument-response.md), named as `synthesis_file` in the configuration, and a file per snapshot, each with its time, is observed as a [time series](time-series.md#from-synthesis-files). Any code will do, optically thin or thick, as long as it gives the spectral radiance leaving the Sun at each pixel and wavelength.
+To simulate the instrument response to spectra that another code has synthesised, write them as a synthesis file first. These can then be observed as a [single snapshot](instrument-response.md) or as a [time series](time-series.md#from-synthesis-files).
 
 ## The synthesis file
 
@@ -17,9 +17,7 @@ The file is laid out much like an [atmosphere file](synthesis.md#atmosphere-file
 
 Each group under `lines` holds a line, named as `reference_line` names it in the instrument configuration. It can equally hold a whole spectral window with its blends, as most codes give it, and the blends are fitted with a `fitting` block as on the [single snapshot](instrument-response.md) page. ECLIPSE's own synthesis writes a group for each line, and a `synthesis` group of what it worked out on the way, which a file from another code can leave out.
 
-The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons: `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)` all work. The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores, as Lightweaver and RH1.5D use, can go in as it is: ECLIPSE resamples it onto the detector's pixels, keeping the total intensity.
-
-The fit covers the wavelengths of the line it measures, and whatever other lines reach into them, so leave room around the line for its Doppler shifts and the instrument's blurring. ECLIPSE's own windows reach 300 km/s either side of the line. The Doppler shifts are taken as they are in the spectra, so a redshift should be a motion away from the observer.
+The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons (e.g. `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)`). The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores can be input.
 
 x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`. If your code gives pixel centres, `edges_from_centres` places the edges halfway between them.
 
@@ -44,25 +42,23 @@ synthesis = Synthesis(
 write_synthesis(synthesis, "my_code.h5")
 ```
 
-Any other HDF5 writer works too, as long as the attributes and units are there. Then observe the file as a [single snapshot](instrument-response.md), with `synthesis_file: ./my_code.h5`, or a file for each snapshot as a [time series](time-series.md#from-synthesis-files), with `synthesis_series: ./my_code_*.h5`.
-
 ## Worked example: FoMo
 
-[FoMo](https://github.com/TomVeeDee/FoMo) ([Van Doorsselaere et al. 2016](https://doi.org/10.3389/fspas.2016.00004)) synthesises optically thin lines from an MHD simulation, from any viewing angle, and stops at the spectra leaving the Sun. This example takes a FoMo-C rendering the rest of the way.
+[FoMo](https://github.com/TomVeeDee/FoMo) ([Van Doorsselaere et al. 2016](https://doi.org/10.3389/fspas.2016.00004)) synthesises optically thin lines from an MHD simulation, from any viewing angle.
 
-Render the line as spectra, with a window that leaves room for the Doppler shifts and the instrument's blurring:
+Make the FoMo synthesis:
 
 ```cpp
 Object.setchiantifile("chiantitables/goft_table_fe_12_0195_abco.dat");
 Object.setobservationtype(FoMo::Spectroscopic);
 // pixels in x and y, points along the line of sight, wavelengths, and the window in m/s
 Object.setresolution(128, 128, 2000, 121, 600000);
-Object.render(0, M_PI);  // the viewing angles l and b; see below
+Object.render(0, M_PI);  // the viewing angles l and b: down from above, for a box with z up
 ```
 
-A window of 600000 m/s reaches 300 km/s either side of the line, as ECLIPSE's own windows do, and 121 wavelengths put the points 5 km/s apart, much finer than EUVST's pixels.
+A window of 600000 m/s reaches 300 km/s on both sides of the line, and 121 wavelengths put the points 5 km/s apart.
 
-Then read the rendering into a synthesis file:
+Then format the synthesis into a format ECLIPSE will accept:
 
 ```python
 import gzip
@@ -125,12 +121,6 @@ write_synthesis(synthesis, "fomo.h5")
 
 FoMo writes text unless told otherwise, and binary with `setwriteoutbinary()`, as in its own example; `read_fomo` reads either, zipped or not. The file then goes into the instrument configuration as `synthesis_file: ./fomo.h5`.
 
-A few things to know about FoMo's side:
-
-- FoMo shifts a line to the red for a flow along its line of sight, which points away from the observer. For a simulation with height along z, `render(0, 0)` looks up from below, and `render(0, M_PI)` looks down from above, with upflows blueshifted.
-- FoMo renders one line at a time. For a window with blends, render each line on the same window, as its own line of the synthesis file or added into one.
-- FoMo's tables come from an older CHIANTI than ECLIPSE's own synthesis uses. On a block of the [Bifrost snapshot](synthesis.md#worked-example-bifrost-quiet-sun) from the synthesis page, FoMo's Fe XII 195 came out about 25 per cent fainter than ECLIPSE's synthesis of the same cells with the same abundances, with the same Doppler shifts to within about 0.5 km/s.
-
 ## Worked example: PINTofALE
 
 [PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem-synthesis.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a synthesis file.
@@ -149,7 +139,7 @@ flx = lineflx(ff, 10d^logT, abs(wvl), Z, DEM=dem, /temp, abund=getabund('schmelz
 save, file='pintofale_lines.sav', wvl, flx, Z, logT, ff, dem
 ```
 
-Give the DEM per kelvin with `/temp`, as here. Without it, LINEFLX takes the DEM per unit natural log of T, which is T times the DEM per kelvin, so a DEM per unit log10 T would come out 2.3 times too bright.
+Give the DEM per kelvin with `/temp`, as here. Without it, LINEFLX takes the DEM per unit natural log of T, which is T times the DEM per kelvin.
 
 Then in Python:
 
@@ -207,5 +197,3 @@ write_synthesis(synthesis, "pintofale.h5")
 ```
 
 The file then goes into the instrument configuration as `synthesis_file: ./pintofale.h5`.
-
-PINTofALE's CHIANTI line database is from CHIANTI 7.1.2. With the same DEM and abundances, its intensities for thirteen lines from O V to Fe XXIV came out within about 5 per cent of ECLIPSE's own for most lines, and within 20 per cent for all of them.
