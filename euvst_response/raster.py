@@ -369,7 +369,7 @@ class SynthesisSeries(_Series):
                 if not _same_grid(_to_length(found), _to_length(edges)):
                     raise ValueError(f"{path} has a different {axis} grid from {first}; a "
                                      f"series must share one image.")
-            if list(other["lines"]) != list(layout["lines"]):
+            if set(other["lines"]) != set(layout["lines"]):
                 raise ValueError(f"{path} has the lines {list(other['lines'])} in the window "
                                  f"of {reference_line}, and {first} has "
                                  f"{list(layout['lines'])}; a series must have the same.")

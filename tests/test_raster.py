@@ -701,6 +701,17 @@ def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
                                                       x_edges=in_arcsec)], LINE)
     assert len(series) == 3
 
+    # The same lines in another order are the same lines; the first file's order is kept.
+    def with_blend(path, time, blend_first):
+        base = read_synthesis(_other_code_file(tmp_path / f"base_{time}.h5", time, ones))
+        lines = [(LINE, base.lines[LINE]), ("Fe12_195.1790", blend)]
+        return write_synthesis(dataclasses.replace(
+            base, lines=dict(lines[::-1] if blend_first else lines)), path)
+
+    series = SynthesisSeries([with_blend(tmp_path / "in_order.h5", 0.0, False),
+                              with_blend(tmp_path / "reversed.h5", 10.0, True)], LINE)
+    assert series.lines == [LINE, "Fe12_195.1790"]
+
 
 def test_an_instrument_run_observes_another_codes_series(tmp_path, monkeypatch):
     nx = SHAPE[2]

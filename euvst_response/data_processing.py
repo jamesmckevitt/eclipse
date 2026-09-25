@@ -225,9 +225,11 @@ def resample_spectra(data: np.ndarray, spectral_world: u.Quantity,
         The wavelength of each pixel along the last axis, increasing. The
         pixels need not be evenly spaced.
     output_resolution : astropy.units.Quantity
-        The spacing of the new grid, which starts at the first wavelength
-        and runs to the last, and further by whole pixels where the
-        outermost intervals reach beyond.
+        The spacing of the new grid, which starts at the first wavelength and
+        steps in whole pixels until it passes the last, as it always has, so
+        its last pixel can lie beyond the outermost interval and stay empty.
+        Where a coarse grid's outermost intervals reach past either end,
+        whole pixels are added there too.
 
     Returns
     -------
