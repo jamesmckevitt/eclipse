@@ -1,6 +1,6 @@
-"""The instrument simulation writes its results as ASDF, and reads back what it wrote.
+"""The instrument simulation writes its results file, and reads back what it wrote.
 
-The unit tests in test_io_asdf.py check the encoder against objects built for
+The unit tests in test_results_file.py check the encoder against objects built for
 the purpose. These run the real thing end to end, which is the only way to
 find out whether the tree ECLIPSE actually produces survives the trip: each
 run keeps what it saved, and what comes back from the file is compared with
@@ -8,6 +8,7 @@ it entry by entry.
 """
 import dataclasses
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from euvst_response.analysis import load_instrument_response_results, summary_table
-from euvst_response.io import convert_results_pickle, is_asdf, load_results
+from euvst_response.results_file import convert_results_pickle, is_results_file, load_results
 from euvst_response.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
 
 LINE = "Fe12_195.1190"
@@ -120,7 +121,7 @@ def test_a_uniform_intensity_run_reads_back_what_it_saved(tmp_path, monkeypatch)
     payload, path = _run(tmp_path, monkeypatch, "uniform",
                          uniform_intensity="5000 erg / (s cm2 sr)",
                          simulation={"slit_width": "0.2 arcsec", "expos": ["5 s", "10 s"]})
-    assert path == Path("run/result/uniform.asdf") and is_asdf(path)
+    assert path == Path("run/result/uniform.h5") and is_results_file(path)
     assert not Path("run/result/uniform.pkl").exists()
     _same(load_results(path), payload)
 
@@ -154,8 +155,50 @@ def test_a_synthesis_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
     _same(load_results(path), payload)
 
 
+def test_an_atmosphere_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
+    """With its synthesis settings, whose precision is a NumPy type."""
+    from euvst_response import raster as raster_module
+    from euvst_response.atmosphere import Atmosphere, write_atmosphere
+    from euvst_response.utils import angle_to_distance
+
+    def flat_goft(lines, **kwargs):
+        logT, logN = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
+        return ({name: {"wl0": REST.to(u.cm), "g_tn": np.full((21, 21), 1e-24), "atom": 26,
+                        "ion": 12, "hdf5_dbase_root": None} for name in lines}, logT, logN)
+
+    monkeypatch.setattr(raster_module, "compute_goft_fiasco", flat_goft)
+    cell = angle_to_distance(0.2 * u.arcsec).to(u.Mm)
+    nz, ny, nx = 4, 6, 12
+    for index, time in enumerate((0.0, 10.0)):
+        write_atmosphere(Atmosphere(
+            temperature=np.full((nz, ny, nx), 1e6) * u.K,
+            electron_density=np.full((nz, ny, nx), 1e9) / u.cm**3,
+            velocity_z=np.zeros((nz, ny, nx)) * u.km / u.s, time=time * u.s,
+            x_edges=(np.arange(nx + 1) - nx / 2) * cell, y_edges=(np.arange(ny + 1) - ny / 2) * cell,
+            z_edges=np.arange(nz + 1) * 0.1 * u.Mm), tmp_path / "series" / f"snap_{index}.h5")
+    payload, path = _run(tmp_path, monkeypatch, "atmospheres",
+                         atmosphere_series=str(tmp_path / "series" / "*.h5"), reference_line=LINE,
+                         fit_signals="dn", synthesis={"lines": [LINE]},
+                         raster={"start": "0 s", "steps": 2},
+                         simulation={"slit_width": "0.4 arcsec", "expos": "5 s", "psf": False})
+    assert payload["raster"]["settings"].precision is np.float64
+    _same(load_results(path), payload)
+
+
+def test_an_eis_run_reads_back_what_it_saved(tmp_path, monkeypatch):
+    """With the calibration date as YAML reads an unquoted one, a datetime.date."""
+    import datetime
+
+    payload, path = _run(tmp_path, monkeypatch, "eis", instrument="EIS",
+                         uniform_intensity="5000 erg / (s cm2 sr)",
+                         telescope={"calibration": "dz2025", "date": datetime.date(2012, 6, 3)},
+                         simulation={"slit_width": "2 arcsec", "expos": "5 s"})
+    assert payload["config"]["telescope"]["date"] == datetime.date(2012, 6, 3)
+    _same(load_results(path), payload)
+
+
 def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
-    """Results that older versions pickled read with a warning, and convert to ASDF."""
+    """Results that older versions pickled read with a warning, and convert to a results file."""
     import dill
 
     payload, path = _run(tmp_path, monkeypatch, "uniform",
@@ -169,17 +212,47 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     assert len(results["results"]["all_combinations"]) == 1
 
     converted = convert_results_pickle(old)
-    assert converted == tmp_path / "old.asdf" and is_asdf(converted)
+    assert converted == tmp_path / "old.h5" and is_results_file(converted)
     _same(load_results(converted), payload)
-    with pytest.raises(ValueError, match="already an ASDF file"):
+    with pytest.raises(ValueError, match="already an HDF5 file"):
         convert_results_pickle(converted)
+    # A file already there, and the pickle itself, are left alone.
+    with pytest.raises(FileExistsError, match="overwrite=True"):
+        convert_results_pickle(old)
+    assert convert_results_pickle(old, overwrite=True) == converted
+    misnamed = tmp_path / "misnamed.h5"
+    misnamed.write_bytes(old.read_bytes())
+    with pytest.raises(ValueError, match="the pickle itself"):
+        convert_results_pickle(misnamed)
+
+    # A configuration object from before one of its settings existed, as in
+    # a 0.8.0 pickle, gets today's default for it.
+    from euvst_response.config import Simulation
+    simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
+    del simulation.__dict__["pinhole_positions_spectral"]
+    with open(tmp_path / "v080.pkl", "wb") as f:
+        dill.dump({"simulation": simulation}, f)
+    with pytest.warns(UserWarning, match="has no pinhole_positions_spectral"):
+        converted = convert_results_pickle(tmp_path / "v080.pkl")
+    restored = load_results(converted)["simulation"]
+    assert restored.pinhole_positions_spectral == [] and restored.slit_width == 0.4 * u.arcsec
 
 
 def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, monkeypatch):
     _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
          simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
-    with pytest.warns(FutureWarning, match="uniform.asdf, which the instrument simulation now"):
+    with pytest.warns(FutureWarning, match="uniform.h5, which the instrument simulation now"):
         results = load_instrument_response_results("run/result/uniform.pkl")
     assert results["instrument"] == "SWC"
+
+    # A pickle left from an older version is older than the run that wrote the
+    # .h5, which a script asking for the .pkl got before, when the run
+    # replaced the pickle.
+    stale = Path("run/result/uniform.pkl")
+    stale.write_bytes(b"left from an older version")
+    written = Path("run/result/uniform.h5").stat().st_mtime
+    os.utime(stale, (written - 100, written - 100))
+    with pytest.warns(FutureWarning, match="is older, left from a version of ECLIPSE"):
+        assert load_instrument_response_results(stale)["instrument"] == "SWC"
     with pytest.raises(FileNotFoundError):
         load_results("run/result/elsewhere.pkl")

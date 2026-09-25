@@ -28,7 +28,7 @@ from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centre
 from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, load_synthesis,
                              read_synthesis, read_synthesis_products, write_line_cubes,
                              write_synthesis)
-from .io import convert_results_pickle
+from .results_file import convert_results_pickle
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,

@@ -24,7 +24,7 @@ import yaml
 
 from euvst_response import raster as raster_module
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.io import load_results
+from euvst_response.results_file import load_results
 from euvst_response.raster import (
     AtmosphereSeries,
     RasterPlan,
@@ -424,7 +424,7 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     from euvst_response.main import main as run_main
     run_main()
 
-    saved = load_results(tmp_path / "run" / "result" / "series.asdf")
+    saved = load_results(tmp_path / "run" / "result" / "series.h5")
     # Two exposure times and two rasters: four observations.
     assert len(saved["results"]["all_combinations"]) == 4
     raster = saved["raster"]
@@ -447,7 +447,7 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     assert saved["cube_sim"].meta["raster"] is True
 
     from euvst_response import get_results_for_combination, load_instrument_response_results
-    results = load_instrument_response_results(tmp_path / "run" / "result" / "series.asdf")
+    results = load_instrument_response_results(tmp_path / "run" / "result" / "series.h5")
     chosen = get_results_for_combination(results, **{
         "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 5 * u.s,
         "offchip_bin_slit": 1, "raster.repeat": 1})
@@ -573,7 +573,7 @@ def test_an_instrument_run_observes_a_synthesis_series_as_its_atmosphere_series(
     for path in (by_atmosphere, by_synthesis):
         monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
         run_main()
-        saved[path.stem] = load_results(tmp_path / "run" / "result" / f"{path.stem}.asdf")
+        saved[path.stem] = load_results(tmp_path / "run" / "result" / f"{path.stem}.h5")
     atmosphere_run, synthesis_run = saved["series"], saved["syntheses"]
 
     assert sorted(synthesis_run["cube_reb_dict"]) == sorted(atmosphere_run["cube_reb_dict"])
@@ -765,7 +765,7 @@ def test_an_instrument_run_observes_another_codes_series(tmp_path, monkeypatch):
     from euvst_response.main import main as run_main
     run_main()
 
-    saved = load_results(tmp_path / "run" / "result" / "other.asdf")
+    saved = load_results(tmp_path / "run" / "result" / "other.h5")
     # The files hold one line, which is observed without a reference_line.
     assert len(saved["results"]["all_combinations"]) == 2
     for cube in saved["cube_reb_dict"].values():

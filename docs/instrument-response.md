@@ -279,7 +279,7 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are written to `run/result/<config name>.asdf`, an [ASDF](https://asdf-standard.readthedocs.io/) file. Older versions wrote a pickle, which still loads, with a warning, until a future release; `euvst_response.convert_results_pickle("old.pkl")` rewrites one as ASDF. The output includes:
+Results are written to `run/result/<config name>.h5`, an HDF5 file. Older versions wrote a pickle, which still loads, with a warning, until a future release; `euvst_response.convert_results_pickle("old.pkl")` rewrites one as a results file. The output includes:
 
 - Simulated detector signals (DN and photon counts)
 - For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel

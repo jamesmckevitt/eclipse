@@ -21,7 +21,7 @@ from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, Synthe
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
-from .io import save_results
+from .results_file import save_results
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
 from .utils import (
@@ -1162,7 +1162,10 @@ def main() -> None:
         git_commit_id = get_git_commit_id()
         software_version = _get_software_version()
 
-        output_file = Path(f"run/result/{Path(args.config).stem}.asdf")
+        output_file = Path(f"run/result/{Path(args.config).stem}.h5")
+        if output_file.with_suffix(".pkl").is_file():
+            print(f"\n{output_file.with_suffix('.pkl')}, from an older version, is left as it "
+                  f"was; these results are in {output_file}.")
 
         print(f"\nSaving results to {output_file}")
         save_data = {

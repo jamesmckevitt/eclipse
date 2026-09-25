@@ -1,4 +1,4 @@
-"""Results survive a round trip through ASDF, and old pickles still load.
+"""Results survive a round trip through the results file, and old pickles still load.
 
 The tests that matter here are the ones that compare against the object that
 went in, field by field, because a format change that loses something does
@@ -9,7 +9,7 @@ import dataclasses
 import datetime
 import warnings
 
-import asdf
+import h5py
 import astropy.units as u
 import numpy as np
 import pytest
@@ -17,12 +17,12 @@ import yaml
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response import io
+from euvst_response import results_file
 from euvst_response.config import (AluminiumFilter, Detector_EIS,
                                    Detector_SWC, Simulation, Telescope_EIS,
                                    Telescope_EUVST)
 from euvst_response.fitting import FitComponent, FitConfig
-from euvst_response.io import is_asdf, load_results, save_results
+from euvst_response.results_file import is_results_file, load_results, save_results
 from euvst_response.raster import RasterPlan, SynthesisSettings
 
 REST = 195.119 * u.Angstrom
@@ -93,16 +93,50 @@ def _payload():
 
 
 def _round_trip(tmp_path, payload=None, **kwargs):
-    path = save_results(tmp_path / "out.asdf", payload or _payload(), **kwargs)
+    path = save_results(tmp_path / "out.h5", payload or _payload(), **kwargs)
     return load_results(path)
 
 
-def test_the_file_is_asdf_not_a_pickle(tmp_path):
-    path = save_results(tmp_path / "out.asdf", _payload())
-    assert is_asdf(path)
-    with asdf.open(path) as af:
-        assert af["instrument"] == "SWC"
-        assert af["eclipse_format_version"] == 1
+def test_the_file_is_hdf5_not_a_pickle(tmp_path):
+    path = save_results(tmp_path / "out.h5", _payload())
+    assert is_results_file(path)
+    with h5py.File(path, "r") as f:
+        assert f.attrs["format"] == "eclipse-results" and f.attrs["version"] == 1
+        # Any HDF5 reader finds the arrays, with their units.
+        assert f["cube_sim/data"].shape == (2, 3, 4)
+        assert f["cube_sim/data"].dtype == np.float64
+
+
+def test_a_view_is_written_without_the_array_it_views(tmp_path):
+    """A slice of the Monte Carlo stack, as the first fit is, costs only itself."""
+    stack = np.random.default_rng(1).random((1000, 50, 50))
+    path = save_results(tmp_path / "view.h5", {"first": stack[0]}, compression=None)
+    assert path.stat().st_size < 100_000
+    assert np.array_equal(load_results(path)["first"], stack[0])
+
+
+def test_a_failed_write_leaves_the_file_there_as_it_was(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    with pytest.raises(TypeError, match="cannot be written"):
+        save_results(path, {"instrument": "EIS", "odd": {1, 2}})
+    assert load_results(path)["instrument"] == "SWC"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_a_later_layout_or_a_link_elsewhere_is_refused(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC", "data": np.ones(3)})
+    with h5py.File(path, "r+") as f:
+        f.attrs["version"] = 2
+    with pytest.raises(ValueError, match="reads version 1"):
+        load_results(path)
+
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC", "data": np.ones(3)})
+    save_results(tmp_path / "other.h5", {"secret": np.zeros(3)})
+    with h5py.File(path, "r+") as f:
+        del f["data"]
+        f["data"] = h5py.ExternalLink("other.h5", "/secret")
+    with pytest.raises(ValueError, match="is a link"):
+        load_results(path)
 
 
 def test_scalars_and_strings_survive(tmp_path):
@@ -139,7 +173,7 @@ def test_the_cube_comes_back_whole(tmp_path):
 
 
 def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
-    """asdf-astropy normalises a tagged WCS through SI; a header does not.
+    """A WCS written as a FITS header comes back in SI units unless its own are put back.
 
     Without this, a wavelength axis written in cm comes back in m. The
     coordinates are the same, but anything reading wcs.wcs.cdelt directly
@@ -169,7 +203,7 @@ def test_saving_leaves_the_callers_wcs_alone(tmp_path):
     script that saves and then carries on would find its cdelt rescaled.
     """
     cube, wcs = _cube(), _wcs()
-    save_results(tmp_path / "out.asdf", {"cube_sim": cube, "wcs": wcs})
+    save_results(tmp_path / "out.h5", {"cube_sim": cube, "wcs": wcs})
 
     for held in (cube.wcs, wcs):
         assert [str(c) for c in held.wcs.cunit] == ["cm", "arcsec", "arcsec"]
@@ -177,7 +211,7 @@ def test_saving_leaves_the_callers_wcs_alone(tmp_path):
 
 
 def test_tuple_keyed_dicts_survive(tmp_path):
-    """ASDF only allows str, int and bool keys; results are keyed by tuple."""
+    """HDF5 names members by strings; results are keyed by tuple."""
     out = _round_trip(tmp_path)
 
     assert set(out["cube_reb_dict"]) == {(0.2, 1), (0.4, 2)}
@@ -307,12 +341,12 @@ def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
     the file, which a colleague reading it elsewhere does not have.
     """
     telescope = Telescope_EUVST()
-    path = save_results(tmp_path / "out.asdf", {"telescope": telescope})
+    path = save_results(tmp_path / "out.h5", {"telescope": telescope})
 
-    assert str(io._package_root()).encode() not in path.read_bytes()
+    assert str(results_file._package_root()).encode() not in path.read_bytes()
 
     elsewhere = tmp_path / "another_install" / "euvst_response"
-    monkeypatch.setattr(io, "_package_root", lambda: elsewhere)
+    monkeypatch.setattr(results_file, "_package_root", lambda: elsewhere)
     restored = load_results(path)["telescope"]
 
     tables = elsewhere / "data" / "throughput"
@@ -349,7 +383,7 @@ def test_arrays_keep_their_values_and_dtype(tmp_path):
 
 
 def test_arrays_outlive_the_closed_file(tmp_path):
-    """ASDF memory-maps by default, which would leave dangling arrays."""
+    """The arrays are read out of the file, not left pointing into it."""
     out = _round_trip(tmp_path)
     array = out["cube_sim"].data
     assert isinstance(array, np.ndarray)
@@ -363,16 +397,16 @@ def test_uncompressed_writing_works(tmp_path):
 
 def test_compression_actually_shrinks_a_large_array(tmp_path):
     payload = {"big": np.zeros((60, 60, 60))}
-    small = save_results(tmp_path / "z.asdf", payload, compression="zlib")
-    big = save_results(tmp_path / "n.asdf", payload, compression=None)
+    small = save_results(tmp_path / "z.h5", payload, compression="gzip")
+    big = save_results(tmp_path / "n.h5", payload, compression=None)
     assert small.stat().st_size < big.stat().st_size / 10
 
 
 def test_a_pkl_name_is_corrected_rather_than_written(tmp_path):
     """A file named .pkl that is not a pickle is worse than a renamed one."""
-    with pytest.warns(UserWarning, match="ASDF"):
+    with pytest.warns(UserWarning, match="an HDF5 file"):
         path = save_results(tmp_path / "result.pkl", {"instrument": "SWC"})
-    assert path.name == "result.asdf"
+    assert path.name == "result.h5"
     assert path.exists()
     assert not (tmp_path / "result.pkl").exists()
 
@@ -393,27 +427,33 @@ def test_an_old_pickle_still_loads(tmp_path):
 
 
 def test_the_format_is_detected_from_content_not_the_name(tmp_path):
-    """A pickle named .asdf must not be read as ASDF, and the reverse."""
+    """A pickle named .h5 must not be read as HDF5, and the reverse."""
     import dill
 
-    misnamed = tmp_path / "actually_a_pickle.asdf"
+    misnamed = tmp_path / "actually_a_pickle.h5"
     with open(misnamed, "wb") as handle:
         dill.dump({"instrument": "EIS"}, handle)
 
-    assert not is_asdf(misnamed)
+    assert not is_results_file(misnamed)
     with pytest.warns(FutureWarning, match="results pickle"):
         assert load_results(misnamed)["instrument"] == "EIS"
+
+    # And a results file named .pkl, with no .h5 beside it, reads as one.
+    results = save_results(tmp_path / "results.h5", {"instrument": "SWC"})
+    renamed = results.rename(tmp_path / "renamed.pkl")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert load_results(renamed)["instrument"] == "SWC"
 
 
 def test_a_file_cannot_name_an_arbitrary_class(tmp_path):
     """The point of leaving pickle: reading must not construct what it likes."""
-    path = tmp_path / "hostile.asdf"
-    af = asdf.AsdfFile({
-        "eclipse_format_version": 1,
-        "thing": {"__eclipse__": "dataclass", "class": "os.system",
-                  "fields": {}},
-    })
-    af.write_to(str(path))
+    path = tmp_path / "hostile.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["format"] = "eclipse-results"
+        f.attrs["version"] = 1
+        f.attrs["eclipse_order"] = '["thing"]'
+        f.attrs["thing"] = '{"__eclipse__": "dataclass", "class": "os.system", "fields": {}}'
 
     with pytest.raises(ValueError, match="will not construct"):
         load_results(path)
@@ -430,7 +470,7 @@ def test_an_eis_telescope_survives(tmp_path):
 
 
 def test_numpy_scalars_do_not_stop_a_write(tmp_path):
-    """np.bool_ has no ASDF representation and turns up in parsed configs."""
+    """np.bool_ and the like turn up in parsed configs."""
     out = _round_trip(tmp_path, {"flag": np.bool_(True),
                                  "count": np.int64(7),
                                  "value": np.float32(1.5)})

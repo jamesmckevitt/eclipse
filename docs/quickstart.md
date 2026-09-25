@@ -87,7 +87,7 @@ from euvst_response import (
 )
 
 # Load results
-results = load_instrument_response_results("run/result/my_run.asdf")
+results = load_instrument_response_results("run/result/my_run.h5")
 
 # Print a summary table (auto-discovers all parameters and shows git commit)
 summary_table(results)

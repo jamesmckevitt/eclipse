@@ -22,7 +22,7 @@ from euvst_response.analysis import (
 )
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import create_uniform_intensity_cube, load_atmosphere
-from euvst_response.io import save_results
+from euvst_response.results_file import save_results
 from euvst_response.radiometric import apply_focusing_optics_psf
 from euvst_response.synthesis import (
     apply_cube_cropping,
@@ -398,12 +398,12 @@ def test_old_results_files_are_refused(tmp_path):
     The stored WCS is the only thing that tells the two apart: the old files
     put HPLT on FITS axis 2 because the signal was (x, y, wavelength).
     """
-    old = _write_results_file(tmp_path / "old.asdf",
+    old = _write_results_file(tmp_path / "old.h5",
                               ["WAVE", "HPLT-TAN", "HPLN-TAN"])
     with pytest.raises(ValueError, match="older ECLIPSE"):
         load_instrument_response_results(str(old))
 
-    new = _write_results_file(tmp_path / "new.asdf",
+    new = _write_results_file(tmp_path / "new.h5",
                               ["WAVE", "HPLN-TAN", "HPLT-TAN"])
     results = load_instrument_response_results(str(new))
     combination = results["results"]["all_combinations"]["combo"]
