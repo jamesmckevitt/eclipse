@@ -206,6 +206,8 @@ class RasterPlan:
                 raise ValueError(f"The plan has {self.repeats} rasters; say which one "
                                  f"with repeat=0 to {self.repeats - 1}.")
             repeat = 0
+        if isinstance(repeat, bool) or not isinstance(repeat, (int, np.integer)):
+            raise ValueError(f"repeat must be a whole number, got {repeat!r}.")
         if not 0 <= repeat < self.repeats:
             raise ValueError(f"repeat must be between 0 and {self.repeats - 1}, got {repeat}.")
         cadence = expos if self.cadence is None else self.cadence

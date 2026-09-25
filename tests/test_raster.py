@@ -157,6 +157,9 @@ def test_a_plan_places_its_exposures_in_space_and_time():
         plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm)
     with pytest.raises(ValueError, match="between 0 and 1"):
         plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm, repeat=2)
+    for bad in (0.5, True):
+        with pytest.raises(ValueError, match="whole number"):
+            plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm, repeat=bad)
 
     # The step and the cadence default to the slit width and the exposure,
     # and a sit-and-stare's exposures are rasters of one position.

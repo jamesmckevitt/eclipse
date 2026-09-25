@@ -1,4 +1,4 @@
-# Synthesising from a time series
+# Simulating a time series
 
 A slit spectrograph sees one strip of the Sun at a time, so in a raster each exposure sees a different strip at a later time, and in a sit-and-stare it sees the same strip over and over. ECLIPSE can observe a time series of [atmosphere files](synthesis.md#atmosphere-files) in the same way: for each exposure it synthesises only the columns under the slit, from the snapshots that overlap the exposure in time.
 
@@ -24,7 +24,7 @@ simulation:
   psf: True
 ```
 
-The rest of the configuration is as for a [synthesis file](instrument-response.md). `synthesis_file` and `uniform_intensity` can't be given with `atmosphere_series`.
+The rest of the configuration is as for [a single snapshot](instrument-response.md). `synthesis_file` and `uniform_intensity` can't be given with `atmosphere_series`.
 
 ## The files
 

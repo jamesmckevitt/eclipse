@@ -378,7 +378,7 @@ print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
 
 ??? note "Dynamic mode (deprecated)"
 
-    Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [From a time series](time-series.md).
+    Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Simulating a time series](time-series.md).
 
     ```bash
     synthesise-spectra \
