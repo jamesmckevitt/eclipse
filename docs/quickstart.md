@@ -69,7 +69,7 @@ filter_eff = telescope.filter.total_throughput(fe12_wl)
 
 ## Working with results
 
-For analysing simulation results, see the [analysis tutorial](analysing-the-results.ipynb), which demonstrates how to:
+For analysing simulation results, see the [worked example](analysing-the-results.ipynb), which demonstrates how to:
 
 - Load simulation results
 - Explore parameter combinations

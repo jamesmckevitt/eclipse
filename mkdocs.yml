@@ -36,7 +36,7 @@ nav:
       - Single snapshot: instrument-response.md
       - Time series: time-series.md
       - From another code: other-codes.md
-  - Analysing the results: analysing-the-results.ipynb
+  - Worked example: analysing-the-results.ipynb
   - Acknowledgements: acknowledgements.md
 
 # docs/internal/ holds pages for the instrument team, reached only by a link.
