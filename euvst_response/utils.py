@@ -13,6 +13,7 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 import joblib
+from scipy import sparse
 from tqdm import tqdm
 
 
@@ -174,6 +175,51 @@ def multi_gaussian(wave, *params, n_components=1):
         result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
     result += params[-1]  # background
     return result
+
+
+def _bin_edges(centres: np.ndarray) -> np.ndarray:
+    """Boundaries of the bins centred on *centres*: halfway between neighbours, and the outer ones as far out as the inner ones are in."""
+    inner = 0.5 * (centres[1:] + centres[:-1])
+    return np.concatenate([[centres[0] - (inner[0] - centres[0])], inner,
+                           [centres[-1] + (centres[-1] - inner[-1])]])
+
+
+def onto_wavelength_bins(spectra: np.ndarray, wavelength: np.ndarray,
+                         reference: np.ndarray) -> np.ndarray:
+    """
+    *spectra*, sampled at *wavelength* along their last axis, averaged over the bins of *reference*.
+
+    Each sample stands for the bin halfway to its neighbours, as the
+    flux-conserving resampling onto the detector takes it, and each bin of
+    *reference* gets the mean over it of whatever overlaps it, with nothing
+    beyond the samples. The integral over the reference bins is kept, so a
+    line narrower than a reference bin, or falling between two reference
+    wavelengths, is not lost as it would be to interpolation. Spectra already
+    on the reference wavelengths come back as they are.
+
+    *wavelength* and *reference* are plain increasing arrays in one unit.
+    """
+    spectra = np.asarray(spectra, dtype=float)
+    if wavelength.shape == reference.shape and np.array_equal(wavelength, reference):
+        return spectra
+    source, target = _bin_edges(wavelength), _bin_edges(reference)
+    # Each bin overlaps only the few bins of the other grid that it spans, so
+    # the weights are worked out for those alone. Every pair would take
+    # memory and time growing as the product of the two grids' sizes, and
+    # would carry a NaN in one sample into every bin.
+    last_bin = reference.size - 1
+    first = np.clip(np.searchsorted(target, source[:-1], side="right") - 1, 0, last_bin)
+    last = np.clip(np.searchsorted(target, source[1:], side="left") - 1, 0, last_bin)
+    count = last - first + 1
+    rows = np.repeat(np.arange(wavelength.size), count)
+    cols = np.repeat(first, count) + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    overlap = np.minimum(source[rows + 1], target[cols + 1]) - np.maximum(source[rows], target[cols])
+    kept = overlap > 0
+    weights = sparse.csr_matrix(
+        (overlap[kept] / np.diff(target)[cols[kept]], (rows[kept], cols[kept])),
+        shape=(wavelength.size, reference.size))
+    flat = spectra.reshape(-1, wavelength.size)
+    return np.asarray((weights.T @ flat.T).T).reshape(spectra.shape[:-1] + reference.shape)
 
 
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:

@@ -42,7 +42,7 @@ flowchart LR
     DEM --> ECL
 
     ECL -- "synthesis file" --> INS
-    EXT -. "coming soon" .-> INS
+    EXT -- "synthesis file" --> INS
     UNI --> INS
     INS -- "results file" --> ANA
 
@@ -60,14 +60,12 @@ flowchart LR
 | A 3D MHD simulation | [From an MHD simulation](synthesis.md) | You have a numerical model of the atmosphere and want realistic spatial structure and Doppler shifts. The simulation goes in as an [atmosphere file](synthesis.md#atmosphere-files), which you write from any code's output. |
 | A VDEM from an MHD simulation | [From a VDEM](vdem-synthesis.md) | The simulation has already been reduced to emission measure resolved in temperature and line-of-sight velocity. |
 | An observed DEM | [From a DEM](dem-synthesis.md) | You have a differential emission measure from an inversion of real data. No velocity information. |
-| Spectra from any other code | Coming soon | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
+| Spectra from any other code | [From another code](other-codes.md) | You have already synthesised the spectra elsewhere - with an optically thick code such as Lightweaver or RH1.5D, or any other tool - and want only the instrument simulation on top. |
 | A single intensity | [From a single intensity](uniform-intensity.md) | You only want to know how precisely a line of a given brightness can be measured. |
 
-The first three run ECLIPSE's own synthesis, which is optically thin, and produce a synthesis file. The fourth brings in spectra that some other code has already produced. The last has no synthesis step at all and is set directly in the instrument configuration.
+**2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating a single snapshot](instrument-response.md). To observe a series of atmosphere files as a raster or sit-and-stare, with each exposure seeing the atmosphere at its own time, see [Simulating a time series](time-series.md); the synthesis then happens inside this stage, one exposure at a time. A series of synthesis files, one per snapshot, can be observed in the same way.
 
-**2. Simulate the instrument.** Take those spectra through the telescope, filter, grating, and detector, add the noise sources, and fit the resulting spectra exactly as you would fit real data. This can be a Monte Carlo simulation, so it can run many times to give a distribution of measured intensities, velocities, and line widths. See [Simulating a single snapshot](instrument-response.md). To observe a series of atmosphere files as a raster or sit-and-stare, with each exposure seeing the atmosphere at its own time, see [Simulating a time series](time-series.md); the synthesis then happens inside this stage, one exposure at a time.
-
-**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [analysis tutorial](analysing-the-results.ipynb).
+**3. Analyse the results.** See the precision with which the instrument made its measurements. Also compare these measurements against the known truth, sweep across simulation variables, and make maps. See the [worked example](worked-example.ipynb).
 
 ## Instruments
 
@@ -80,7 +78,6 @@ The instrument is chosen with a single top-level `instrument:` key in the config
 ## Coming soon
 
 - **The long wavelength channel**, completing EUVST alongside the short wavelength channel already modelled.
-- **Spectra from any other synthesis code.** ECLIPSE will read the spectra produced by codes like [Lightweaver](https://github.com/Goobley/Lightweaver) or [RH1.5D](https://rh15d.readthedocs.io/).
 
 ## Installation
 
@@ -115,5 +112,6 @@ Every results file records the version and git commit that produced it, so `summ
 - [From a VDEM](vdem-synthesis.md) - start from a simulation already reduced in temperature and velocity
 - [From a single intensity](uniform-intensity.md) - no atmosphere, just one line
 - [Simulating a single snapshot](instrument-response.md) - configuration file reference and the `eclipse` CLI
-- [Simulating a time series](time-series.md) - a raster or sit-and-stare over a series of atmosphere files
-- [Analysing the results](analysing-the-results.ipynb) - worked notebook example
+- [Simulating a time series](time-series.md) - a raster or sit-and-stare over a series of atmosphere or synthesis files
+- [From another code](other-codes.md) - the instrument on spectra another code synthesised
+- [Worked example](worked-example.ipynb) - a notebook taking an MHD snapshot through to the analysed results

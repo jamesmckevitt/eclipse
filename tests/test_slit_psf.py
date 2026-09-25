@@ -15,7 +15,6 @@ import sys
 
 import astropy.constants as const
 import astropy.units as u
-import dill
 import numpy as np
 import pytest
 import yaml
@@ -30,6 +29,7 @@ from euvst_response.main import _validate_config_keys
 from euvst_response.radiometric import (apply_focusing_optics_psf, slit_image_width,
                                         spectral_line_spread, spectral_optics_fwhm,
                                         spectral_psf_fwhm, spectral_psf_margin)
+from euvst_response.synthesis_file import write_line_cubes
 from euvst_response.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
 
 TEL = Telescope_EUVST()
@@ -297,9 +297,7 @@ def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, m
                   unit=u.erg / (u.s * u.cm**3 * u.sr),
                   meta={"rest_wav": REST, "integration_axis": "z",
                         "velocity_convention": VELOCITY_CONVENTION})
-    synthesis_file = tmp_path / "synthesis.pkl"
-    with open(synthesis_file, "wb") as f:
-        dill.dump({"line_cubes": {"Fe12_195.1190": cube}}, f)
+    synthesis_file = write_line_cubes({"Fe12_195.1190": cube}, tmp_path / "synthesis.h5")
 
     config = tmp_path / "window.yaml"
     config.write_text(yaml.safe_dump({

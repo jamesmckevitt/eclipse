@@ -27,7 +27,7 @@ those two commands. A minimal one that reads what the synthesis just wrote:
 
 ```yaml
 instrument: SWC
-synthesis_file: ./run/input/synthesised_spectra.pkl
+synthesis_file: ./run/input/synthesised_spectra.h5
 reference_line: Fe12_195.1190
 n_iter: 100
 
@@ -69,7 +69,7 @@ filter_eff = telescope.filter.total_throughput(fe12_wl)
 
 ## Working with results
 
-For analysing simulation results, see the [analysis tutorial](analysing-the-results.ipynb), which demonstrates how to:
+For analysing simulation results, see the [worked example](worked-example.ipynb), which demonstrates how to:
 
 - Load simulation results
 - Explore parameter combinations

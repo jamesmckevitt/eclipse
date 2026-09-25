@@ -26,7 +26,6 @@ dependencies = [
     "numpy>=2.0",
     "astropy>=6.1.5",
     "ndcube>=2.3",
-    "specutils>=2.0",
     "scipy",
     "matplotlib>=3.8.4",
     "joblib>=1.2",

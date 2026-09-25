@@ -25,6 +25,9 @@ from .main import main
 from .data_processing import load_atmosphere, create_uniform_intensity_cube
 from .atmosphere import (Atmosphere, describe_atmosphere_file, edges_from_centres,
                          read_atmosphere, write_atmosphere)
+from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, load_synthesis,
+                             read_synthesis, read_synthesis_products, write_line_cubes,
+                             write_synthesis)
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -56,6 +59,14 @@ __all__ = [
     "edges_from_centres",
     "read_atmosphere",
     "write_atmosphere",
+    "SpectralLine",
+    "Synthesis",
+    "convert_synthesis_pickle",
+    "load_synthesis",
+    "read_synthesis_products",
+    "write_line_cubes",
+    "read_synthesis",
+    "write_synthesis",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 

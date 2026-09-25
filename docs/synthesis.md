@@ -154,8 +154,6 @@ synthesise-spectra --atmosphere muram_300000.h5 \
   --output-dir ./run/input
 ```
 
-The flows in the flare are faster than the default velocity grid of +/-300 km/s covers, so it is widened to +/-1000 km/s. This needs about 130 GB of memory and writes a 22 GB synthesis file. Adding `--downsample 2` brings that down to about 60 GB and 5.4 GB, with cells twice the size.
-
 ### Worked example: Bifrost quiet Sun
 
 This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
@@ -209,8 +207,6 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
   --output-dir ./run/input
 ```
 
-This needs about 130 GB of memory and writes a 25 GB synthesis file, or about 40 GB and 6.4 GB with `--downsample 2`.
-
 ## Basic usage
 
 ```bash
@@ -227,7 +223,7 @@ synthesise-spectra \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
   --output-dir ./run/input \
-  --output-name synthesised_spectra.pkl \
+  --output-name synthesised_spectra.h5 \
   --vel-res "5.0 km/s" \
   --vel-lim "300.0 km/s" \
   --integration-axis z \
@@ -248,7 +244,7 @@ synthesise-spectra --help
 
 - `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in dynamic mode)
 - `--output-dir`: Output directory for results (default: `./run/input`)
-- `--output-name`: Output filename (default: `synthesised_spectra.pkl`)
+- `--output-name`: Output filename, an HDF5 synthesis file (default: `synthesised_spectra.h5`)
 
 **Line and Abundance Selection:**
 
@@ -306,14 +302,6 @@ Check that line. A large difference means the transition you meant is not in the
 database for that ion, and a neighbouring one was picked up instead. A name that
 does not match the pattern at all raises `ValueError` immediately.
 
-## Output
-
-The synthesis produces a pickle file containing:
-
-- `line_cubes`: Individual NDCube objects for each spectral line with proper WCS
-- `config`: Runtime configuration for reproducibility
-- Additional technical data for internal use
-
 ## Performance tips
 
 - Use `--downsample 2` or `--downsample 4` for initial testing
@@ -324,33 +312,29 @@ The synthesis produces a pickle file containing:
 
 ## Working with synthesis results
 
-The synthesis results can be loaded and analysed using the package API:
+The synthesis file is HDF5. It holds each line's spectra over the image, which is what the [instrument run](instrument-response.md) observes, and everything needed to calculate this (the DEM, the emission measure in temperature and velocity, the contribution functions and the settings it ran with). `load_synthesis` can be used to read this:
 
 ```python
 import euvst_response
 
-# Load synthesis results - this sums all line cubes into a single cube.
-# Returns a (cube, dynamic_mode_info) tuple, so unpack it.
-# The second argument is the reference line whose wavelength grid the other
-# lines are interpolated onto; omit it and the first line in the file is used.
-cube, dynamic_mode_info = euvst_response.load_atmosphere(
-    "./run/input/synthesised_spectra.pkl", "Fe12_195.1190"
-)
-print(f"Combined cube shape: {cube.data.shape}")
+data = euvst_response.load_synthesis("./run/input/synthesised_spectra.h5")
 
-# Access individual line cubes if needed
-import dill
-with open("./run/input/synthesised_spectra.pkl", "rb") as f:
-    data = dill.load(f)
-
-# Access individual line cubes
+# A line cube for each line, indexed [y, x, wavelength]
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]
 print(f"Fe XII 195.119 cube shape: {fe12_195.data.shape}")
 print(f"Rest wavelength: {fe12_195.meta['rest_wav']}")
+print(f"Available spectral lines: {list(data['line_cubes'])}")
 
-# List all available lines
-print(f"Available spectral lines: {list(data['line_cubes'].keys())}")
+# What the synthesis worked out on the way
+print(f"DEM map (y, x, logT): {data['dem_map'].shape}, on log T {data['logT_grid']}")
+print(f"Settings: {data['config']}")
 ```
+
+`read_synthesis` reads just the spectra, and `read_synthesis_products` just the rest, or only the parts named in `keys`. The line cubes need evenly spaced wavelengths, as ECLIPSE's own synthesis gives them; a file from [another code](other-codes.md) with uneven ones is read with `read_synthesis`, which keeps each line's wavelengths as they are.
+
+??? note "Synthesis files from ECLIPSE 0.11.0 and earlier"
+
+    Older versions wrote the synthesis as a pickle. The instrument run still reads one, and `synthesise-spectra` still writes one for an `--output-name` ending in `.pkl`, with a warning, until a future release stops both. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
 
 ??? note "Reading MURaM's own files (deprecated)"
 
