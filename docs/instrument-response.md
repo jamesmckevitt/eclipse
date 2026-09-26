@@ -279,7 +279,7 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are written to `run/result/<config name>.h5`, an HDF5 file that any HDF5 reader can open: the arrays are datasets, with a `unit` attribute for quantities, and the other values, such as the configuration, are attributes holding JSON. Older versions wrote a pickle, which still loads, with a warning, until a future release; `euvst_response.convert_results_pickle("old.pkl")` rewrites one as a results file. The output includes:
+Results are written to `run/result/<config name>.h5`. The output includes:
 
 - Simulated detector signals (DN and photon counts)
 - For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel
@@ -289,3 +289,11 @@ Results are written to `run/result/<config name>.h5`, an HDF5 file that any HDF5
 - The git commit ID and software version used to produce the results
 
 Use `summary_table(results)` after loading to see all parameter combinations, the fitted components and the run metadata. `list_fit_components` gives the component names, and `analyse_fit_statistics` and `create_sunpy_maps_from_combo` take `component=` to choose one, defaulting to the primary component.
+
+### The results file
+
+It is an HDF5 file that any HDF5 reader can open, with a `format` attribute of `eclipse-results` and a `version` of `1` on the root. Each array is a dataset, with a `unit` attribute if it is a quantity, and the other values, such as the configuration, are attributes holding JSON. A group lists its members in order as JSON in an `eclipse_order` attribute. A group whose keys are not names, as the parameter combinations are, has an `eclipse_type` of `map`, its keys in `eclipse_keys` and its values as members `0`, `1`, ...; a cube has an `eclipse_type` of `ndcube` and members `data`, `wcs` and `meta`; and a value held in more than one place, such as a ground truth the combinations share, is written once and elsewhere as a group with an `eclipse_type` of `ref` and its path in `target`. Values JSON has no form for, such as quantities, tuples and the configuration objects, are objects naming what they are in an `__eclipse__` entry.
+
+??? note "Results files from ECLIPSE 0.11.0 and earlier"
+
+    Older versions wrote the results as a pickle. `load_instrument_response_results` still reads one named `.pkl`, with a warning, until a future release stops it, and a rerun moves the pickle of the same name aside to `.pkl.old`. `euvst_response.convert_results_pickle("old.pkl")` writes it as `old.h5` beside it.

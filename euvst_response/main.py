@@ -1163,9 +1163,6 @@ def main() -> None:
         software_version = _get_software_version()
 
         output_file = Path(f"run/result/{Path(args.config).stem}.h5")
-        if output_file.with_suffix(".pkl").is_file():
-            print(f"\n{output_file.with_suffix('.pkl')}, from an older version, is left as it "
-                  f"was; these results are in {output_file}.")
 
         print(f"\nSaving results to {output_file}")
         save_data = {
@@ -1192,6 +1189,13 @@ def main() -> None:
         output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+        # A rerun replaced the pickle of the same name when results were
+        # pickles, so one left from an older version is moved aside rather
+        # than read in place of these results.
+        stale = output_file.with_suffix(".pkl")
+        if stale.is_file():
+            os.replace(stale, stale.with_name(stale.name + ".old"))
+            print(f"Moved {stale}, from an older version, to {stale.name}.old")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
 

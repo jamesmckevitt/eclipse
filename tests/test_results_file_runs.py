@@ -73,9 +73,8 @@ def _same_wcs(got, expected, where):
     assert list(got.ctype) == list(expected.ctype), where
     assert [str(c) for c in got.cunit] == [str(c) for c in expected.cunit], where
     for name in ("crval", "cdelt", "crpix"):
-        assert np.allclose(getattr(got, name), getattr(expected, name), rtol=1e-12, atol=0), \
-            f"{where}: {name}"
-    assert np.allclose(got.get_pc(), expected.get_pc(), rtol=1e-12, atol=1e-15), where
+        assert np.array_equal(getattr(got, name), getattr(expected, name)), f"{where}: {name}"
+    assert np.array_equal(got.get_pc(), expected.get_pc()), where
 
 
 def _same(got, expected, where="payload"):
@@ -113,8 +112,13 @@ def _same(got, expected, where="payload"):
         assert np.isnan(got), where
     elif isinstance(expected, type):
         assert got is expected, where
-    else:
+    elif isinstance(expected, u.UnitBase):
         assert got == expected, f"{where}: {got!r} != {expected!r}"
+    else:
+        # Of the same type too, so that a flag coming back as 1 is caught; a
+        # NumPy scalar comes back as the Python one it stands for.
+        plain = expected.item() if isinstance(expected, np.generic) else expected
+        assert type(got) is type(plain) and got == plain, f"{where}: {got!r} != {expected!r}"
 
 
 def test_a_uniform_intensity_run_reads_back_what_it_saved(tmp_path, monkeypatch):
@@ -213,13 +217,29 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
 
     converted = convert_results_pickle(old)
     assert converted == tmp_path / "old.h5" and is_results_file(converted)
-    _same(load_results(converted), payload)
+    # What the pickle holds, whose WCSs astropy pickled as headers, to 14 digits.
+    with open(old, "rb") as f:
+        _same(load_results(converted), dill.load(f))
     with pytest.raises(ValueError, match="already an HDF5 file"):
         convert_results_pickle(converted)
     # A file already there, and the pickle itself, are left alone.
     with pytest.raises(FileExistsError, match="overwrite=True"):
         convert_results_pickle(old)
     assert convert_results_pickle(old, overwrite=True) == converted
+    # One that cannot be read back leaves the file there as it was.
+    from euvst_response import results_file
+
+    before, real = converted.read_bytes(), results_file.load_results
+
+    def unreadable(path, _stacklevel=2):
+        raise ValueError("unreadable")
+
+    monkeypatch.setattr(results_file, "load_results", unreadable)
+    with pytest.raises(ValueError, match="cannot be read back"):
+        convert_results_pickle(old, overwrite=True)
+    monkeypatch.setattr(results_file, "load_results", real)
+    assert converted.read_bytes() == before
+    assert [p.name for p in tmp_path.glob("old.h5*")] == ["old.h5"]
     misnamed = tmp_path / "misnamed.h5"
     misnamed.write_bytes(old.read_bytes())
     with pytest.raises(ValueError, match="the pickle itself"):
@@ -266,3 +286,21 @@ def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, m
         assert any("beside it, is newer" in str(w.message) for w in seen) is newer
     with pytest.raises(FileNotFoundError):
         load_results("run/result/elsewhere.pkl")
+
+
+def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch):
+    """As a rerun replaced it when results were pickles, so a script naming it reads the new results."""
+    import dill
+
+    stale = tmp_path / "run" / "result" / "uniform.pkl"
+    stale.parent.mkdir(parents=True)
+    with open(stale, "wb") as f:
+        dill.dump({"instrument": "EIS"}, f)
+    _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
+         simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
+    assert not stale.exists() and (stale.parent / "uniform.pkl.old").is_file()
+    with pytest.warns(FutureWarning, match="does not exist"):
+        assert load_instrument_response_results(stale)["instrument"] == "SWC"
+    with pytest.raises(ValueError, match="is not a pickle"):
+        (tmp_path / "empty.pkl").write_bytes(b"")
+        convert_results_pickle(tmp_path / "empty.pkl")

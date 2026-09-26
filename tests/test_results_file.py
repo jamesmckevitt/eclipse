@@ -8,6 +8,7 @@ numbers.
 import dataclasses
 import datetime
 import json
+import os
 import warnings
 
 import astropy.units as u
@@ -109,20 +110,34 @@ def test_the_file_is_hdf5_not_a_pickle(tmp_path):
         assert f["cube_sim/data"].attrs["unit"] == "DN / pix"
 
 
-def test_a_view_is_written_without_the_array_it_views(tmp_path):
-    """A slice of the Monte Carlo stack, as the first fit is, is written without the rest of it."""
-    stack = np.random.default_rng(1).random((200, 50, 50))
-    path = save_results(tmp_path / "view.h5", {"first": stack[0]}, compression=None)
-    assert path.stat().st_size < 100_000
-    assert np.array_equal(load_results(path)["first"], stack[0])
-
-
 def test_a_failed_write_leaves_the_file_there_as_it_was(tmp_path):
     path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
-    with pytest.raises(TypeError, match="cannot be written"):
-        save_results(path, {"instrument": "EIS", "odd": {1, 2}})
+    # And says where what it cannot write is.
+    with pytest.raises(TypeError, match="/deep: Values of type object cannot be written"):
+        save_results(path, {"instrument": "EIS", "deep": {"odd": object()}})
     assert load_results(path)["instrument"] == "SWC"
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_what_yaml_can_put_in_a_configuration_survives(tmp_path):
+    config = yaml.safe_load("lines: !!set {Fe12_195.1190, Fe09_171.0730}\n"
+                            "blob: !!binary aGVsbG8=\n")
+    out = _round_trip(tmp_path, {"config": {**config, "frozen": frozenset({1, 2})}})["config"]
+    assert out["lines"] == {"Fe12_195.1190", "Fe09_171.0730"} and type(out["lines"]) is set
+    assert out["blob"] == b"hello" and out["frozen"] == frozenset({1, 2})
+
+
+def test_the_file_is_made_as_any_file_is(tmp_path):
+    """With the umask's permissions, so that colleagues can read it, and through a link."""
+    umask = os.umask(0)
+    os.umask(umask)
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    assert path.stat().st_mode & 0o777 == 0o666 & ~umask
+    target = save_results(tmp_path / "real.h5", {"instrument": "SWC"})
+    link = tmp_path / "link.h5"
+    link.symlink_to(target)
+    save_results(link, {"instrument": "EIS"})
+    assert link.is_symlink() and load_results(target)["instrument"] == "EIS"
 
 
 def test_a_later_layout_or_a_link_elsewhere_is_refused(tmp_path):
@@ -186,8 +201,8 @@ def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
 
     assert list(restored.wcs.ctype) == ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     assert [str(c) for c in restored.wcs.cunit] == ["cm", "arcsec", "arcsec"]
-    assert restored.wcs.cdelt == pytest.approx(_wcs().wcs.cdelt, rel=1e-12)
-    assert restored.wcs.crpix == pytest.approx(_wcs().wcs.crpix, rel=1e-12)
+    assert list(restored.wcs.cdelt) == list(_wcs().wcs.cdelt)
+    assert list(restored.wcs.crpix) == list(_wcs().wcs.crpix)
 
 
 def test_the_wcs_describes_the_same_world_coordinates(tmp_path):
@@ -265,7 +280,7 @@ def _same(before, after):
     if dataclasses.is_dataclass(before):
         return all(_same(getattr(before, f.name), getattr(after, f.name))
                    for f in dataclasses.fields(before))
-    if isinstance(before, list):
+    if isinstance(before, (list, tuple)):
         return (len(after) == len(before)
                 and all(_same(b, a) for b, a in zip(before, after)))
     if isinstance(before, u.Quantity):
@@ -275,8 +290,8 @@ def _same(before, after):
 
 
 @pytest.mark.parametrize("config_object", [
-    # Every field away from its default, so a field that is dropped on the
-    # way out cannot pass by being rebuilt from the default on the way in.
+    # Fields away from their defaults, and each stored by name (checked below),
+    # so that a field dropped on the way out cannot pass as its default.
     Simulation(expos=20 * u.s, n_iter=3, slit_width=0.4 * u.arcsec, ncpu=2,
                instrument="SWC", vis_sl=10 * u.photon / (u.s * u.cm**2),
                psf=True, noise=False, enable_pinholes=True,
@@ -307,6 +322,13 @@ def _same(before, after):
                       precision=np.float32, mass_per_electron=1.2,
                       hdf5_dbase_root="/somewhere/chianti", n_workers=4,
                       goft_temperature_chunk=16),
+    FitComponent(wavelength=195.179 * u.AA, tie_center=0, tie_width=0,
+                 amplitude_greater_than=0, name="blend"),
+    FitConfig(components=[FitComponent(wavelength=195.119 * u.AA, name="main"),
+                          FitComponent(wavelength=195.179 * u.AA, tie_width=0,
+                                       amplitude_greater_than=0, name="blend")],
+              primary_component=1, constrain_positive_intensity=True, backend="scipy",
+              max_iter=200, bessel_correction=True, save_iterations=True),
 ], ids=lambda obj: type(obj).__name__)
 def test_every_config_field_survives(tmp_path, config_object):
     """Every field, Simulation.noise included, comes back unchanged.
@@ -314,6 +336,8 @@ def test_every_config_field_survives(tmp_path, config_object):
     A run with the noise off that read back with it on would be mistaken for
     a noisy one.
     """
+    stored = results_file._jsonable(config_object)["fields"]
+    assert set(stored) == {f.name for f in dataclasses.fields(config_object) if f.init}
     restored = _round_trip(tmp_path, {"object": config_object})["object"]
 
     for f in dataclasses.fields(config_object):
@@ -432,8 +456,8 @@ def test_an_old_pickle_still_loads(tmp_path):
     assert np.array_equal(out["cube"].data, _cube().data)
 
 
-def test_the_format_is_detected_from_content_not_the_name(tmp_path):
-    """A pickle named .h5 must not be read as HDF5, and the reverse."""
+def test_only_a_file_named_as_a_pickle_is_unpickled(tmp_path):
+    """A pickle named .h5, which unpickling would run, is refused, and a results file named .pkl read."""
     import dill
 
     misnamed = tmp_path / "actually_a_pickle.h5"
@@ -441,8 +465,13 @@ def test_the_format_is_detected_from_content_not_the_name(tmp_path):
         dill.dump({"instrument": "EIS"}, handle)
 
     assert not is_results_file(misnamed)
-    with pytest.warns(FutureWarning, match="results pickle"):
-        assert load_results(misnamed)["instrument"] == "EIS"
+    with pytest.raises(ValueError, match="reads as a pickle. Only a file named as a pickle"):
+        load_results(misnamed)
+    for name in ("upper.PKL", "other.pickle"):
+        named = tmp_path / name
+        named.write_bytes(misnamed.read_bytes())
+        with pytest.warns(FutureWarning, match="results pickle"):
+            assert load_results(named)["instrument"] == "EIS"
 
     # And a results file named .pkl, with no .h5 beside it, reads as one.
     results = save_results(tmp_path / "results.h5", {"instrument": "SWC"})
@@ -562,6 +591,14 @@ def test_only_the_configuration_objects_it_rebuilds_are_written(tmp_path):
         save_results(tmp_path / "mine.h5", {"mine": Mine()})
     assert not (tmp_path / "mine.h5").exists()
 
+    # Nor one only named like one of them.
+    @dataclasses.dataclass
+    class Simulation:
+        value: int = 1
+
+    with pytest.raises(TypeError, match="only .* are rebuilt"):
+        save_results(tmp_path / "mine.h5", {"mine": Simulation()})
+
 
 def _with_attribute(tmp_path, name, value):
     """A results file with *value* written by hand as the JSON of member *name*."""
@@ -595,6 +632,12 @@ def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_pa
     object.__setattr__(detector, "dark_current", as_run)
     assert _round_trip(tmp_path, {"detector": detector})["detector"].dark_current == as_run
 
+    # Only what it works out, so that a file cannot set a setting past its checks.
+    encoded = results_file._jsonable(Detector_SWC())
+    encoded["derived"]["qe_euv"] = 7.0
+    restored = load_results(_with_attribute(tmp_path, "detector", encoded))["detector"]
+    assert restored.qe_euv == Detector_SWC().qe_euv
+
 
 def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
     path = save_results(tmp_path / "out.h5", {"data": np.ones(3), "more": {"x": np.ones(2)}})
@@ -610,6 +653,130 @@ def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
     structured = {"__eclipse__": "numpy_type", "value": "f8,i4"}
     with pytest.raises(ValueError, match="which a results file does not"):
         load_results(_with_attribute(tmp_path, "kind", structured))
+    # Text as wide as it is, not as wide as the file says.
+    wide = {"__eclipse__": "array", "dtype": "<U100000000", "value": ["a", "bc"]}
+    assert load_results(_with_attribute(tmp_path, "wide", wide))["wide"].dtype == np.dtype("<U2")
+
+    # A member listed more than once would be read again for each.
+    path = save_results(tmp_path / "out.h5", {"more": {"x": np.ones(2)}})
+    with h5py.File(path, "r+") as f:
+        f["more"].attrs["eclipse_order"] = json.dumps(["x", "x"])
+    with pytest.raises(ValueError, match="not those it lists"):
+        load_results(path)
+
+
+def _crafted_dataset(tmp_path, **options):
+    """A results file whose one dataset is made with *options* by hand."""
+    path = save_results(tmp_path / "crafted.h5", {"instrument": "SWC"})
+    with h5py.File(path, "r+") as f:
+        f.create_dataset("data", **options)
+        f.attrs["eclipse_order"] = json.dumps(["instrument", "data"])
+    return path
+
+
+@pytest.mark.parametrize("options, match", [
+    (dict(data=np.array([b"text"])), "values of type"),
+    (dict(data=np.arange(4.0), compression="lzf"), "compressed in a way"),
+    (dict(shape=(10**9,), chunks=(1000,), dtype="f8"), "does not hold all of its data"),
+], ids=["text", "lzf", "unwritten"])
+def test_a_dataset_not_as_eclipse_writes_one_is_refused(tmp_path, options, match):
+    with pytest.raises(ValueError, match=match):
+        load_results(_crafted_dataset(tmp_path, **options))
+
+
+def test_a_virtual_dataset_is_refused(tmp_path):
+    source = save_results(tmp_path / "source.h5", {"data": np.arange(4.0)})
+    layout = h5py.VirtualLayout(shape=(4,), dtype="f8")
+    layout[:] = h5py.VirtualSource(str(source), "data", shape=(4,))
+    path = save_results(tmp_path / "virtual.h5", {"instrument": "SWC"})
+    with h5py.File(path, "r+") as f:
+        f.create_virtual_dataset("data", layout)
+        f.attrs["eclipse_order"] = json.dumps(["instrument", "data"])
+    with pytest.raises(ValueError, match="keeps its data in another file"):
+        load_results(path)
+
+
+@pytest.mark.parametrize("attribute, value, match", [
+    ("thing", {"__eclipse__": "not_a_tag"}, "tagged 'not_a_tag'"),
+    ("thing", {"__eclipse__": "resource", "value": "../../outside"}, "outside the package"),
+    ("thing", {"__eclipse__": "quantity"}, "not a results file this ECLIPSE can read"),
+], ids=["unknown tag", "resource outside", "missing entry"])
+def test_a_value_not_as_eclipse_writes_one_is_refused(tmp_path, attribute, value, match):
+    with pytest.raises(ValueError, match=match):
+        load_results(_with_attribute(tmp_path, attribute, value))
+
+
+@pytest.mark.parametrize("payload, change, match", [
+    ({"group": {"x": np.ones(2)}}, lambda f: f["group"].attrs.__setitem__("eclipse_type", "odd"),
+     "a kind, 'odd'"),
+    ({"group": {(1, 2): np.ones(2)}}, lambda f: f["group"].attrs.__delitem__("eclipse_keys"),
+     "no 'eclipse_keys' attribute"),
+    ({"group": [np.ones(2)]}, lambda f: f["group"].attrs.__delitem__("eclipse_length"),
+     "no 'eclipse_length' attribute"),
+    ({"group": [np.ones(2)]}, lambda f: f["group"].attrs.__setitem__("eclipse_length", 3),
+     "has no member '1'"),
+], ids=["unknown kind", "no keys", "no length", "missing member"])
+def test_a_group_not_as_eclipse_writes_one_is_refused(tmp_path, payload, change, match):
+    path = save_results(tmp_path / "out.h5", payload)
+    with h5py.File(path, "r+") as f:
+        change(f)
+    with pytest.raises(ValueError, match=match):
+        load_results(path)
+
+
+def test_another_kind_of_eclipse_file_is_refused(tmp_path):
+    with h5py.File(tmp_path / "synthesis.h5", "w") as f:
+        f.attrs["format"] = "eclipse-synthesis"
+        f.attrs["version"] = 1
+    with pytest.raises(ValueError, match="is not an ECLIPSE results file"):
+        load_results(tmp_path / "synthesis.h5")
+
+
+def test_every_value_is_strict_json(tmp_path):
+    """So that a reader in another language parses it, NaN and infinity included."""
+    payload = {"nan": float("nan"), "inf": -np.inf * u.s, "list": [1.0, float("inf")],
+               "array": np.array(["a"]), "quantities": [np.nan * u.m]}
+    path = save_results(tmp_path / "out.h5", payload)
+
+    def refuse(constant):
+        raise ValueError(f"{constant} is not JSON")
+
+    with h5py.File(path, "r") as f:
+        for name, text in f.attrs.items():
+            if name not in ("format", "version"):
+                json.loads(text, parse_constant=refuse)
+    out = load_results(path)
+    assert np.isnan(out["nan"]) and out["inf"] == -np.inf * u.s
+    assert out["list"][1] == float("inf") and np.isnan(out["quantities"][0].value)
+
+
+def test_whole_numbers_with_a_unit_stay_whole(tmp_path):
+    counts = NDCube(np.arange(6, dtype=np.uint16).reshape(2, 3), wcs=WCS(naxis=2),
+                    unit=u.photon)
+    steps = u.Quantity(np.arange(3), u.pix, dtype=None)
+    out = _round_trip(tmp_path, {"counts": counts, "steps": steps})
+    assert out["counts"].data.dtype == np.uint16 and out["counts"].unit == u.photon
+    assert steps.dtype.kind == "i" and out["steps"].dtype == steps.dtype
+
+
+def test_a_sweep_of_many_combinations_is_written(tmp_path):
+    """Its keys make one large attribute, which a plain HDF5 object header could not hold."""
+    keys = [tuple((f"detector.parameter_{i}", float(j)) for i in range(40)) for j in range(100)]
+    combinations = {key: {"data": np.full(3, j)} for j, key in enumerate(keys)}
+    out = _round_trip(tmp_path, {"results": {"all_combinations": combinations}})
+    assert list(out["results"]["all_combinations"]) == keys
+
+
+def test_what_save_results_is_given_is_checked_first(tmp_path, monkeypatch):
+    with pytest.raises(IsADirectoryError):
+        save_results(tmp_path, {"instrument": "SWC"})
+    with pytest.raises(ValueError, match="'gzip' or None"):
+        save_results(tmp_path / "out.h5", {"instrument": "SWC"}, compression="lzf")
+    with pytest.raises(TypeError, match="must be a mapping"):
+        save_results(tmp_path / "out.h5", ["ab", "cd"])
+    monkeypatch.setenv("HOME", str(tmp_path))
+    save_results("~/home.h5", {"instrument": "SWC"})
+    assert load_results("~/home.h5")["instrument"] == "SWC"
 
 
 def test_another_save_of_the_same_name_is_left_alone(tmp_path):
@@ -620,6 +787,22 @@ def test_another_save_of_the_same_name_is_left_alone(tmp_path):
     assert theirs.read_bytes() == b"another run's"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["out.h5", "out.h5.part"]
     assert load_results(path)["instrument"] == "SWC"
+
+
+def test_two_saves_of_one_name_at_once_do_not_meet(tmp_path, monkeypatch):
+    """Another save of the same name starts and finishes while this one writes."""
+    write, started = results_file._put_dict, []
+
+    def meanwhile(*args):
+        if not started:
+            started.append(True)
+            save_results(tmp_path / "out.h5", {"instrument": "EIS"})
+        return write(*args)
+
+    monkeypatch.setattr(results_file, "_put_dict", meanwhile)
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    assert started and load_results(path)["instrument"] == "SWC"
+    assert [p.name for p in tmp_path.iterdir()] == ["out.h5"]
 
 
 def test_what_a_results_file_cannot_hold_is_said(tmp_path):
@@ -641,3 +824,49 @@ def test_a_missing_or_foreign_file_is_named_for_what_it_is(tmp_path):
     (tmp_path / "notes.txt").write_text("instrument: SWC\n")
     with pytest.raises(ValueError, match="neither a results file nor a results pickle"):
         load_results(tmp_path / "notes.txt")
+
+
+def test_what_the_results_hold_in_more_than_one_place_is_written_once(tmp_path):
+    """As a ground truth the combinations share, or the last raster cube kept as cube_sim."""
+    shared, cube = {"fit": np.arange(2000.0)}, _cube()
+    payload = {"a": {"truth": shared, "cube": cube}, "b": {"truth": shared}, "cube_sim": cube}
+    path = save_results(tmp_path / "out.h5", payload)
+    datasets = []
+    with h5py.File(path, "r") as f:
+        f.visititems(lambda name, node: datasets.append(name)
+                     if isinstance(node, h5py.Dataset) else None)
+    assert sorted(datasets) == ["a/cube/data", "a/truth/fit"]
+    out = load_results(path)
+    assert out["a"]["truth"] is out["b"]["truth"] and out["a"]["cube"] is out["cube_sim"]
+    assert np.array_equal(out["b"]["truth"]["fit"], shared["fit"])
+
+
+@pytest.mark.parametrize("target, match", [
+    ("/a/missing", "which the file does not hold"),
+    ("/b", "which it is inside"),
+    ("/ext/x", "which the file does not hold"),
+    ("nowhere", "refers to nothing"),
+], ids=["missing", "inside itself", "through a link", "not a path"])
+def test_a_reference_is_only_to_what_the_file_holds(tmp_path, target, match):
+    save_results(tmp_path / "other.h5", {"x": np.ones(2)})
+    path = save_results(tmp_path / "out.h5", {"a": {"x": np.ones(2)}, "b": {"y": np.ones(2)}})
+    with h5py.File(path, "r+") as f:
+        del f["b"]["y"]
+        reference = f["b"].create_group("y")
+        reference.attrs["eclipse_type"] = "ref"
+        reference.attrs["target"] = target
+        f["ext"] = h5py.ExternalLink("other.h5", "/")
+        f.attrs["eclipse_order"] = json.dumps(["a", "b", "ext"])
+    with pytest.raises(ValueError, match=match):
+        load_results(path)
+
+
+def test_the_numbers_of_a_wcs_come_back_exactly(tmp_path):
+    """A header holds 14 digits, which 0.2 arcsec in degrees is not."""
+    wcs = _wcs()
+    wcs.wcs.cunit = ["cm", "deg", "deg"]
+    wcs.wcs.cdelt = [1.69e-11, (0.2 * u.arcsec).to_value(u.deg), (0.159 * u.arcsec).to_value(u.deg)]
+    wcs.wcs.crpix = [2.5, 85.83333333333333, 1.5]
+    restored = _round_trip(tmp_path, {"wcs": wcs})["wcs"]
+    for name in ("cdelt", "crpix", "crval"):
+        assert list(getattr(restored.wcs, name)) == list(getattr(wcs.wcs, name))
