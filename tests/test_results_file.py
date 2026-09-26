@@ -566,6 +566,16 @@ def test_dates_times_text_and_edge_values_survive(tmp_path):
     assert out["flags"].dtype == bool and list(out["flags"]) == [True, False]
 
 
+def test_text_arrays_keep_their_shape_and_width(tmp_path):
+    """Written as their items, which do not give an empty array's shape or a width wider than the text."""
+    text = {"wide": np.array(["a"], dtype="U5"), "empty": np.empty((0, 3), dtype="U5"),
+            "grid": np.array([["ab", "c"], ["d", "e"]]), "none": np.empty((2, 0), dtype="U1")}
+    out = _round_trip(tmp_path, text)
+    for name, array in text.items():
+        assert out[name].dtype == array.dtype and out[name].shape == array.shape, name
+        assert out[name].tolist() == array.tolist(), name
+
+
 def test_a_file_that_does_not_hold_together_is_refused(tmp_path):
     path = save_results(tmp_path / "out.h5", {"group": {"data": np.ones(3), "note": "x"}})
     with h5py.File(path, "r+") as f:
@@ -677,9 +687,10 @@ def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
     structured = {"__eclipse__": "numpy_type", "value": "f8,i4"}
     with pytest.raises(ValueError, match="which a results file does not"):
         load_results(_with_attribute(tmp_path, "kind", structured))
-    # Text as wide as it is, not as wide as the file says.
+    # Text no wider than the file, whatever width it says it is.
     wide = {"__eclipse__": "array", "dtype": "<U100000000", "value": ["a", "bc"]}
-    assert load_results(_with_attribute(tmp_path, "wide", wide))["wide"].dtype == np.dtype("<U2")
+    with pytest.raises(ValueError, match="larger than the file"):
+        load_results(_with_attribute(tmp_path, "wide", wide))
 
     # A member listed more than once would be read again for each.
     path = save_results(tmp_path / "out.h5", {"more": {"x": np.ones(2)}})
@@ -762,11 +773,15 @@ def test_a_virtual_dataset_is_refused(tmp_path):
     ("thing", {"__eclipse__": "map", "items": [[["a"], 1]]}, "TypeError: .*unhashable"),
     ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": [0, "x"]},
      "holds more than text"),
-    ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": [""] * 10**4 + ["x" * 10**4]},
+    ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": ["", "xy"]},
+     "holds more than text of its width"),
+    ("thing", {"__eclipse__": "array", "dtype": "<U10000", "value": [""] * 10**4 + ["x" * 10**4]},
      "larger than the file"),
+    ("thing", {"__eclipse__": "array", "dtype": "<f8", "shape": [2, 2], "value": [1.0, 2.0]},
+     "does not have the shape it gives"),
 ], ids=["unknown tag", "resource outside", "resource absolute", "resource on a drive",
         "resource with backslashes", "missing entry", "unhashable key", "text and numbers",
-        "text wider than the file"])
+        "text wider than it says", "text wider than the file", "wrong shape"])
 def test_a_value_not_as_eclipse_writes_one_is_refused(tmp_path, attribute, value, match):
     with pytest.raises(ValueError, match=match):
         load_results(_with_attribute(tmp_path, attribute, value))

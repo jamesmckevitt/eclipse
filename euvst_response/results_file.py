@@ -45,8 +45,8 @@ with an ``__eclipse__`` entry naming what they are:
 
 - ``float``, a number that is not finite, as ``nan``, ``inf`` or ``-inf``,
   which JSON has no form for;
-- ``quantity`` (``value`` and ``unit``), ``array`` (``dtype`` and
-  ``value``) and ``unit``;
+- ``quantity`` (``value`` and ``unit``), ``array`` (``dtype``, ``shape``
+  and ``value``) and ``unit``;
 - ``tuple`` and ``map`` (``items``, a map's as key and value pairs);
 - ``date`` and ``datetime``, in ISO 8601, ``set`` and ``frozenset``
   (``items``) and ``bytes``, in base 64;
@@ -250,7 +250,8 @@ def _jsonable(value):
             return _jsonable(value.item())
         if value.dtype.kind not in "biufcU":
             raise TypeError(f"An array of {value.dtype} cannot be written to a results file.")
-        return {TAG: "array", "dtype": value.dtype.str, "value": _jsonable(value.tolist())}
+        return {TAG: "array", "dtype": value.dtype.str, "shape": list(value.shape),
+                "value": _jsonable(value.tolist())}
     if isinstance(value, u.UnitBase):
         return {TAG: "unit", "value": value.to_string()}
     if isinstance(value, WCS):
@@ -353,16 +354,25 @@ def _unjson(value, reading: _Reading):
         return float(value["value"])
     if tag == "array":
         dtype = _plain_dtype(value["dtype"])
-        if dtype.kind != "U":
-            return np.array(_unjson(value["value"], reading), dtype=dtype)
-        # Text as wide as its longest item, rather than the width the file
-        # declares, which could be any.
-        items = np.array(_unjson(value["value"], reading), dtype=object)
-        if not all(isinstance(item, str) for item in items.flat):
-            raise ValueError("A text array in the results file holds more than text.")
-        if items.size * max((len(item) for item in items.flat), default=1) > reading.size:
-            raise ValueError("A text array in the results file is larger than the file.")
-        return items.astype(str)
+        items = np.array(_unjson(value["value"], reading),
+                         dtype=object if dtype.kind == "U" else dtype)
+        if dtype.kind == "U":
+            # As wide as the file declares, but no larger than the file, which
+            # holds the text of an array as wide as its items in less, as a few
+            # bytes of a crafted file could otherwise ask for as much memory as
+            # they liked.
+            width = dtype.itemsize // 4
+            if not all(isinstance(item, str) and len(item) <= width for item in items.flat):
+                raise ValueError("A text array in the results file holds more than text of its "
+                                 "width.")
+            if items.size * width > reading.size:
+                raise ValueError("A text array in the results file is larger than the file.")
+        # The shape as written, which the items of an empty array do not give.
+        shape = value.get("shape", list(items.shape))
+        if (not all(isinstance(size, int) and size >= 0 for size in shape)
+                or math.prod(shape) != items.size):
+            raise ValueError("An array in the results file does not have the shape it gives.")
+        return items.astype(dtype, copy=False).reshape(shape)
     if tag == "unit":
         return u.Unit(value["value"])
     if tag == "wcs":
