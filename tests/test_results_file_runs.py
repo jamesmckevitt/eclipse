@@ -21,7 +21,8 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from euvst_response.analysis import load_instrument_response_results, summary_table
-from euvst_response.results_file import convert_results_pickle, is_results_file, load_results
+from euvst_response.results_file import (_holds_array, convert_results_pickle, is_results_file,
+                                         load_results)
 from euvst_response.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
 
 LINE = "Fe12_195.1190"
@@ -77,25 +78,38 @@ def _same_wcs(got, expected, where):
     assert np.array_equal(got.get_pc(), expected.get_pc()), where
 
 
-def _same(got, expected, where="payload"):
-    """That *got* is what *expected* was, entry by entry."""
+def _same(got, expected, where="payload", _memo=None):
+    """
+    That *got* is what *expected* was, entry by entry.
+
+    What the file writes as a dataset or group is also checked to come back
+    as one object wherever the results held one object, as the ground truth
+    combinations share is, and as distinct objects wherever they were.
+    """
+    memo = {} if _memo is None else _memo
+    if _holds_array(expected):
+        pair = memo.setdefault(("expected", id(expected)), got)
+        back = memo.setdefault(("got", id(got)), expected)
+        assert pair is got and back is expected, f"{where}: shared as it was not"
     if isinstance(expected, NDCube):
         assert isinstance(got, NDCube), where
         assert got.unit == expected.unit, where
         assert got.data.dtype == np.asarray(expected.data).dtype, where
         assert np.array_equal(got.data, expected.data, equal_nan=True), where
         _same_wcs(got.wcs, expected.wcs, f"{where}.wcs")
-        _same(dict(got.meta), dict(expected.meta or {}), f"{where}.meta")
+        _same(got.meta, expected.meta if expected.meta is not None else {},
+              f"{where}.meta", memo)
     elif isinstance(expected, WCS):
         _same_wcs(got, expected, where)
     elif dataclasses.is_dataclass(expected) and not isinstance(expected, type):
         assert type(got) is type(expected), where
         for field in dataclasses.fields(expected):
-            if field.init:
-                _same(getattr(got, field.name), getattr(expected, field.name),
-                      f"{where}.{field.name}")
+            _same(getattr(got, field.name), getattr(expected, field.name),
+                  f"{where}.{field.name}", {})
     elif isinstance(expected, u.Quantity):
         assert isinstance(got, u.Quantity) and got.unit == expected.unit, where
+        if expected.ndim:
+            assert got.dtype == expected.dtype, where
         assert np.array_equal(got.value, expected.value, equal_nan=True), where
     elif isinstance(expected, np.ndarray):
         assert isinstance(got, np.ndarray) and got.dtype == expected.dtype, where
@@ -103,11 +117,11 @@ def _same(got, expected, where="payload"):
     elif isinstance(expected, dict):
         assert isinstance(got, dict) and list(got) == list(expected), where
         for key in expected:
-            _same(got[key], expected[key], f"{where}[{key!r}]")
+            _same(got[key], expected[key], f"{where}[{key!r}]", memo)
     elif isinstance(expected, (list, tuple)):
         assert type(got) is type(expected) and len(got) == len(expected), where
         for index, (a, b) in enumerate(zip(got, expected)):
-            _same(a, b, f"{where}[{index}]")
+            _same(a, b, f"{where}[{index}]", memo)
     elif isinstance(expected, float) and np.isnan(expected):
         assert np.isnan(got), where
     elif isinstance(expected, type):
@@ -250,6 +264,22 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="convert_synthesis_pickle"):
         convert_results_pickle(tmp_path / "synthesis.pkl")
     assert not (tmp_path / "synthesis.h5").exists()
+    # Nor is a file that is not a pickle at all.
+    (tmp_path / "empty.pkl").write_bytes(b"")
+    with pytest.raises(ValueError, match="is not a pickle"):
+        convert_results_pickle(tmp_path / "empty.pkl")
+    # A directory is not a file to write, and a link is written through.
+    with pytest.raises(IsADirectoryError):
+        convert_results_pickle(old, tmp_path)
+    real, link = tmp_path / "elsewhere" / "real.h5", tmp_path / "link.h5"
+    real.parent.mkdir()
+    real.write_bytes(b"")
+    link.symlink_to(real)
+    assert convert_results_pickle(old, link, overwrite=True) == link
+    assert link.is_symlink() and load_results(real)["instrument"] == "SWC"
+    # A home directory is where the user's is.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert convert_results_pickle("~/old.pkl", "~/home.h5") == tmp_path / "home.h5"
 
     # A configuration object from before one of its settings existed, as in
     # a 0.8.0 pickle, gets today's default for it.
@@ -288,7 +318,7 @@ def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, m
         load_results("run/result/elsewhere.pkl")
 
 
-def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch):
+def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsys):
     """As a rerun replaced it when results were pickles, so a script naming it reads the new results."""
     import dill
 
@@ -296,11 +326,37 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch):
     stale.parent.mkdir(parents=True)
     with open(stale, "wb") as f:
         dill.dump({"instrument": "EIS"}, f)
-    _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
-         simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
-    assert not stale.exists() and (stale.parent / "uniform.pkl.old").is_file()
+    config = {"uniform_intensity": "5000 erg / (s cm2 sr)",
+              "simulation": {"slit_width": "0.2 arcsec", "expos": "5 s"}}
+
+    # Only once the results are saved: a run that fails to save leaves it.
+    main_module = importlib.import_module("euvst_response.main")
+    real = main_module.save_results
+
+    def fails(path, payload, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(main_module, "save_results", fails)
+    with pytest.raises(OSError, match="no space left"):
+        _run(tmp_path, monkeypatch, "uniform", **config)
+    monkeypatch.setattr(main_module, "save_results", real)
+    assert stale.is_file()
+
+    _run(tmp_path, monkeypatch, "uniform", **config)
+    moved = stale.parent / "uniform.pkl.old"
+    assert not stale.exists() and moved.is_file()
     with pytest.warns(FutureWarning, match="does not exist"):
         assert load_instrument_response_results(stale)["instrument"] == "SWC"
-    with pytest.raises(ValueError, match="is not a pickle"):
-        (tmp_path / "empty.pkl").write_bytes(b"")
-        convert_results_pickle(tmp_path / "empty.pkl")
+    # And what was moved aside still reads, as the pickle it is.
+    with pytest.warns(FutureWarning, match="results pickle"):
+        assert load_results(moved)["instrument"] == "EIS"
+
+    # One that cannot be moved aside is left, said so, and the run still succeeds.
+    moved.unlink()
+    moved.mkdir()
+    with open(stale, "wb") as f:
+        dill.dump({"instrument": "EIS"}, f)
+    capsys.readouterr()
+    _run(tmp_path, monkeypatch, "uniform", **config)
+    assert stale.is_file() and "Could not move" in capsys.readouterr().out
+    assert load_results(stale.with_suffix(".h5"))["instrument"] == "SWC"

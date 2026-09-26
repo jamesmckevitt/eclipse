@@ -9,14 +9,17 @@ import dataclasses
 import datetime
 import json
 import os
+import re
 import warnings
+import zlib
 
 import astropy.units as u
 import h5py
 import numpy as np
 import pytest
 import yaml
-from astropy.wcs import WCS
+from astropy.io import fits
+from astropy.wcs import WCS, Sip
 from ndcube import NDCube
 
 from euvst_response import results_file
@@ -41,8 +44,8 @@ def _wcs():
     return wcs
 
 
-def _cube():
-    return NDCube(np.arange(24, dtype=float).reshape((2, 3, 4)),
+def _cube(offset=0.0):
+    return NDCube(np.arange(24, dtype=float).reshape((2, 3, 4)) + offset,
                   wcs=_wcs(), unit=u.DN / u.pix,
                   meta={"rest_wav": REST, "line_name": "Fe12_195.1190",
                         "uniform_mode": False})
@@ -57,7 +60,8 @@ def _payload():
         "config": {"instrument": "SWC", "n_iter": 5,
                    "simulation": {"expos": ["5 s", "20 s"]}},
         "cube_sim": _cube(),
-        "cube_reb_dict": {(0.2, 1): _cube(), (0.4, 2): _cube()},
+        # Cubes alike but for their data, which must not come back as one.
+        "cube_reb_dict": {(0.2, 1): _cube(), (0.4, 2): _cube(offset=100.0)},
         "results": {
             "all_combinations": {
                 (("simulation.expos", 5.0), ("detector.qe_euv", 0.76)): {
@@ -125,14 +129,21 @@ def test_what_yaml_can_put_in_a_configuration_survives(tmp_path):
     out = _round_trip(tmp_path, {"config": {**config, "frozen": frozenset({1, 2})}})["config"]
     assert out["lines"] == {"Fe12_195.1190", "Fe09_171.0730"} and type(out["lines"]) is set
     assert out["blob"] == b"hello" and out["frozen"] == frozenset({1, 2})
+    assert type(out["frozen"]) is frozenset
 
 
 def test_the_file_is_made_as_any_file_is(tmp_path):
-    """With the umask's permissions, so that colleagues can read it, and through a link."""
-    umask = os.umask(0)
-    os.umask(umask)
-    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
-    assert path.stat().st_mode & 0o777 == 0o666 & ~umask
+    """With the permissions any other file there gets, so that colleagues can read it, and through a link."""
+    # A umask that lets the group read, which a file made only for its owner
+    # would not follow.
+    previous = os.umask(0o022)
+    try:
+        path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+        (tmp_path / "plain").write_text("")
+    finally:
+        os.umask(previous)
+    assert path.stat().st_mode & 0o777 == (tmp_path / "plain").stat().st_mode & 0o777
+    assert path.stat().st_mode & 0o044
     target = save_results(tmp_path / "real.h5", {"instrument": "SWC"})
     link = tmp_path / "link.h5"
     link.symlink_to(target)
@@ -232,6 +243,10 @@ def test_tuple_keyed_dicts_survive(tmp_path):
     out = _round_trip(tmp_path)
 
     assert set(out["cube_reb_dict"]) == {(0.2, 1), (0.4, 2)}
+    first, second = out["cube_reb_dict"][(0.2, 1)], out["cube_reb_dict"][(0.4, 2)]
+    assert first is not second
+    assert np.array_equal(first.data, _cube().data)
+    assert np.array_equal(second.data, _cube(offset=100.0).data)
     combos = out["results"]["all_combinations"]
     key, = combos
     assert key == (("simulation.expos", 5.0), ("detector.qe_euv", 0.76))
@@ -432,13 +447,14 @@ def test_compression_actually_shrinks_a_large_array(tmp_path):
     assert small.stat().st_size < big.stat().st_size / 10
 
 
-def test_a_pkl_name_is_corrected_rather_than_written(tmp_path):
+@pytest.mark.parametrize("name", ["result.pkl", "result.pickle", "result.PKL"])
+def test_a_pkl_name_is_corrected_rather_than_written(tmp_path, name):
     """A file named .pkl that is not a pickle is worse than a renamed one."""
     with pytest.warns(UserWarning, match="an HDF5 file"):
-        path = save_results(tmp_path / "result.pkl", {"instrument": "SWC"})
+        path = save_results(tmp_path / name, {"instrument": "SWC"})
     assert path.name == "result.h5"
     assert path.exists()
-    assert not (tmp_path / "result.pkl").exists()
+    assert [p.name for p in tmp_path.iterdir()] == ["result.h5"]
 
 
 def test_an_old_pickle_still_loads(tmp_path):
@@ -456,8 +472,8 @@ def test_an_old_pickle_still_loads(tmp_path):
     assert np.array_equal(out["cube"].data, _cube().data)
 
 
-def test_only_a_file_named_as_a_pickle_is_unpickled(tmp_path):
-    """A pickle named .h5, which unpickling would run, is refused, and a results file named .pkl read."""
+def test_a_pickle_named_as_an_hdf5_file_is_not_unpickled(tmp_path):
+    """A reader takes a .h5 file to be safe to open; a pickle under any other name loads, with a warning."""
     import dill
 
     misnamed = tmp_path / "actually_a_pickle.h5"
@@ -465,9 +481,9 @@ def test_only_a_file_named_as_a_pickle_is_unpickled(tmp_path):
         dill.dump({"instrument": "EIS"}, handle)
 
     assert not is_results_file(misnamed)
-    with pytest.raises(ValueError, match="reads as a pickle. Only a file named as a pickle"):
+    with pytest.raises(ValueError, match="is named as an HDF5 file but is a pickle"):
         load_results(misnamed)
-    for name in ("upper.PKL", "other.pickle"):
+    for name in ("upper.PKL", "other.pickle", "run.pkl.old", "x.results"):
         named = tmp_path / name
         named.write_bytes(misnamed.read_bytes())
         with pytest.warns(FutureWarning, match="results pickle"):
@@ -624,6 +640,14 @@ def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path
     assert isinstance(restored, FitConfig) and len(restored.components) == 1
     assert restored.components[0].wavelength == 195.119 * u.AA
 
+    # Rebuilt unchecked, it still gets today's default for a setting it lacks.
+    encoded = results_file._jsonable(Simulation(instrument="SWC", slit_width=0.4 * u.arcsec))
+    encoded["fields"]["slit_width"] = results_file._jsonable(0.3 * u.arcsec)
+    del encoded["fields"]["pinhole_positions_spectral"]
+    with pytest.warns(UserWarning, match="rebuilt as it was stored"):
+        restored = load_results(_with_attribute(tmp_path, "simulation", encoded))["simulation"]
+    assert restored.slit_width == 0.3 * u.arcsec and restored.pinhole_positions_spectral == []
+
 
 def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):
     """A detector's dark current, as the run used it, whatever this version works out."""
@@ -634,9 +658,9 @@ def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_pa
 
     # Only what it works out, so that a file cannot set a setting past its checks.
     encoded = results_file._jsonable(Detector_SWC())
-    encoded["derived"]["qe_euv"] = 7.0
+    encoded["derived"].update(qe_euv=7.0, __dict__={"qe_euv": 7.0}, not_a_field=1)
     restored = load_results(_with_attribute(tmp_path, "detector", encoded))["detector"]
-    assert restored.qe_euv == Detector_SWC().qe_euv
+    assert restored.qe_euv == Detector_SWC().qe_euv and not hasattr(restored, "not_a_field")
 
 
 def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
@@ -665,23 +689,55 @@ def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
         load_results(path)
 
 
-def _crafted_dataset(tmp_path, **options):
-    """A results file whose one dataset is made with *options* by hand."""
+def _crafted_dataset(tmp_path, write=None, **options):
+    """A results file whose one dataset is made with *options* by hand, and then *write* done to it."""
     path = save_results(tmp_path / "crafted.h5", {"instrument": "SWC"})
     with h5py.File(path, "r+") as f:
-        f.create_dataset("data", **options)
+        data = f.create_dataset("data", **options)
+        if write is not None:
+            write(data)
         f.attrs["eclipse_order"] = json.dumps(["instrument", "data"])
     return path
 
 
-@pytest.mark.parametrize("options, match", [
-    (dict(data=np.array([b"text"])), "values of type"),
-    (dict(data=np.arange(4.0), compression="lzf"), "compressed in a way"),
-    (dict(shape=(10**9,), chunks=(1000,), dtype="f8"), "does not hold all of its data"),
-], ids=["text", "lzf", "unwritten"])
-def test_a_dataset_not_as_eclipse_writes_one_is_refused(tmp_path, options, match):
+def _first_quarter(data):
+    data[:1000] = 1.0
+
+
+def _one_small_chunk(data):
+    """A chunk stored as a few bytes of deflate, which could not give back all it declares."""
+    data.id.write_direct_chunk((0,), zlib.compress(bytes(16)))
+
+
+@pytest.mark.parametrize("options, write, match", [
+    (dict(data=np.array([b"text"])), None, "values of type"),
+    (dict(data=np.arange(4.0), compression="lzf"), None, "compressed in a way"),
+    (dict(shape=(4000,), chunks=(1000,), dtype="f8"), _first_quarter,
+     "does not hold all of its data"),
+    (dict(shape=(4000,), dtype="f8"), None, "does not hold all of its data"),
+    (dict(shape=(10**6,), chunks=(10**6,), dtype="f8", compression="gzip"), _one_small_chunk,
+     "does not hold all of its data"),
+], ids=["text", "lzf", "partly written", "unwritten", "swelling chunk"])
+def test_a_dataset_not_as_eclipse_writes_one_is_refused(tmp_path, options, write, match):
     with pytest.raises(ValueError, match=match):
-        load_results(_crafted_dataset(tmp_path, **options))
+        load_results(_crafted_dataset(tmp_path, write, **options))
+
+
+def test_datasets_that_store_more_than_the_file_are_refused(tmp_path, monkeypatch):
+    """As they would if several read the same stored data, which a crafted file could have."""
+    path = save_results(tmp_path / "out.h5", {"data": np.arange(4000.0)}, compression=None)
+    reading = results_file._Reading
+    monkeypatch.setattr(results_file, "_Reading", lambda size: reading(size=16000))
+    with pytest.raises(ValueError, match="shares what it stores with another dataset"):
+        load_results(path)
+
+
+def test_a_damaged_file_is_named(tmp_path):
+    """HDF5's own error, as for a chunk that does not decompress, is given with the file's name, as the OSError it is."""
+    path = _crafted_dataset(tmp_path, lambda data: data.id.write_direct_chunk((0,), bytes(100)),
+                            shape=(100,), chunks=(100,), dtype="f8", compression="gzip")
+    with pytest.raises(OSError, match="crafted.h5 could not be read"):
+        load_results(path)
 
 
 def test_a_virtual_dataset_is_refused(tmp_path):
@@ -699,11 +755,71 @@ def test_a_virtual_dataset_is_refused(tmp_path):
 @pytest.mark.parametrize("attribute, value, match", [
     ("thing", {"__eclipse__": "not_a_tag"}, "tagged 'not_a_tag'"),
     ("thing", {"__eclipse__": "resource", "value": "../../outside"}, "outside the package"),
+    ("thing", {"__eclipse__": "resource", "value": "/etc/hosts"}, "outside the package"),
+    ("thing", {"__eclipse__": "resource", "value": "C:outside"}, "outside the package"),
+    ("thing", {"__eclipse__": "resource", "value": "data\\..\\..\\x"}, "outside the package"),
     ("thing", {"__eclipse__": "quantity"}, "not a results file this ECLIPSE can read"),
-], ids=["unknown tag", "resource outside", "missing entry"])
+    ("thing", {"__eclipse__": "map", "items": [[["a"], 1]]}, "TypeError: .*unhashable"),
+    ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": [0, "x"]},
+     "holds more than text"),
+    ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": [""] * 10**4 + ["x" * 10**4]},
+     "larger than the file"),
+], ids=["unknown tag", "resource outside", "resource absolute", "resource on a drive",
+        "resource with backslashes", "missing entry", "unhashable key", "text and numbers",
+        "text wider than the file"])
 def test_a_value_not_as_eclipse_writes_one_is_refused(tmp_path, attribute, value, match):
     with pytest.raises(ValueError, match=match):
         load_results(_with_attribute(tmp_path, attribute, value))
+
+
+@pytest.mark.parametrize("name, value", [
+    ("thing", np.array(['"a"', '"b"'], dtype=h5py.string_dtype())),
+    ("thing", np.array([(1, 2)], dtype=[("a", "i4"), ("b", "i4")])[0]),
+    ("format", np.array(["eclipse-results"] * 2, dtype=h5py.string_dtype())),
+], ids=["many", "fields", "format"])
+def test_an_attribute_that_is_not_one_value_is_refused_before_it_is_read(tmp_path, name, value):
+    """Each element could refer to the same text elsewhere in the file, copied for each."""
+    path = _with_attribute(tmp_path, "thing", "x")
+    with h5py.File(path, "r+") as f:
+        f.attrs[name] = value
+    with pytest.raises(ValueError, match=f"attribute '{name}' of / is not one string or integer"):
+        load_results(path)
+
+
+def _with_cards(wcs, **cards):
+    """The tree :func:`_jsonable` writes for *wcs*, with *cards* set in its header."""
+    tree = results_file._jsonable(wcs)
+    header = fits.Header.fromstring(tree["header"], sep="\n")
+    header.update(cards)
+    tree["header"] = header.tostring(sep="\n")
+    return tree
+
+
+@pytest.mark.filterwarnings("ignore:Some non-standard WCS keywords were excluded")
+def test_a_wcs_is_read_back_without_what_a_results_file_does_not_hold(tmp_path):
+    """A distortion, which is not written, and which astropy would tabulate at any size a header asks."""
+    sky = WCS(naxis=2)
+    sky.wcs.ctype, sky.wcs.cunit, sky.wcs.cdelt = ["HPLN-TAN", "HPLT-TAN"], ["arcsec"] * 2, [0.2, 0.2]
+    tree = _with_cards(sky, A_ORDER=2, B_ORDER=2, A_2_0=0.001, B_0_2=0.001)
+    assert WCS(fits.Header.fromstring(tree["header"], sep="\n")).sip is not None
+    restored = load_results(_with_attribute(tmp_path, "wcs", tree))["wcs"]
+    assert restored.sip is None and restored.wcs.cdelt.tolist() == [0.2, 0.2]
+
+    # Nor its number of axes, which wcslib makes room for as the square of.
+    tree = _with_cards(_wcs(), WCSAXES=5)
+    assert WCS(fits.Header.fromstring(tree["header"], sep="\n")).naxis == 5
+    assert load_results(_with_attribute(tmp_path, "wcs", tree))["wcs"].naxis == 3
+    tree = _with_cards(_wcs(), WCSAXES=10**6)
+    assert load_results(_with_attribute(tmp_path, "wcs", tree))["wcs"].naxis == 3
+    with pytest.raises(ValueError, match="does not have its axes"):
+        load_results(_with_attribute(tmp_path, "wcs", _with_cards(_wcs(), CTYPE9="EXTRA")))
+
+    sky = WCS(naxis=2)
+    sky.wcs.ctype = ["RA---TAN-SIP", "DEC--TAN-SIP"]
+    sky.sip = Sip(np.full((3, 3), 1e-3), np.full((3, 3), 1e-3), None, None, sky.wcs.crpix)
+    with pytest.warns(UserWarning, match="does not hold a WCS's distortion"):
+        path = save_results(tmp_path / "sky.h5", {"sky": sky})
+    assert load_results(path)["sky"].sip is None
 
 
 @pytest.mark.parametrize("payload, change, match", [
@@ -735,19 +851,30 @@ def test_another_kind_of_eclipse_file_is_refused(tmp_path):
 def test_every_value_is_strict_json(tmp_path):
     """So that a reader in another language parses it, NaN and infinity included."""
     payload = {"nan": float("nan"), "inf": -np.inf * u.s, "list": [1.0, float("inf")],
-               "array": np.array(["a"]), "quantities": [np.nan * u.m]}
+               "array": np.array(["a"]), "quantities": [np.nan * u.m],
+               "group": {"data": np.ones(3), "nan": float("nan"), (1, 2): {"x": np.ones(2)}},
+               "cube": _cube()}
     path = save_results(tmp_path / "out.h5", payload)
 
     def refuse(constant):
         raise ValueError(f"{constant} is not JSON")
 
+    # Every attribute but those of plain text or a number.
+    plain = {"format", "version", "unit", "eclipse_type", "eclipse_length", "target"}
+    checked = []
     with h5py.File(path, "r") as f:
-        for name, text in f.attrs.items():
-            if name not in ("format", "version"):
-                json.loads(text, parse_constant=refuse)
+        nodes = [f]
+        f.visititems(lambda name, node: nodes.append(node))
+        for node in nodes:
+            for name, text in node.attrs.items():
+                if name not in plain:
+                    json.loads(text, parse_constant=refuse)
+                    checked.append(f"{node.name.rstrip('/')}/{name}")
+    assert {"/group/1", "/group/eclipse_keys", "/cube/wcs", "/cube/meta"} <= set(checked)
     out = load_results(path)
     assert np.isnan(out["nan"]) and out["inf"] == -np.inf * u.s
     assert out["list"][1] == float("inf") and np.isnan(out["quantities"][0].value)
+    assert np.isnan(out["group"]["nan"])
 
 
 def test_whole_numbers_with_a_unit_stay_whole(tmp_path):
@@ -779,13 +906,15 @@ def test_what_save_results_is_given_is_checked_first(tmp_path, monkeypatch):
     assert load_results("~/home.h5")["instrument"] == "SWC"
 
 
-def test_another_save_of_the_same_name_is_left_alone(tmp_path):
-    """Two runs saving one name at once write their own partial files."""
-    theirs = tmp_path / "out.h5.part"
+def test_another_save_of_the_same_name_is_left_alone(tmp_path, monkeypatch):
+    """Two runs saving one name at once write their own partial files, even if they draw the same name."""
+    draws = iter(["aaaa", "bbbb"])
+    monkeypatch.setattr(results_file.secrets, "token_hex", lambda size: next(draws))
+    theirs = tmp_path / "out.h5.aaaa.part"
     theirs.write_bytes(b"another run's")
     path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
     assert theirs.read_bytes() == b"another run's"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["out.h5", "out.h5.part"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["out.h5", "out.h5.aaaa.part"]
     assert load_results(path)["instrument"] == "SWC"
 
 
@@ -846,7 +975,9 @@ def test_what_the_results_hold_in_more_than_one_place_is_written_once(tmp_path):
     ("/b", "which it is inside"),
     ("/ext/x", "which the file does not hold"),
     ("nowhere", "refers to nothing"),
-], ids=["missing", "inside itself", "through a link", "not a path"])
+    ("/a//x", "which the file does not hold"),
+    ("/a/./x", "which the file does not hold"),
+], ids=["missing", "inside itself", "through a link", "not a path", "empty part", "dot"])
 def test_a_reference_is_only_to_what_the_file_holds(tmp_path, target, match):
     save_results(tmp_path / "other.h5", {"x": np.ones(2)})
     path = save_results(tmp_path / "out.h5", {"a": {"x": np.ones(2)}, "b": {"y": np.ones(2)}})
@@ -870,3 +1001,83 @@ def test_the_numbers_of_a_wcs_come_back_exactly(tmp_path):
     restored = _round_trip(tmp_path, {"wcs": wcs})["wcs"]
     for name in ("cdelt", "crpix", "crval"):
         assert list(getattr(restored.wcs, name)) == list(getattr(wcs.wcs, name))
+
+
+@pytest.mark.filterwarnings("ignore:cdelt will be ignored since cd is present")
+def test_a_rotated_wcs_or_one_given_by_a_cd_matrix_comes_back_exactly(tmp_path):
+    rotated = _wcs()
+    angle = np.deg2rad(7.0)
+    rotated.wcs.pc = [[1.0, 0.0, 0.0], [0.0, np.cos(angle), -np.sin(angle)],
+                      [0.0, np.sin(angle), np.cos(angle)]]
+    matrix = WCS(naxis=2)
+    matrix.wcs.ctype = ["HPLN-TAN", "HPLT-TAN"]
+    matrix.wcs.cunit = ["arcsec", "arcsec"]
+    matrix.wcs.cd = [[0.2, 0.013], [-0.011, 0.159]]
+    matrix.wcs.crpix = [85.83333333333333, 1.5]
+    # With both, wcslib takes the PC matrix.
+    both = WCS(naxis=2)
+    both.wcs.ctype, both.wcs.cunit = matrix.wcs.ctype, matrix.wcs.cunit
+    both.wcs.cdelt, both.wcs.pc, both.wcs.cd = [0.2, 0.159], [[1.0, 0.1], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]]
+    # As an older solar FITS header can give it.
+    crota = WCS(naxis=2)
+    crota.wcs.ctype, crota.wcs.cunit = matrix.wcs.ctype, matrix.wcs.cunit
+    crota.wcs.cdelt, crota.wcs.crota = [0.6, 0.6], [0.0, 12.0]
+    out = _round_trip(tmp_path, {"rotated": rotated, "matrix": matrix, "both": both,
+                                 "crota": crota})
+    assert out["crota"].wcs.has_crota() and out["crota"].wcs.crota.tolist() == [0.0, 12.0]
+    for name, before in (("both", both), ("crota", crota)):
+        assert np.allclose(out[name].pixel_to_world_values(10, 20),
+                           before.pixel_to_world_values(10, 20), rtol=0, atol=1e-12), name
+    assert out["rotated"].wcs.pc.tolist() == rotated.wcs.pc.tolist()
+    assert out["rotated"].wcs.cdelt.tolist() == rotated.wcs.cdelt.tolist()
+    assert out["matrix"].wcs.has_cd() and out["matrix"].wcs.cd.tolist() == matrix.wcs.cd.tolist()
+    assert list(out["matrix"].wcs.cunit) == list(matrix.wcs.cunit)
+    assert np.allclose(out["matrix"].pixel_to_world_values(10, 20),
+                       matrix.pixel_to_world_values(10, 20), rtol=0, atol=1e-12)
+
+
+def test_a_file_that_holds_no_mapping_is_refused(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    with h5py.File(path, "r+") as f:
+        f.attrs["eclipse_type"] = "list"
+        f.attrs["eclipse_length"] = 0
+    with pytest.raises(ValueError, match="holds a list, not a mapping"):
+        load_results(path)
+
+
+def _combinations(first, second):
+    """Results of two combinations, with the DN signal data and unit of each given."""
+    return {"results": {"all_combinations": {
+        ("a",): {"first_signal_wcs": _wcs(), "first_dn_signal_data": first[0],
+                 "first_dn_signal_unit": first[1], "first_photon_signal_data": np.ones((2, 3, 4)),
+                 "first_photon_signal_unit": u.photon},
+        ("b",): {"first_signal_wcs": _wcs(), "first_dn_signal_data": second[0],
+                 "first_dn_signal_unit": second[1], "first_photon_signal_data": np.ones((2, 3, 4)),
+                 "first_photon_signal_unit": u.photon},
+    }}}
+
+
+def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
+    """Signals are multiplied by units only, each signal once, and what is missing is named."""
+    from euvst_response.analysis import load_instrument_response_results
+
+    signal = np.arange(24.0).reshape(2, 3, 4)
+    path = save_results(tmp_path / "out.h5", _combinations((signal, u.DN), (signal * 2, u.DN)))
+    results = load_instrument_response_results(path)["results"]["all_combinations"]
+    assert results[("b",)]["first_dn_signal"].data.tolist() == (signal * 2).tolist()
+    assert results[("b",)]["first_dn_signal"].unit == u.DN
+
+    # Held once by the file, as a crafted file could for any number of combinations.
+    path = save_results(tmp_path / "out.h5", _combinations((signal, u.DN), (signal, u.DN)))
+    results = load_instrument_response_results(path)["results"]["all_combinations"]
+    assert np.shares_memory(results[("a",)]["first_dn_signal"].data,
+                            results[("b",)]["first_dn_signal"].data)
+    assert results[("b",)]["first_dn_signal"].data.tolist() == signal.tolist()
+    path = save_results(tmp_path / "out.h5",
+                        _combinations((signal, u.DN), (signal * 2, np.ones((2, 3, 4)))))
+    with pytest.raises(ValueError, match="out.h5: the dn signal.s unit is a ndarray, not a unit"):
+        load_instrument_response_results(path)
+    path = save_results(tmp_path / "out.h5", {"results": {"all_combinations": {("a",): {}}}})
+    with pytest.raises(ValueError, match="does not hold the results of an instrument simulation: "
+                                         "KeyError"):
+        load_instrument_response_results(path)

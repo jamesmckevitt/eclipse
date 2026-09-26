@@ -1194,8 +1194,12 @@ def main() -> None:
         # than read in place of these results.
         stale = output_file.with_suffix(".pkl")
         if stale.is_file():
-            os.replace(stale, stale.with_name(stale.name + ".old"))
-            print(f"Moved {stale}, from an older version, to {stale.name}.old")
+            try:
+                os.replace(stale, stale.with_name(stale.name + ".old"))
+                print(f"Moved {stale}, from an older version, to {stale.name}.old")
+            except OSError as error:
+                print(f"Could not move {stale}, from an older version, aside ({error}); "
+                      f"the results are {output_file}, not it")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
 
