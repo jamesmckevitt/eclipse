@@ -201,7 +201,7 @@ def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wro
     # The same line cubes as a pickle of an older version, which did not
     # record the convention.
     del saved["line_cubes"][LINE].meta["velocity_convention"]
-    old = tmp_path / "pickled.pkl"
+    old = tmp_path / "old.pkl"
     with open(old, "wb") as f:
         dill.dump({"line_cubes": saved["line_cubes"]}, f)
     if refused:
@@ -224,21 +224,20 @@ def _write_results_file(path, meta):
     {},  # written before the side views existed, so a view along z
 ], ids=["z", "x", "no axis"])
 def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
-    new = _write_results_file(tmp_path / "old.h5", meta)
+    written = _write_results_file(tmp_path / "written.h5", meta)
     # The versions that wrote such results wrote them as pickles.
-    old = tmp_path / "pickled.pkl"
-    with open(old, "wb") as f:
+    pickled = tmp_path / "pickled.pkl"
+    with open(pickled, "wb") as f:
         dill.dump({"results": {"all_combinations": {}},
                    "cube_sim": NDCube(np.ones((2, 2, 3)), wcs=WCS(naxis=3), meta=meta)}, f)
-    for path in (new, old):
+    for path in (written, pickled):
+        # The pickle's own warning is not the one looked for here.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             with pytest.raises(ValueError, match="wrong sign"):
                 load_instrument_response_results(path)
-        with warnings.catch_warnings(record=True) as seen:
-            warnings.simplefilter("always")
-            load_instrument_response_results(path, allow_wrong_velocity_sign=True)
-        assert any("wrong sign" in str(warning.message) for warning in seen)
+            with pytest.warns(UserWarning, match="wrong sign"):
+                load_instrument_response_results(path, allow_wrong_velocity_sign=True)
 
 
 @pytest.mark.parametrize("meta", [

@@ -279,7 +279,7 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are written to `run/result/<config name>.h5`, an HDF5 file. Older versions wrote a pickle, which still loads, with a warning, until a future release; `euvst_response.convert_results_pickle("old.pkl")` rewrites one as a results file. The output includes:
+Results are written to `run/result/<config name>.h5`, an HDF5 file that any HDF5 reader can open: the arrays are datasets, with a `unit` attribute for quantities, and the other values, such as the configuration, are attributes holding JSON. Older versions wrote a pickle, which still loads, with a warning, until a future release; `euvst_response.convert_results_pickle("old.pkl")` rewrites one as a results file. The output includes:
 
 - Simulated detector signals (DN and photon counts)
 - For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel

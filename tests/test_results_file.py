@@ -7,10 +7,11 @@ numbers.
 """
 import dataclasses
 import datetime
+import json
 import warnings
 
-import h5py
 import astropy.units as u
+import h5py
 import numpy as np
 import pytest
 import yaml
@@ -22,8 +23,8 @@ from euvst_response.config import (AluminiumFilter, Detector_EIS,
                                    Detector_SWC, Simulation, Telescope_EIS,
                                    Telescope_EUVST)
 from euvst_response.fitting import FitComponent, FitConfig
-from euvst_response.results_file import is_results_file, load_results, save_results
 from euvst_response.raster import RasterPlan, SynthesisSettings
+from euvst_response.results_file import is_results_file, load_results, save_results
 
 REST = 195.119 * u.Angstrom
 
@@ -105,11 +106,12 @@ def test_the_file_is_hdf5_not_a_pickle(tmp_path):
         # Any HDF5 reader finds the arrays, with their units.
         assert f["cube_sim/data"].shape == (2, 3, 4)
         assert f["cube_sim/data"].dtype == np.float64
+        assert f["cube_sim/data"].attrs["unit"] == "DN / pix"
 
 
 def test_a_view_is_written_without_the_array_it_views(tmp_path):
-    """A slice of the Monte Carlo stack, as the first fit is, costs only itself."""
-    stack = np.random.default_rng(1).random((1000, 50, 50))
+    """A slice of the Monte Carlo stack, as the first fit is, is written without the rest of it."""
+    stack = np.random.default_rng(1).random((200, 50, 50))
     path = save_results(tmp_path / "view.h5", {"first": stack[0]}, compression=None)
     assert path.stat().st_size < 100_000
     assert np.array_equal(load_results(path)["first"], stack[0])
@@ -390,9 +392,13 @@ def test_arrays_outlive_the_closed_file(tmp_path):
     assert float(array.sum()) == pytest.approx(276.0)
 
 
-def test_uncompressed_writing_works(tmp_path):
-    out = _round_trip(tmp_path, compression=None)
-    assert np.array_equal(out["cube_sim"].data, _cube().data)
+def test_the_larger_arrays_are_compressed_unless_asked_not_to_be(tmp_path):
+    payload = {"large": np.arange(5000.0), "small": np.arange(10.0)}
+    for compression, expected in (("gzip", "gzip"), (None, None)):
+        path = save_results(tmp_path / f"{compression}.h5", payload, compression=compression)
+        with h5py.File(path, "r") as f:
+            assert f["large"].compression == expected and f["small"].compression is None
+        assert np.array_equal(load_results(path)["large"], payload["large"])
 
 
 def test_compression_actually_shrinks_a_large_array(tmp_path):
@@ -477,3 +483,161 @@ def test_numpy_scalars_do_not_stop_a_write(tmp_path):
     assert out["flag"] is True
     assert out["count"] == 7
     assert out["value"] == pytest.approx(1.5)
+
+
+def test_sequences_and_meta_holding_arrays_are_groups(tmp_path):
+    cube = NDCube(np.ones((2, 3)), wcs=WCS(naxis=2),
+                  meta={"positions": np.arange(3.0) * u.Mm, "raster": True})
+    out = _round_trip(tmp_path, {"pair": (np.ones(2), "a"), "items": [np.zeros(3), 1.5],
+                                 "cube": cube})
+    assert type(out["pair"]) is tuple and out["pair"][1] == "a"
+    assert np.array_equal(out["pair"][0], np.ones(2))
+    assert type(out["items"]) is list and out["items"][1] == 1.5
+    assert u.allclose(out["cube"].meta["positions"], np.arange(3.0) * u.Mm)
+    assert out["cube"].meta["raster"] is True and out["cube"].unit is None
+
+
+def test_keys_that_cannot_name_members_are_kept(tmp_path):
+    """Keys HDF5 cannot use as names, or that the file uses itself, are kept in order."""
+    nested = {"a/b": np.ones(2), "version": 1, "": 2, ".": 3, 4: "four", "eclipse_order": "x"}
+    plain = {"a/b": 1, 2: "two", "__eclipse__": 3}
+    out = _round_trip(tmp_path, {"nested": nested, "plain": plain})
+    assert list(out["nested"]) == list(nested)
+    assert np.array_equal(out["nested"]["a/b"], np.ones(2)) and out["nested"][4] == "four"
+    assert out["plain"] == plain
+    with pytest.raises(ValueError, match="cannot be keyed by"):
+        save_results(tmp_path / "bad.h5", {"version": 1})
+
+
+def test_dates_times_text_and_edge_values_survive(tmp_path):
+    when = datetime.datetime(2026, 9, 25, 12, 30, 5)
+    names = np.array(["Fe12_195.1190", "Fe09_171.0730"])
+    out = _round_trip(tmp_path, {"when": when, "names": names, "empty": np.zeros((0, 3)),
+                                 "nan": float("nan"), "big": 2**70, "flags": np.array([True, False])})
+    assert type(out["when"]) is datetime.datetime and out["when"] == when
+    assert out["names"].dtype == names.dtype and list(out["names"]) == list(names)
+    assert out["empty"].shape == (0, 3)
+    assert np.isnan(out["nan"]) and out["big"] == 2**70
+    assert out["flags"].dtype == bool and list(out["flags"]) == [True, False]
+
+
+def test_a_file_that_does_not_hold_together_is_refused(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"group": {"data": np.ones(3), "note": "x"}})
+    with h5py.File(path, "r+") as f:
+        del f["group"].attrs["note"]
+    with pytest.raises(ValueError, match="not those it lists"):
+        load_results(path)
+
+    path = save_results(tmp_path / "out.h5", {"group": {"data": np.ones(3)}})
+    with h5py.File(path, "r+") as f:
+        del f["group"].attrs["eclipse_order"]
+    with pytest.raises(ValueError, match="no 'eclipse_order' attribute"):
+        load_results(path)
+
+    # A soft link, or a dataset keeping its data in another file, is refused too.
+    path = save_results(tmp_path / "out.h5", {"group": {"data": np.ones(3)}, "other": np.ones(3)})
+    with h5py.File(path, "r+") as f:
+        del f["other"]
+        f["other"] = h5py.SoftLink("/group/data")
+    with pytest.raises(ValueError, match="is a link"):
+        load_results(path)
+
+    raw = tmp_path / "raw.bin"
+    np.ones(3).tofile(raw)
+    path = save_results(tmp_path / "out.h5", {"other": np.ones(3)})
+    with h5py.File(path, "r+") as f:
+        del f["other"]
+        f.create_dataset("other", shape=(3,), dtype="f8", external=[(str(raw), 0, 24)])
+    with pytest.raises(ValueError, match="keeps its data in another file"):
+        load_results(path)
+
+
+def test_only_the_configuration_objects_it_rebuilds_are_written(tmp_path):
+    """So that a file is not written that cannot then be read."""
+    @dataclasses.dataclass
+    class Mine:
+        value: int = 1
+
+    with pytest.raises(TypeError, match="only .* are rebuilt"):
+        save_results(tmp_path / "mine.h5", {"mine": Mine()})
+    assert not (tmp_path / "mine.h5").exists()
+
+
+def _with_attribute(tmp_path, name, value):
+    """A results file with *value* written by hand as the JSON of member *name*."""
+    path = save_results(tmp_path / "hand.h5", {"instrument": "SWC"})
+    with h5py.File(path, "r+") as f:
+        f.attrs[name] = json.dumps(value)
+        f.attrs["eclipse_order"] = json.dumps(["instrument", name])
+    return path
+
+
+def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path):
+    """As one from a later check, or with a setting since removed, would be."""
+    fit = FitConfig(components=[FitComponent(wavelength=195.119 * u.AA),
+                                FitComponent(wavelength=195.179 * u.AA)])
+    encoded = results_file._jsonable(fit)
+    # One component, which this version refuses, and a setting it lacks.
+    encoded["fields"]["components"] = encoded["fields"]["components"][:1]
+    encoded["fields"]["retired_setting"] = 3
+    with pytest.warns(UserWarning) as seen:
+        restored = load_results(_with_attribute(tmp_path, "fit", encoded))["fit"]
+    messages = " ".join(str(w.message) for w in seen)
+    assert "retired_setting" in messages and "rebuilt as it was stored" in messages
+    assert isinstance(restored, FitConfig) and len(restored.components) == 1
+    assert restored.components[0].wavelength == 195.119 * u.AA
+
+
+def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):
+    """A detector's dark current, as the run used it, whatever this version works out."""
+    detector = Detector_SWC()
+    as_run = 42 * detector.dark_current.unit
+    object.__setattr__(detector, "dark_current", as_run)
+    assert _round_trip(tmp_path, {"detector": detector})["detector"].dark_current == as_run
+
+
+def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"data": np.ones(3), "more": {"x": np.ones(2)}})
+    with h5py.File(path, "r+") as f:
+        f["more"]["again"] = f["data"]
+        f["more"].attrs["eclipse_order"] = json.dumps(["x", "again"])
+    with pytest.raises(ValueError, match="reached from more than one place"):
+        load_results(path)
+
+    swelling = {"__eclipse__": "array", "dtype": "(1000,1000)f8", "value": [0.0]}
+    with pytest.raises(ValueError, match="which a results file does not"):
+        load_results(_with_attribute(tmp_path, "swell", swelling))
+    structured = {"__eclipse__": "numpy_type", "value": "f8,i4"}
+    with pytest.raises(ValueError, match="which a results file does not"):
+        load_results(_with_attribute(tmp_path, "kind", structured))
+
+
+def test_another_save_of_the_same_name_is_left_alone(tmp_path):
+    """Two runs saving one name at once write their own partial files."""
+    theirs = tmp_path / "out.h5.part"
+    theirs.write_bytes(b"another run's")
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    assert theirs.read_bytes() == b"another run's"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["out.h5", "out.h5.part"]
+    assert load_results(path)["instrument"] == "SWC"
+
+
+def test_what_a_results_file_cannot_hold_is_said(tmp_path):
+    masked = NDCube(np.ones((2, 3)), wcs=WCS(naxis=2), mask=np.zeros((2, 3), bool))
+    with pytest.warns(UserWarning, match="/cube: a results file does not hold a cube.s mask"):
+        out = _round_trip(tmp_path, {"cube": masked})
+    assert out["cube"].mask is None
+    with pytest.raises(TypeError, match="cannot be written"):
+        save_results(tmp_path / "long.h5", {"value": np.longdouble(1.5)})
+
+
+def test_a_missing_or_foreign_file_is_named_for_what_it_is(tmp_path):
+    import dill
+
+    with open(tmp_path / "run.pkl", "wb") as f:
+        dill.dump({"instrument": "SWC"}, f)
+    with pytest.raises(FileNotFoundError, match="convert_results_pickle"):
+        load_results(tmp_path / "run.h5")
+    (tmp_path / "notes.txt").write_text("instrument: SWC\n")
+    with pytest.raises(ValueError, match="neither a results file nor a results pickle"):
+        load_results(tmp_path / "notes.txt")

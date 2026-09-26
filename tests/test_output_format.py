@@ -224,6 +224,12 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     misnamed.write_bytes(old.read_bytes())
     with pytest.raises(ValueError, match="the pickle itself"):
         convert_results_pickle(misnamed)
+    # A pickle of something else, as a synthesis pickle is, is not results.
+    with open(tmp_path / "synthesis.pkl", "wb") as f:
+        dill.dump({"line_cubes": {}}, f)
+    with pytest.raises(ValueError, match="convert_synthesis_pickle"):
+        convert_results_pickle(tmp_path / "synthesis.pkl")
+    assert not (tmp_path / "synthesis.h5").exists()
 
     # A configuration object from before one of its settings existed, as in
     # a 0.8.0 pickle, gets today's default for it.
@@ -231,7 +237,7 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
     del simulation.__dict__["pinhole_positions_spectral"]
     with open(tmp_path / "v080.pkl", "wb") as f:
-        dill.dump({"simulation": simulation}, f)
+        dill.dump({"results": {"all_combinations": {}}, "simulation": simulation}, f)
     with pytest.warns(UserWarning, match="has no pinhole_positions_spectral"):
         converted = convert_results_pickle(tmp_path / "v080.pkl")
     restored = load_results(converted)["simulation"]
@@ -245,14 +251,18 @@ def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, m
         results = load_instrument_response_results("run/result/uniform.pkl")
     assert results["instrument"] == "SWC"
 
-    # A pickle left from an older version is older than the run that wrote the
-    # .h5, which a script asking for the .pkl got before, when the run
-    # replaced the pickle.
-    stale = Path("run/result/uniform.pkl")
-    stale.write_bytes(b"left from an older version")
+    # A pickle that is there is the one read, and the warning says when the
+    # .h5 beside it is newer, the results of a later run.
+    import dill
+
+    old = Path("run/result/uniform.pkl")
+    with open(old, "wb") as f:
+        dill.dump({"instrument": "EIS"}, f)
     written = Path("run/result/uniform.h5").stat().st_mtime
-    os.utime(stale, (written - 100, written - 100))
-    with pytest.warns(FutureWarning, match="is older, left from a version of ECLIPSE"):
-        assert load_instrument_response_results(stale)["instrument"] == "SWC"
+    for offset, newer in ((-100, True), (100, False)):
+        os.utime(old, (written + offset, written + offset))
+        with pytest.warns(FutureWarning, match="results pickle") as seen:
+            assert load_results(old)["instrument"] == "EIS"
+        assert any("beside it, is newer" in str(w.message) for w in seen) is newer
     with pytest.raises(FileNotFoundError):
         load_results("run/result/elsewhere.pkl")
