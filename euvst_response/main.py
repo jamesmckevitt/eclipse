@@ -21,7 +21,7 @@ from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, Synthe
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
-from .results_file import save_results
+from .results_file import _to_json, save_results
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
 from .utils import (
@@ -470,6 +470,14 @@ def main() -> None:
             f"Config file must be a mapping of keys to values, got "
             f"{type(config).__name__}: {args.config}"
         )
+    # The config is saved with the results, so a value the results file
+    # cannot hold, such as a YAML alias inside itself, is refused now rather
+    # than once the run is done.
+    try:
+        _to_json(config)
+    except (TypeError, RecursionError) as error:
+        reason = "a value holds itself" if isinstance(error, RecursionError) else error
+        raise ValueError(f"{args.config} cannot be saved with the results: {reason}") from None
 
     # Top-level scalar settings. A 'simulation:' that is not a mapping is left
     # for _validate_config_keys to report.

@@ -54,8 +54,10 @@ def load_instrument_response_results(filepath: str | Path,
     Parameters
     ----------
     filepath : str or Path
-        Path to the results file, or a pickle as older versions of
-        ECLIPSE wrote them, which is read with a warning.
+        Path to the results file, ``run/result/<config name>.h5``. A pickle,
+        as ECLIPSE 0.11.0 and earlier wrote them, is read with a warning
+        unless it is named as an HDF5 file, and a ``.pkl`` name that no
+        longer exists reads the ``.h5`` beside it.
     allow_wrong_velocity_sign : bool, optional
         Load a results file made from a synthesis file that an older ECLIPSE
         wrote for a view along x or z, with a warning instead of an error.
@@ -71,6 +73,9 @@ def load_instrument_response_results(filepath: str | Path,
         Dictionary containing all results and metadata with reconstructed signals.
     """
     data = load_results(filepath, _stacklevel=3)
+    # An old pickle can hold anything.
+    if not isinstance(data, dict):
+        raise ValueError(f"{filepath} does not hold the results of an instrument simulation.")
 
     # Refuse results made from synthesis files written before the Doppler
     # sign was fixed, for the views whose sign it changed.  Uniform intensity
@@ -117,7 +122,7 @@ def load_instrument_response_results(filepath: str | Path,
                 signal = combination_results[f"first_{kind}_signal_data"]
                 unit = combination_results[f"first_{kind}_signal_unit"]
                 if not isinstance(unit, u.UnitBase):
-                    raise ValueError(f"{filepath}: the {kind} signal's unit is a "
+                    raise ValueError(f"{filepath}: the {kind} signal's unit is of type "
                                      f"{type(unit).__name__}, not a unit.")
                 if (id(signal), unit) not in signals:
                     signals[id(signal), unit] = signal * unit

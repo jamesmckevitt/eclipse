@@ -134,16 +134,16 @@ def test_what_yaml_can_put_in_a_configuration_survives(tmp_path):
 
 def test_the_file_is_made_as_any_file_is(tmp_path):
     """With the permissions any other file there gets, so that colleagues can read it, and through a link."""
-    # A umask that lets the group read, which a file made only for its owner
-    # would not follow.
-    previous = os.umask(0o022)
+    # A umask that lets the group write, which a file made only for its owner,
+    # or with permissions of its own, would not follow.
+    previous = os.umask(0o002)
     try:
         path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
         (tmp_path / "plain").write_text("")
     finally:
         os.umask(previous)
     assert path.stat().st_mode & 0o777 == (tmp_path / "plain").stat().st_mode & 0o777
-    assert path.stat().st_mode & 0o044
+    assert path.stat().st_mode & 0o060 == 0o060
     target = save_results(tmp_path / "real.h5", {"instrument": "SWC"})
     link = tmp_path / "link.h5"
     link.symlink_to(target)
@@ -483,6 +483,11 @@ def test_a_pickle_named_as_an_hdf5_file_is_not_unpickled(tmp_path):
     assert not is_results_file(misnamed)
     with pytest.raises(ValueError, match="is named as an HDF5 file but is a pickle"):
         load_results(misnamed)
+    for name in ("other.hdf5", "other.hdf", "other.he5"):
+        named = tmp_path / name
+        named.write_bytes(misnamed.read_bytes())
+        with pytest.raises(ValueError, match="is named as an HDF5 file but is a pickle"):
+            load_results(named)
     for name in ("upper.PKL", "other.pickle", "run.pkl.old", "x.results"):
         named = tmp_path / name
         named.write_bytes(misnamed.read_bytes())
@@ -525,9 +530,9 @@ def test_numpy_scalars_do_not_stop_a_write(tmp_path):
     out = _round_trip(tmp_path, {"flag": np.bool_(True),
                                  "count": np.int64(7),
                                  "value": np.float32(1.5)})
-    assert out["flag"] is True
-    assert out["count"] == 7
-    assert out["value"] == pytest.approx(1.5)
+    assert out["flag"] is np.True_
+    assert type(out["count"]) is np.int64 and out["count"] == 7
+    assert type(out["value"]) is np.float32 and out["value"] == 1.5
 
 
 def test_sequences_and_meta_holding_arrays_are_groups(tmp_path):
@@ -540,6 +545,10 @@ def test_sequences_and_meta_holding_arrays_are_groups(tmp_path):
     assert type(out["items"]) is list and out["items"][1] == 1.5
     assert u.allclose(out["cube"].meta["positions"], np.arange(3.0) * u.Mm)
     assert out["cube"].meta["raster"] is True and out["cube"].unit is None
+    with h5py.File(tmp_path / "out.h5", "r") as f:
+        assert f["pair"].attrs["eclipse_type"] == "tuple" and "0" in f["pair"]
+        assert f["items"].attrs["eclipse_type"] == "list" and "0" in f["items"]
+        assert isinstance(f["cube/meta"], h5py.Group) and "positions" in f["cube/meta"]
 
 
 def test_keys_that_cannot_name_members_are_kept(tmp_path):
@@ -569,7 +578,9 @@ def test_dates_times_text_and_edge_values_survive(tmp_path):
 def test_text_arrays_keep_their_shape_and_width(tmp_path):
     """Written as their items, which do not give an empty array's shape or a width wider than the text."""
     text = {"wide": np.array(["a"], dtype="U5"), "empty": np.empty((0, 3), dtype="U5"),
-            "grid": np.array([["ab", "c"], ["d", "e"]]), "none": np.empty((2, 0), dtype="U1")}
+            "grid": np.array([["ab", "c"], ["d", "e"]]), "none": np.empty((2, 0), dtype="U1"),
+            "padded": np.array(["a"] * 100, dtype="U100"), "uneven": np.array(["x" * 200] + [""] * 2000),
+            "one": np.array("abc")}
     out = _round_trip(tmp_path, text)
     for name, array in text.items():
         assert out[name].dtype == array.dtype and out[name].shape == array.shape, name
@@ -687,10 +698,6 @@ def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
     structured = {"__eclipse__": "numpy_type", "value": "f8,i4"}
     with pytest.raises(ValueError, match="which a results file does not"):
         load_results(_with_attribute(tmp_path, "kind", structured))
-    # Text no wider than the file, whatever width it says it is.
-    wide = {"__eclipse__": "array", "dtype": "<U100000000", "value": ["a", "bc"]}
-    with pytest.raises(ValueError, match="larger than the file"):
-        load_results(_with_attribute(tmp_path, "wide", wide))
 
     # A member listed more than once would be read again for each.
     path = save_results(tmp_path / "out.h5", {"more": {"x": np.ones(2)}})
@@ -775,13 +782,11 @@ def test_a_virtual_dataset_is_refused(tmp_path):
      "holds more than text"),
     ("thing", {"__eclipse__": "array", "dtype": "<U1", "value": ["", "xy"]},
      "holds more than text of its width"),
-    ("thing", {"__eclipse__": "array", "dtype": "<U10000", "value": [""] * 10**4 + ["x" * 10**4]},
-     "larger than the file"),
     ("thing", {"__eclipse__": "array", "dtype": "<f8", "shape": [2, 2], "value": [1.0, 2.0]},
      "does not have the shape it gives"),
 ], ids=["unknown tag", "resource outside", "resource absolute", "resource on a drive",
         "resource with backslashes", "missing entry", "unhashable key", "text and numbers",
-        "text wider than it says", "text wider than the file", "wrong shape"])
+        "text wider than it says", "wrong shape"])
 def test_a_value_not_as_eclipse_writes_one_is_refused(tmp_path, attribute, value, match):
     with pytest.raises(ValueError, match=match):
         load_results(_with_attribute(tmp_path, attribute, value))
@@ -916,6 +921,7 @@ def test_what_save_results_is_given_is_checked_first(tmp_path, monkeypatch):
         save_results(tmp_path / "out.h5", {"instrument": "SWC"}, compression="lzf")
     with pytest.raises(TypeError, match="must be a mapping"):
         save_results(tmp_path / "out.h5", ["ab", "cd"])
+    assert list(tmp_path.iterdir()) == []
     monkeypatch.setenv("HOME", str(tmp_path))
     save_results("~/home.h5", {"instrument": "SWC"})
     assert load_results("~/home.h5")["instrument"] == "SWC"
@@ -1090,9 +1096,124 @@ def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
     assert results[("b",)]["first_dn_signal"].data.tolist() == signal.tolist()
     path = save_results(tmp_path / "out.h5",
                         _combinations((signal, u.DN), (signal * 2, np.ones((2, 3, 4)))))
-    with pytest.raises(ValueError, match="out.h5: the dn signal.s unit is a ndarray, not a unit"):
+    with pytest.raises(ValueError, match="out.h5: the dn signal.s unit is of type ndarray, not a unit"):
         load_instrument_response_results(path)
     path = save_results(tmp_path / "out.h5", {"results": {"all_combinations": {("a",): {}}}})
     with pytest.raises(ValueError, match="does not hold the results of an instrument simulation: "
                                          "KeyError"):
         load_instrument_response_results(path)
+
+
+def test_numbers_keep_their_numpy_types(tmp_path):
+    """As the keys of a cube's sampling have them, and a setting given in single precision."""
+    values = {"f32": np.float32(0.76), "f64": np.float64(0.2), "i32": np.int32(26),
+              "flag": np.bool_(True), "zero_d": np.array(5.0), "count": u.Quantity(3, u.pix, dtype=int),
+              "single": np.float32(1.5) * u.s, "keys": {(np.float64(0.2), 1): np.zeros(3)}}
+    out = _round_trip(tmp_path, values)
+    for name in ("f32", "f64", "i32", "flag"):
+        assert type(out[name]) is type(values[name]) and out[name] == values[name], name
+    assert type(out["zero_d"]) is np.ndarray and out["zero_d"].shape == () and out["zero_d"] == 5.0
+    for name in ("count", "single"):
+        assert out[name].dtype == values[name].dtype and out[name] == values[name], name
+    (key,) = out["keys"]
+    assert type(key[0]) is np.float64 and key == (0.2, 1)
+
+
+def test_a_unit_keeps_its_whole_scale(tmp_path):
+    units = {"third": u.CompositeUnit(1 / 3, [u.m], [1]), "arcsec": u.arcsec.decompose()}
+    out = _round_trip(tmp_path, {**units, "quantity": 2.0 * units["third"]})
+    for name, unit in units.items():
+        assert out[name] == unit and out[name].scale == unit.scale, name
+    assert out["quantity"].unit.scale == 1 / 3
+
+
+@pytest.mark.parametrize("value, match", [
+    (1.0 * u.def_unit("widget_for_a_test"), "would not read back as itself"),
+    (u.Magnitude(3.0), "is not a plain unit"),
+    (np.ma.masked_array([1.0, 2.0], mask=[False, True]), "masked array"),
+    (np.datetime64("2020-01-01T00:00:00.000000001"), "datetime64"),
+    (np.datetime64, "type datetime64"),
+    (np.complex128(1 + 2j), "complex128"),
+], ids=["unit of a script's own", "function unit", "masked array", "numpy date", "numpy date type",
+        "complex number"])
+def test_what_would_not_read_back_is_refused_when_written(tmp_path, value, match):
+    """With where it is, rather than written as something that cannot be read or reads as another value."""
+    with pytest.raises(TypeError, match=f"/group/value: .*{match}"):
+        save_results(tmp_path / "out.h5", {"group": {"value": value, "data": np.ones(3)}})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_cube_or_value_that_cannot_be_written_is_said_where_it_is(tmp_path):
+    loop = [1]
+    loop.append(loop)
+    with pytest.raises(TypeError, match="/loop: A value that holds itself"):
+        save_results(tmp_path / "out.h5", {"loop": loop})
+    # A sliced cube, whose WCS is a view of another.
+    with warnings.catch_warnings(), pytest.raises(TypeError, match="/cube/wcs: Values of type"):
+        warnings.simplefilter("ignore")
+        save_results(tmp_path / "out.h5", {"cube": _cube()[0]})
+
+
+def test_names_hdf5_cannot_hold_are_kept_as_keys(tmp_path):
+    """A NUL, which HDF5 would cut the name at, or text UTF-8 has no form for."""
+    payload = {"group": {"a\x00b": np.ones(2), "a": np.zeros(2), "\ud800": 1}}
+    out = _round_trip(tmp_path, payload)["group"]
+    assert list(out) == ["a\x00b", "a", "\ud800"]
+    assert np.array_equal(out["a\x00b"], np.ones(2)) and out["\ud800"] == 1
+
+
+def test_a_path_the_reader_would_not_follow_is_kept_as_given(tmp_path):
+    """The package itself, say, which is no file in it."""
+    root = results_file._package_root()
+    out = _round_trip(tmp_path, {"root": root, "table": root / "data" / "throughput" / "source.txt"})
+    assert out["root"] == root and out["table"] == root / "data" / "throughput" / "source.txt"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes over read-only files")
+def test_a_read_only_results_file_is_not_written_over(tmp_path):
+    path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
+    path.chmod(0o444)
+    with pytest.raises(PermissionError, match="read-only"):
+        save_results(path, {"instrument": "EIS"})
+    assert load_results(path)["instrument"] == "SWC"
+
+
+def test_a_long_name_is_written(tmp_path):
+    """Its partial file takes no more of the name than a filesystem allows."""
+    path = save_results(tmp_path / ("x" * 240 + ".h5"), {"instrument": "SWC"})
+    assert load_results(path)["instrument"] == "SWC"
+    assert [p.name for p in tmp_path.iterdir()] == [path.name]
+
+
+def test_odd_paths_are_named_for_what_they_are(tmp_path, monkeypatch):
+    import dill
+
+    (tmp_path / "x.h5").mkdir()
+    for path in (tmp_path / "x.h5", tmp_path, tmp_path / "."):
+        with pytest.raises(IsADirectoryError):
+            load_results(path)
+    with open(tmp_path / "run.pickle", "wb") as f:
+        dill.dump({"instrument": "SWC"}, f)
+    with pytest.raises(FileNotFoundError, match="run.pickle, beside it, is a results pickle"):
+        load_results(tmp_path / "run.h5")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    save_results(tmp_path / "home.h5", {"instrument": "SWC"})
+    assert is_results_file("~/home.h5")
+
+
+class _Gone:
+    """A class a pickle names, which a later version no longer has."""
+
+
+def test_a_pickle_of_a_class_this_version_lacks_is_named(tmp_path, monkeypatch):
+    import sys
+
+    import dill
+
+    with open(tmp_path / "old.pkl", "wb") as f:
+        dill.dump({"results": {"all_combinations": {}}, "thing": _Gone()}, f)
+    monkeypatch.delattr(sys.modules[__name__], "_Gone")
+    with pytest.warns(FutureWarning), pytest.raises(ValueError, match="cannot be unpickled"):
+        load_results(tmp_path / "old.pkl")
+    with pytest.raises(ValueError, match="cannot be unpickled"):
+        results_file.convert_results_pickle(tmp_path / "old.pkl")

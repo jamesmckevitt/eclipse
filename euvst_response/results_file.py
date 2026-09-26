@@ -11,14 +11,15 @@ File layout, version 1
 Root attributes ``format`` (``"eclipse-results"``) and ``version`` (``1``).
 The results are a tree of mappings, the root group being the top one:
 
-- an array of numbers with dimensions is a dataset, with a ``unit``
-  attribute if it is a quantity;
-- a mapping, list or tuple that holds such arrays is a group;
+- an array of numbers or booleans with dimensions is a dataset, with a
+  ``unit`` attribute if it is a quantity;
+- a cube, and a mapping, list or tuple that holds such arrays, is a group;
 - anything else is an attribute of its group, holding JSON.
 
-The group of a mapping lists its keys, in order, as JSON in an
-``eclipse_order`` attribute. A few groups are tagged by an ``eclipse_type``
-attribute:
+The group of a mapping keyed by names lists them, in order, as JSON in an
+``eclipse_order`` attribute. Other groups are tagged by an ``eclipse_type``
+attribute, which, as ``eclipse_length``, ``target`` and a dataset's
+``unit``, is plain text or a number rather than JSON:
 
 ``ndcube``
     An NDCube: its ``data``, with the cube's ``unit``, its ``wcs`` and its
@@ -35,18 +36,20 @@ attribute:
     items as members ``0``, ``1``, ...
 
 ``ref``
-    A value the results hold in more than one place, as the combinations
-    that share a ground truth hold it: written once, and elsewhere as this,
-    with the path it was written at in ``target``, so that it is read back
-    as one object, as a pickle kept it.
+    A value holding arrays that the results hold in more than one place, as
+    the combinations that share a ground truth hold it: written once, and
+    elsewhere as this, with the path it was written at in ``target``, so
+    that it is read back as one object, as a pickle kept it.
 
 The JSON is plain but for values it has no form for, which are objects
 with an ``__eclipse__`` entry naming what they are:
 
 - ``float``, a number that is not finite, as ``nan``, ``inf`` or ``-inf``,
   which JSON has no form for;
+- ``numpy``, a NumPy number, with its ``dtype``, as a key of a cube's
+  sampling is one;
 - ``quantity`` (``value`` and ``unit``), ``array`` (``dtype``, ``shape``
-  and ``value``) and ``unit``;
+  and ``value``) and ``unit``, a unit given with its whole scale;
 - ``tuple`` and ``map`` (``items``, a map's as key and value pairs);
 - ``date`` and ``datetime``, in ISO 8601, ``set`` and ``frozenset``
   (``items``) and ``bytes``, in base 64;
@@ -82,6 +85,7 @@ import math
 import os
 import re
 import secrets
+import sys
 import warnings
 from collections.abc import Mapping
 from importlib.resources import files
@@ -91,6 +95,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 from astropy.io import fits
+from astropy.utils.masked import Masked
 from astropy.wcs import WCS
 from ndcube import NDCube
 
@@ -170,8 +175,7 @@ def _wcs_to_tree(wcs: WCS) -> dict:
         tree.update(cdelt=lin.cdelt.tolist(), crota=lin.crota.tolist())
     tree["header"] = wcs.deepcopy().to_header().tostring(sep="\n")
     if wcs.has_distortion:
-        warnings.warn("A results file does not hold a WCS's distortion, so this WCS's is left "
-                      "out.", UserWarning, stacklevel=2)
+        _warn("A results file does not hold a WCS's distortion, so this WCS's is left out.")
     return tree
 
 
@@ -213,9 +217,12 @@ def _wcs_from_tree(tree: dict) -> WCS:
 # Values as JSON
 # ----------------------------------------------------------------------
 def _is_array(value) -> bool:
-    """Whether *value* is an array to write as a dataset: numbers or booleans, with dimensions."""
-    return (isinstance(value, np.ndarray) and value.ndim > 0
-            and value.dtype.kind in "biufc")
+    """Whether *value* is an array to write as a dataset: numbers or booleans, with dimensions.
+
+    A masked one is not, as its mask would be lost; writing it as JSON refuses it.
+    """
+    return (isinstance(value, np.ndarray) and value.ndim > 0 and value.dtype.kind in "biufc"
+            and not isinstance(value, (np.ma.MaskedArray, Masked)))
 
 
 def _holds_array(value) -> bool:
@@ -228,32 +235,78 @@ def _holds_array(value) -> bool:
     return False
 
 
+def _warn(message: str) -> None:
+    """Warn of *message* as the first caller outside this module, whatever the depth it is found at."""
+    frame, level = sys._getframe(1), 2
+    while frame is not None and frame.f_globals.get("__name__") == __name__:
+        frame, level = frame.f_back, level + 1
+    warnings.warn(message, UserWarning, stacklevel=level)
+
+
+def _unit_text(unit) -> str:
+    """*unit* as text that reads back as it, or TypeError if there is none."""
+    if not isinstance(unit, u.UnitBase):
+        raise TypeError(f"The unit {unit} cannot be written to a results file, as it is not a "
+                        f"plain unit.")
+    return _checked_unit_text(unit)
+
+
+@functools.lru_cache(maxsize=None)
+def _checked_unit_text(unit: u.UnitBase) -> str:
+    # With its whole scale, which astropy's text gives to six digits.
+    text = unit.to_string()
+    if unit.scale != 1:
+        text = (f"{float(unit.scale)!r} "
+                f"{u.CompositeUnit(1, unit.bases, unit.powers).to_string()}").strip()
+    try:
+        same = u.Unit(text) == unit
+    except ValueError:
+        same = False
+    # A unit only a script defined, say, is not one a reader knows.
+    if not same:
+        raise TypeError(f"The unit {unit} cannot be written to a results file, as it would not "
+                        f"read back as itself.")
+    return text
+
+
+def _package_parts(text: str):
+    """The parts of *text*, a path relative to the package, or None if it could lead out of it."""
+    parts = PurePosixPath(text).parts
+    if parts and all(part != ".." and re.fullmatch(r"[\w.-]+", part) for part in parts):
+        return parts
+    return None
+
+
 def _jsonable(value):
     """*value* as something json can write, with the kinds JSON lacks tagged."""
     if value is None or isinstance(value, (bool, int, str)):
         return value
-    if isinstance(value, float):
-        # A NumPy float is one too, and written as the Python float it is.
-        value = float(value)
-        return value if math.isfinite(value) else {TAG: "float", "value": repr(value)}
     if isinstance(value, np.generic):
         item = value.item()
-        # A longdouble, say, has no Python number to stand for it.
-        if isinstance(item, np.generic):
+        # A longdouble, say, has no Python number to stand for it, and a NumPy
+        # date or time none that keeps its units.
+        if isinstance(item, np.generic) or value.dtype.kind not in "biufS":
             raise TypeError(f"Values of type {type(value).__name__} cannot be written to a "
                             f"results file.")
-        return _jsonable(item)
+        if value.dtype.kind == "S":
+            return _jsonable(item)
+        # With its type, as a key of a cube's sampling has it, or a setting
+        # given in single precision.
+        return {TAG: "numpy", "dtype": value.dtype.str, "value": _jsonable(item)}
+    if isinstance(value, float):
+        return value if math.isfinite(value) else {TAG: "float", "value": repr(value)}
+    if isinstance(value, (np.ma.MaskedArray, Masked)):
+        raise TypeError("A masked array cannot be written to a results file: its mask would be "
+                        "lost.")
     if isinstance(value, u.Quantity):
-        return {TAG: "quantity", "value": _jsonable(value.value), "unit": value.unit.to_string()}
+        return {TAG: "quantity", "value": _jsonable(value.value), "unit": _unit_text(value.unit)}
     if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return _jsonable(value.item())
-        if value.dtype.kind not in "biufcU":
+        if value.dtype.kind not in "biufU":
             raise TypeError(f"An array of {value.dtype} cannot be written to a results file.")
         return {TAG: "array", "dtype": value.dtype.str, "shape": list(value.shape),
                 "value": _jsonable(value.tolist())}
     if isinstance(value, u.UnitBase):
-        return {TAG: "unit", "value": value.to_string()}
+        return {TAG: "unit", "value": _unit_text(value)}
     if isinstance(value, WCS):
         return {TAG: "wcs", **_wcs_to_tree(value)}
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -269,7 +322,12 @@ def _jsonable(value):
                 "fields": {name: _jsonable(field) for name, field in _init_fields(value).items()},
                 "derived": {name: _jsonable(field) for name, field in derived.items()}}
     if isinstance(value, type) and issubclass(value, np.generic):
-        return {TAG: "numpy_type", "value": np.dtype(value).name}
+        try:
+            name = _plain_dtype(value).name
+        except (TypeError, ValueError):
+            raise TypeError(f"The type {value.__name__} cannot be written to a results "
+                            f"file.") from None
+        return {TAG: "numpy_type", "value": name}
     # YAML reads !!set and !!binary as these, so a configuration can hold them.
     if isinstance(value, (set, frozenset)):
         items = [_jsonable(v) for v in value]
@@ -286,13 +344,16 @@ def _jsonable(value):
         return {TAG: "date", "value": value.isoformat()}
     # Path, and anything else that says where it is on the filesystem, as the
     # throughput tables, found through importlib.resources, may do without
-    # being a pathlib.Path.
+    # being a pathlib.Path. One in the package is written relative to it, as
+    # the reader then finds it, else as it is.
     if isinstance(value, Path) or hasattr(value, "__fspath__"):
         try:
-            relative = Path(os.fspath(value)).relative_to(_package_root())
+            relative = Path(os.fspath(value)).relative_to(_package_root()).as_posix()
         except ValueError:
-            return {TAG: "path", "value": os.fspath(value)}
-        return {TAG: "resource", "value": relative.as_posix()}
+            relative = None
+        if relative is not None and _package_parts(relative):
+            return {TAG: "resource", "value": relative}
+        return {TAG: "path", "value": os.fspath(value)}
     if isinstance(value, tuple):
         return {TAG: "tuple", "items": [_jsonable(v) for v in value]}
     if isinstance(value, list):
@@ -310,7 +371,9 @@ def _init_fields(value) -> dict:
     Its other fields, worked out in __post_init__ such as a detector's dark
     current from its temperature, are written beside them as ``derived`` and
     given back as the run had them. An object from an older version's pickle
-    can lack a field added since, which then takes today's default.
+    can lack a field added since, which then takes today's default, and one
+    from another version can have a setting this version's lacks, which is
+    written too, so that reading it says it is left out.
     """
     fields, missing = {}, []
     # What the object itself holds, so that a field it lacks is not taken
@@ -325,22 +388,18 @@ def _init_fields(value) -> dict:
             fields[field.name] = own[field.name]
         else:
             missing.append(field.name)
+    if own is not None:
+        names = {field.name for field in dataclasses.fields(value)}
+        fields.update({key: item for key, item in own.items() if key not in names
+                       and not key.startswith("_") and not hasattr(type(value), key)})
     if missing:
-        warnings.warn(f"This {type(value).__name__} has no {', '.join(missing)}, which it gained "
-                      f"after it was written; it gets today's default.", UserWarning,
-                      stacklevel=2)
+        _warn(f"This {type(value).__name__} has no {', '.join(missing)}, which ECLIPSE added "
+              f"after it was made; it gets today's default.")
     return fields
 
 
 def _unjson(value, reading: _Reading):
-    """
-    Rebuild what :func:`_jsonable` wrote, in the *reading* of a file.
-
-    A text array may take no more characters, each item as wide as its
-    longest, than the file has bytes, as the file holds one whose items are
-    much of a length in less, while a few bytes of a crafted file could
-    otherwise ask for as much memory as they liked.
-    """
+    """Rebuild what :func:`_jsonable` wrote, in the *reading* of a file."""
     if isinstance(value, list):
         return [_unjson(v, reading) for v in value]
     if not isinstance(value, dict):
@@ -349,26 +408,21 @@ def _unjson(value, reading: _Reading):
     if tag is None:
         return {k: _unjson(v, reading) for k, v in value.items()}
     if tag == "quantity":
-        return u.Quantity(_unjson(value["value"], reading), u.Unit(value["unit"]))
+        return u.Quantity(_unjson(value["value"], reading), u.Unit(value["unit"]), dtype=None)
+    if tag == "numpy":
+        return _plain_dtype(value["dtype"]).type(_unjson(value["value"], reading))
     if tag == "float":
         return float(value["value"])
     if tag == "array":
         dtype = _plain_dtype(value["dtype"])
         items = np.array(_unjson(value["value"], reading),
                          dtype=object if dtype.kind == "U" else dtype)
-        if dtype.kind == "U":
-            # As wide as the file declares, but no larger than the file, which
-            # holds the text of an array as wide as its items in less, as a few
-            # bytes of a crafted file could otherwise ask for as much memory as
-            # they liked.
-            width = dtype.itemsize // 4
-            if not all(isinstance(item, str) and len(item) <= width for item in items.flat):
-                raise ValueError("A text array in the results file holds more than text of its "
-                                 "width.")
-            if items.size * width > reading.size:
-                raise ValueError("A text array in the results file is larger than the file.")
+        # Text as wide as the file declares it, which its items have to fit.
+        if dtype.kind == "U" and not all(isinstance(item, str) and len(item) <= dtype.itemsize // 4
+                                         for item in items.flat):
+            raise ValueError("A text array in the results file holds more than text of its width.")
         # The shape as written, which the items of an empty array do not give.
-        shape = value.get("shape", list(items.shape))
+        shape = value["shape"]
         if (not all(isinstance(size, int) and size >= 0 for size in shape)
                 or math.prod(shape) != items.size):
             raise ValueError("An array in the results file does not have the shape it gives.")
@@ -386,7 +440,7 @@ def _unjson(value, reading: _Reading):
                              f"that reading a file cannot construct anything the file chooses.")
         return _rebuild(registry[name],
                         {k: _unjson(v, reading) for k, v in value["fields"].items()},
-                        {k: _unjson(v, reading) for k, v in value.get("derived", {}).items()},
+                        {k: _unjson(v, reading) for k, v in value["derived"].items()},
                         reading)
     if tag == "numpy_type":
         return _plain_dtype(value["value"]).type
@@ -403,12 +457,11 @@ def _unjson(value, reading: _Reading):
     if tag == "resource":
         # Checked as written, before anything looks at the filesystem, so
         # that a file cannot have the reader look outside the package at all.
-        relative = PurePosixPath(value["value"])
-        if not relative.parts or not all(part != ".." and re.fullmatch(r"[\w.-]+", part)
-                                         for part in relative.parts):
+        parts = _package_parts(value["value"])
+        if parts is None:
             raise ValueError(f"The results file names a package file, {value['value']!r}, "
                              f"outside the package.")
-        return _package_root().joinpath(*relative.parts)
+        return _package_root().joinpath(*parts)
     if tag == "tuple":
         return tuple(_unjson(v, reading) for v in value["items"])
     if tag == "map":
@@ -445,7 +498,8 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     gone = sorted(set(stored) - known)
     if gone:
         reading.notes[f"The {cls.__name__} in the results file has {', '.join(gone)}, which "
-                      f"this version of ECLIPSE no longer has; they are left out."] = None
+                      f"this version of ECLIPSE does not have, so "
+                      f"{'it is' if len(gone) == 1 else 'they are'} left out."] = None
     arguments = {key: item for key, item in stored.items() if key in known}
     try:
         obj = cls(**arguments)
@@ -480,8 +534,19 @@ def _to_json(value) -> str:
 # ----------------------------------------------------------------------
 def _is_name(key) -> bool:
     """Whether *key* can name a member of a group, as a dataset or an attribute."""
-    return (isinstance(key, str) and key not in ("", ".") and "/" not in key
-            and key not in _RESERVED)
+    if (not isinstance(key, str) or key in ("", ".") or key in _RESERVED
+            or "/" in key or "\0" in key):
+        return False
+    # An HDF5 name is UTF-8, which a lone surrogate, say, has no form in.
+    try:
+        key.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+class _Unwritable(TypeError):
+    """A value a results file cannot hold, and where it is in the results."""
 
 
 def _put(group: h5py.Group, name: str, value, compression, written: dict) -> None:
@@ -492,12 +557,20 @@ def _put(group: h5py.Group, name: str, value, compression, written: dict) -> Non
     id, to the object and the path it was written at, so that one the
     results hold again is referred to rather than written again.
     """
+    try:
+        _put_value(group, name, value, compression, written)
+    except _Unwritable:
+        raise
+    except (TypeError, RecursionError) as error:
+        # Where it is, which a failed save at the end of a run has to say.
+        reason = ("A value that holds itself cannot be written to a results file."
+                  if isinstance(error, RecursionError) else error)
+        raise _Unwritable(f"{group.name.rstrip('/')}/{name}: {reason}") from error
+
+
+def _put_value(group: h5py.Group, name: str, value, compression, written: dict) -> None:
     if not _holds_array(value):
-        try:
-            group.attrs[name] = _to_json(value)
-        except TypeError as error:
-            # Where it is, which a failed save at the end of a run has to say.
-            raise TypeError(f"{group.name.rstrip('/')}/{name}: {error}") from None
+        group.attrs[name] = _to_json(value)
         return
     if id(value) in written:
         reference = group.create_group(name)
@@ -506,13 +579,14 @@ def _put(group: h5py.Group, name: str, value, compression, written: dict) -> Non
         return
     if _is_array(value):
         data = value.value if isinstance(value, u.Quantity) else value
+        unit = _unit_text(value.unit) if isinstance(value, u.Quantity) else None
         options = {}
         if compression and data.size >= _COMPRESS_FROM:
             options = {"compression": compression, "shuffle": True,
                        **({"compression_opts": 1} if compression == "gzip" else {})}
         node = group.create_dataset(name, data=data, **options)
-        if isinstance(value, u.Quantity):
-            node.attrs["unit"] = value.unit.to_string()
+        if unit is not None:
+            node.attrs["unit"] = unit
     elif isinstance(value, NDCube):
         left_out = [part for part in ("mask", "uncertainty", "psf")
                     if getattr(value, part, None) is not None]
@@ -522,9 +596,10 @@ def _put(group: h5py.Group, name: str, value, compression, written: dict) -> Non
         if len(getattr(value, "global_coords", None) or {}):
             left_out.append("global coordinates")
         if left_out:
-            warnings.warn(f"{group.name.rstrip('/')}/{name}: a results file does not hold a "
-                          f"cube's {' or '.join(left_out)}, so this cube's are left out.",
-                          UserWarning, stacklevel=2)
+            _warn(f"{group.name.rstrip('/')}/{name}: a results file does not hold a cube's "
+                  f"{' or '.join(left_out)}, so this cube's are left out.")
+        if value.unit is not None:
+            _unit_text(value.unit)
         node = group.create_group(name, track_order=True)
         node.attrs[TYPE] = "ndcube"
         # The data with the cube's unit, as any other quantity is written.
@@ -532,8 +607,9 @@ def _put(group: h5py.Group, name: str, value, compression, written: dict) -> Non
         if value.unit is not None:
             data = u.Quantity(data, value.unit, copy=False, dtype=None)
         _put(node, "data", data, compression, written)
-        node.attrs["wcs"] = _to_json(value.wcs)
-        # The cube's own meta, so that one it shares with another cube is written once.
+        _put(node, "wcs", value.wcs, compression, written)
+        # The cube's own meta: one that holds arrays and that another cube
+        # shares is written once.
         meta = value.meta if isinstance(value.meta, dict) else dict(value.meta or {})
         _put(node, "meta", meta, compression, written)
     elif isinstance(value, dict):
@@ -754,7 +830,7 @@ def is_results_file(path: str | Path) -> bool:
 
     Which HDF5 file it is, :func:`load_results` checks.
     """
-    return h5py.is_hdf5(os.fspath(path))
+    return h5py.is_hdf5(os.fspath(Path(path).expanduser()))
 
 
 def save_results(path: str | Path, payload: dict, *, compression: str | None = "gzip") -> Path:
@@ -797,6 +873,10 @@ def save_results(path: str | Path, payload: dict, *, compression: str | None = "
     path.parent.mkdir(parents=True, exist_ok=True)
     # Through a link to the file it names, as writing to the link would.
     destination = Path(os.path.realpath(path)) if path.is_symlink() else path
+    # Nor over a file made read-only, which writing into would not be.
+    if destination.exists() and not os.access(destination, os.W_OK):
+        raise PermissionError(f"{destination} is read-only, so the results are not written "
+                              f"over it.")
     partial = _new_partial(destination)
     try:
         with h5py.File(partial, "w", track_order=True) as f:
@@ -804,8 +884,9 @@ def save_results(path: str | Path, payload: dict, *, compression: str | None = "
             f.attrs["version"] = FORMAT_VERSION
             _put_dict(f, dict(payload), compression, {})
         os.replace(partial, destination)
-    finally:
+    except BaseException:
         partial.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -818,7 +899,10 @@ def _new_partial(path: Path) -> Path:
     project directory expect.
     """
     while True:
-        partial = path.with_name(f"{path.name}.{secrets.token_hex(4)}.part")
+        suffix = f".{secrets.token_hex(4)}.part"
+        # Within the 255 bytes most filesystems allow a name, however long *path*'s is.
+        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
+        partial = path.with_name(stem + suffix)
         try:
             os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
         except FileExistsError:
@@ -853,20 +937,25 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
         The stored payload.
     """
     path = Path(path).expanduser()
-    written = path.with_suffix(".h5")
-    if path.suffix.lower() in _PICKLE_SUFFIXES and not path.exists() and written.is_file():
+    # The .h5 the simulation now writes where it wrote a pickle of this name.
+    written = path.with_suffix(".h5") if path.suffix.lower() in _PICKLE_SUFFIXES else None
+    if written is not None and not path.exists() and written.is_file():
         warnings.warn(f"{path} does not exist, so {written}, which the instrument simulation "
                       f"now writes in its place, is read instead. Name the .h5 file to read it "
                       f"without this warning.", FutureWarning, stacklevel=_stacklevel)
-        path = written
+        path, written = written, None
 
+    if path.is_dir():
+        raise IsADirectoryError(f"{path} is a directory; name the results file to read.")
     if not path.is_file():
-        older = path.with_suffix(".pkl")
-        if path.suffix.lower() in _HDF5_SUFFIXES and older.is_file():
-            raise FileNotFoundError(
-                f"No results file {path}. {older}, beside it, is a results pickle from an older "
-                f"version of ECLIPSE: load_results reads it, and "
-                f"euvst_response.convert_results_pickle rewrites it as a results file.")
+        if path.suffix.lower() in _HDF5_SUFFIXES:
+            for older in (path.with_suffix(suffix) for suffix in _PICKLE_SUFFIXES):
+                if older.is_file():
+                    raise FileNotFoundError(
+                        f"No results file {path}. {older}, beside it, is a results pickle from "
+                        f"an older version of ECLIPSE: load_instrument_response_results reads "
+                        f"it, and euvst_response.convert_results_pickle rewrites it as a "
+                        f"results file.")
         raise FileNotFoundError(f"No results file {path}.")
     if not is_results_file(path):
         if not _is_pickle(path):
@@ -877,7 +966,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
                              f"file holds: rename it to .pkl if it is a results pickle you "
                              f"trust.")
         later = ""
-        if (path.suffix.lower() in _PICKLE_SUFFIXES and written.is_file()
+        if (written is not None and written.is_file()
                 and written.stat().st_mtime > path.stat().st_mtime):
             later = (f" {written}, beside it, is newer: the results of a later run, as the "
                      f"simulation now writes them.")
@@ -935,7 +1024,12 @@ def _load_pickle(path: Path) -> dict:
     import dill
 
     with open(path, "rb") as handle:
-        return dill.load(handle)
+        try:
+            return dill.load(handle)
+        # As for a pickle of a class another version or branch of ECLIPSE had.
+        except (AttributeError, ImportError) as error:
+            raise ValueError(f"{path} cannot be unpickled by this version of ECLIPSE: "
+                             f"{error}") from error
 
 
 def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = None,
@@ -955,7 +1049,8 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
         The pickle.
     path : str or Path, optional
         The results file to write. None writes it beside the pickle, with
-        the same name ending in ``.h5``.
+        the same name ending in ``.h5``. A pickle's suffix is replaced with
+        ``.h5``, as :func:`save_results` does.
     overwrite : bool, optional
         Replace a file already at *path*, which is otherwise refused.
 
@@ -997,10 +1092,13 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
         del payload, results
         try:
             load_results(staging, _stacklevel=3)
+        except (MemoryError, OSError):
+            raise
         except Exception as error:
             raise ValueError(f"{pickle_path} converts to a file that cannot be read back, "
                              f"so {target} is not written: {error}") from error
         os.replace(staging, target)
-    finally:
+    except BaseException:
         staging.unlink(missing_ok=True)
+        raise
     return requested

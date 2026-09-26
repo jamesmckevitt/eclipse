@@ -108,14 +108,16 @@ def _same(got, expected, where="payload", _memo=None):
                   f"{where}.{field.name}", {})
     elif isinstance(expected, u.Quantity):
         assert isinstance(got, u.Quantity) and got.unit == expected.unit, where
-        if expected.ndim:
-            assert got.dtype == expected.dtype, where
+        assert got.dtype == expected.dtype and got.shape == expected.shape, where
         assert np.array_equal(got.value, expected.value, equal_nan=True), where
     elif isinstance(expected, np.ndarray):
         assert isinstance(got, np.ndarray) and got.dtype == expected.dtype, where
         assert np.array_equal(got, expected, equal_nan=expected.dtype.kind == "f"), where
     elif isinstance(expected, dict):
         assert isinstance(got, dict) and list(got) == list(expected), where
+        # The keys too, as a NumPy number in one is not a Python number.
+        for got_key, key in zip(got, expected):
+            _same(got_key, key, f"{where} key {key!r}", {})
         for key in expected:
             _same(got[key], expected[key], f"{where}[{key!r}]", memo)
     elif isinstance(expected, (list, tuple)):
@@ -123,16 +125,15 @@ def _same(got, expected, where="payload", _memo=None):
         for index, (a, b) in enumerate(zip(got, expected)):
             _same(a, b, f"{where}[{index}]", memo)
     elif isinstance(expected, float) and np.isnan(expected):
-        assert np.isnan(got), where
+        assert type(got) is type(expected) and np.isnan(got), where
     elif isinstance(expected, type):
         assert got is expected, where
     elif isinstance(expected, u.UnitBase):
         assert got == expected, f"{where}: {got!r} != {expected!r}"
     else:
-        # Of the same type too, so that a flag coming back as 1 is caught; a
-        # NumPy scalar comes back as the Python one it stands for.
-        plain = expected.item() if isinstance(expected, np.generic) else expected
-        assert type(got) is type(plain) and got == plain, f"{where}: {got!r} != {expected!r}"
+        # Of the same type too, so that a flag coming back as 1 is caught, or
+        # a NumPy number as a Python one.
+        assert type(got) is type(expected) and got == expected, f"{where}: {got!r} != {expected!r}"
 
 
 def test_a_uniform_intensity_run_reads_back_what_it_saved(tmp_path, monkeypatch):
@@ -293,6 +294,16 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     restored = load_results(converted)["simulation"]
     assert restored.pinhole_positions_spectral == [] and restored.slit_width == 0.4 * u.arcsec
 
+    # And one from another version, with a setting this version lacks, says
+    # the setting is left out rather than losing it unsaid.
+    simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
+    simulation.__dict__["allow_nonflight_slit"] = True
+    with open(tmp_path / "branch.pkl", "wb") as f:
+        dill.dump({"results": {"all_combinations": {}}, "simulation": simulation}, f)
+    with pytest.warns(UserWarning, match="has allow_nonflight_slit, which this version of "
+                                         "ECLIPSE does not have, so it is left out"):
+        convert_results_pickle(tmp_path / "branch.pkl")
+
 
 def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, monkeypatch):
     _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
@@ -360,3 +371,14 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
     _run(tmp_path, monkeypatch, "uniform", **config)
     assert stale.is_file() and "Could not move" in capsys.readouterr().out
     assert load_results(stale.with_suffix(".h5"))["instrument"] == "SWC"
+
+
+def test_a_config_the_results_file_cannot_hold_is_refused_before_the_run(tmp_path, monkeypatch):
+    """As a YAML alias inside itself, which would otherwise fail only when the results are saved."""
+    loop = ["x"]
+    loop.append(loop)
+    main_module = importlib.import_module("euvst_response.main")
+    monkeypatch.setattr(main_module, "monte_carlo", lambda *args, **kwargs: pytest.fail("ran"))
+    with pytest.raises(ValueError, match="cannot be saved with the results: a value holds itself"):
+        _run(tmp_path, monkeypatch, "loop", uniform_intensity="5000 erg / (s cm2 sr)",
+             reference_line=loop)
