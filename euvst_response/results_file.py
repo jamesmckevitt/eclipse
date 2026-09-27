@@ -988,7 +988,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
             for name in ("format", "version"):
                 _attribute(f, name, path)
             _check_format(f, path, kind="results", format_name=FORMAT_NAME,
-                          format_version=FORMAT_VERSION)
+                          format_version=FORMAT_VERSION, documented=False)
             results = _get_group(f, path, reading)
     except MemoryError:
         raise

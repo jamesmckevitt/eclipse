@@ -864,8 +864,10 @@ def test_another_kind_of_eclipse_file_is_refused(tmp_path):
     with h5py.File(tmp_path / "synthesis.h5", "w") as f:
         f.attrs["format"] = "eclipse-synthesis"
         f.attrs["version"] = 1
-    with pytest.raises(ValueError, match="is not an ECLIPSE results file"):
+    with pytest.raises(ValueError, match="is not an ECLIPSE results file") as error:
         load_results(tmp_path / "synthesis.h5")
+    # Nor sent to docs that do not give the layout.
+    assert "documentation" not in str(error.value)
 
 
 def test_every_value_is_strict_json(tmp_path):
