@@ -557,16 +557,23 @@ def describe_atmosphere_file(path: str | Path) -> str:
 
 def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
                   format_name: str = FORMAT_NAME,
-                  format_version: int = FORMAT_VERSION) -> None:
-    """Refuse a file that is not an ECLIPSE *kind* file of the version this ECLIPSE reads."""
+                  format_version: int = FORMAT_VERSION,
+                  documented: bool = True) -> None:
+    """
+    Refuse a file that is not an ECLIPSE *kind* file of the version this ECLIPSE reads.
+
+    *documented* says whether the docs give the layout, as they do for a
+    file someone may write themselves.
+    """
     name = f.attrs.get("format")
     if isinstance(name, bytes):
         name = name.decode()
     if name != format_name:
+        layout = (f" See ECLIPSE's documentation of the {kind} file for the layout."
+                  if documented else "")
         raise ValueError(
             f"{path} is not an ECLIPSE {kind} file: its 'format' "
-            f"attribute is {name!r}, not {format_name!r}. See ECLIPSE's "
-            f"documentation of the {kind} file for the layout.")
+            f"attribute is {name!r}, not {format_name!r}.{layout}")
     version = f.attrs.get("version")
     if version is None:
         raise ValueError(f"{path} has no 'version' attribute; an ECLIPSE "

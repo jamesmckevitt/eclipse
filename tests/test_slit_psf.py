@@ -310,7 +310,7 @@ def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, m
     monkeypatch.chdir(tmp_path)
     main()
 
-    cubes = load_instrument_response_results(tmp_path / "run" / "result" / "window.pkl")[
+    cubes = load_instrument_response_results(tmp_path / "run" / "result" / "window.h5")[
         "cube_reb_dict"]
     narrow, wide = cubes[(0.2, 1)], cubes[(1.6, 1)]
     margin = spectral_psf_margin(TEL, DET, 1.6 * u.arcsec)
@@ -336,7 +336,7 @@ def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     main()
 
-    results = load_instrument_response_results(tmp_path / "run" / "result" / "slits.pkl")
+    results = load_instrument_response_results(tmp_path / "run" / "result" / "slits.h5")
     measured = {}
     for combination in results["results"]["all_combinations"].values():
         parameters = combination["parameters"]

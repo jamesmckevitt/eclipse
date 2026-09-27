@@ -279,7 +279,7 @@ None of this has a configuration key, so this needs to be done with the Python A
 
 ## Output
 
-Results are saved as pickle files in the `run/result/` directory with the same base name as the configuration file. The output includes:
+Results are written to `run/result/<config name>.h5`. The output includes:
 
 - Simulated detector signals (DN and photon counts)
 - For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel
@@ -289,3 +289,7 @@ Results are saved as pickle files in the `run/result/` directory with the same b
 - The git commit ID and software version used to produce the results
 
 Use `summary_table(results)` after loading to see all parameter combinations, the fitted components and the run metadata. `list_fit_components` gives the component names, and `analyse_fit_statistics` and `create_sunpy_maps_from_combo` take `component=` to choose one, defaulting to the primary component.
+
+??? note "Results files from ECLIPSE 0.11.0 and earlier"
+
+    Older versions wrote the results as a pickle. `load_instrument_response_results` still reads these with a warning, until a future release removes support. Rerunning `run.yaml` creates a new `run.h5` and renames the old `run.pkl` to `run.pkl.old`, and scripts that reference `run.pkl` with ECLIPSE's functions will read `run.h5` instead, with a warning. `euvst_response.convert_results_pickle("run.pkl")` converts an old pickle to the new `.h5` format without rerunning.

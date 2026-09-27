@@ -7,7 +7,6 @@ instrument response simulation results.
 
 import warnings
 
-import dill
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -21,6 +20,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
+from .results_file import load_results
 from .utils import has_wrong_velocity_sign
 
 
@@ -44,28 +44,6 @@ def _to_canonical_scalar(val):
             return float(val.value)
 
 
-def _reconstruct_signal_with_units(signal_data, signal_unit, signal_wcs) -> NDCube:
-    """
-    Reconstruct NDCube signal with units from stripped data.
-    
-    Parameters
-    ----------
-    signal_data : numpy.ndarray
-        Signal data array
-    signal_unit : astropy.units.Unit
-        Unit (astropy unit object)
-    signal_wcs : WCS
-        World coordinate system
-        
-    Returns
-    -------
-    NDCube
-        Reconstructed NDCube with units
-    """
-    signal_quantity = signal_data * signal_unit
-    return NDCube(signal_quantity, wcs=signal_wcs)
-
-
 def load_instrument_response_results(filepath: str | Path,
                                      allow_wrong_velocity_sign: bool = False,
                                      ) -> Dict[str, Any]:
@@ -76,7 +54,10 @@ def load_instrument_response_results(filepath: str | Path,
     Parameters
     ----------
     filepath : str or Path
-        Path to the pickled results file.
+        Path to the results file, ``run/result/<config name>.h5``. A pickle,
+        as ECLIPSE 0.11.0 and earlier wrote them, is read with a warning
+        unless it is named as an HDF5 file, and a ``.pkl`` name that no
+        longer exists reads the ``.h5`` beside it.
     allow_wrong_velocity_sign : bool, optional
         Load a results file made from a synthesis file that an older ECLIPSE
         wrote for a view along x or z, with a warning instead of an error.
@@ -91,8 +72,10 @@ def load_instrument_response_results(filepath: str | Path,
     dict
         Dictionary containing all results and metadata with reconstructed signals.
     """
-    with open(filepath, "rb") as f:
-        data = dill.load(f)
+    data = load_results(filepath, _stacklevel=3)
+    # An old pickle can hold anything.
+    if not isinstance(data, dict):
+        raise ValueError(f"{filepath} does not hold the results of an instrument simulation.")
 
     # Refuse results made from synthesis files written before the Doppler
     # sign was fixed, for the views whose sign it changed.  Uniform intensity
@@ -115,30 +98,40 @@ def load_instrument_response_results(filepath: str | Path,
             )
         warnings.warn(message, stacklevel=2)
 
-    for param_key, combination_results in tqdm(data["results"]["all_combinations"].items(), desc="Reconstructing results", leave=False):
-        # Refuse files written before the cube axis order was fixed (issue
-        # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
-        # WCS; the maps made from one here would come out transposed.
-        wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype
-        if str(wcs_ctype[1]).startswith("HPLT"):
-            raise ValueError(
-                f"{filepath} was written by an older ECLIPSE that stored "
-                "cubes as (x, y, wavelength). Cubes are now "
-                "(y, x, wavelength). Re-run the simulation with this "
-                "version to regenerate the file."
-            )
-        # Reconstruct signal NDCubes
-        combination_results["first_dn_signal"] = _reconstruct_signal_with_units(
-            combination_results["first_dn_signal_data"],
-            combination_results["first_dn_signal_unit"],
-            combination_results["first_signal_wcs"]
-        )
-        combination_results["first_photon_signal"] = _reconstruct_signal_with_units(
-            combination_results["first_photon_signal_data"],
-            combination_results["first_photon_signal_unit"],
-            combination_results["first_signal_wcs"]
-        )
-        
+    # A file that is not what the simulation writes is refused naming the
+    # file. A signal's unit has to be a unit, as two arrays could multiply to
+    # far more than either, and a signal the file holds once is multiplied
+    # once, however many combinations share it.
+    signals = {}
+    try:
+        combinations = data["results"]["all_combinations"]
+        for param_key, combination_results in tqdm(combinations.items(), desc="Reconstructing results", leave=False):
+            # Refuse files written before the cube axis order was fixed (issue
+            # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
+            # WCS; the maps made from one here would come out transposed.
+            wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype
+            if str(wcs_ctype[1]).startswith("HPLT"):
+                raise ValueError(
+                    f"{filepath} was written by an older ECLIPSE that stored "
+                    "cubes as (x, y, wavelength). Cubes are now "
+                    "(y, x, wavelength). Re-run the simulation with this "
+                    "version to regenerate the file."
+                )
+            # Reconstruct signal NDCubes
+            for kind in ("dn", "photon"):
+                signal = combination_results[f"first_{kind}_signal_data"]
+                unit = combination_results[f"first_{kind}_signal_unit"]
+                if not isinstance(unit, u.UnitBase):
+                    raise ValueError(f"{filepath}: the {kind} signal's unit is of type "
+                                     f"{type(unit).__name__}, not a unit.")
+                if (id(signal), unit) not in signals:
+                    signals[id(signal), unit] = signal * unit
+                combination_results[f"first_{kind}_signal"] = NDCube(
+                    signals[id(signal), unit], wcs=combination_results["first_signal_wcs"])
+    except (KeyError, TypeError, AttributeError, IndexError) as error:
+        raise ValueError(f"{filepath} does not hold the results of an instrument simulation: "
+                         f"{type(error).__name__}: {error}") from error
+
     return data
 
 

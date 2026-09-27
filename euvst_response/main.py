@@ -9,7 +9,6 @@ import sys
 import warnings
 from itertools import product as itertools_product
 from pathlib import Path
-import dill
 import yaml
 import astropy.units as u
 import gzip
@@ -22,6 +21,7 @@ from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, Synthe
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
+from .results_file import _to_json, save_results
 from .monte_carlo import monte_carlo
 from .radiometric import spectral_psf_margin
 from .utils import (
@@ -470,6 +470,14 @@ def main() -> None:
             f"Config file must be a mapping of keys to values, got "
             f"{type(config).__name__}: {args.config}"
         )
+    # The config is saved with the results, so a value the results file
+    # cannot hold, such as a YAML alias inside itself, is refused now rather
+    # than once the run is done.
+    try:
+        _to_json(config)
+    except (TypeError, RecursionError) as error:
+        reason = "a value holds itself" if isinstance(error, RecursionError) else error
+        raise ValueError(f"{args.config} cannot be saved with the results: {reason}") from None
 
     # Top-level scalar settings. A 'simulation:' that is not a mapping is left
     # for _validate_config_keys to report.
@@ -1162,8 +1170,7 @@ def main() -> None:
         git_commit_id = get_git_commit_id()
         software_version = _get_software_version()
 
-        output_file = Path(f"run/result/{Path(args.config).stem}.pkl")
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file = Path(f"run/result/{Path(args.config).stem}.h5")
 
         print(f"\nSaving results to {output_file}")
         save_data = {
@@ -1187,10 +1194,20 @@ def main() -> None:
                 "cubes": raster_cubes,
             }
 
-        with open(output_file, "wb") as f:
-            dill.dump(save_data, f)
+        output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
+        # A rerun replaced the pickle of the same name when results were
+        # pickles, so one left from an older version is moved aside rather
+        # than read in place of these results.
+        stale = output_file.with_suffix(".pkl")
+        if stale.is_file():
+            try:
+                os.replace(stale, stale.with_name(stale.name + ".old"))
+                print(f"Moved {stale}, from an older version, to {stale.name}.old")
+            except OSError as error:
+                print(f"Could not move {stale}, from an older version, aside ({error}); "
+                      f"the results are {output_file}, not it")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
 

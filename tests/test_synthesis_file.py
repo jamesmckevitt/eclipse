@@ -610,7 +610,7 @@ def _run(tmp_path, monkeypatch, name, **inputs):
     monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
     monkeypatch.chdir(tmp_path)
     main()
-    return load_instrument_response_results(tmp_path / "run" / "result" / f"{name}.pkl")
+    return load_instrument_response_results(tmp_path / "run" / "result" / f"{name}.h5")
 
 
 def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch):

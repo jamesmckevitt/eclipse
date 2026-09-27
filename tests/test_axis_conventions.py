@@ -9,6 +9,8 @@ as the swap were consistent, so each test anchors one end of the chain to
 something absolute: where a known feature lands in the array, which WCS
 entry a physical pitch is written to, or which way a map comes out.
 """
+import warnings
+
 import astropy.units as u
 import dill
 import numpy as np
@@ -23,6 +25,7 @@ from euvst_response.analysis import (
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import create_uniform_intensity_cube, load_atmosphere
 from euvst_response.radiometric import apply_focusing_optics_psf
+from euvst_response.results_file import save_results
 from euvst_response.synthesis import (
     apply_cube_cropping,
     create_atmosphere_ndcube,
@@ -388,9 +391,13 @@ def _write_results_file(path, ctypes):
         "first_photon_signal_data": data,
         "first_photon_signal_unit": u.photon / u.pix,
     }
-    with open(path, "wb") as f:
-        dill.dump({"results": {"all_combinations": {"combo": combination}}}, f)
-    return path
+    payload = {"results": {"all_combinations": {"combo": combination}}}
+    if path.suffix == ".pkl":
+        # As the versions that wrote such results wrote them.
+        with open(path, "wb") as f:
+            dill.dump(payload, f)
+        return path
+    return save_results(path, payload)
 
 
 def test_old_results_files_are_refused(tmp_path):
@@ -399,12 +406,14 @@ def test_old_results_files_are_refused(tmp_path):
     The stored WCS is the only thing that tells the two apart: the old files
     put HPLT on FITS axis 2 because the signal was (x, y, wavelength).
     """
-    old = _write_results_file(tmp_path / "old.pkl",
-                              ["WAVE", "HPLT-TAN", "HPLN-TAN"])
-    with pytest.raises(ValueError, match="older ECLIPSE"):
-        load_instrument_response_results(str(old))
+    for name in ("old.pkl", "old.h5"):
+        old = _write_results_file(tmp_path / name, ["WAVE", "HPLT-TAN", "HPLN-TAN"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            with pytest.raises(ValueError, match="older ECLIPSE"):
+                load_instrument_response_results(str(old))
 
-    new = _write_results_file(tmp_path / "new.pkl",
+    new = _write_results_file(tmp_path / "new.h5",
                               ["WAVE", "HPLN-TAN", "HPLT-TAN"])
     results = load_instrument_response_results(str(new))
     combination = results["results"]["all_combinations"]["combo"]
