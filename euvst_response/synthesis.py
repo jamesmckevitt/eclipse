@@ -644,6 +644,11 @@ def _compute_single_ion(args):
     return results
 
 
+# A line name: element, ionisation stage, and a wavelength in Angstrom, such
+# as Fe12_195.1190.
+_LINE_NAME = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
+
+
 def compute_goft_fiasco(
     line_names: List[str],
     abundance: str = "sun_coronal_2021_chianti",
@@ -745,7 +750,7 @@ def compute_goft_fiasco(
     densities_cm3 = 10.0 ** logN_grid
 
     # ---- parse line names and group by ion for efficiency ----
-    line_pattern = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
+    line_pattern = _LINE_NAME
     ion_lines: Dict[Tuple[str, int], List[Tuple[str, float]]] = {}
 
     for name in line_names:
@@ -1758,6 +1763,12 @@ def main(args=None) -> None:
     if args.downsample < 1:
         raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
+    # Checked now, where a name that could not be read was found only once
+    # the atmosphere had been read, which can take minutes and gigabytes.
+    for name in args.lines:
+        if not _LINE_NAME.match(name):
+            raise ValueError(f"Cannot parse line name '{name}'. Expected format like "
+                             f"'Fe12_195.1190'.")
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
 

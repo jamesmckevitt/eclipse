@@ -32,6 +32,14 @@ class FitComponent:
     # wavelength, e.g. "195.1190 Angstrom".
     name: Optional[str] = None
 
+    def __post_init__(self):
+        # Checked here, where a number with no unit went as far as the fit.
+        if not (isinstance(self.wavelength, u.Quantity)
+                and self.wavelength.unit.physical_type == "length"
+                and np.isfinite(self.wavelength.value) and self.wavelength.value > 0):
+            raise ValueError(f"A fitting component's wavelength must be the wavelength of a "
+                             f"line, such as '195.119 AA'; got {self.wavelength!r}.")
+
 
 def default_component_name(wavelength: u.Quantity) -> str:
     """The name a component gets in the results when it is not given one."""
@@ -96,7 +104,9 @@ class FitConfig:
                 )
         if self.components:
             n = len(self.components)
-            if not 0 <= self.primary_component < n:
+            if (isinstance(self.primary_component, bool)
+                    or not isinstance(self.primary_component, (int, np.integer))
+                    or not 0 <= self.primary_component < n):
                 raise ValueError(
                     f"fitting.primary_component is {self.primary_component}, "
                     f"but there are {n} components, numbered from 0."

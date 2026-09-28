@@ -1,0 +1,152 @@
+"""A configuration that cannot be run is refused before anything runs.
+
+Each of these once ran to completion and saved results that meant nothing,
+or failed part-way through a sweep and lost what came before: a quantity
+with no unit, or of the wrong kind; a value out of its physical range; a
+repeated YAML key, which PyYAML lets the last one win; an empty value; a
+sweep value that could not be run, found only when its turn came.
+"""
+import sys
+
+import astropy.units as u
+import numpy as np
+import pytest
+import yaml
+
+from euvst_response.atmosphere import Atmosphere
+from euvst_response.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
+                                   Telescope_EIS, Telescope_EUVST, _load_throughput_table)
+from euvst_response.fitting import FitComponent, FitConfig
+from euvst_response.main import main
+
+UNIFORM = {"instrument": "SWC", "n_iter": 1, "uniform_intensity": "5000 erg / (s cm2 sr)"}
+
+
+def _run(tmp_path, monkeypatch, config, text=None):
+    path = tmp_path / "run.yaml"
+    path.write_text(text if text is not None else yaml.safe_dump(config))
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
+    monkeypatch.chdir(tmp_path)
+    main()
+
+
+@pytest.mark.parametrize("build, message", [
+    (lambda: Telescope_EUVST(D_ap=0.28), "telescope.D_ap needs a unit, of length"),
+    (lambda: Telescope_EUVST(D_ap=28 * u.arcsec), "telescope.D_ap must be in a unit of length"),
+    (lambda: Detector_SWC(qe_euv=76), "detector.qe_euv is a fraction"),
+    (lambda: Detector_SWC(gain_e_per_dn=0 * u.electron / u.DN), "gain_e_per_dn must be more than zero"),
+    (lambda: Detector_SWC(ccd_temperature=-60 * u.K), "above absolute zero.*-60 C"),
+    (lambda: Detector_EIS(material="silicn"), "detector.material must be one of"),
+    (lambda: AluminiumFilter(mesh_throughput=80), "filter.mesh_throughput is a fraction"),
+    (lambda: AluminiumFilter(al_thickness=-5 * u.AA), "al_thickness cannot be negative"),
+    (lambda: Simulation(expos=0 * u.s), "simulation.expos must be more than zero"),
+    (lambda: Simulation(expos=-5 * u.s), "simulation.expos must be more than zero"),
+    (lambda: Simulation(noise=None), "simulation.noise must be true or false"),
+    (lambda: Simulation(n_iter=0), "n_iter must be a whole number of iterations"),
+    (lambda: Simulation(instrument="EIS", slit_width=4 * u.arcsec), "1 or 2 arcsec, its two slits"),
+    (lambda: Simulation(enable_pinholes=True, pinhole_sizes=[-5 * u.um], pinhole_positions=[0.5]),
+     r"pinhole_sizes\[0\] must be a diameter"),
+    (lambda: Telescope_EIS(calibration="dz2025", date="03-Jun-2012"),
+     "telescope.date '03-Jun-2012' is not a date ECLIPSE can read"),
+    (lambda: FitComponent(195.119), "wavelength must be the wavelength of a line"),
+    (lambda: FitConfig(components=[FitComponent(195.119 * u.AA), FitComponent(195.179 * u.AA)],
+                       primary_component=1.0), "primary_component is 1.0"),
+])
+def test_a_setting_of_the_wrong_kind_or_out_of_range_is_refused(build, message):
+    with pytest.raises(ValueError, match=message):
+        build()
+
+
+def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
+    """Named as text, a path failed to parse as a quantity; a table with one header line lost a row."""
+    rows = "17.0 0.097\n17.2 0.103\n17.4 0.110\n"
+    for name, text in (("one.dat", "# reflectance\n" + rows), ("none.dat", rows)):
+        (tmp_path / name).write_text(text)
+        wavelength, _ = _load_throughput_table(tmp_path / name)
+        assert wavelength.to_value(u.nm).tolist() == [17.0, 17.2, 17.4]
+    telescope = Telescope_EUVST(pm_table=str(tmp_path / "one.dat"))
+    assert np.isfinite(telescope.primary_mirror_efficiency(172.0 * u.AA))
+
+
+@pytest.mark.parametrize("text, message", [
+    ("instrument: SWC\nuniform_intensity: 5000 erg / (s cm2 sr)\n"
+     "simulation:\n  expos: 10 s\nsimulation:\n  slit_width: 0.4 arcsec\n", "'simulation' is given twice"),
+    ("instrument: SWC\nuniform_intensity: 5000 erg / (s cm2 sr)\n"
+     "simulation:\n  expos: [5 s, 10 s]\n  expos: 10 s\n", "'expos' is given twice"),
+])
+def test_a_key_given_twice_is_refused(tmp_path, monkeypatch, text, message):
+    with pytest.raises(yaml.constructor.ConstructorError, match=message):
+        _run(tmp_path, monkeypatch, None, text)
+
+
+@pytest.mark.parametrize("section, message", [
+    ({"expos": []}, "'simulation.expos' is empty"),
+    ({"noise": None}, "'simulation.noise' is empty"),
+])
+def test_an_empty_value_is_refused(tmp_path, monkeypatch, section, message):
+    with pytest.raises(ValueError, match=message):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": section})
+
+
+@pytest.mark.parametrize("extra, message", [
+    ({"n_iter": 0}, "'n_iter' must be a whole number"),
+    ({"n_iter": "1e3"}, "'n_iter' must be a whole number"),
+    ({"instrument": None}, "'instrument' must be SWC or EIS"),
+    ({"offchip_bin_slit": 2.7}, "'offchip_bin_slit' must be whole numbers"),
+    ({"thermal_width": "-20 km/s"}, "'thermal_width' must be a positive speed"),
+    ({"thermal_width": "0 km/s"}, "'thermal_width' must be a positive speed"),
+    ({"uniform_intensity": "-5000 erg / (s cm2 sr)"}, "'uniform_intensity' must be a positive"),
+])
+def test_a_top_level_value_that_cannot_be_run_is_refused(tmp_path, monkeypatch, extra, message):
+    with pytest.raises(ValueError, match=message):
+        _run(tmp_path, monkeypatch, {**UNIFORM, **extra})
+
+
+def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path, monkeypatch,
+                                                                         capsys):
+    """0.3 arcsec is no slit; found when its turn came, it ended the sweep and lost the rest."""
+    with pytest.raises(ValueError, match="slit_width must be 0.2, 0.4, 0.8, or 1.6"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {
+            "expos": ["5 s", "10 s"], "slit_width": ["0.2 arcsec", "0.3 arcsec"]}})
+    assert "Combination 1" not in capsys.readouterr().out
+
+
+def test_the_line_of_a_uniform_intensity_is_said_to_be_ignored_elsewhere(tmp_path, monkeypatch):
+    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+
+    edges = np.arange(3) * 0.1 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    with pytest.warns(UserWarning, match="'thermal_width' is ignored"):
+        _run(tmp_path, monkeypatch, {"instrument": "SWC", "n_iter": 1,
+                                     "synthesis_file": str(tmp_path / "file.h5"),
+                                     "thermal_width": "30 km/s"})
+
+
+def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
+    """Such cells were dropped from the synthesis without a word."""
+    edges = {axis: np.arange(3) * u.Mm for axis in ("x_edges", "y_edges", "z_edges")}
+    temperature = np.full((2, 2, 2), 1e6) * u.K
+    density = np.full((2, 2, 2), 1e9) / u.cm**3
+    with pytest.raises(ValueError, match="temperature must be above zero"):
+        Atmosphere(temperature=-temperature, electron_density=density, **edges)
+    with pytest.raises(ValueError, match="electron_density cannot be negative"):
+        Atmosphere(temperature=temperature, electron_density=-density, **edges)
+    # An empty cell may have no density.
+    Atmosphere(temperature=temperature, electron_density=0 * density, **edges)
+
+
+def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(monkeypatch):
+    from euvst_response import synthesis
+
+    def never(*args, **kwargs):
+        raise AssertionError("the atmosphere was read")
+
+    monkeypatch.setattr(synthesis, "read_atmosphere", never)
+    monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", "box.h5",
+                                      "--lines", "FeXII_195.119"])
+    with pytest.raises(ValueError, match="Cannot parse line name 'FeXII_195.119'"):
+        synthesis.main()

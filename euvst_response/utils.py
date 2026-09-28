@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 import warnings
 import numpy as np
+import yaml
 import astropy.units as u
 import astropy.constants as const
 import joblib
@@ -260,6 +261,9 @@ def rebin_slit_offchip(cube, n_bin: int):
 
     data = cube.data
     n_slit, n_scan, n_lam = data.shape
+    if n_bin > n_slit:
+        raise ValueError(f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
+                         f"slit, so there would be nothing left; bin at most {n_slit}.")
     n_keep = (n_slit // n_bin) * n_bin
     trimmed = data[:n_keep, :, :]
     rebinned = trimmed.reshape(n_keep // n_bin, n_bin, n_scan, n_lam).sum(axis=1)
@@ -424,9 +428,35 @@ _SECTION_STRING_FIELDS = {
     # then discarded. main() rejects it rather than letting it look effective.
     "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
-    "telescope": ["psf_type", "calibration", "date"],
-    "filter": [],
+    "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table"],
+    "filter": ["al_table", "oxide_table", "c_table"],
 }
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, but refusing a key a mapping gives twice."""
+
+
+def _construct_mapping_once(loader, node, deep=False):
+    # YAML forbids a repeated key; PyYAML keeps the last, so that a section
+    # written twice lost the whole of its first block to the defaults.
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"the key {key!r} is given twice in one mapping", key_node.start_mark)
+        seen.add(key)
+    return loader.construct_mapping(node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+                                 _construct_mapping_once)
+
+
+def load_yaml_config(text: str):
+    """A configuration file's YAML, as yaml.safe_load reads it, but refusing a repeated key."""
+    return yaml.load(text, Loader=_UniqueKeyLoader)
 
 
 def _parse_section(section_dict: dict, class_name: str) -> tuple:
@@ -460,6 +490,11 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
     sweep = {}
 
     for key, val in section_dict.items():
+        # Left empty, a key read as nothing: noise off, or no exposure times
+        # and so no run at all, which still said it had succeeded.
+        if val is None or (isinstance(val, (list, tuple)) and len(val) == 0):
+            raise ValueError(f"'{class_name}.{key}' is empty. Give it a value, or leave it "
+                             f"out for its default.")
         if key in list_fields:
             parsed = parse_yaml_input(val)
             fixed[key] = parsed if isinstance(parsed, list) else [parsed]
