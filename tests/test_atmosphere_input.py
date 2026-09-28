@@ -537,7 +537,7 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(
     # fiasco itself offers only once an Ion is made.
     assert offered[:2] == [str(database), str(default)]
 
-    # One the user declined to build stops the run with that said.
+    # A database that the user declined to build stops the run, saying so.
     mass_per_electron.cache_clear()
     try:
         with pytest.raises(FileNotFoundError, match="no CHIANTI database.*not built"):
