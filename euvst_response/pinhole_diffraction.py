@@ -22,9 +22,11 @@ size. The light is taken from the image as the focusing optics leave it.
 
 Visible. Where the visible stray light comes from is not known, so it is taken
 to reach the filter head-on as a plane wave, and the hole's light is its
-near-field diffraction pattern, centred under the hole, worked out in the full
-Rayleigh-Sommerfeld geometry rather than in the far-field limit a large hole
-is not in. The foil passes some 1e-9 of the visible, so its interference with
+near-field diffraction pattern, centred under the hole, rather than the
+far-field limit a large hole is not in. It is the Rayleigh-Sommerfeld
+integral with the path from each point of the hole taken to second order in
+its distance from the centre, and the obliquity and distance of the centre
+ray, which agrees with the full integral to 5e-4 for a 400 micron hole. The foil passes some 1e-9 of the visible, so its interference with
 the light through the hole, at most 2 |t| of it, some 1e-4, is left out.
 
 A pinhole's position is a fraction of the simulated window along each axis,
@@ -335,14 +337,14 @@ def _airy_of_squared(r2, radius: float, wavelength: float, distance: float):
     return (np.pi * radius**2 / (wavelength * distance) ** 2) * cos2 * cos2 * np.sqrt(cos2) * pattern
 
 
-@functools.lru_cache(maxsize=1024)
 def _converging_kernel(n_rows: int, n_columns: int, radius: float, wavelength: float,
                        distance: float, pixel: float) -> np.ndarray:
     """
     ``K[m, n]``: of the light a hole of *radius* passes toward the points of
     one pixel, spread evenly over it, the share landing on the pixel *m* rows
-    and *n* columns away. All lengths in metres. Cached, since every Monte
-    Carlo iteration asks for the same ones, and read-only.
+    and *n* columns away. All lengths in metres. Read-only. Not cached: each
+    column has its own wavelength and so its own kernel, as large as the
+    window, and apply_euv_pinhole_diffraction keeps what they add up to.
     """
     s, w = _gauss_nodes(_nodes_per_pixel(2 * radius, wavelength, distance, pixel))
     # Two pixels u apart overlap by 1 - |u| of one along each axis, a function
@@ -483,7 +485,10 @@ def apply_euv_pinhole_diffraction(
     photon_counts: NDCube,
     det,
     sim,
-    tel
+    tel,
+    *,
+    unfocused: NDCube | None = None,
+    focus=None,
 ) -> NDCube:
     """
     Add the EUV light the filter's pinholes let through.
@@ -498,7 +503,16 @@ def apply_euv_pinhole_diffraction(
     the pixels it lands on, and 2 Re[conj(t) (1 - t)] stays in that pixel,
     where t is the filter's amplitude transmission,
     :meth:`~euvst_response.config.AluminiumFilter.amplitude_transmission`,
-    at each column's wavelength.
+    at the light's own wavelength.
+
+    Where the focusing optics blur the image, a pixel holds light of the
+    wavelengths around its own, which the filter passed in different shares,
+    so the light without the filter, and the shares of it that stay and are
+    diffracted, are worked out from the photons before the blur, where each
+    column holds its own wavelength, and then blurred by *focus* as the image
+    is. The Airy pattern the diffracted light spreads into is taken at the
+    wavelength of the pixel it was heading for, which the light in it
+    differs from by the width of the spectral blur, a part in some 1e4.
 
     Parameters
     ----------
@@ -511,6 +525,12 @@ def apply_euv_pinhole_diffraction(
         the window.
     tel : Telescope_EUVST
         The filter, and the entrance pupil the beam's f-number comes from.
+    unfocused : NDCube, optional
+        The same photons before the focusing optics blurred them, where
+        *focus* did. Without it, *photon_counts* are taken to be unblurred.
+    focus : callable, optional
+        The blur of the focusing optics, taking a cube like *unfocused* to
+        one like *photon_counts*.
 
     Returns
     -------
@@ -520,13 +540,18 @@ def apply_euv_pinhole_diffraction(
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return photon_counts  # No pinholes enabled
 
+    if (unfocused is None) != (focus is None):
+        raise ValueError("unfocused and focus go together: the photons before the focusing "
+                         "optics' blur, and the blur.")
+    source = photon_counts if unfocused is None else unfocused
+    if source.data.shape != photon_counts.data.shape:
+        raise ValueError(f"The photons before the blur are {source.data.shape}, and after it "
+                         f"{photon_counts.data.shape}.")
     n_slit, n_scan, n_spectral = photon_counts.data.shape
-    wavelength = photon_counts.axis_world_coords(2)[0].to(u.m)
+    wavelength = source.axis_world_coords(2)[0].to(u.m)
     transmission = np.asarray(tel.filter.amplitude_transmission(wavelength), dtype=complex)
     stays = 2 * np.real(np.conj(transmission) * (1 - transmission))
     diffracted = np.abs(1 - transmission) ** 2
-    # The light each pixel would have had without the filter.
-    unfiltered = photon_counts.data / (np.abs(transmission) ** 2)
 
     pixel = (det.pix_size * u.pix).to_value(u.m)
     distance = det.filter_distance.to_value(u.m)
@@ -541,20 +566,30 @@ def apply_euv_pinhole_diffraction(
 
     # The light is the same in every Monte Carlo iteration, which works it out
     # again before its noise is drawn, so the last answer is kept.
-    digest = hashlib.blake2b(np.ascontiguousarray(photon_counts.data).tobytes(), digest_size=16)
+    digest = hashlib.blake2b(np.ascontiguousarray(source.data).tobytes(), digest_size=16)
+    digest.update(repr((source.data.shape, focus is not None)).encode())
     digest.update(np.ascontiguousarray(wavelength.value).tobytes())
     digest.update(transmission.tobytes())
     digest.update(repr((pinholes, pixel, distance, footprint)).encode())
     key = digest.hexdigest()
     if key not in _LAST_ADDED:
+        # The light each pixel would have had without the filter, and the
+        # shares of it that stay and are diffracted, at its own wavelength,
+        # then as the focusing optics leave it.
+        unfiltered = source.data / (np.abs(transmission) ** 2)
+        staying, diffracting = unfiltered * stays, unfiltered * diffracted
+        if focus is not None:
+            staying, diffracting = (np.asarray(focus(NDCube(light, wcs=source.wcs,
+                                                            unit=source.unit,
+                                                            meta=source.meta)).data)
+                                    for light in (staying, diffracting))
         added = np.zeros(photon_counts.data.shape)
         for radius, along_slit, along_spectral in pinholes:
             centre = pinhole_centre(along_slit, along_spectral, n_slit, n_spectral)
-            share = (np.pi * radius**2 / footprint_area) * half_disc_fractions(
-                (n_slit, n_spectral), centre, footprint / pixel, longer_is_higher)
-            through = unfiltered * share[:, np.newaxis, :]
-            added += through * stays
-            added += _spread(through * diffracted, lambda column: _converging_kernel(
+            share = ((np.pi * radius**2 / footprint_area) * half_disc_fractions(
+                (n_slit, n_spectral), centre, footprint / pixel, longer_is_higher))[:, np.newaxis, :]
+            added += staying * share
+            added += _spread(diffracting * share, lambda column: _converging_kernel(
                 n_slit, n_spectral, radius, float(wavelength[column].to_value(u.m)), distance, pixel))
         added.flags.writeable = False
         _LAST_ADDED.clear()

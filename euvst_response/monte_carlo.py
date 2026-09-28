@@ -100,17 +100,21 @@ def simulate_once(
     photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
 
     # Apply focusing optics PSF (primary mirror + diffraction grating)
-    if sim.psf:
-        photons_focused = apply_focusing_optics_psf(
-            photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
+    def focus(cube):
+        return apply_focusing_optics_psf(
+            cube, tel, det, sim, convolve_spatial=not uniform_mode,
             boundary=getattr(sim, "psf_boundary", "replicate"),
         )
-    else:
-        photons_focused = photons_pixels
-    
-    # Apply EUV pinhole diffraction effects (after focusing optics, if enabled)
+
+    photons_focused = focus(photons_pixels) if sim.psf else photons_pixels
+
+    # Apply EUV pinhole diffraction effects (after focusing optics, if enabled).
+    # The filter's share of each wavelength is known before the blur mixes
+    # them, so the pinholes' light is worked out from there and blurred alike.
     if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
-        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
+        photons_euv_pinholes = apply_euv_pinhole_diffraction(
+            photons_focused, det, sim, tel,
+            **({"unfocused": photons_pixels, "focus": focus} if sim.psf else {}))
     else:
         photons_euv_pinholes = photons_focused
 

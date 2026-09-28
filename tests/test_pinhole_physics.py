@@ -220,3 +220,74 @@ def test_an_euv_pinhole_adds_what_the_foil_took_from_the_light_through_it_beside
     short = columns < hole - 10 if increasing else columns > hole + 10
     v = np.pi * 50e-6 * 10 * PIXEL / (EUV * 0.05)
     assert added[:, short].max() < (through * diffracted).max() * (j0(v) ** 2 + j1(v) ** 2)
+
+
+def _kernel_in_window(n_rows, n_columns, radius, wavelength, distance):
+    """For each column, the share of its pixels' diffracted light the window holds."""
+    in_window = np.empty((n_rows, n_columns))
+    rows, columns = np.arange(n_rows), np.arange(n_columns)
+    for column in columns:
+        kernel = _converging_kernel(n_rows, n_columns, radius,
+                                    float(wavelength[column].to_value(u.m)), distance, PIXEL)
+        in_window[:, column] = kernel[np.abs(rows[:, None] - rows)][:, :, np.abs(columns - column)].sum(
+            axis=(1, 2))
+    return in_window
+
+
+def _shift_a_column_on(cube):
+    """A blur that moves each column's light to the next, as the optics' spectral blur moves some."""
+    data = np.zeros_like(cube.data)
+    data[..., 1:] = cube.data[..., :-1]
+    return NDCube(data, wcs=cube.wcs, unit=cube.unit, meta=cube.meta)
+
+
+def test_the_pinholes_light_is_weighed_at_its_own_wavelength_before_the_blur():
+    """
+    Moved a column on by the blur, each column's light keeps the filter's share of its own wavelength.
+
+    Divided by the filter's share at the column it was moved to, and weighed
+    by that column's, the light came out as the filter at the wrong wavelength
+    would have passed it.
+    """
+    det, tel = Detector_SWC(filter_distance=50 * u.mm), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", enable_pinholes=True, pinhole_sizes=[50 * u.um],
+                     pinhole_positions=[0.5], pinhole_positions_spectral=[0.25])
+    n_rows, n_columns = 121, 61
+    before = _window(n_rows, 1, n_columns, 1000.0)
+    after = _shift_a_column_on(before)
+    added = (apply_euv_pinhole_diffraction(after, det, sim, tel, unfocused=before,
+                                           focus=_shift_a_column_on).data - after.data)[:, 0]
+
+    wavelength = before.axis_world_coords(2)[0]
+    t = tel.filter.amplitude_transmission(wavelength)
+    footprint = beam_footprint_radius(det, tel).to_value(u.m) / PIXEL
+    share = (25e-6 / (footprint * PIXEL)) ** 2 * 2 * half_disc_fractions(
+        (n_rows, n_columns), (60.0, 15.0), footprint, True)
+    in_window = _kernel_in_window(n_rows, n_columns, 25e-6, wavelength, 0.05)
+    # The light of column j, without the filter, reaching column j + 1.
+    through = 1000.0 / np.abs(t[:-1]) ** 2 * share[:, 1:]
+    stays = 2 * np.real(np.conj(t[:-1]) * (1 - t[:-1]))
+    diffracted = np.abs(1 - t[:-1]) ** 2
+    expected = (through * (stays + diffracted * in_window[:, 1:])).sum()
+    assert added.sum() == pytest.approx(expected, rel=1e-9)
+    # Weighed at the column it reached, it would differ.
+    t_there = t[1:]
+    wrong = (1000.0 / np.abs(t_there) ** 2 * share[:, 1:]
+             * (2 * np.real(np.conj(t_there) * (1 - t_there))
+                + np.abs(1 - t_there) ** 2 * in_window[:, 1:])).sum()
+    assert abs(wrong / expected - 1) > 1e-6
+
+
+def test_windows_of_the_same_numbers_in_other_shapes_are_each_their_own():
+    """The kept answer was found by the photons' bytes, which two shapes can share."""
+    from euvst_response.pinhole_diffraction import _LAST_ADDED
+
+    det, tel = Detector_SWC(filter_distance=50 * u.mm), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", enable_pinholes=True, pinhole_sizes=[50 * u.um],
+                     pinhole_positions=[0.5], pinhole_positions_spectral=[0.25])
+    apply_euv_pinhole_diffraction(_window(60, 2, 61, 1000.0), det, sim, tel)
+    second = apply_euv_pinhole_diffraction(_window(120, 1, 61, 1000.0), det, sim, tel)
+    _LAST_ADDED.clear()
+    fresh = apply_euv_pinhole_diffraction(_window(120, 1, 61, 1000.0), det, sim, tel)
+    assert second.data.shape == (120, 1, 61)
+    assert np.array_equal(second.data, fresh.data)
