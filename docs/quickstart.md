@@ -17,13 +17,9 @@ synthesise-spectra --help
 eclipse --help
 ```
 
-That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's
-spectra, `eclipse` puts them through the instrument. See
-[From an MHD simulation](synthesis.md), which also describes the atmosphere file, and
-[Simulating the instrument](instrument-response.md) for the full set of options.
+That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's spectra, `eclipse` puts them through the instrument. See [From an MHD simulation](synthesis.md), which also describes the atmosphere file, and [Simulating the instrument](instrument-response.md) for the full set of options.
 
-There is no default configuration file, so write `config.yaml` yourself between
-those two commands. A minimal one that reads what the synthesis just wrote:
+There is no default configuration file, so write `config.yaml` yourself between those two commands. A minimal one that reads what the synthesis just wrote:
 
 ```yaml
 instrument: SWC
@@ -35,11 +31,7 @@ simulation:
   expos: [10 s, 40 s]
 ```
 
-Starting from an observed DEM instead of an MHD cube? See
-[From a DEM](dem-synthesis.md). Only want the precision on a line of known
-brightness, with no atmosphere at all? See
-[From a single intensity](uniform-intensity.md), which skips
-`synthesise-spectra` entirely.
+Starting from an observed DEM instead of an MHD cube? See [From a DEM](dem-synthesis.md). Only want the precision on a line of known brightness, with no atmosphere at all? See [From a single intensity](uniform-intensity.md), which skips `synthesise-spectra` entirely.
 
 ## Python API
 

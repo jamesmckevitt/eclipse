@@ -55,6 +55,72 @@ _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z
                    "goft_temperature_chunk"}
 _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre", "direction"}
 
+# Under MPI, a copy of the stderr a rank other than the first started with,
+# before its output is silenced.
+_STARTING_STDERR = None
+
+
+def _cpu_list(text: str) -> list:
+    """The CPUs of a Linux CPU list such as ``0-3,8,10-11``."""
+    cpus = []
+    for part in text.strip().split(","):
+        if part:
+            first, _, last = part.partition("-")
+            cpus.extend(range(int(first), int(last or first) + 1))
+    return cpus
+
+
+def _cpuset():
+    """The CPUs this process's cgroup cpuset allows, or None where there is none to read."""
+    try:
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            hierarchy, controllers, path = line.split(":", 2)
+            if hierarchy == "0" or "cpuset" in controllers.split(","):
+                root = Path("/sys/fs/cgroup") if hierarchy == "0" else Path("/sys/fs/cgroup/cpuset")
+                for name in ("cpuset.cpus.effective", "cpuset.cpus"):
+                    listed = root / path.lstrip("/") / name
+                    if listed.is_file() and listed.read_text().strip():
+                        return _cpu_list(listed.read_text())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _allowed_cpus(environ, cpuset, affinity) -> list:
+    """
+    The CPUs this job step has on its node, for its ranks to share.
+
+    SLURM confines a step to its CPUs with a cpuset, which may be wider than
+    the *affinity* an MPI library narrowed a rank to, so the *cpuset* is
+    taken where it is the step's: no more CPUs than SLURM_CPUS_ON_NODE says
+    the job has there, and holding the affinity. Where SLURM does not
+    confine steps, the cpuset is the whole node, and taking CPUs from it
+    could land on another job's, so the affinity is kept, as it is where
+    there is no cpuset or SLURM does not say.
+    """
+    on_node = environ.get("SLURM_CPUS_ON_NODE")
+    if (cpuset and on_node is not None and on_node.isdigit()
+            and len(cpuset) <= int(on_node) and set(affinity) <= set(cpuset)):
+        return list(cpuset)
+    return list(affinity)
+
+
+def _rank_cpus(environ, allowed: list) -> list:
+    """
+    This MPI rank's CPUs: SLURM_CPUS_PER_TASK of *allowed*, taken in turn by its local task id.
+
+    All of *allowed* where there are not enough for every task on the node
+    to have its own, and none, to leave the affinity alone, where SLURM does
+    not say how many a task has.
+    """
+    per_task, local = environ.get("SLURM_CPUS_PER_TASK"), environ.get("SLURM_LOCALID")
+    if per_task is None or local is None:
+        return []
+    per_task, local = int(per_task), int(local)
+    share = allowed[local * per_task:(local + 1) * per_task]
+    return share if len(share) == per_task else list(allowed)
+
+
 # The Simulation dataclass has more fields than this, but main() builds its
 # Simulation objects itself and only takes these from the section. The rest
 # (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
@@ -441,11 +507,14 @@ def main() -> None:
     from .utils import _get_mpi_info
     _comm, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
-        # Intel MPI pins each rank to cores, breaking joblib/loky.
-        # Reset affinity to the full SLURM allocation.
-        _slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
-        if _slurm_cpus is not None:
-            os.sched_setaffinity(0, range(int(_slurm_cpus)))
+        # Intel MPI pins each rank to cores, breaking joblib/loky. Widen it
+        # to this rank's share of the CPUs the job step has on its node,
+        # rather than to CPUs 0 to n, which every rank shared and which, on a
+        # node shared with another job, need not be the job's at all.
+        _cpus = _rank_cpus(os.environ, _allowed_cpus(os.environ, _cpuset(),
+                                                     sorted(os.sched_getaffinity(0))))
+        if _cpus:
+            os.sched_setaffinity(0, _cpus)
 
         if _mpi_rank == 0:
             print(f"MPI distributed mode: {_mpi_size} processes "
@@ -455,6 +524,10 @@ def main() -> None:
             # output. Redirect at the OS file-descriptor level, not
             # just the Python objects, because SLURM captures fd 1/2 directly
             # and tqdm can bypass the Python sys.stderr object.
+            # The stderr it started with is kept, for an error that has to be
+            # said before the run is aborted.
+            global _STARTING_STDERR
+            _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
             os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
             os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
@@ -508,6 +581,11 @@ def main() -> None:
 
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
+    # joblib and reproject both take it, and agree only on these. 0, which
+    # means every CPU to the synthesis's n_workers, failed at the first fit.
+    if isinstance(ncpu, bool) or not isinstance(ncpu, int) or (ncpu < 1 and ncpu != -1):
+        raise ValueError(f"'ncpu' must be a whole number of CPUs, 1 or more, or -1 for all "
+                         f"of them, got {ncpu!r}.")
 
     # In MPI mode, if a ncpu value specified, cap it to
     # the CPUs available to this rank so joblib doesn't oversubscribe.
@@ -634,10 +712,19 @@ def main() -> None:
     if instrument == "EIS":
         if config.get("filter"):
             warnings.warn(
-                "EIS does not use an aluminium filter. The 'filter:' section will be ignored.",
+                "The 'filter:' section describes SWC's filter and is ignored for EIS, whose "
+                "filters are folded into its effective area tables.",
                 UserWarning,
             )
             fil_fixed, fil_sweep = {}, {}
+        vis_sl = [sim_fixed["vis_sl"]] if "vis_sl" in sim_fixed else sim_sweep.get("vis_sl", [])
+        if any(np.any(u.Quantity(value).value > 0) for value in vis_sl):
+            warnings.warn(
+                "EIS's filters are not modelled for visible light, so vis_sl reaches its CCD "
+                "as given, where for SWC it is the flux before the filter. Give EIS the flux "
+                "after its filters.",
+                UserWarning,
+            )
         for key in ("microroughness_sigma",):
             if key in tel_fixed or key in tel_sweep:
                 warnings.warn(
@@ -810,7 +897,6 @@ def main() -> None:
         # Before the contribution functions, which take minutes and gigabytes.
         RasterSynthesiser.check_plan(series, raster_plan, *_swept("slit_width", "expos"))
         raster = RasterSynthesiser(series, synthesis_settings)
-        print(f"  CHIANTI database: {raster.goft_dbase_root}")
     elif synthesis_series_mode:
         # The spectra are read per combination inside the loop, a strip of
         # columns at a time, and each column once.
@@ -898,6 +984,11 @@ def main() -> None:
     cube_reb_cache = {}
     # rebin_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res, offchip_bin_slit)
     rebin_cache = {}
+    # observed_cache: the cubes the Monte Carlo observes through the PSF,
+    # keyed by the sampling and the PSF.
+    observed_cache = {}
+    # A synthesis series' raster, its metadata and its summed spectra, by sampling.
+    raster_syntheses = {}
     # Keyed by slit_width_arcsec (first match) for convenient downstream access
     cube_reb_dict = {}
 
@@ -1013,6 +1104,7 @@ def main() -> None:
             if synthesis.evenly_spaced(reference_line):
                 cube_sim = synthesis.summed_cube(reference_line, summed_input, raster_meta)
             raster_summed[cube_reb_key] = cube_sim
+            raster_syntheses[cube_reb_key] = (synthesis, raster_meta, summed_input)
             print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "
                   f"strips read so far")
 
@@ -1081,6 +1173,48 @@ def main() -> None:
 
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
+        # The cube the Monte Carlo observes. With the PSF on, the scene goes
+        # onto the pixels through it, which is exact where blurring the pixels
+        # afterwards moves a narrow line within its pixel; the ground truth
+        # stays the scene without it. A uniform intensity is centred on a
+        # pixel and uniform along the slit, and the Monte Carlo blurs it.
+        cube_obs = cube_reb
+        if psf and not uniform_intensity_mode:
+            # The observed cube carries the telescope's throughput as well as
+            # its PSF, so every setting of the telescope and filter is in the key.
+            telescope_key = _params_to_key({
+                **_extract_config_params(TEL, "telescope"),
+                **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
+            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, telescope_key)
+            if psf_key not in observed_cache:
+                print("Laying the scene onto the detector through the PSF...")
+                SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
+                                     ncpu=ncpu, instrument=instrument, psf=True,
+                                     psf_boundary=psf_boundary, spectral_psf=spectral_psf)
+                across = TEL.psf_across_slit
+                extend = psf_boundary == "replicate"
+                if atmosphere_series_mode:
+                    scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(
+                        raster_plan, slit_width, expos, reference_line, repeat=raster_repeat,
+                        across_slit=across, extend=extend)
+                    observed = rebin_atmosphere(scene, DET, SIM_obs, tel=TEL)
+                elif synthesis_series_mode:
+                    series_synthesis, series_meta, series_summed = raster_syntheses[cube_reb_key]
+                    if across is not None:
+                        series_synthesis, series_meta = raster.synthesis(
+                            raster_plan, slit_width, expos, repeat=raster_repeat,
+                            across_slit=across, extend=extend)
+                        series_summed = None
+                    observed = rebin_spectra(series_synthesis, reference_line, DET, SIM_obs,
+                                             summed=series_summed, meta=series_meta, tel=TEL)
+                elif synthesis is None:
+                    observed = rebin_atmosphere(cube_sim, DET, SIM_obs, tel=TEL)
+                else:
+                    observed = rebin_spectra(synthesis, reference_line, DET, SIM_obs,
+                                             summed=summed_input, meta=file_meta, tel=TEL)
+                observed_cache[psf_key] = observed
+            cube_obs = observed_cache[psf_key]
+
         # Build Simulation object
         SIM = Simulation(
             expos=expos,
@@ -1119,7 +1253,7 @@ def main() -> None:
 
         # Run Monte Carlo
         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-            cube_reb, expos, DET, TEL, SIM,
+            cube_obs, expos, DET, TEL, SIM,
             n_iter=SIM.n_iter,
             fit_config=fit_config,
             offchip_bin_slit=offchip_bin_slit,
