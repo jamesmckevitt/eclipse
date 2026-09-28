@@ -4,6 +4,7 @@ Configuration classes for instruments, detectors, and simulation parameters.
 
 from __future__ import annotations
 import dataclasses
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -69,6 +70,32 @@ def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple
             raise ValueError(f"{name} cannot be negative, got {value}.")
         if f.name in fractions and not (0 <= magnitude <= 1):
             raise ValueError(f"{name} is a fraction, from 0 to 1, got {value}.")
+
+
+def _check_psf_params(tel, section: str = "telescope") -> None:
+    """psf_params must be two widths in pixels, along the slit and along the dispersion, above zero."""
+    value = tel.psf_params
+    if (not isinstance(value, (list, tuple)) or len(value) != 2
+            or not all(isinstance(q, u.Quantity) and q.unit.is_equivalent(u.pix)
+                       and np.isfinite(q.value) and q.value > 0 for q in value)):
+        raise ValueError(f"{section}.psf_params must be two FWHMs in pixels, along the slit "
+                         f"and along the dispersion, such as [2.66 pix, 2.54 pix]; got {value!r}.")
+
+
+def _check_tables(obj, names: tuple, section: str) -> None:
+    """
+    Each of *names* the path of a table; one named in a configuration comes as text.
+
+    Whether the table is there is left until it is read, since a results
+    file made on another machine rebuilds these with that machine's paths.
+    """
+    for name in names:
+        value = getattr(obj, name)
+        if isinstance(value, (str, os.PathLike)):
+            value = Path(value).expanduser()
+            setattr(obj, name, value)
+        if not hasattr(value, "is_file"):
+            raise ValueError(f"{section}.{name} must be the path of a table, got {value!r}.")
 
 
 def _check_detector(det, section: str = "detector") -> None:
@@ -165,12 +192,14 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
             text = line.strip()
             if not text or text.startswith('#'):
                 continue
+            # Every value of a line of data is a number, the first two its
+            # wavelength and throughput.
             try:
-                row = [float(x) for x in text.split()[:2]]
+                row = [float(x) for x in text.split()]
             except ValueError:
                 row = []
-            if len(row) == 2:
-                data.append(row)
+            if len(row) >= 2:
+                data.append(row[:2])
             elif data:
                 raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
                                  f"throughput, and the table's data had begun.")
@@ -279,10 +308,7 @@ class AluminiumFilter:
         _check_settings(self, "filter", positive=("table_thickness",),
                         non_negative=("al_thickness", "oxide_thickness", "c_thickness"),
                         fractions=("mesh_throughput",))
-        # A table named in a configuration file comes as text.
-        for name in ("al_table", "oxide_table", "c_table"):
-            if isinstance(getattr(self, name), str):
-                setattr(self, name, Path(getattr(self, name)).expanduser())
+        _check_tables(self, ("al_table", "oxide_table", "c_table"), "filter")
 
     def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
         """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""
@@ -413,9 +439,8 @@ class Telescope_EUVST:
     def __post_init__(self):
         _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
                         non_negative=("microroughness_sigma",), optional=("psf_slit_width",))
-        for name in ("pm_table", "grating_table"):
-            if isinstance(getattr(self, name), str):
-                setattr(self, name, Path(getattr(self, name)).expanduser())
+        _check_psf_params(self)
+        _check_tables(self, ("pm_table", "grating_table"), "telescope")
 
     @property
     def collecting_area(self) -> u.Quantity:
@@ -567,6 +592,7 @@ class Telescope_EIS:
     date: str | None = None
 
     def __post_init__(self):
+        _check_psf_params(self)
         if self.calibration not in eis_calibration.CALIBRATIONS:
             raise ValueError(
                 f"Unknown EIS calibration {self.calibration!r}. Choose from: "

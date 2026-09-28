@@ -76,6 +76,25 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     (tmp_path / "empty.dat").write_text("# nothing here\n")
     with pytest.raises(ValueError, match="has no lines of a wavelength and a throughput"):
         _load_throughput_table(tmp_path / "empty.dat")
+    # A column of numbers more is read; a word after the numbers is a slip.
+    (tmp_path / "three.dat").write_text("17.0 0.097 0.001\n17.2 0.103 0.001\n")
+    assert _load_throughput_table(tmp_path / "three.dat")[1].tolist() == [0.097, 0.103]
+    (tmp_path / "word.dat").write_text("17.0 0.097\n17.2 0.103 garbage\n")
+    with pytest.raises(ValueError, match="line 2: '17.2 0.103 garbage'"):
+        _load_throughput_table(tmp_path / "word.dat")
+
+
+@pytest.mark.parametrize("build, message", [
+    (lambda: Telescope_EUVST(psf_params=[2.66, 2.54]), "psf_params must be two FWHMs in pixels"),
+    (lambda: Telescope_EUVST(psf_params=[2.66 * u.pix]), "psf_params must be two FWHMs in pixels"),
+    (lambda: Telescope_EIS(psf_params=[3 * u.pix, -3 * u.pix]), "psf_params must be two FWHMs"),
+    (lambda: Telescope_EUVST(pm_table=3), "telescope.pm_table must be the path of a table"),
+    (lambda: AluminiumFilter(al_table=None), "filter.al_table must be the path of a table"),
+])
+def test_the_psf_widths_and_the_tables_are_checked_when_built(build, message):
+    """They were set by a default factory, which the checks of other settings pass by."""
+    with pytest.raises(ValueError, match=message):
+        build()
 
 
 def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
