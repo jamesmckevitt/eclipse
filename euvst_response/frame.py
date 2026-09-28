@@ -421,7 +421,9 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
                                         photons.shape))
     else:
         electrons = electrons + dark
-    return np.maximum(electrons, 0.0)
+    # Not clipped at zero, as a CCD reads out above a bias level; see
+    # radiometric.to_electrons.
+    return electrons
 
 
 def digitise(electrons: np.ndarray, det) -> np.ndarray:
