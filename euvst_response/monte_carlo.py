@@ -99,8 +99,10 @@ def simulate_once(
     # Convert to pixel counts
     photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
 
-    # Apply focusing optics PSF (primary mirror + diffraction grating)
-    if sim.psf:
+    # Apply focusing optics PSF (primary mirror + diffraction grating), unless
+    # the cube was laid onto the pixels through it (rebin_atmosphere with a
+    # telescope), which is exact where blurring the pixels is not.
+    if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
         photons_focused = apply_focusing_optics_psf(
             photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
             boundary=getattr(sim, "psf_boundary", "replicate"),

@@ -964,6 +964,11 @@ def main() -> None:
     cube_reb_cache = {}
     # rebin_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res, offchip_bin_slit)
     rebin_cache = {}
+    # observed_cache: the cubes the Monte Carlo observes through the PSF,
+    # keyed by the sampling and the PSF.
+    observed_cache = {}
+    # A synthesis series' raster, its metadata and its summed spectra, by sampling.
+    raster_syntheses = {}
     # Keyed by slit_width_arcsec (first match) for convenient downstream access
     cube_reb_dict = {}
 
@@ -1079,6 +1084,7 @@ def main() -> None:
             if synthesis.evenly_spaced(reference_line):
                 cube_sim = synthesis.summed_cube(reference_line, summed_input, raster_meta)
             raster_summed[cube_reb_key] = cube_sim
+            raster_syntheses[cube_reb_key] = (synthesis, raster_meta, summed_input)
             print(f"  {len(raster_meta['positions'])} exposures, {raster.strips_read} "
                   f"strips read so far")
 
@@ -1147,6 +1153,48 @@ def main() -> None:
 
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
+        # The cube the Monte Carlo observes. With the PSF on, the scene goes
+        # onto the pixels through it, which is exact where blurring the pixels
+        # afterwards moves a narrow line within its pixel; the ground truth
+        # stays the scene without it. A uniform intensity is centred on a
+        # pixel and uniform along the slit, and the Monte Carlo blurs it.
+        cube_obs = cube_reb
+        if psf and not uniform_intensity_mode:
+            # The observed cube carries the telescope's throughput as well as
+            # its PSF, so every setting of the telescope and filter is in the key.
+            telescope_key = _params_to_key({
+                **_extract_config_params(TEL, "telescope"),
+                **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
+            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, telescope_key)
+            if psf_key not in observed_cache:
+                print("Laying the scene onto the detector through the PSF...")
+                SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
+                                     ncpu=ncpu, instrument=instrument, psf=True,
+                                     psf_boundary=psf_boundary, spectral_psf=spectral_psf)
+                across = TEL.psf_across_slit
+                extend = psf_boundary == "replicate"
+                if atmosphere_series_mode:
+                    scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(
+                        raster_plan, slit_width, expos, reference_line, repeat=raster_repeat,
+                        across_slit=across, extend=extend)
+                    observed = rebin_atmosphere(scene, DET, SIM_obs, tel=TEL)
+                elif synthesis_series_mode:
+                    series_synthesis, series_meta, series_summed = raster_syntheses[cube_reb_key]
+                    if across is not None:
+                        series_synthesis, series_meta = raster.synthesis(
+                            raster_plan, slit_width, expos, repeat=raster_repeat,
+                            across_slit=across, extend=extend)
+                        series_summed = None
+                    observed = rebin_spectra(series_synthesis, reference_line, DET, SIM_obs,
+                                             summed=series_summed, meta=series_meta, tel=TEL)
+                elif synthesis is None:
+                    observed = rebin_atmosphere(cube_sim, DET, SIM_obs, tel=TEL)
+                else:
+                    observed = rebin_spectra(synthesis, reference_line, DET, SIM_obs,
+                                             summed=summed_input, meta=file_meta, tel=TEL)
+                observed_cache[psf_key] = observed
+            cube_obs = observed_cache[psf_key]
+
         # Build Simulation object
         SIM = Simulation(
             expos=expos,
@@ -1185,7 +1233,7 @@ def main() -> None:
 
         # Run Monte Carlo
         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
-            cube_reb, expos, DET, TEL, SIM,
+            cube_obs, expos, DET, TEL, SIM,
             n_iter=SIM.n_iter,
             fit_config=fit_config,
             offchip_bin_slit=offchip_bin_slit,

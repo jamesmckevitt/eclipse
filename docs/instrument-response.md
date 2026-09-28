@@ -63,6 +63,19 @@ simulation:
 
 The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
 
+### The edges of the atmosphere
+
+With `psf: True` the blur brings light in from beyond the edges of the atmosphere. `simulation.psf_boundary` sets what is there:
+
+- `replicate` (default): the Sun beyond each edge is taken to be like the cells at the edge, so the pixels there are as bright as they would be in the middle of a larger atmosphere.
+- `zero`: nothing is beyond the edges, so the light the blur carries out of the atmosphere is lost, and the pixels within a PSF width of an edge come out darker.
+
+```yaml
+simulation:
+  psf: True
+  psf_boundary: zero
+```
+
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
