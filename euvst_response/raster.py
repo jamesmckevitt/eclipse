@@ -275,11 +275,18 @@ class _Series:
             raise ValueError(f"An exposure must end after it starts, got {start} to {end}.")
         begins = self.times.to_value(u.s)
         ends = self.valid_until().to_value(u.s)
-        if t0 < begins[0] or t1 > ends[-1]:
+        # A plan that fills the series exactly reaches its ends but for the
+        # rounding of adding up its exposures: a part in 1e9 of the series.
+        rounding = 1e-9 * max(abs(begins[0]), abs(ends[-1]), ends[-1] - begins[0])
+        early, late = begins[0] - t0, t1 - ends[-1]
+        if early > rounding or late > rounding:
+            where = (f"starting {early:.3g} s before it" if early > rounding
+                     else f"ending {late:.3g} s after it")
             raise ValueError(
-                f"An exposure from {t0:.3f} to {t1:.3f} s lies outside the series, which "
-                f"runs from {begins[0]:.3f} to {ends[-1]:.3f} s (the last snapshot, at "
-                f"{begins[-1]:.3f} s, stands for as long as the gap before it).")
+                f"An exposure from {t0:.10g} to {t1:.10g} s lies outside the series, {where}; "
+                f"the series runs from {begins[0]:.10g} to {ends[-1]:.10g} s (the last "
+                f"snapshot, at {begins[-1]:.10g} s, stands for as long as the gap before it).")
+        t0, t1 = max(t0, begins[0]), min(t1, ends[-1])
         overlap = np.clip(np.minimum(ends, t1) - np.maximum(begins, t0), 0.0, None)
         fractions = overlap / (t1 - t0)
         return [(int(k), float(f)) for k, f in enumerate(fractions) if f > 0.0]
@@ -461,17 +468,17 @@ class _SlitRaster:
         edges = self.series.x_edges.to_value(u.Mm)
         low = position.to_value(u.Mm) - width / 2
         high = position.to_value(u.Mm) + width / 2
-        if low < edges[0] or high > edges[-1]:
+        # A slit edge that lands on a cell boundary, as it does when the slit
+        # is a whole number of cells wide, must not pull in the cell beyond
+        # on rounding, nor reach past the edge of the box: a column counts
+        # only when more than a millionth of a cell of it is under the slit.
+        tolerance = 1e-6 * np.diff(edges).min()
+        if low < edges[0] - tolerance or high > edges[-1] + tolerance:
             raise ValueError(
                 f"A slit {width:.4g} Mm wide at x = {position.to_value(u.Mm):.4g} Mm reaches "
                 f"outside the {self._extent}, which spans x = {edges[0]:.4g} to "
                 f"{edges[-1]:.4g} Mm.")
         overlap = np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low), 0.0, None)
-        # A slit edge that lands on a cell boundary, as it does when the slit
-        # is a whole number of cells wide, must not pull in the cell beyond
-        # on rounding: a column counts only when more than a millionth of a
-        # cell of it is under the slit.
-        tolerance = 1e-6 * np.diff(edges).min()
         inside = np.flatnonzero(overlap > tolerance)
         first, last = int(inside[0]), int(inside[-1]) + 1
         return first, last, overlap[first:last] / overlap[first:last].sum()
