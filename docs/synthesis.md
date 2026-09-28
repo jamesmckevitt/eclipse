@@ -289,13 +289,15 @@ Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 
 The same names are used by `--lines`, by the `reference_line` key in the instrument configuration, and as the keys of `line_cubes` in the output file.
 
-The wavelength does not have to be exact. ECLIPSE finds the nearest transition of that ion in CHIANTI and prints both the requested and matched wavelengths:
+ECLIPSE takes the line of that ion whose wavelength in CHIANTI, written to as many decimals as the name gives, is the name's wavelength, so `Fe12_195.119` and `Fe12_195.12` both name Fe XII 195.119. Lines CHIANTI has only a theoretical wavelength for are named the same way, at that wavelength. Where an observed and a theoretical line are both at the name's wavelength, the observed one is taken, and of several transitions at one wavelength, the brightest. The line is synthesised at CHIANTI's wavelength, whatever the digits of the name.
+
+If no line of the ion is at the name's wavelength, as when it comes from another line list, ECLIPSE takes the nearest line CHIANTI has observed and warns, rather than the nearest theoretical wavelength, since many of those are weak transitions within a few mA of strong lines. It prints the requested and matched wavelengths for every line:
 
 ```text
-  Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom (delta=0.0000 Angstrom)
+  Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom, observed (delta=0.0000 Angstrom)
 ```
 
-Check that line. A large difference means the transition you meant is not in the database for that ion, and a neighbouring one was picked up instead. A name that does not match the pattern at all raises `ValueError` immediately.
+Check that line. A large difference means the line you meant is not in the database for that ion, and a neighbouring one was picked up instead. Two names that match the same line are refused, since the line would be synthesised twice and summed. A name that does not match the pattern at all raises `ValueError` immediately.
 
 ## Performance tips
 

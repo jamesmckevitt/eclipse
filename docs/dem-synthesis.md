@@ -48,7 +48,7 @@ def main():
     em_scene = np.tile(em_bin, (ny, nx, 1))
 
     # 4. Contribution functions, on exactly the DEM temperature grid.
-    lines = ["Si10_258.3750", "S10_264.2300"]
+    lines = ["Si10_258.3740", "S10_264.2300"]
     goft, logT_goft, logN_grid = compute_goft_fiasco(
         lines,
         abundance="sun_coronal_2021_chianti",
@@ -120,7 +120,7 @@ The output is an ordinary synthesis file, so the [instrument response](instrumen
 # configs/eis_si10.yaml
 instrument: EIS
 synthesis_file: ./run/input/dem_synth.h5
-reference_line: Si10_258.3750   # selects the Si X 258 window
+reference_line: Si10_258.3740   # selects the Si X 258 window
 
 n_iter: 500
 ncpu: -1

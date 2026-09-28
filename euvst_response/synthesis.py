@@ -562,6 +562,37 @@ def build_composite_cubes_mhd(
     return temp_ndcube, rho_ndcube, vel_ndcube
 
 
+def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.ndarray) -> tuple:
+    """
+    The transitions *line_name* names, by index, and how they were found.
+
+    First those whose wavelength, written to as many decimals as the name
+    gives, is the name's: observed ones if any are, else theoretical ones, so
+    that a line CHIANTI has only worked out can be named at its wavelength.
+    With none, the nearest line CHIANTI has observed: its theoretical
+    wavelengths include many weak transitions within a few mA of strong
+    lines, and a name a little off an observed wavelength, as another line
+    list may give it, would otherwise pick one of those, up to 1e12 times
+    fainter. An ion with no observed lines has only its theoretical ones.
+    All the transitions at the chosen wavelength are given, for the
+    brightest to be taken.
+    """
+    number = line_name.split("_", 1)[1]
+    decimals = len(number.partition(".")[2])
+    target = float(number)
+    named = np.round(wavelengths_aa, decimals) == np.round(target, decimals)
+    if (named & observed).any():
+        pool, how = named & observed, "named"
+    elif named.any():
+        pool, how = named, "named"
+    elif observed.any():
+        pool, how = observed, "nearest observed"
+    else:
+        pool, how = np.ones_like(named), "nearest theoretical"
+    distance = np.where(pool, np.abs(wavelengths_aa - target), np.inf)
+    return np.flatnonzero(distance == distance.min()), how
+
+
 def _compute_single_ion(args):
     """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
     that each spawned process gets its own HDF5 handles.
@@ -596,7 +627,7 @@ def _compute_single_ion(args):
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
 
-    g_parts = {line_name: [] for line_name, _ in lines}
+    g_parts = {}
     try:
         for start in range(0, n_temperatures, step):
             ion = fiasco.Ion(f'{elem} {stage}',
@@ -610,12 +641,17 @@ def _compute_single_ion(args):
             # The transitions do not depend on temperature, so the lines are
             # matched once, on the first chunk.
             if start == 0:
-                bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
-                line_idx = {line_name: int(np.argmin(np.abs(bb_wl - target_wl_aa * u.AA)))
-                            for line_name, target_wl_aa in lines}
-            for line_name, idx in line_idx.items():
-                g_parts[line_name].append(
-                    g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+                bound = ion.transitions.is_bound_bound
+                bb_wl = ion.transitions.wavelength[bound]
+                # CHIANTI stores its theoretical wavelengths negative, and
+                # fiasco gives them positive with this flag.
+                observed = np.asarray(ion.transitions.is_observed[bound])
+                matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
+                           for line_name, _ in lines}
+                g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
+                           for idx in indices}
+            for (line_name, idx), parts in g_parts.items():
+                parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
             del g
     finally:
         fiasco_logger.setLevel(prev_level)
@@ -623,18 +659,24 @@ def _compute_single_ion(args):
     results = {}
     for line_name, target_wl_aa in lines:
         target_wl = target_wl_aa * u.AA
-        idx = line_idx[line_name]
+        indices, how = matches[line_name]
+        tables = {}
+        for idx in indices:
+            g_tn = np.concatenate(g_parts[(line_name, int(idx))]).T
+            tables[int(idx)] = np.nan_to_num(g_tn, nan=0.0, posinf=0.0, neginf=0.0)
+        # Transitions CHIANTI lists at one wavelength are told apart by their brightness.
+        idx = max(tables, key=lambda i: tables[i].max())
         matched_wl = bb_wl[idx]
 
-        g_tn = np.concatenate(g_parts[line_name]).T
-        np.nan_to_num(g_tn, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-
         results[line_name] = {
-            "g_tn": g_tn,
+            "g_tn": tables[idx],
             "atom": int(ion.atomic_number),
             "ion": stage,
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
+            "match": how,
+            "observed": bool(observed[idx]),
+            "transition": idx,
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
             # The root this Ion was built against.  fiasco resolves it to the
             # fiascorc default when the caller did not choose one, so this is
@@ -663,7 +705,13 @@ def compute_goft_fiasco(
 
     For each line specification (e.g. "Fe12_195.1190"), creates a fiasco Ion,
     computes the contribution function over a (T, n_e) grid, and extracts the
-    transition closest to the requested wavelength.
+    line at the requested wavelength to the digits the name gives, observed or
+    theoretical, the observed one where both are. If no line is there, the
+    nearest line CHIANTI has observed is taken, with a warning, rather than
+    the nearest theoretical wavelength, many of which are weak transitions a
+    few mA from strong lines. Of several transitions CHIANTI lists at one
+    wavelength, the brightest is taken. The line is placed at CHIANTI's
+    wavelength, ``wl0``, not the name's.
 
     The CHIANTI contribution function is::
 
@@ -806,11 +854,39 @@ def compute_goft_fiasco(
                 )
             print(
                 f"  {line_name}: requested {info['target_wl_cm']*1e8:.4f} Angstrom, "
-                f"matched {info['matched_wl_aa']:.4f} Angstrom "
+                f"matched {info['matched_wl_aa']:.4f} Angstrom, "
+                f"{'observed' if info['observed'] else 'theoretical'} "
                 f"(delta={info['delta_aa']:.4f} Angstrom)"
             )
+            # No line of the ion is at the name's wavelength to its digits.
+            if info["match"] == "nearest observed":
+                warnings.warn(
+                    f"{line_name}: no line of this ion is at that wavelength to the digits "
+                    f"given, so the nearest line CHIANTI has observed is used, at "
+                    f"{info['matched_wl_aa']:.4f} Angstrom, {info['delta_aa']:.4f} Angstrom "
+                    f"from the name, and synthesised there. To synthesise another line, "
+                    f"theoretical ones included, give CHIANTI's wavelength for it.",
+                    UserWarning, stacklevel=2)
+            elif info["match"] == "nearest theoretical":
+                warnings.warn(
+                    f"{line_name}: no line of this ion is at that wavelength to the digits "
+                    f"given, and CHIANTI has observed none of its lines, so the nearest of its "
+                    f"theoretical wavelengths is used, at {info['matched_wl_aa']:.4f} Angstrom, "
+                    f"{info['delta_aa']:.4f} Angstrom from the name, and synthesised there.",
+                    UserWarning, stacklevel=2)
+            same = [other for other, seen in goft_dict.items()
+                    if (seen["atom"], seen["ion"], seen["transition"])
+                    == (info["atom"], info["ion"], info["transition"])]
+            if same:
+                raise ValueError(
+                    f"{same[0]} and {line_name} are the same line, CHIANTI's at "
+                    f"{info['matched_wl_aa']:.4f} Angstrom, which would be synthesised twice "
+                    f"and summed. Give it once.")
             goft_dict[line_name] = {
-                "wl0": info["target_wl_cm"] * u.cm,
+                # The line is where CHIANTI has observed it, whatever
+                # digits the name gave.
+                "wl0": info["matched_wl_aa"] * u.AA.to(u.cm) * u.cm,
+                "transition": info["transition"],
                 "g_tn": info["g_tn"].astype(precision),
                 "atom": info["atom"],
                 "ion": info["ion"],
