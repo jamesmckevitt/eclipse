@@ -304,6 +304,12 @@ class Telescope_EUVST:
     # slit width (giving 0.405 arcsec, 43.00 mA), so the spectral PSF of any
     # other slit is worked out from it; see radiometric.spectral_psf_fwhm.
     psf_slit_width: u.Quantity = 0.2 * u.arcsec
+    # The telescope's blur across the slit: the FWHM of the image it forms at
+    # the slit, which decides how much light from beside the slit falls into
+    # it. None leaves it out, so that the slit takes in only the light it
+    # covers. It is not psf_params[0], the blur along the slit measured at the
+    # detector, which includes the spectrograph after the slit.
+    psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -455,6 +461,9 @@ class Telescope_EIS:
     # same whichever slit is used. Setting this says which slit psf_params was
     # measured with, and the spectral PSF then follows the slit as for SWC.
     psf_slit_width: u.Quantity | None = None
+    # The telescope's blur across the slit, the FWHM of its image at the
+    # slit, as for Telescope_EUVST. None leaves it out.
+    psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
     calibration: str = "ground"
     date: str | None = None
 
