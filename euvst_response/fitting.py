@@ -96,7 +96,7 @@ class FitConfig:
                 f"fitting.max_iter must be a positive integer, got "
                 f"{self.max_iter!r}."
             )
-        for key in ("bessel_correction", "save_iterations"):
+        for key in ("bessel_correction", "save_iterations", "constrain_positive_intensity"):
             if not isinstance(getattr(self, key), bool):
                 raise ValueError(
                     f"fitting.{key} must be true or false, got "
@@ -129,6 +129,25 @@ class FitConfig:
                         f"fitting.components[{idx}].name must be a non-empty "
                         f"string, got {comp.name!r}."
                     )
+            for key in ("tie_center", "tie_width", "amplitude_greater_than"):
+                for start in range(n):
+                    index, chain = start, [start]
+                    while getattr(self.components[index], key) is not None:
+                        index = getattr(self.components[index], key)
+                        if index in chain:
+                            raise ValueError(
+                                f"fitting.components {chain + [index]} make a loop of "
+                                f"{key}, which no fit can meet. One component in a chain "
+                                f"has to be left free.")
+                        chain.append(index)
+            fainter = [comp.amplitude_greater_than for comp in self.components
+                       if comp.amplitude_greater_than is not None]
+            shared = sorted({index for index in fainter if fainter.count(index) > 1})
+            if shared:
+                raise ValueError(
+                    f"fitting.components {shared} are each held fainter than more than one "
+                    f"component by amplitude_greater_than. A component can be held fainter "
+                    f"than one other; chain them to hold it below several.")
             names = [default_component_name(c.wavelength) if c.name is None
                      else c.name for c in self.components]
             repeated = sorted({name for name in names if names.count(name) > 1})
@@ -177,6 +196,65 @@ class FitConfig:
     @property
     def idx_sigma(self) -> int:
         return 3 * self.primary_component + 2
+
+
+def _tie_root(fit_config: FitConfig, key: str, index: int) -> int:
+    """
+    The free component that a chain of *key* ties from component *index* ends at.
+
+    Tying to a component that is itself tied is the same as tying to the one
+    that one is tied to: for centres the ratios of the rest wavelengths
+    multiply out to the ratio with the last, and widths are equal all along.
+    FitConfig refuses loops, so the chain ends.
+    """
+    while getattr(fit_config.components[index], key) is not None:
+        index = getattr(fit_config.components[index], key)
+    return index
+
+
+# The fraction of the primary's amplitude the guess starts every other
+# component at.
+_GUESS_FRACTION = 0.15
+
+
+def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
+                 child: int, parent: int) -> float:
+    """
+    The fraction of its parent's amplitude a component held fainter than it starts at.
+
+    Read from the spectrum, above the guessed background, at the two
+    components' guessed centres, since the guess starts every component but
+    the primary at the same fraction of it: two held one below the other
+    would start equal, at the bound, and a primary held below another above
+    it. Where the spectrum puts the child the brighter, the fraction the
+    guess gives the others is used, strictly inside the bounds. *child* and
+    *parent* index the amplitudes in the full *guess*.
+    """
+    def level(index):
+        return float(np.interp(guess[index + 1], wv, prof - guess[-1]))
+
+    child_level, parent_level = level(child), level(parent)
+    if parent_level > 0 and 0 < child_level / parent_level < 1:
+        return child_level / parent_level
+    return _GUESS_FRACTION
+
+
+def _in_dependency_order(fainter_than: dict) -> list:
+    """
+    The ``(child, parent)`` items of *fainter_than*, each parent before any child of it.
+
+    A child's amplitude is fitted as a fraction of its parent's, so the
+    parent's has to be known first, as it is not yet when the parent is
+    itself the child of a component listed after it.
+    """
+    def depth(child):
+        steps = 0
+        while child in fainter_than:
+            child = fainter_than[child]
+            steps += 1
+        return steps
+
+    return sorted(fainter_than.items(), key=lambda item: depth(item[0]))
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +404,7 @@ def _build_scipy_multi(fit_config: FitConfig):
 
         # centre
         if comp.tie_center is not None:
-            src = comp.tie_center
+            src = _tie_root(fit_config, "tie_center", i)
             # Tied centres share one velocity, and one velocity moves a line by
             # an amount proportional to its wavelength, so the tie is the ratio
             # of the two rest wavelengths rather than their separation. Holding
@@ -344,7 +422,7 @@ def _build_scipy_multi(fit_config: FitConfig):
 
         # sigma
         if comp.tie_width is not None:
-            src = comp.tie_width
+            src = _tie_root(fit_config, "tie_width", i)
             # Widths stay tied as equals. Thermal broadening does scale with
             # wavelength, but the instrumental width that dominates these
             # windows does not, so this is left as it was.
@@ -372,12 +450,18 @@ def _build_scipy_multi(fit_config: FitConfig):
     has_bounds = ratio_spec or fit_config.constrain_positive_intensity
     bounds = (lower, upper) if has_bounds else (-np.inf, np.inf)
 
+    # Parents before their children, whatever order the components are in.
+    by_child = {free_indices[fp]: fp for fp in ratio_spec}
+    ratio_order = [(by_child[child], parent) for child, parent in
+                   _in_dependency_order({free_indices[fp]: parent
+                                         for fp, parent in ratio_spec.items()})]
+
     def free_to_full_A(free_params):
         full = np.empty(n_full)
         for pos, fi in enumerate(free_indices):
             full[fi] = free_params[pos]
         # Convert ratio params -> absolute amplitudes
-        for fp, parent_idx in ratio_spec.items():
+        for fp, parent_idx in ratio_order:
             child_idx = free_indices[fp]
             full[child_idx] = full[parent_idx] * free_params[fp]
         for fi, (src_fi, factor) in tie_spec.items():
@@ -418,13 +502,10 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
 
     p0_free_A = p0_full_A[free_indices]
 
-    # Convert absolute amplitudes to ratios for constrained params
+    # Convert absolute amplitudes to ratios for constrained params.
     for free_pos, parent_idx in ratio_spec.items():
-        parent_val = p0_full_A[parent_idx]
-        if parent_val > 0:
-            p0_free_A[free_pos] = p0_full_A[free_indices[free_pos]] / parent_val
-        else:
-            p0_free_A[free_pos] = 0.15
+        p0_free_A[free_pos] = _start_ratio(wv_cm, prof, p0_full_cm,
+                                           free_indices[free_pos], parent_idx)
 
     wv_A = wv_cm * CM_TO_A
 
@@ -519,8 +600,9 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
 
         # --- peak (intensity) ---
         if base in ratio_params:
-            parent_amp = p0[ratio_params[base]]
-            ratio = p0[base] / parent_amp if parent_amp > 0 else 0.15
+            # Set for each spectrum by _fit_one_multi; any value inside the
+            # bounds does here.
+            ratio = _GUESS_FRACTION
             peak_info: dict = {"value": ratio,
                                "limited": [1, 1], "limits": [0.0, 1.0]}
         else:
@@ -533,7 +615,7 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         # --- centre ---
         centre_info: dict = {"value": p0[base + 1]}
         if comp.tie_center is not None:
-            src = comp.tie_center
+            src = _tie_root(fit_config, "tie_center", i)
             # Ratio of rest wavelengths, so that the one free centre means one
             # velocity for every tied component; see _build_scipy_multi.
             factor = float(comp.wavelength.to(u.cm).value
@@ -548,7 +630,7 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         sigma_info["limited"] = [1, 0]
         sigma_info["limits"] = [1e-30, 0.0]
         if comp.tie_width is not None:
-            src = comp.tie_width
+            src = _tie_root(fit_config, "tie_width", i)
             sigma_info["tied"] = f"p[{3 * src + 2}]"
         parinfo.append(sigma_info)
 
@@ -684,7 +766,7 @@ def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
     """
     p_eval = np.array(p, dtype=float)
     if ratio_params:
-        for child_idx, parent_idx in ratio_params.items():
+        for child_idx, parent_idx in _in_dependency_order(ratio_params):
             p_eval[child_idx] = p_eval[parent_idx] * p[child_idx]
     model = multi_gaussian(x, *p_eval, n_components=n_components)
     return [0, y - model]
@@ -710,11 +792,11 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
         d["value"] = p0[i]
         parinfo.append(d)
 
-    # Convert absolute amplitudes to ratios for constrained params
+    # Convert absolute amplitudes to ratios for constrained params, from the
+    # absolute guesses, since a parent may itself be converted first.
     if ratio_params:
         for child_idx, parent_idx in ratio_params.items():
-            parent_amp = p0[parent_idx]
-            ratio = p0[child_idx] / parent_amp if parent_amp > 0 else 0.15
+            ratio = _start_ratio(wv, prof, p0_orig, child_idx, parent_idx)
             parinfo[child_idx]["value"] = ratio
             p0[child_idx] = ratio
 
@@ -729,7 +811,7 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
             out = np.asarray(result.params, dtype=float)
             # Convert ratios back to absolute amplitudes
             if ratio_params:
-                for child_idx, parent_idx in ratio_params.items():
+                for child_idx, parent_idx in _in_dependency_order(ratio_params):
                     out[child_idx] = out[parent_idx] * result.params[child_idx]
             return out, _mpfit_succeeded(result.status, out)
     except Exception:

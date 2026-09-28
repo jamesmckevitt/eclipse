@@ -10,9 +10,12 @@ import astropy.constants as const
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
+from scipy.sparse import csr_matrix
 from scipy.special import erf
 from tqdm import tqdm
-from .radiometric import spectral_psf_fwhm
+from .radiometric import (slit_image_width, spectral_optics_fwhm, spectral_psf_fwhm,
+                          spectral_psf_margin)
+from .sampling import centred_edges, pixel_weights
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
 
@@ -254,21 +257,27 @@ def resample_spectra(data: np.ndarray, spectral_world: u.Quantity,
         wavelength last, and the new grid in the unit of *output_resolution*.
     """
     centres = spectral_world.to_value(output_resolution.unit)
-    step = output_resolution.value
-    grid = np.arange(centres.min(), centres.max() + step, step)
+    grid = _spectral_grid(centres, output_resolution.value)
+    resampled = onto_wavelength_bins(data.reshape(-1, data.shape[-1]), centres, grid)
+    return resampled.reshape(data.shape[:-1] + grid.shape), grid * output_resolution.unit
 
+
+def _spectral_grid(centres: np.ndarray, step: float, margin: int = 0) -> np.ndarray:
+    """
+    The detector's wavelength pixels for spectra at *centres*: from the first
+    wavelength in steps of *step* until past the last, as
+    :func:`resample_spectra` describes, and *margin* more at each end.
+    """
+    grid = np.arange(centres.min(), centres.max() + step, step)
     # The outermost intervals of a grid coarser than the pixels at its ends
     # reach past the pixels at the first and last wavelength, and would lose
     # what they hold, so pixels are added either side, keeping the grid where
     # it is. A reach within a part in 1e9 of a pixel is rounding.
     edges = _bin_edges(centres)
-    below = max(0, int(np.ceil((grid[0] - step / 2 - edges[0]) / step - 1e-9)))
-    above = max(0, int(np.ceil((edges[-1] - (grid[-1] + step / 2)) / step - 1e-9)))
-    grid = np.concatenate([grid[0] - step * np.arange(below, 0, -1), grid,
+    below = margin + max(0, int(np.ceil((grid[0] - step / 2 - edges[0]) / step - 1e-9)))
+    above = margin + max(0, int(np.ceil((edges[-1] - (grid[-1] + step / 2)) / step - 1e-9)))
+    return np.concatenate([grid[0] - step * np.arange(below, 0, -1), grid,
                            grid[-1] + step * np.arange(1, above + 1)])
-
-    resampled = onto_wavelength_bins(data.reshape(-1, data.shape[-1]), centres, grid)
-    return resampled.reshape(data.shape[:-1] + grid.shape), grid * output_resolution.unit
 
 
 def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
@@ -284,9 +293,16 @@ def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
     return int(np.floor(ratio * (1 + 1e-9)))
 
 
-def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1):
+def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1, *,
+                                                     sigma_x=0.0, sigma_y=0.0, extend=False):
     """ Reproject an NDCube from heliocentric to helioprojective coordinates.
-    
+
+    The pixels along the slit are the plate scale apart and those across it
+    the slit width, or a raster's own columns, which are kept. Each holds the
+    mean over its footprint of the cells it covers, each cell taken to be
+    uniform, so that structure finer than a pixel is averaged as the
+    detector averages it.
+
     Parameters
     ----------
     new_cube_spec : NDCube
@@ -296,8 +312,16 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     det : Detector
         Detector configuration object
     ncpu : int, optional
-        Number of CPU cores for parallel reprojection. -1 uses all cores,
-        positive integers specify exact count. Default is -1.
+        Kept so that existing calls still work; the averaging is a matrix
+        product, which uses the threads numpy is given.
+    sigma_x, sigma_y : float, optional
+        Standard deviations in arcsec of a Gaussian blur across and along the
+        slit, applied to the scene before the pixels average it. The blur
+        across the slit is not applied to a raster, whose columns have been
+        through the slit already.
+    extend : bool, optional
+        Take the scene to go on past its edges, as its edge cells, for the
+        blur to bring in.
     """
 
     ny, nx, _ = new_cube_spec.shape
@@ -344,7 +368,6 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
             f"is smaller than one detector pixel ({pitch_x.to(u.arcsec):.3f} along the "
             f"scan, {(pitch_y * u.pix).to(u.arcsec):.3f} along the slit), so nothing "
             f"would be left after rebinning.")
-    shape_out = [ny_out, nx_out, nl_in]
 
     crpix_spec = (nl_in + 1) / 2
     crpix_y = (ny_out + 1) / 2
@@ -359,30 +382,103 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
                         pitch_x.to_value(u.arcsec),
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec)]
 
-    # Determine parallelization setting:
-    # - If ncpu=-1, use True (all available cores)
-    # - If ncpu is a positive integer, pass it directly to control thread count
-    parallel_setting = True if ncpu == -1 else ncpu
-    
-    new_cube_spec_hp_spat = new_cube_spec_hp.reproject_to(
-        wcs_tgt,
-        shape_out=shape_out,
-        algorithm='interpolation',
-        parallel=parallel_setting,
-        order='bilinear',
-    ) * new_cube_spec_hp.unit
-
+    # Each pixel holds the mean over its footprint of the cells it covers,
+    # each uniform over its own, blurred first by the optics if they are
+    # given. Both grids are centred on the middle of the input.
+    rows = pixel_weights(centred_edges(ny_in, y_angle.to_value(u.arcsec)),
+                         centred_edges(ny_out, (pitch_y * u.pix).to_value(u.arcsec)),
+                         sigma_y, extend=extend)
+    columns = pixel_weights(centred_edges(nx_in, x_angle.to_value(u.arcsec)),
+                            centred_edges(nx_out, pitch_x.to_value(u.arcsec)),
+                            0.0 if raster else sigma_x, extend=extend)
+    # A pixel takes in only the cells near it, so the weights are held sparse.
+    data = np.asarray(new_cube_spec.data, dtype=float)
+    data = (csr_matrix(rows) @ data.reshape(ny_in, -1)).reshape(ny_out, nx_in, nl_in)
+    data = (csr_matrix(columns) @ np.moveaxis(data, 1, 0).reshape(nx_in, -1)).reshape(
+        nx_out, ny_out, nl_in)
+    # In the units wcslib keeps them in, metres and degrees, as a
+    # reprojection's WCS has always come back.
+    wcs_tgt.wcs.set()
     # The scene's extent along the slit, from which the rows it covers at
     # any plate scale follow, as main checks off-chip binning against.
-    return NDCube(new_cube_spec_hp_spat.data, wcs=new_cube_spec_hp_spat.wcs,
-                  unit=new_cube_spec_hp_spat.unit,
-                  meta={**(new_cube_spec_hp_spat.meta or {}), "fov_along_slit": fov_y.to(u.arcsec)})
+    return NDCube(np.ascontiguousarray(np.moveaxis(data, 0, 1)), wcs=wcs_tgt,
+                  unit=new_cube_spec.unit,
+                  meta={**(new_cube_spec.meta or {}), "fov_along_slit": fov_y.to(u.arcsec)})
 
 
-def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
+def _through_the_optics(tel, sim) -> bool:
+    """Whether the focusing optics' PSF goes into the rebinning."""
+    if tel is None or not sim.psf:
+        return False
+    if tel.psf_type.lower() != "gaussian":
+        raise ValueError(f"Unsupported PSF type: {tel.psf_type}. Supported: 'gaussian'.")
+    return True
+
+
+def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, sim,
+                             tel) -> tuple:
+    """
+    Spectra blurred by the spectral PSF and averaged over each detector
+    pixel in one step, from their own wavelengths.
+
+    Blurring the spectra once they are on the pixels, as the Monte Carlo
+    did, moves a line narrower than a pixel toward the middle of the pixel
+    it is in; done here, each wavelength keeps its place. The pixels reach
+    :func:`~euvst_response.radiometric.spectral_psf_margin` further at each
+    end, as :func:`pad_spectral_axis` makes them for a PSF on the pixels.
+    The Monte Carlo counts a pixel's photons at the pixel's wavelength, with
+    its effective area and photon energy; so that the light the PSF moves
+    there keeps its own, each wavelength's share of a pixel is weighted by
+    how many photons its light makes over how many the pixel's would.
+
+    Returns ``(spectra, grid)``, the grid in cm.
+    """
+    step = (det.wvl_res * u.pix).to_value(u.cm)
+    centres = spectral_world.to_value(u.cm)
+    grid = _spectral_grid(centres, step, spectral_psf_margin(tel, det, sim.slit_width))
+    if sim.spectral_psf == "quadrature":
+        sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * step
+        width = 0.0
+    else:
+        sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det)) * step
+        width = slit_image_width(sim.slit_width, det) * step
+    pixel_edges = np.concatenate([grid - step / 2, [grid[-1] + step / 2]])
+    weights = pixel_weights(_bin_edges(centres), pixel_edges, sigma, width)
+
+    def photons_per_radiance(wavelength_cm):
+        area = np.array([tel.ea_and_throughput(w * u.cm).cgs.value for w in wavelength_cm])
+        return wavelength_cm * area
+
+    own, pixel = photons_per_radiance(centres), photons_per_radiance(grid)
+    weights *= np.divide(own[np.newaxis, :], pixel[:, np.newaxis],
+                         out=np.zeros(weights.shape), where=pixel[:, np.newaxis] > 0)
+    return data @ weights.T, grid * u.cm
+
+
+def _spatial_blur(tel, det, sim) -> dict:
+    """
+    The blur along and across the slit, as standard deviations in arcsec, for
+    :func:`reproject_ndcube_heliocentric_to_helioprojective`.
+    """
+    along = (_fwhm_to_sigma(tel.psf_params[0].to_value(u.pix))
+             * (det.plate_scale_angle * u.pix).to_value(u.arcsec))
+    across = getattr(tel, "psf_across_slit", None)
+    return {"sigma_y": along,
+            "sigma_x": 0.0 if across is None else _fwhm_to_sigma(across.to_value(u.arcsec)),
+            "extend": sim.psf_boundary == "replicate"}
+
+
+def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
     """
     Rebin synthetic atmosphere cube to instrument resolution and spatial sampling.
-    
+
+    Each detector pixel holds the mean of the scene over its footprint, in
+    wavelength and in space. Given *tel*, with ``sim.psf`` on, the scene is
+    blurred by the focusing optics' PSF on its own grids before the pixels
+    average it, which is exact however fine the scene is, and the cube's
+    ``meta`` records it in ``psf_applied``, so that the Monte Carlo does not
+    blur it again.
+
     Parameters
     ----------
     cube_sim : NDCube
@@ -393,28 +489,37 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
         Simulation configuration
     use_dask : bool, optional
         Whether to use Dask for automatic parallelization (default: False)
-        
+    tel : Telescope_EUVST or Telescope_EIS, optional
+        The telescope, whose PSF is applied if ``sim.psf`` is on.
+
     Returns
     -------
     NDCube
         Rebinned cube at instrument resolution
     """
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
+    if not _through_the_optics(tel, sim):
+        cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2,
+                                                  output_resolution=det.wvl_res*u.pix,
+                                                  ncpu=sim.ncpu)
+        print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
+        return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det,
+                                                                ncpu=sim.ncpu)
 
-    cube_spec = resample_ndcube_spectral_axis(cube_sim, spectral_axis=2, output_resolution=det.wvl_res*u.pix, ncpu=sim.ncpu)
-
+    data, grid = _spectra_on_the_detector(cube_sim.data, cube_sim.axis_world_coords(2)[0],
+                                          det, sim, tel)
+    wcs = cube_sim.wcs.deepcopy()
+    unit = wcs.wcs.cunit[0]
+    wcs.wcs.crpix[0], wcs.wcs.crval[0], wcs.wcs.cdelt[0] = _even_grid_wcs(grid, unit)
+    cube_spec = NDCube(data, wcs=wcs, unit=cube_sim.unit,
+                       meta={**(cube_sim.meta or {}), "psf_applied": True})
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
-    cube_det = reproject_ndcube_heliocentric_to_helioprojective(
-        cube_spec,
-        sim,
-        det,
-        ncpu=sim.ncpu
-    )
-
-    return cube_det
+    return reproject_ndcube_heliocentric_to_helioprojective(
+        cube_spec, sim, det, ncpu=sim.ncpu, **_spatial_blur(tel, det, sim))
 
 
-def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=None) -> NDCube:
+def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=None, *,
+                  tel=None) -> NDCube:
     """
     A synthesis file's spectra at instrument resolution and spatial sampling.
 
@@ -445,6 +550,9 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
         such as the synthesis's ``dynamic_mode``, or a time series'
         ``raster`` entries, whose columns are its exposures and are kept as
         they are.
+    tel : Telescope_EUVST or Telescope_EIS, optional
+        The telescope, whose PSF is applied as :func:`rebin_atmosphere`
+        applies it if ``sim.psf`` is on.
 
     Returns
     -------
@@ -454,7 +562,12 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
     reference = synthesis.lines[reference_line]
     radiance = synthesis.summed(reference_line) if summed is None else summed
-    data, grid = resample_spectra(radiance.value, reference.wavelength, det.wvl_res * u.pix)
+    blurred = _through_the_optics(tel, sim)
+    if blurred:
+        data, grid = _spectra_on_the_detector(radiance.value, reference.wavelength, det, sim, tel)
+        meta = {**(meta or {}), "psf_applied": True}
+    else:
+        data, grid = resample_spectra(radiance.value, reference.wavelength, det.wvl_res * u.pix)
 
     # The cube a synthesis gives: wavelength in cm, then x and y on the Sun
     # in Mm, referenced to the middle of each axis.
@@ -474,7 +587,8 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
                        meta={**synthesis.summed_meta(reference_line), **(meta or {})})
 
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
-    return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det, ncpu=sim.ncpu)
+    return reproject_ndcube_heliocentric_to_helioprojective(
+        cube_spec, sim, det, ncpu=sim.ncpu, **(_spatial_blur(tel, det, sim) if blurred else {}))
 
 
 def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:

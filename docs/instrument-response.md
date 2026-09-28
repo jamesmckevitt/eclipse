@@ -63,6 +63,19 @@ simulation:
 
 The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
 
+### The edges of the atmosphere
+
+With `psf: True` the blur brings light in from beyond the edges of the atmosphere. `simulation.psf_boundary` sets what is there:
+
+- `replicate` (default): the Sun beyond each edge is taken to be like the cells at the edge, so the pixels there are as bright as they would be in the middle of a larger atmosphere.
+- `zero`: nothing is beyond the edges, so the light the blur carries out of the atmosphere is lost, and the pixels within a PSF width of an edge come out darker.
+
+```yaml
+simulation:
+  psf: True
+  psf_boundary: zero
+```
+
 ## Configuration file
 
 ECLIPSE uses YAML configuration files to specify simulation parameters. Parameters are organised into four sections - `simulation`, `detector`, `telescope`, and `filter` - each corresponding directly to a configuration class in `config.py`. Any field of those classes can be set here. **Any parameter given as a list of more than one value is automatically swept over** and the simulation runs every combination (Cartesian product). A single-element list is treated as a fixed value, not as a sweep of one.
@@ -272,7 +285,7 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 
 Both are keyword-only and both default to `False`. The distribution is the same, so a run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler.
 
-None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Each MPI rank keeps its own generator state, so both runs also need the same number of ranks.
+None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Under MPI each rank draws its own numbers from that seed and its rank, so both runs also need the same number of ranks.
 
 ## Output
 

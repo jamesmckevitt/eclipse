@@ -813,6 +813,63 @@ def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch)
         run(raster={"start": "0 s", "centre": "5 Mm"})
 
 
+def test_the_telescopes_blur_across_the_slit_brings_in_the_columns_beside_it(tmp_path, flat_goft):
+    from euvst_response.sampling import pixel_weights
+    from euvst_response.utils import _fwhm_to_sigma
+
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
+    synthesiser = RasterSynthesiser(series, _settings())
+    assert synthesiser.columns_seen(CELL, 0.4 * u.arcsec)[:2] == (6, 8)
+    first, last, weights = synthesiser.columns_seen(CELL, 0.4 * u.arcsec, 0.6 * u.arcsec)
+    edges = series.x_edges.to_value(u.Mm)
+    sigma = angle_to_distance(_fwhm_to_sigma(0.6 * u.arcsec)).to_value(u.Mm)
+    slit = [CELL.to_value(u.Mm) - CELL.to_value(u.Mm), CELL.to_value(u.Mm) + CELL.to_value(u.Mm)]
+    expected = pixel_weights(edges, slit, sigma, extend=True)[0]
+    assert (first, last) == (np.flatnonzero(expected)[0], np.flatnonzero(expected)[-1] + 1)
+    assert weights == pytest.approx(expected[first:last], rel=1e-12)
+    assert first < 6 and last > 8 and weights.sum() == pytest.approx(1.0)
+    # At the edge of the box, with nothing beyond it, the slit gets less.
+    edge = series.x_edges[0] + 1.01 * CELL
+    assert synthesiser.columns_seen(edge, 0.4 * u.arcsec, 0.6 * u.arcsec, extend=False)[2].sum() < 0.95
+
+
+def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypatch, flat_goft):
+    """The run observes the exposures collected through the telescope's blur and laid onto the pixels through the PSF."""
+    import importlib
+
+    from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
+    from euvst_response.data_processing import rebin_atmosphere
+
+    snapshots = [_snapshot(t, columns={6: (3.0, 0.0)}) for t in (0.0, 10.0)]
+    paths = _series(tmp_path / "series", snapshots)
+    config = _config(tmp_path, str(tmp_path / "series" / "*.h5"),
+                     raster={"start": "0 s", "steps": 2},
+                     simulation={"slit_width": "0.4 arcsec", "expos": "5 s", "psf": True},
+                     telescope={"psf_across_slit": "1 arcsec"})
+    main_module = importlib.import_module("euvst_response.main")
+    observed = []
+    real = main_module.monte_carlo
+
+    def recording(cube, *args, **kwargs):
+        observed.append(cube)
+        return real(cube, *args, **kwargs)
+
+    monkeypatch.setattr(main_module, "monte_carlo", recording)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    main_module.main()
+
+    assert len(observed) == 1 and observed[0].meta["psf_applied"]
+    synthesiser = RasterSynthesiser(AtmosphereSeries(paths), _settings())
+    scene = synthesiser.summed_cube(RasterPlan(start=0 * u.s, steps=2), 0.4 * u.arcsec, 5 * u.s,
+                                    LINE, across_slit=1 * u.arcsec)
+    expected = rebin_atmosphere(
+        scene, Detector_SWC(),
+        Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, psf=True, ncpu=1),
+        tel=Telescope_EUVST(psf_across_slit=1 * u.arcsec))
+    _assert_close(observed[0].data, expected.data, rel=1e-10)
+
+
 def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_snapshots_need(
         tmp_path, monkeypatch):
     """Each snapshot is read when an exposure needs it, so the density grid grows as they are."""
