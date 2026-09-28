@@ -27,6 +27,7 @@ LINES = ["Fe12_195.1190", "Fe12_195.1790"]
 class _Transitions:
     wavelength = np.array([171.073, 195.119, 195.179, 180.0]) * u.AA
     is_bound_bound = np.array([True, True, True, False])
+    is_observed = np.array([True, True, True, False])
 
 
 class _Ion:
@@ -53,10 +54,17 @@ class _Ion:
 
 
 @pytest.fixture
-def fake_fiasco(monkeypatch):
+def fake_fiasco(tmp_path, monkeypatch):
     module = types.ModuleType("fiasco")
     module.Ion = _Ion
+    (tmp_path / "chianti_dbase.h5").touch()
+    module.defaults = {"hdf5_dbase_root": str(tmp_path / "chianti_dbase.h5")}
+    # The database is there, so the offer to build it asks nothing.
+    util = types.ModuleType("fiasco.util")
+    util.check_database = lambda hdf5_dbase_root, **kwargs: None
+    module.util = util
     monkeypatch.setitem(sys.modules, "fiasco", module)
+    monkeypatch.setitem(sys.modules, "fiasco.util", util)
     _Ion.temperatures_per_call = []
     return _Ion
 
@@ -128,3 +136,15 @@ def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _recording_goft)
     synthesis.main()
     assert received["temperature_chunk"] == expected
+
+
+def test_a_density_grid_carried_on_from_the_default_has_its_values_at_its_points(fake_fiasco):
+    """Each density is worked out on its own, so a grid sized to an atmosphere changes nothing it shares."""
+    from euvst_response.synthesis import _density_point
+
+    whole, _, logn = compute_goft_fiasco(LINES, n_workers=1)
+    part, _, logn_part = compute_goft_fiasco(LINES, n_workers=1, logN_min=_density_point(4),
+                                             logN_max=_density_point(9), nN=6)
+    assert np.allclose(logn_part, logn[4:10], rtol=0, atol=1e-12)
+    for line in LINES:
+        assert np.allclose(part[line]["g_tn"], whole[line]["g_tn"][4:10], rtol=1e-12, atol=0)
