@@ -16,8 +16,7 @@
 
 ### Version numbers
 
-Three components, `vMAJOR.MINOR.PATCH`. Avoid four-component tags such as
-`v0.6.1.4` if possible.
+Three components, `vMAJOR.MINOR.PATCH`. Avoid four-component tags such as `v0.6.1.4` if possible.
 
 - `patch` - fixes with no API change.
 - `minor` - new features, new configuration keys, new extras; backwards compatible.

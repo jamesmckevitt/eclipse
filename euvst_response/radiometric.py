@@ -153,7 +153,18 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
     wl0 = ph_flux.meta['rest_wav']
     wl_axis = ph_flux.axis_world_coords(2)[0]
     throughput = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
-    
+    # Beyond the throughput tables there is no detector to collect the light,
+    # and a pixel of the window there would be a pixel the instrument does not
+    # have: filled with nothing, it would pull the fit; left as NaN, it spreads
+    # through the blur, or leaves the fit wrong with no warning.
+    outside = ~np.isfinite(throughput.value)
+    if outside.any():
+        missing = wl_axis[outside].to_value(u.AA)
+        raise ValueError(
+            f"The window of the line at {u.Quantity(wl0).to(u.AA):.4f} reaches "
+            f"{missing.min():.4f} to {missing.max():.4f} Angstrom, where the telescope's "
+            f"throughput tables, and so its band, end. Observe a line further inside the band.")
+
     out_data = (ph_flux.data * ph_flux.unit * throughput)
     
     return NDCube(
@@ -539,9 +550,12 @@ def to_electrons(
         e += np.random.normal(0, det.read_noise_rms.value,
                               photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
 
+    # Not clipped at zero: a CCD reads out above a bias level, so read noise
+    # takes a dark pixel below it as often as above, and the bias-subtracted
+    # signal ECLIPSE gives goes negative. Clipping raised the mean of faint
+    # pixels, so that noise on no longer averaged to noise off.
     e = e.to(u.electron / u.pixel)
     e_val = e.value
-    e_val[e_val < 0] = 0                                              # clip negatives
 
     return NDCube(
         data=e_val,
@@ -745,21 +759,17 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
     else:
         n_vis_ph = np.full(electrons.data.shape, vis_mean) * (u.photon / u.pixel)
 
-    # Assume visible stray light is ~600nm (typical visible wavelength)
-    visible_wavelength = 600 * u.nm  # Keep as Quantity with units
-
-    # Apply quantum efficiency first, then vectorized Fano noise
+    # Apply the quantum efficiency. A visible photon absorbed in silicon frees
+    # exactly one electron: its couple of eV is below the 3.7 eV an EUV photon
+    # spends on each electron-hole pair, so neither the EUV photon's many
+    # electrons nor their Fano spread apply, and that model gave 0.55.
     vis_incident = n_vis_ph.to_value(u.photon / u.pixel)
     if noise:
         vis_photons_detected = np.random.binomial(
             vis_incident.astype(int), det.qe_vis)
     else:
         vis_photons_detected = vis_incident * det.qe_vis
-
-    # Apply vectorized Fano noise to detected visible photons
-    stray_electrons_values = _vectorized_fano_noise(
-        vis_photons_detected.astype(float), visible_wavelength, det, noise=noise)
-    stray_electrons = stray_electrons_values * (u.electron / u.pixel)
+    stray_electrons = vis_photons_detected.astype(float) * (u.electron / u.pixel)
 
     # Add to original signal
     out_q = electrons.data * electrons.unit + stray_electrons
@@ -864,29 +874,16 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
 
         vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
 
-        # Sample Poisson photons for this pinhole contribution
+        # The same light at every scan position, as the pinhole does not move,
+        # but each exposure its own photons: drawn for each one.
+        expected = np.broadcast_to(vis_photons_distributed[:, np.newaxis, :], data_shape)
         if noise:
-            vis_photons_poisson = np.random.poisson(vis_photons_distributed)
+            vis_photons_detected = np.random.binomial(np.random.poisson(expected), det.qe_vis)
         else:
-            vis_photons_poisson = vis_photons_distributed
+            vis_photons_detected = expected * det.qe_vis
 
-        # Apply quantum efficiency
-        if noise:
-            vis_photons_detected = np.random.binomial(
-                vis_photons_poisson.astype(int),
-                det.qe_vis
-            )
-        else:
-            vis_photons_detected = vis_photons_poisson * det.qe_vis
-
-        # Apply Fano noise to detected visible photons
-        vis_electrons_values = _vectorized_fano_noise(
-            vis_photons_detected.astype(float), visible_wavelength, det,
-            noise=noise)
-
-        # Add to all scan positions (visible light affects all equally)
-        for scan_idx in range(n_scan):
-            additional_electrons[:, scan_idx, :] += vis_electrons_values
+        # One electron per visible photon; see add_visible_stray_light.
+        additional_electrons += vis_photons_detected
 
     # Add pinhole contributions to original signal
     additional_electrons_quantity = additional_electrons * (u.electron / u.pixel)
