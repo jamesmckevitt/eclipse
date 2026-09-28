@@ -1082,10 +1082,12 @@ def main() -> None:
         # pixel and uniform along the slit, and the Monte Carlo blurs it.
         cube_obs = cube_reb
         if psf and not uniform_intensity_mode:
-            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, TEL.psf_type,
-                       tuple(q.to_value(u.pix) for q in TEL.psf_params),
-                       *(None if q is None else q.to_value(u.arcsec)
-                         for q in (getattr(TEL, "psf_slit_width", None), TEL.psf_across_slit)))
+            # The observed cube carries the telescope's throughput as well as
+            # its PSF, so every setting of the telescope and filter is in the key.
+            telescope_key = _params_to_key({
+                **_extract_config_params(TEL, "telescope"),
+                **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
+            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, telescope_key)
             if psf_key not in observed_cache:
                 print("Laying the scene onto the detector through the PSF...")
                 SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,

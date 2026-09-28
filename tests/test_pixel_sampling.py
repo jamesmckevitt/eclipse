@@ -189,3 +189,52 @@ def test_the_telescopes_blur_across_the_slit_brings_in_light_from_beside_it():
                              _fwhm_to_sigma(1.0)) @ ((np.arange(64) >= 28) & (np.arange(64) < 32))
     assert seen == pytest.approx(expected, rel=1e-9, abs=1e-15)
     assert np.count_nonzero(seen > 0.01) >= 3
+
+
+def test_a_sweep_over_the_filter_observes_each_through_its_own_throughput(tmp_path, monkeypatch):
+    """The cube laid on the detector carries the telescope's throughput, so each filter gets its own."""
+    import importlib
+    import sys
+
+    import yaml
+
+    from euvst_response.config import AluminiumFilter
+    from euvst_response.data_processing import rebin_spectra
+    from euvst_response.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
+                                               write_synthesis)
+
+    edges = np.arange(5) * 0.3 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-60, 61) * 0.003 * u.AA
+    profile = np.exp(-0.5 * ((wavelength - 195.119 * u.AA) / (0.03 * u.AA)).decompose() ** 2)
+    line = SpectralLine(intensity=np.ones((4, 4, 1)) * profile.value * 1e13
+                        * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    thicknesses = ["1000 Angstrom", "3000 Angstrom"]
+    (tmp_path / "run.yaml").write_text(yaml.safe_dump({
+        "instrument": "SWC", "n_iter": 1, "ncpu": 1, "synthesis_file": str(tmp_path / "file.h5"),
+        "simulation": {"expos": "5 s", "slit_width": "0.4 arcsec", "psf": True},
+        "filter": {"al_thickness": thicknesses}}))
+    main_module = importlib.import_module("euvst_response.main")
+    observed = []
+    real = main_module.monte_carlo
+
+    def recording(cube, *args, **kwargs):
+        observed.append(cube)
+        return real(cube, *args, **kwargs)
+
+    monkeypatch.setattr(main_module, "monte_carlo", recording)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(tmp_path / "run.yaml")])
+    main_module.main()
+
+    assert len(observed) == 2
+    sim = Simulation(expos=1 * u.s, n_iter=1, slit_width=0.4 * u.arcsec, ncpu=1,
+                     instrument="SWC", psf=True)
+    for cube, thickness in zip(observed, thicknesses):
+        tel = Telescope_EUVST(filter=AluminiumFilter(al_thickness=u.Quantity(thickness)))
+        expected = rebin_spectra(read_synthesis(tmp_path / "file.h5"), "Fe12_195.1190",
+                                 Detector_SWC(), sim, tel=tel)
+        assert cube.data == pytest.approx(expected.data, rel=1e-10, abs=0)
+    assert not np.array_equal(observed[0].data, observed[1].data)
