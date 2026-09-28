@@ -78,6 +78,7 @@ For analysing simulation results, see the [worked example](worked-example.ipynb)
 The analysis functions are available directly from the package:
 
 ```python
+import astropy.units as u
 from euvst_response import (
     load_instrument_response_results,
     get_results_for_combination,
@@ -93,5 +94,5 @@ results = load_instrument_response_results("run/result/config.h5")
 summary_table(results)
 
 # Retrieve a specific combination using full section.attribute names
-combo = get_results_for_combination(results, **{"simulation.expos": 40*u.s, "simulation.psf": True})
+combo = get_results_for_combination(results, **{"simulation.expos": 40*u.s})
 ```

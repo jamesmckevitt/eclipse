@@ -388,7 +388,7 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False):
     sim : Simulation
         Simulation configuration
     use_dask : bool, optional
-        Whether to use Dask for automatic parallelization (default: False)
+        Not used; kept so that calls passing it still work.
         
     Returns
     -------

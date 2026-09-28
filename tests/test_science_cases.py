@@ -138,8 +138,11 @@ def test_a_line_is_chosen_by_ion_or_wavelength_across_cases(selector):
 def test_a_line_eclipse_cannot_simulate_yet_is_skipped_not_refused():
     configs, skipped = sc.science_case_configs(lines=["O VI 1031.91"])
     assert configs == []
-    assert sorted(skipped) == ["I-2-1 O VI 1031.91", "I-4-1 O VI 1031.914",
-                               "I-4-2 O VI 1031.91", "II-1-2 O VI 1031.91"]
+    assert sorted(skipped) == [
+        "I-1-2 O VI 1031.914", "I-2-1 O VI 1031.91", "I-2-2 O VI 1031.914",
+        "I-3-1 O VI 1031.914", "I-4-1 O VI 1031.914", "I-4-2 O VI 1031.91",
+        "II-1-2 O VI 1031.91", "II-1-3 O VI 1031.914", "II-2-1 O VI 1031.914",
+        "II-2-2 O VI 1031.914"]
 
 
 @pytest.mark.parametrize("kwargs, message", [

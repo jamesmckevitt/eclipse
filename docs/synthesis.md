@@ -262,9 +262,9 @@ synthesise-spectra --help
 **Integration and Viewing:**
 
 - `--integration-axis`: Integration axis: `x`, `y`, or `z` (default: `z`)
-    - `z`: Standard top-down view (integrates through height)
-    - `x`: Side view from the left (integrates left-to-right)
-    - `y`: Side view from the front (integrates front-to-back)
+    - `z`: Standard top-down view, from above (+z), integrating through height
+    - `x`: Side view from +x, integrating towards decreasing x; a flow towards +x is blueshifted
+    - `y`: Side view from -y, integrating towards increasing y; a flow towards -y is blueshifted
 
 **Spatial Cropping (Heliocentric coordinates with units):**
 

@@ -18,7 +18,7 @@ pinhole_positions_spectral: [0.1, 0.8]  # fraction along the spectral axis, 0 to
 
 simulation:
   enable_pinholes: True
-  vis_sl: 8.1e1 photon / (s * cm^2)     # visible stray light before the filter
+  vis_sl: 3.0e16 photon / (s * cm^2)    # before the filter; about 81 photons per pixel per second after it
 ```
 
 The pinhole lists are paired, one entry per pinhole, and must be the same length. `pinhole_positions_spectral` can be left out, in which case every pinhole lands at the centre of the spectral window. The spectral axis is wavelength, so that fraction is what decides which lines a pinhole contaminates - set it if that matters.

@@ -150,7 +150,7 @@ To fit blended spectral lines with multiple Gaussian components, add a `fitting`
 ```yaml
 fitting:
   primary_component: 0           # index of the component whose velocity is reported
-  constrain_positive_intensity: true  # reject fits with negative amplitudes
+  constrain_positive_intensity: true  # keep every amplitude at zero or above during the fit
   backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
   max_iter: 1000                 # optimiser iterations before it gives up
   components:
@@ -247,10 +247,10 @@ export I_MPI_PIN_DOMAIN=auto
 export LOKY_MAX_CPU_COUNT=$SLURM_CPUS_PER_TASK
 source /path/to/venv/bin/activate
 
-srun --mpi=pmi2 eclipse --config ./run/input/my_run.yaml
+srun --mpi=pmi2 --kill-on-bad-exit=1 eclipse --config ./run/input/my_run.yaml
 ```
 
-MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within each rank. `I_MPI_PIN_DOMAIN=auto` gives each rank an affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib oversubscribing against that mask. Setting `ncpu` in the config is optional - in MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read the affinity mask itself.
+MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within each rank. `--kill-on-bad-exit=1` ends every rank when one fails, rather than leaving the others waiting until the time limit. `I_MPI_PIN_DOMAIN=auto` gives each rank an affinity mask covering its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib oversubscribing against that mask. Setting `ncpu` in the config is optional - in MPI mode it is capped to `SLURM_CPUS_PER_TASK`, while `ncpu: -1` lets joblib read the affinity mask itself.
 
 ## Common random numbers
 

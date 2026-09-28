@@ -5,7 +5,7 @@ search:
 
 # Reading out without a shutter
 
-The SW camera has a mechanical shutter that keeps the CCDs dark while a frame is cleared and read. If it is not there, or does not close, the chip stays illuminated throughout, and every charge packet collects light from each row it is clocked through on the way to the serial register. A bright line therefore appears again, faintly, in every row between it and the register. `euvst_response.readout` models that.
+The SW camera has a mechanical shutter that keeps the CCDs dark while a frame is cleared and read. If it is not there, or does not close, the chip stays illuminated throughout, and every charge packet collects light from each row it is clocked through on the way to the serial register. A bright line therefore appears again, faintly, in the rows beyond it, whose packets cross it on their way down during the read-out, and, when the chip is cleared before the exposure, in the rows between it and the register, whose packets are clocked down through it during the clear. `euvst_response.readout` models that.
 
 This is a Python API rather than a configuration key: the read-out depends on the window layout of a particular observation, which the YAML does not describe.
 
@@ -25,7 +25,7 @@ fp.lit_rows("right")                            # (1290, 2047)
 fp.row_edges("left")                            # 2049 wavelengths, for binning a spectrum onto rows
 ```
 
-The wavelength of each row comes from a quadratic fitted to the focal plane positions in RSC-2022021C. The spacing is not the same everywhere: it runs from 17.0 mA per row at the short-wavelength end to 16.8 at the long one, so a single 16.9 would misplace a line by up to nine rows at the gap.
+The wavelength of each row comes from a quadratic fitted to the focal plane positions in RSC-2022021C. The spacing is not the same everywhere: it runs from 17.0 mA per row at the short-wavelength end to 16.8 at the long one, so a single 16.9 from the middle of the focal plane would misplace a line by up to about seven rows, at the outer ends.
 
 - `wavelength_offset`: added to every row, for an as-built or in-flight wavelength calibration. The design positions are good to about a row, but the camera's alignment to the beam is quoted at +/-0.79 Angstrom, some 47 rows.
 - `lit_band`: the wavelengths between which light reaches the chip. Outside them a baffle vignettes the beam, which leaves 380 dark rows on the left CCD and 1290 on the right. Charge from the lit rows is clocked across all of them.
@@ -111,7 +111,7 @@ The frame has `parallel_overscan_rows` more rows than the image area. With a shu
 
 `dark_current_time` gives how long each packet collects dark current, which is how long it spends in the image area: its part of the clear, the exposure, and the wait while the rows before it are read, or for a parallel overscan packet its crossing of the chip during the read-out. It is the same with a shutter as without one, and longest for the rows read last.
 
-`detect` and `digitise` in `euvst_response.frame` take the frame through the detector stages of `radiometric`, to electrons and then DN, with two things a full-band frame needs: a dark current time for each row, and a photon energy for each pixel, since a 170 A photon liberates a fifth more electrons than a 212 A one. Without a shutter a pixel holds photons from every row its charge crossed, so its energy is the mean of what it holds. `expose` is linear in the rate, so `expose_with_wavelength` exposes the energy-weighted rate alongside the photons and gives each pixel the wavelength of that mean.
+`detect` and `digitise` in `euvst_response.frame` take the frame through the detector stages of `radiometric`, to electrons and then DN, with two things a full-band frame needs: a dark current time for each row, and a photon energy for each pixel, since a 170 A photon liberates a quarter more electrons than a 212 A one. Without a shutter a pixel holds photons from every row its charge crossed, so its energy is the mean of what it holds. `expose` is linear in the rate, so `expose_with_wavelength` exposes the energy-weighted rate alongside the photons and gives each pixel the wavelength of that mean.
 
 ```python
 from euvst_response.frame import detect, digitise, expose_with_wavelength

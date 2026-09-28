@@ -56,7 +56,7 @@
     - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
     - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
     - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 939 erg / (s cm2 sr)}
@@ -135,7 +135,7 @@
     - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
     - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 1044 erg / (s cm2 sr)}
     - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
@@ -164,7 +164,7 @@
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 10000 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 1175.74 AA, log_t_max: 4.85, intensity: 790 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 92 erg / (s cm2 sr), note: "N V is 50% of VR so scale O IV by same amount"}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 860 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 860 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8000 erg / (s cm2 sr)}
 
 - task: I-4-1
@@ -307,7 +307,7 @@
     - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
     - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
 
@@ -332,7 +332,7 @@
     - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
     - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
     - {ion: Fe XII, wavelength: 195.119 AA, log_t_max: 6.20, intensity: 3890 erg / (s cm2 sr)}
@@ -359,7 +359,7 @@
     - {ion: Si III, wavelength: 1206.502 AA, log_t_max: 4.70, intensity: 3560 erg / (s cm2 sr)}
     - {ion: C III, wavelength: 977.02 AA, log_t_max: 4.85, intensity: 3666 erg / (s cm2 sr)}
     - {ion: O IV, wavelength: 790.199 AA, log_t_max: 5.15, intensity: 184 erg / (s cm2 sr)}
-    - {ion: O VI, wavelength: 1032.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
+    - {ion: O VI, wavelength: 1031.914 AA, log_t_max: 5.45, intensity: 2460 erg / (s cm2 sr)}
     - {ion: Ne VIII, wavelength: 770.428 AA, log_t_max: 5.80, intensity: 600 erg / (s cm2 sr)}
     - {ion: Fe IX, wavelength: 171.073 AA, log_t_max: 5.85, intensity: 8400 erg / (s cm2 sr)}
     - {ion: Si XII, wavelength: 499.41 AA, log_t_max: 6.30, intensity: 2473 erg / (s cm2 sr)}
