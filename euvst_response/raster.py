@@ -43,13 +43,21 @@ from .atmosphere import (Atmosphere, read_atmosphere, read_edges, read_time,
                          require_mass_per_electron)
 from .data_processing import sum_line_cubes
 from .synthesis import (
+    _LOGT_MAX,
+    _LOGT_MIN,
+    _N_N,
+    _N_T,
+    _density_point,
+    _density_points,
     compute_goft_fiasco,
     line_of_sight_velocity,
     synthesise_cubes,
 )
 from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
-from .utils import VELOCITY_CONVENTION, angle_to_distance, require_uniform_grid
+from .sampling import pixel_weights
+from .utils import (VELOCITY_CONVENTION, _fwhm_to_sigma, angle_to_distance, require_uniform_grid,
+                    velocity_grid)
 
 __all__ = ["SynthesisSettings", "RasterPlan", "Exposure", "AtmosphereSeries",
            "RasterSynthesiser", "SynthesisSeries", "SynthesisRaster"]
@@ -115,9 +123,7 @@ class SynthesisSettings:
 
     def velocity_grid(self) -> u.Quantity:
         """The velocity bin centres, as synthesise-spectra builds them."""
-        lim = self.vel_lim.to_value(u.cm / u.s)
-        res = self.vel_res.to_value(u.cm / u.s)
-        return np.arange(-lim, lim + res, res) * (u.cm / u.s)
+        return velocity_grid(self.vel_res, self.vel_lim)
 
 
 @dataclass(frozen=True)
@@ -485,12 +491,40 @@ class _SlitRaster:
             self._load_strip(snapshot, column, column + 1)
         return self._columns[(snapshot, column)]
 
-    def exposure_spectra(self, exposure: Exposure, slit_width: u.Quantity) -> Dict[str, np.ndarray]:
+    def columns_seen(self, position: u.Quantity, slit_width: u.Quantity,
+                     across_slit: Optional[u.Quantity] = None,
+                     extend: bool = True) -> Tuple[int, int, np.ndarray]:
+        """
+        The columns whose light a slit at *position* takes in, as
+        :meth:`columns_under` gives them, when the telescope blurs its image
+        across the slit by a Gaussian of FWHM *across_slit*: the light of
+        columns beside the slit then falls into it too. With *extend* the
+        edge columns stand for the Sun beyond them; without, it is dark.
+        Without *across_slit*, the columns under the slit.
+        """
+        first, last, fractions = self.columns_under(position, slit_width)
+        if across_slit is None:
+            return first, last, fractions
+        width = angle_to_distance(slit_width).to_value(u.Mm)
+        sigma = angle_to_distance(_fwhm_to_sigma(across_slit)).to_value(u.Mm)
+        centre = position.to_value(u.Mm)
+        weights = pixel_weights(self.series.x_edges.to_value(u.Mm),
+                                [centre - width / 2, centre + width / 2], sigma, extend=extend)[0]
+        seen = np.flatnonzero(weights > 0)
+        first, last = int(seen[0]), int(seen[-1]) + 1
+        return first, last, weights[first:last]
+
+    def exposure_spectra(self, exposure: Exposure, slit_width: u.Quantity,
+                         across_slit: Optional[u.Quantity] = None,
+                         extend: bool = True) -> Dict[str, np.ndarray]:
         """
         What the slit collects in one exposure: the columns under it, averaged over
         the slit, and the snapshots it spans, weighted by the time each covers.
+        With *across_slit*, the light the telescope's blur brings into the slit
+        from beside it too (:meth:`columns_seen`).
         """
-        first, last, fractions = self.columns_under(exposure.position, slit_width)
+        first, last, fractions = self.columns_seen(exposure.position, slit_width,
+                                                   across_slit, extend)
         spectra: Dict[str, np.ndarray] = {}
         for snapshot, weight in self.series.coverage(exposure.start, exposure.end):
             missing = [c for c in range(first, last) if (snapshot, c) not in self._columns]
@@ -506,7 +540,8 @@ class _SlitRaster:
         return spectra
 
     def _observe(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
-                 repeat: Optional[int]) -> Tuple[List[Dict[str, np.ndarray]], u.Quantity, u.Quantity, dict]:
+                 repeat: Optional[int], across_slit: Optional[u.Quantity] = None,
+                 extend: bool = True) -> Tuple[List[Dict[str, np.ndarray]], u.Quantity, u.Quantity, dict]:
         """
         One raster of the plan: each exposure's spectra, the slit positions, the distance
         between them, and what the cube of the raster records about it.
@@ -514,9 +549,11 @@ class _SlitRaster:
         The columns are the raster's exposures in order, at the slit
         positions, which advance by the step. A sit-and-stare is a raster of
         one exposure, so its cube has one column, as wide as the slit.
+        *across_slit* and *extend* are as for :meth:`columns_seen`.
         """
         exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
-        collected = [self.exposure_spectra(exposure, slit_width) for exposure in exposures]
+        collected = [self.exposure_spectra(exposure, slit_width, across_slit, extend)
+                     for exposure in exposures]
         positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
         pitch = (positions[1] - positions[0] if plan.steps > 1
                  else angle_to_distance(slit_width).to(u.Mm))
@@ -538,9 +575,12 @@ class RasterSynthesiser(_SlitRaster):
     """
     Synthesises the spectra a slit sees over a plan, one exposure at a time.
 
-    The contribution functions are computed once. Each column of each
-    snapshot is synthesised the first time an exposure needs it and kept,
-    so a sweep over exposure times or slit widths reuses most of the work.
+    The contribution functions are computed when the first strip is
+    synthesised, at the densities it has, and only the densities a later
+    strip adds are computed after that, which can take as long as the first
+    if the plasma reaches far beyond them. Each column of each snapshot is
+    synthesised the first time an exposure needs it and kept, so a sweep
+    over exposure times or slit widths reuses most of the work.
 
     Parameters
     ----------
@@ -552,13 +592,14 @@ class RasterSynthesiser(_SlitRaster):
         super().__init__(series)
         self.settings = settings
         self.vel_grid = settings.velocity_grid()
-        print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines")
-        self.goft, self.logT_grid, self.logN_grid = compute_goft_fiasco(
-            list(settings.lines), abundance=settings.abundance,
-            precision=settings.precision, n_workers=settings.n_workers,
-            hdf5_dbase_root=settings.hdf5_dbase_root,
-            temperature_chunk=settings.goft_temperature_chunk)
-        self.goft_dbase_root = next(iter(self.goft.values()))["hdf5_dbase_root"]
+        # The contribution functions are worked out when the first strip is
+        # synthesised, at the densities it has, and at more densities when a
+        # later strip has others.
+        self.goft: Optional[Dict[str, dict]] = None
+        self.logT_grid = np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(settings.precision)
+        self.logN_grid: Optional[np.ndarray] = None
+        self.goft_dbase_root: Optional[str] = None
+        self._density_points: Optional[Tuple[int, int]] = None
         self._mass_per_electron: Optional[Tuple[float, str]] = None
         self._wl_grids: Dict[str, u.Quantity] = {}
         self._rows: Optional[u.Quantity] = None
@@ -582,6 +623,47 @@ class RasterSynthesiser(_SlitRaster):
 
     def _load_strip(self, snapshot: int, first: int, last: int) -> None:
         self._synthesise_strip(snapshot, first, last)
+
+    def _cover_densities(self, temperature: np.ndarray, electron_density: np.ndarray) -> None:
+        """Work the contribution functions out at every density these cells need and they lack."""
+        settings = self.settings
+        needed = _density_points(temperature, electron_density, self.logT_grid,
+                                 settings.precision)
+        if needed is None:
+            if self.goft is not None:
+                return
+            needed = (0, _N_N - 1)
+        have = self._density_points
+        if have is None:
+            missing = [needed]
+        else:
+            missing = ([(needed[0], have[0] - 1)] if needed[0] < have[0] else []) + (
+                [(have[1] + 1, needed[1])] if needed[1] > have[1] else [])
+        for first, last in missing:
+            print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines "
+                  f"at 10^{_density_point(first):.1f} to 10^{_density_point(last):.1f} cm^-3")
+            goft, self.logT_grid, logN_grid = compute_goft_fiasco(
+                list(settings.lines), abundance=settings.abundance,
+                logN_min=_density_point(first), logN_max=_density_point(last),
+                nN=last - first + 1, precision=settings.precision,
+                n_workers=settings.n_workers, hdf5_dbase_root=settings.hdf5_dbase_root,
+                temperature_chunk=settings.goft_temperature_chunk)
+            if self.goft is None:
+                self.goft, self.logN_grid = goft, logN_grid
+                self.goft_dbase_root = next(iter(goft.values()))["hdf5_dbase_root"]
+                print(f"  CHIANTI database: {self.goft_dbase_root}")
+                self._density_points = (first, last)
+                continue
+            # Each density is worked out on its own, so the new ones go on
+            # either end of the table as they are.
+            below = first < self._density_points[0]
+            for name, info in goft.items():
+                parts = [info["g_tn"], self.goft[name]["g_tn"]]
+                self.goft[name]["g_tn"] = np.concatenate(parts if below else parts[::-1])
+            parts = [logN_grid, self.logN_grid]
+            self.logN_grid = np.concatenate(parts if below else parts[::-1])
+            self._density_points = (min(first, self._density_points[0]),
+                                    max(last, self._density_points[1]))
 
     def _synthesise_strip(self, snapshot: int, first: int, last: int) -> None:
         """Synthesise columns *first* to *last* of one snapshot into the cache."""
@@ -610,6 +692,7 @@ class RasterSynthesiser(_SlitRaster):
             strip.velocity("z").astype(precision).to_value(u.cm / u.s), "z")
         dh_cm = strip.cell_thickness("z").to_value(u.cm)
 
+        self._cover_densities(temperature, electron_density)
         lines, _, _ = synthesise_cubes(
             temperature, electron_density, velocity, dh_cm, self.goft,
             self.logT_grid, self.logN_grid, self.vel_grid, "z", precision)
@@ -624,16 +707,20 @@ class RasterSynthesiser(_SlitRaster):
                 name: info["si"][:, offset, :] for name, info in lines.items()}
 
     def line_cubes(self, plan: RasterPlan, slit_width: u.Quantity,
-                   expos: u.Quantity, repeat: Optional[int] = None) -> Dict[str, NDCube]:
+                   expos: u.Quantity, repeat: Optional[int] = None, *,
+                   across_slit: Optional[u.Quantity] = None,
+                   extend: bool = True) -> Dict[str, NDCube]:
         """
         One cube per line for one raster of the plan: ``(rows, exposures, wavelength)``.
 
         The columns are the raster's exposures in order, at the slit
         positions, which advance by the step. A sit-and-stare is a raster of
         one exposure, so its cube has one column, as wide as the slit; its
-        repeats are separate cubes, one per exposure.
+        repeats are separate cubes, one per exposure. *across_slit* and
+        *extend* are as for :meth:`columns_seen`.
         """
-        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat)
+        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat,
+                                                                 across_slit, extend)
         rows = self._rows.to(u.Mm)
         row_pitch = self._row_pitch.to(u.Mm)
         n_columns, n_rows = positions.size, rows.size
@@ -665,12 +752,15 @@ class RasterSynthesiser(_SlitRaster):
         return cubes
 
     def summed_cube(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
-                    reference_line: str, repeat: Optional[int] = None) -> NDCube:
+                    reference_line: str, repeat: Optional[int] = None, *,
+                    across_slit: Optional[u.Quantity] = None, extend: bool = True) -> NDCube:
         """The lines summed onto the reference line's grid, as the instrument run takes it."""
         if reference_line not in self.settings.lines:
             raise ValueError(f"The reference line {reference_line!r} is not among the "
                              f"synthesised lines {list(self.settings.lines)}.")
-        return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat), reference_line)
+        return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat,
+                                              across_slit=across_slit, extend=extend),
+                              reference_line)
 
 
 class SynthesisRaster(_SlitRaster):
@@ -704,7 +794,8 @@ class SynthesisRaster(_SlitRaster):
                 name: values[:, offset, :] for name, values in radiance.items()}
 
     def synthesis(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
-                  repeat: Optional[int] = None) -> Tuple[Synthesis, dict]:
+                  repeat: Optional[int] = None, *, across_slit: Optional[u.Quantity] = None,
+                  extend: bool = True) -> Tuple[Synthesis, dict]:
         """
         One raster of the plan as a synthesis whose columns are its exposures, and what
         the cube of the raster records about it.
@@ -713,9 +804,11 @@ class SynthesisRaster(_SlitRaster):
         sit-and-stare is a raster of one exposure, so its image has one
         column, as wide as the slit. The synthesis goes onto the detector as
         a single snapshot's does, with the raster entries in the cube's
-        metadata so that the columns stay one per exposure.
+        metadata so that the columns stay one per exposure. *across_slit*
+        and *extend* are as for :meth:`columns_seen`.
         """
-        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat)
+        collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat,
+                                                                 across_slit, extend)
         x_edges = positions[0] - pitch / 2 + np.arange(positions.size + 1) * pitch
         lines = {name: SpectralLine(
                      intensity=np.stack([c[name] for c in collected], axis=1) * RADIANCE_UNIT,
