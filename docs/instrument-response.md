@@ -63,20 +63,18 @@ simulation:
 
 The EIS PSF is not tied to a slit, so its spectral FWHM is the same for every slit, and `convolution` is refused for it, unless `telescope.psf_slit_width` says which slit `psf_params` was measured with.
 
-### Pixels and the PSF
+### The edges of the atmosphere
 
-Each detector pixel holds the mean of the scene over its footprint: along the slit over the plate scale, across it over the slit width, and along the dispersion over the pixel's wavelengths, with each cell of the synthesis taken to be uniform. With `psf: True` the scene is blurred by the PSF on the synthesis's own grids before the pixels average it, so a line narrower than a pixel keeps its place within the pixel. The ground truth is the scene without the PSF.
+With `psf: True` the blur brings light in from beyond the edges of the atmosphere. `simulation.psf_boundary` sets what is there:
 
-The PSF along the slit and along the dispersion is measured at the detector, after the slit. The telescope also blurs the image it forms on the slit, which brings in light from beside the slit, but that blur across the slit is not in `psf_params`. `telescope.psf_across_slit` gives it, as a FWHM, and leaves it out when not set (the default):
+- `replicate` (default): the Sun beyond each edge is taken to be like the cells at the edge, so the pixels there are as bright as they would be in the middle of a larger atmosphere.
+- `zero`: nothing is beyond the edges, so the light the blur carries out of the atmosphere is lost, and the pixels within a PSF width of an edge come out darker.
 
 ```yaml
-telescope:
-  psf_across_slit: 3 arcsec
 simulation:
   psf: True
+  psf_boundary: zero
 ```
-
-`psf_boundary` decides what the blur brings in from beyond the edges of the atmosphere, along and across the slit.
 
 ## Configuration file
 
