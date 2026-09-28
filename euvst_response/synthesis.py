@@ -19,8 +19,8 @@ from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
                     velocity_centers_to_edges, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
-from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
-                         require_mass_per_electron)
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
+                         mass_per_electron, read_atmosphere, require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -769,6 +769,9 @@ def compute_goft_fiasco(
     ]
     if temperature_chunk is not None and temperature_chunk < nT:
         print(f"  {nT} temperatures in chunks of {temperature_chunk}")
+
+    # Here, since spawned workers cannot ask whether to build it.
+    _offer_database_build(dbase_root)
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
