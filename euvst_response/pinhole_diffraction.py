@@ -26,8 +26,9 @@ near-field diffraction pattern, centred under the hole, rather than the
 far-field limit a large hole is not in. It is the Rayleigh-Sommerfeld
 integral with the path from each point of the hole taken to second order in
 its distance from the centre, and the obliquity and distance of the centre
-ray, which agrees with the full integral to 5e-4 for a 400 micron hole. The foil passes some 1e-9 of the visible, so its interference with
-the light through the hole, at most 2 |t| of it, some 1e-4, is left out.
+ray, which agrees with the full integral to 5e-4 for a 400 micron hole. The
+foil passes some 1e-9 of the visible, so its interference with the light
+through the hole, at most 2 |t| of it, some 1e-4, is left out.
 
 A pinhole's position is a fraction of the simulated window along each axis,
 not of the whole detector.
