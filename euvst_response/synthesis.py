@@ -1199,7 +1199,7 @@ def build_em_tv(
 def synthesise_spectra(
     goft: Dict[str, dict],
     em_tv: np.ndarray,
-    vel_grid: np.ndarray,
+    vel_grid: u.Quantity | np.ndarray,
     logT_grid: np.ndarray,
 ) -> None:
     """

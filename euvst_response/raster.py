@@ -542,9 +542,12 @@ class RasterSynthesiser(_SlitRaster):
     """
     Synthesises the spectra a slit sees over a plan, one exposure at a time.
 
-    The contribution functions are computed once. Each column of each
-    snapshot is synthesised the first time an exposure needs it and kept,
-    so a sweep over exposure times or slit widths reuses most of the work.
+    The contribution functions are computed when the first strip is
+    synthesised, at the densities it has, and only the densities a later
+    strip adds are computed after that, which can take as long as the first
+    if the plasma reaches far beyond them. Each column of each snapshot is
+    synthesised the first time an exposure needs it and kept, so a sweep
+    over exposure times or slit widths reuses most of the work.
 
     Parameters
     ----------
