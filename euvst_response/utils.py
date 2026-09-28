@@ -757,6 +757,31 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     return step
 
 
+def velocity_grid(vel_res: u.Quantity, vel_lim: u.Quantity,
+                  names: tuple = ("vel_res", "vel_lim")) -> u.Quantity:
+    """
+    Velocity bin centres, *vel_res* apart, out to at least *vel_lim* either way, in cm/s.
+
+    The bins step out from zero in both directions, so that a static plasma
+    sits on the middle of one whatever the two values. Built from -vel_lim
+    instead, a grid whose limit was not a whole number of steps had no bin
+    at zero, and a static line came out Doppler shifted. *names* are what
+    the two are called in the error for a value that is not a positive
+    velocity.
+    """
+    values = []
+    for value, name in zip((vel_res, vel_lim), names):
+        value = u.Quantity(value)
+        if not value.unit.is_equivalent(u.km / u.s) or not np.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a positive velocity, got {value}.")
+        values.append(value.to_value(u.cm / u.s))
+    res, lim = values
+    # Whole steps to reach lim, a step more only when lim is not a whole
+    # number of them, however the division rounds.
+    steps = int(np.ceil(np.round(lim / res, 9)))
+    return np.arange(-steps, steps + 1) * res * (u.cm / u.s)
+
+
 def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
     """
     Convert velocity grid centers to bin edges.

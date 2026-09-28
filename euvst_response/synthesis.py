@@ -17,7 +17,7 @@ import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
-                    velocity_centers_to_edges, VELOCITY_CONVENTION)
+                    velocity_centers_to_edges, velocity_grid, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
@@ -142,9 +142,10 @@ def create_atmosphere_ndcube(
         voxel_dz.to(u.Mm).value
     ]
 
-    return NDCube(data.data,
+    # A plain array, as the docstring allows, has no unit.
+    return NDCube(np.asarray(getattr(data, "value", data)),
                   wcs=wcs,
-                  unit=data.unit)
+                  unit=getattr(data, "unit", None))
 
 
 def read_timestep_time(file_path: Path) -> float:
@@ -686,15 +687,22 @@ def _compute_single_ion(args):
     return results
 
 
+# The grids G(T, n_e) is worked out on unless given others: log10 T from 4 to 9
+# every 0.05, and log10 n_e from 7 to 13 every 0.3. density_grid carries the
+# density grid on, on the same points, as far as an atmosphere needs.
+_LOGT_MIN, _LOGT_MAX, _N_T = 4.0, 9.0, 101
+_LOGN_MIN, _LOGN_MAX, _N_N = 7.0, 13.0, 21
+
+
 def compute_goft_fiasco(
     line_names: List[str],
     abundance: str = "sun_coronal_2021_chianti",
-    logT_min: float = 4.0,
-    logT_max: float = 9.0,
-    nT: int = 101,
-    logN_min: float = 7.0,
-    logN_max: float = 13.0,
-    nN: int = 21,
+    logT_min: float = _LOGT_MIN,
+    logT_max: float = _LOGT_MAX,
+    nT: int = _N_T,
+    logN_min: float = _LOGN_MIN,
+    logN_max: float = _LOGN_MAX,
+    nN: int = _N_N,
     precision: type = np.float64,
     n_workers: int = 0,
     hdf5_dbase_root=None,
@@ -956,13 +964,7 @@ def compute_dem(
     else:  # "z"
         output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nx, nT)
     
-    # Create temperature bin edges from centers
-    dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
-    logT_edges = np.concatenate([
-        [logT_grid[0] - dlogT/2],
-        logT_grid[:-1] + dlogT/2,
-        [logT_grid[-1] + dlogT/2]
-    ])
+    dlogT, logT_edges = _temperature_bins(logT_grid)
 
     ne = 10.0 ** logN_cube.astype(np.float64)
     dh = along_line_of_sight(voxel_dh_cm, integration_axis)
@@ -981,9 +983,109 @@ def compute_dem(
         em_n = np.sum(w3 * mask, axis=integration_axis_idx)  # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
-        avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
+        # Zero where no plasma is at this temperature, rather than whatever
+        # memory the division left there, which reached the saved G diagnostic.
+        avg_ne[..., idx] = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
 
     return dem, avg_ne
+
+
+def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
+    """The width and the edges of the DEM's temperature bins, centred on *logT_grid*."""
+    dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
+    logT_edges = np.concatenate([
+        [logT_grid[0] - dlogT/2],
+        logT_grid[:-1] + dlogT/2,
+        [logT_grid[-1] + dlogT/2]
+    ])
+    return dlogT, logT_edges
+
+
+def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
+               precision: type) -> Tuple[np.ndarray, np.ndarray]:
+    """log10 of the temperature and the electron density, as the synthesis works with them.
+
+    A cell with no electrons has a log density of minus infinity, so that it
+    adds nothing to the emission measure; one with no temperature is put at
+    log T = 0, below every temperature grid.
+    """
+    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
+                         out=np.full_like(electron_density, -np.inf)).astype(precision)
+    logT_cube = np.log10(temperature, where=temperature > 0.0,
+                         out=np.zeros_like(temperature)).astype(precision)
+    return logT_cube, logN_cube
+
+
+def density_grid(
+    temperature: np.ndarray,
+    electron_density: np.ndarray,
+    logT_grid: np.ndarray,
+    precision: type = np.float64,
+) -> Tuple[float, float, int]:
+    """The density grid to work G(T, n_e) out on for an atmosphere.
+
+    The contribution functions are read at the mean density of each
+    temperature along each line of sight, and taken as zero off their grid.
+    This grid has the points of the default one, every 0.3 in log10 n_e
+    through 10**7 cm^-3, and goes each way until it is past the density of
+    every cell whose temperature is on *logT_grid*, and no further. No mean
+    density falls off it, and an atmosphere with a narrower range of
+    densities than the default grid needs fewer points.
+
+    Parameters
+    ----------
+    temperature, electron_density : np.ndarray
+        The temperature of every cell in K and its electron density in cm^-3.
+    logT_grid : np.ndarray
+        The temperature grid of the DEM, as :func:`compute_goft_fiasco`
+        returns it.
+    precision : type
+        The precision of the synthesis, which the densities are rounded to as
+        :func:`synthesise_cubes` rounds them.
+
+    Returns
+    -------
+    logN_min, logN_max : float
+    nN : int
+        The grid, for :func:`compute_goft_fiasco`. It is the default grid if
+        no cell has electrons at a temperature on *logT_grid*.
+    """
+    points = _density_points(temperature, electron_density, logT_grid, precision)
+    if points is None:
+        return _LOGN_MIN, _LOGN_MAX, _N_N
+    first, last = points
+    return _density_point(first), _density_point(last), last - first + 1
+
+
+def _density_point(index: int) -> float:
+    """log10 n_e of a point of the default density grid, counted from its first."""
+    return _LOGN_MIN + index * (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+
+
+def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
+                    logT_grid: np.ndarray, precision: type) -> Optional[Tuple[int, int]]:
+    """The first and last point of :func:`density_grid`, counted as :func:`_density_point` counts them.
+
+    None if no cell has electrons at a temperature on *logT_grid*.
+    """
+    logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
+    _, logT_edges = _temperature_bins(logT_grid)
+    counted = ((logT_cube >= logT_edges[0]) & (logT_cube < logT_edges[-1])
+               & np.isfinite(logN_cube))
+    if not counted.any():
+        return None
+
+    step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+    # Where the lowest and highest densities fall among the default grid's
+    # points, counted in steps from its first; rounded, so that a density on a
+    # point, but for the arithmetic that put it there, counts as on it.
+    lowest, highest = (
+        round((float(extreme) - _LOGN_MIN) / step, 9) for extreme in (
+            np.min(logN_cube, where=counted, initial=np.inf),
+            np.max(logN_cube, where=counted, initial=-np.inf)))
+    # The points just past them, so that a mean density a rounding error
+    # beyond the lowest or the highest is still on the grid.
+    return int(np.ceil(lowest)) - 1, int(np.floor(highest)) + 1
 
 
 def interpolate_g_on_dem(
@@ -1137,6 +1239,19 @@ def build_em_tv(
     mask_V = (vel_cube[..., None] >= v_edges[:-1]) & \
              (vel_cube[..., None] <  v_edges[1:])
 
+    # Plasma faster than the grid reaches emits beyond the synthesised
+    # wavelengths, so its emission is not in the spectra, though the DEM keeps
+    # it. Said, since the default grid misses the fastest flows of a flare.
+    in_temperature = ne_sq_dh * mask_T.any(axis=-1)
+    beyond = in_temperature[~mask_V.any(axis=-1)].sum()
+    if beyond > 0:
+        warnings.warn(
+            f"{100 * beyond / in_temperature.sum():.3g} per cent of the emission measure is "
+            f"from plasma faster than the velocity grid reaches, "
+            f"{v_edges[0] / 1e5:.1f} to {v_edges[-1] / 1e5:.1f} km/s, and emits beyond the "
+            f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
+            f"it.", UserWarning, stacklevel=2)
+
     # Build the 4-D emission-measure cube EM(spatial,T,v) by summing over the integration axis
     ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
     mask_T_d   = da.from_array(mask_T,   chunks='auto')
@@ -1160,7 +1275,7 @@ def build_em_tv(
 def synthesise_spectra(
     goft: Dict[str, dict],
     em_tv: np.ndarray,
-    vel_grid: np.ndarray,
+    vel_grid: u.Quantity | np.ndarray,
     logT_grid: np.ndarray,
 ) -> None:
     """
@@ -1174,13 +1289,18 @@ def synthesise_spectra(
     em_tv : np.ndarray
         4D emission measure cube (n_rows, n_cols, nT, nv), in the spatial
         layout build_em_tv produces.
-    vel_grid : np.ndarray
-        Velocity grid centers for wavelength calculation.
+    vel_grid : u.Quantity or np.ndarray
+        Velocity grid centers for wavelength calculation, in any unit of
+        velocity; a plain array is taken to be in cm/s, as build_em_tv's is.
     logT_grid : np.ndarray
         Temperature bin centers.
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
+    # The Doppler shifts below are worked out in cm/s, which a grid in km/s
+    # was taken to be, moving every line by a factor of 1e5 too little.
+    vel_grid = (vel_grid.to(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
+                else np.asarray(vel_grid, dtype=float) * (u.cm / u.s))
 
     # The wavelength grid built below is the velocity grid mapped through
     # lambda_0 (1 + v/c), and create_line_cube writes its CDELT from the first
@@ -1269,12 +1389,22 @@ def synthesise_cubes(
     em_tv : np.ndarray
         As :func:`build_em_tv` returns it.
     """
-    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
-                         out=np.zeros_like(electron_density)).astype(precision)
-    logT_cube = np.log10(temperature, where=temperature > 0.0,
-                         out=np.zeros_like(temperature)).astype(precision)
+    logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
 
     dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
+
+    # The contribution functions are worked out on a grid of densities and
+    # taken as zero off it; said, with how much of the emission that is.
+    occupied = dem_map > 0
+    log_ne = np.log10(avg_ne_map, where=avg_ne_map > 0,
+                      out=np.full(avg_ne_map.shape, -np.inf))
+    off_grid = occupied & ((log_ne < logN_grid[0]) | (log_ne > logN_grid[-1]))
+    if off_grid.any():
+        warnings.warn(
+            f"{100 * dem_map[off_grid].sum() / dem_map[occupied].sum():.3g} per cent of the "
+            f"emission measure is at electron densities outside the {10 ** logN_grid[0]:.0e} "
+            f"to {10 ** logN_grid[-1]:.0e} cm^-3 the contribution functions are worked out "
+            f"for, where they are taken as zero.", UserWarning, stacklevel=2)
 
     lines = {name: dict(info) for name, info in goft.items()}
     interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
@@ -1839,6 +1969,8 @@ def main(args=None) -> None:
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
+    # Checked now, before the atmosphere is read or anything computed.
+    velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
 
@@ -2059,11 +2191,7 @@ def main(args=None) -> None:
     # ---------------- Common processing (both modes) -----------------
     
     # Build velocity grid
-    vel_grid = np.arange(
-        -vel_lim.to(u.cm / u.s).value,
-        vel_lim.to(u.cm / u.s).value + vel_res.to(u.cm / u.s).value,
-        vel_res.to(u.cm / u.s).value
-    ) * (u.cm / u.s)
+    vel_grid = velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
     # The electron density: the atmosphere's own where it gives one, otherwise
     # the mass density over the mass per free electron.
@@ -2082,9 +2210,15 @@ def main(args=None) -> None:
     vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
 
     # ---------------- Compute contribution functions (fiasco) ---------
-    print(f"Computing contribution functions via fiasco ({print_mem()})")
+    # At the densities this atmosphere has, and no others.
+    logN_min, logN_max, nN = density_grid(
+        temp_cube.data, ne_values,
+        np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
+    print(f"Computing contribution functions via fiasco at 10^{logN_min:.1f} to "
+          f"10^{logN_max:.1f} cm^-3 ({print_mem()})")
     goft, logT_goft, logN_grid = compute_goft_fiasco(
         args.lines, abundance=args.abundance, precision=precision,
+        logN_min=logN_min, logN_max=logN_max, nN=nN,
         n_workers=args.n_workers,
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
         temperature_chunk=getattr(args, "goft_temperature_chunk", None),

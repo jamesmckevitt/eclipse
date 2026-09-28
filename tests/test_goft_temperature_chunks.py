@@ -136,3 +136,15 @@ def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _recording_goft)
     synthesis.main()
     assert received["temperature_chunk"] == expected
+
+
+def test_a_density_grid_carried_on_from_the_default_has_its_values_at_its_points(fake_fiasco):
+    """Each density is worked out on its own, so a grid sized to an atmosphere changes nothing it shares."""
+    from euvst_response.synthesis import _density_point
+
+    whole, _, logn = compute_goft_fiasco(LINES, n_workers=1)
+    part, _, logn_part = compute_goft_fiasco(LINES, n_workers=1, logN_min=_density_point(4),
+                                             logN_max=_density_point(9), nN=6)
+    assert np.allclose(logn_part, logn[4:10], rtol=0, atol=1e-12)
+    for line in LINES:
+        assert np.allclose(part[line]["g_tn"], whole[line]["g_tn"][4:10], rtol=1e-12, atol=0)
