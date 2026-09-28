@@ -13,6 +13,9 @@ the two bands stay separate, and that the quantum efficiency is divided out
 exactly once on the way into ECLIPSE's radiometric chain.
 """
 
+import re
+import warnings
+
 import numpy as np
 import pytest
 import astropy.units as u
@@ -174,7 +177,11 @@ class TestTelescope:
 # interpol_eis_ea with the bundled smooth fit (dz2025). Between the tables'
 # nodes, where each routine's own interpolation decides the value: a linear
 # one in place of eis_ltds's splines put dz2013 over twice too bright near
-# 168 A. IDL works in single precision, which the tolerance allows for.
+# 168 A. IDL works in single precision, and its spline solves, and dz2013's
+# ratio of two splines, gather up to 2.2e-6 of rounding at these points,
+# which the tolerance allows for; the interpolations it tells apart differ
+# by 2.5 per cent and more.
+IDL_RTOL = 5e-6
 IDL_BETWEEN_NODES = [
     ("ground", None, 172.5, 8.67057301e-04),
     ("ground", None, 203.75, 4.46710475e-02),
@@ -197,23 +204,31 @@ IDL_BETWEEN_NODES = [
 @pytest.mark.parametrize("method, date, wavelength, expected", IDL_BETWEEN_NODES)
 def test_areas_between_the_nodes_match_solarsoft(method, date, wavelength, expected):
     area = eis_calibration.effective_area(wavelength, date, method)[0]
-    assert area == pytest.approx(expected, rel=1e-4)
+    assert area == pytest.approx(expected, rel=IDL_RTOL)
 
 
-@pytest.mark.parametrize("method, date, message", [
-    ("dz2013", "2006-01-01", "before 22 September 2006.*ground calibration is used"),
-    ("dz2013", "2020-01-01", "after 14 September 2012.*decay is held"),
-    ("dz2025", "2024-01-01", "outside 2007-04-01.*nearer end of the fit"),
+@pytest.mark.parametrize("method, date, wavelength, message, expected, rel", [
+    ("dz2013", "2006-01-01", 268.25, "before 22 September 2006.*ground calibration is used",
+     eis_calibration.effective_area(268.25)[0], 1e-12),
+    ("dz2013", "2020-01-01", 268.25, "after 14 September 2012.*decay is held",
+     4.62971665e-02, IDL_RTOL),
+    ("dz2025", "2024-01-01", 203.75, "outside 2007-04-01.*nearer end of the fit",
+     2.80065313e-02, IDL_RTOL),
 ])
-def test_a_date_beyond_a_fitted_range_is_said_to_be(method, date, message):
-    """SolarSoft prints the same; the value is SolarSoft's too."""
-    eis_calibration._interpolator.cache_clear()
-    with pytest.warns(UserWarning, match=message):
-        area = eis_calibration.effective_area(268.25, date, method)[0]
-    if method == "dz2013" and date.startswith("2006"):
-        assert area == pytest.approx(eis_calibration.effective_area(268.25)[0], rel=1e-12)
-    if method == "dz2013" and date.startswith("2020"):
-        assert area == pytest.approx(4.62971665e-02, rel=1e-4)
-    if method == "dz2025":
-        assert eis_calibration.effective_area(203.75, date, method)[0] == pytest.approx(
-            2.80065313e-02, rel=1e-4)
+def test_a_date_beyond_a_fitted_range_is_said_to_be(method, date, wavelength, message,
+                                                    expected, rel):
+    """SolarSoft prints the same, and the value is SolarSoft's too, the ground one before launch."""
+    # Once for each call: one that spans both bands, then the same one twice,
+    # the second answered from the cache.
+    for wavelengths in ([195.0, 268.25], [wavelength], [wavelength]):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            area = eis_calibration.effective_area(wavelengths, date, method)
+        assert sum(re.search(message, str(w.message)) is not None for w in caught) == 1
+    assert area[0] == pytest.approx(expected, rel=rel)
+
+
+def test_the_held_long_wavelength_decay_is_not_mentioned_for_the_short_band():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        eis_calibration.effective_area(195.0, "2020-01-01", "dz2013")

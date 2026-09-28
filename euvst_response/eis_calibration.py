@@ -171,98 +171,117 @@ def _ground_table(band: str, latest: bool = False) -> tuple[np.ndarray, np.ndarr
 # IDL's interpolants, as the SolarSoft routines call them
 # ---------------------------------------------------------------------------
 
-def _idl_interpol_spline(x, y, xout) -> np.ndarray:
+class _IdlInterpolSpline:
     """
-    IDL's ``INTERPOL(y, x, xout, /SPLINE)``.
+    IDL's ``INTERPOL(y, x, xout, /SPLINE)`` through the points *x*, *y*, called with *xout*.
 
     Not one spline through all the points: at each output point, a natural
     cubic spline through the four data points around it, the interval it is
     in and one either side, or the end four beyond the data, from which it
-    extrapolates. As interpol.pro in IDL 8.8.
+    extrapolates. As interpol.pro in IDL 8.8. The splines are made once, so
+    that a call only evaluates them.
     """
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    xout = np.atleast_1d(np.asarray(xout, dtype=float))
-    # VALUE_LOCATE, kept to the intervals that have a point either side.
-    start = np.clip(np.searchsorted(x, xout, side="right") - 1, 0, x.size - 2)
-    start = np.clip(start, 1, x.size - 3)
-    out = np.empty(xout.shape)
-    for first in np.unique(start):
-        here = start == first
-        near = slice(first - 1, first + 3)
-        out[here] = CubicSpline(x[near], y[near], bc_type="natural")(xout[here])
-    return out
+
+    def __init__(self, x, y):
+        self.x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        # One for each interval with a point either side, by its first point.
+        self.splines = [CubicSpline(self.x[first - 1:first + 3], y[first - 1:first + 3],
+                                    bc_type="natural")
+                        for first in range(1, self.x.size - 2)]
+
+    def __call__(self, xout) -> np.ndarray:
+        xout = np.atleast_1d(np.asarray(xout, dtype=float))
+        # VALUE_LOCATE, kept to the intervals that have a point either side.
+        start = np.clip(np.searchsorted(self.x, xout, side="right") - 1, 1, self.x.size - 3)
+        out = np.empty(xout.shape)
+        for first in np.unique(start):
+            here = start == first
+            out[here] = self.splines[first - 1](xout[here])
+        return out
 
 
-def _idl_tension_spline(x, y, t, sigma: float = 1.0) -> np.ndarray:
+class _IdlTensionSpline:
     """
-    IDL's ``SPLINE(x, y, t)``: a spline under tension *sigma*, as spline.pro in IDL 8.8.
+    IDL's ``SPLINE(x, y, t)`` through the points *x*, *y*, called with *t*.
 
-    Its end slopes are those of the quadratics through the first and last
-    three points. Ported step for step, in double precision.
+    A spline under tension *sigma*, as spline.pro in IDL 8.8. Its end slopes
+    are those of the quadratics through the first and last three points.
+    Ported step for step, in double precision, with the solve done once, so
+    that a call only evaluates it.
     """
-    xx = np.asarray(x, dtype=float)
-    yy = np.asarray(y, dtype=float)
-    tt = np.atleast_1d(np.asarray(t, dtype=float))
-    n = xx.size
-    nm1 = n - 1
-    yp = np.zeros(2 * n)
 
-    delx1 = xx[1] - xx[0]
-    dx1 = (yy[1] - yy[0]) / delx1
-    delx2 = xx[2] - xx[1]
-    delx12 = xx[2] - xx[0]
-    slpp1 = (-(delx12 + delx1) / delx12 / delx1 * yy[0] + delx12 / delx1 / delx2 * yy[1]
-             - delx1 / delx12 / delx2 * yy[2])
-    deln = xx[nm1] - xx[nm1 - 1]
-    delnm1 = xx[nm1 - 1] - xx[nm1 - 2]
-    delnn = xx[nm1] - xx[nm1 - 2]
-    slppn = (deln / delnn / delnm1 * yy[nm1 - 2] - delnn / deln / delnm1 * yy[nm1 - 1]
-             + (delnn + deln) / delnn / deln * yy[nm1])
+    def __init__(self, x, y, sigma: float = 1.0):
+        xx = np.asarray(x, dtype=float)
+        yy = np.asarray(y, dtype=float)
+        self.xx, self.yy = xx, yy
+        self.yp, self.sigmap = self._solve(xx, yy, sigma)
 
-    sigmap = sigma * nm1 / (xx[nm1] - xx[0])
-    dels = sigmap * delx1
-    exps = np.exp(dels)
-    sinhs = 0.5 * (exps - 1.0 / exps)
-    sinhin = 1.0 / (delx1 * sinhs)
-    diag1 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
-    yp[0] = (dx1 - slpp1) / diag1
-    yp[n] = sinhin * (sinhs - dels) / diag1
+    @staticmethod
+    def _solve(xx, yy, sigma):
+        n = xx.size
+        nm1 = n - 1
+        yp = np.zeros(2 * n)
 
-    delx2 = np.diff(xx)
-    dx2 = np.diff(yy) / delx2
-    dels = sigmap * delx2
-    exps = np.exp(dels)
-    sinhs = 0.5 * (exps - 1.0 / exps)
-    sinhin = 1.0 / (delx2 * sinhs)
-    diag2 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
-    diag2 = np.concatenate([[0.0], diag2[:-1] + diag2[1:]])
-    dx2nm1 = dx2[nm1 - 1]
-    dx2 = np.concatenate([[0.0], np.diff(dx2)])
-    spdiag = sinhin * (sinhs - dels)
-    for i in range(1, nm1):
-        diagin = 1.0 / (diag2[i] - spdiag[i - 1] * yp[i + n - 1])
-        yp[i] = diagin * (dx2[i] - spdiag[i - 1] * yp[i - 1])
-        yp[i + n] = diagin * spdiag[i]
-    diagin = 1.0 / (diag1 - spdiag[nm1 - 1] * yp[n + nm1 - 1])
-    yp[nm1] = diagin * (slppn - dx2nm1 - spdiag[nm1 - 1] * yp[nm1 - 1])
-    for i in range(n - 2, -1, -1):
-        yp[i] = yp[i] - yp[i + n] * yp[i + 1]
+        delx1 = xx[1] - xx[0]
+        dx1 = (yy[1] - yy[0]) / delx1
+        delx2 = xx[2] - xx[1]
+        delx12 = xx[2] - xx[0]
+        slpp1 = (-(delx12 + delx1) / delx12 / delx1 * yy[0] + delx12 / delx1 / delx2 * yy[1]
+                 - delx1 / delx12 / delx2 * yy[2])
+        deln = xx[nm1] - xx[nm1 - 1]
+        delnm1 = xx[nm1 - 1] - xx[nm1 - 2]
+        delnn = xx[nm1] - xx[nm1 - 2]
+        slppn = (deln / delnn / delnm1 * yy[nm1 - 2] - delnn / deln / delnm1 * yy[nm1 - 1]
+                 + (delnn + deln) / delnn / deln * yy[nm1])
 
-    # The knot at or beyond each point, from the second to the last.
-    subs = np.clip(np.searchsorted(xx, tt, side="right"), 1, nm1)
-    subs1 = subs - 1
-    del1 = tt - xx[subs1]
-    del2 = xx[subs] - tt
-    dels = xx[subs] - xx[subs1]
-    exps1 = np.exp(sigmap * del1)
-    sinhd1 = 0.5 * (exps1 - 1.0 / exps1)
-    exps = np.exp(sigmap * del2)
-    sinhd2 = 0.5 * (exps - 1.0 / exps)
-    exps = exps1 * exps
-    sinhs = 0.5 * (exps - 1.0 / exps)
-    return ((yp[subs] * sinhd1 + yp[subs1] * sinhd2) / sinhs
-            + ((yy[subs] - yp[subs]) * del1 + (yy[subs1] - yp[subs1]) * del2) / dels)
+        sigmap = sigma * nm1 / (xx[nm1] - xx[0])
+        dels = sigmap * delx1
+        exps = np.exp(dels)
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        sinhin = 1.0 / (delx1 * sinhs)
+        diag1 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
+        yp[0] = (dx1 - slpp1) / diag1
+        yp[n] = sinhin * (sinhs - dels) / diag1
+
+        delx2 = np.diff(xx)
+        dx2 = np.diff(yy) / delx2
+        dels = sigmap * delx2
+        exps = np.exp(dels)
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        sinhin = 1.0 / (delx2 * sinhs)
+        diag2 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
+        diag2 = np.concatenate([[0.0], diag2[:-1] + diag2[1:]])
+        dx2nm1 = dx2[nm1 - 1]
+        dx2 = np.concatenate([[0.0], np.diff(dx2)])
+        spdiag = sinhin * (sinhs - dels)
+        for i in range(1, nm1):
+            diagin = 1.0 / (diag2[i] - spdiag[i - 1] * yp[i + n - 1])
+            yp[i] = diagin * (dx2[i] - spdiag[i - 1] * yp[i - 1])
+            yp[i + n] = diagin * spdiag[i]
+        diagin = 1.0 / (diag1 - spdiag[nm1 - 1] * yp[n + nm1 - 1])
+        yp[nm1] = diagin * (slppn - dx2nm1 - spdiag[nm1 - 1] * yp[nm1 - 1])
+        for i in range(n - 2, -1, -1):
+            yp[i] = yp[i] - yp[i + n] * yp[i + 1]
+        return yp, sigmap
+
+    def __call__(self, t) -> np.ndarray:
+        xx, yy, yp, sigmap = self.xx, self.yy, self.yp, self.sigmap
+        tt = np.atleast_1d(np.asarray(t, dtype=float))
+        # The knot at or beyond each point, from the second to the last.
+        subs = np.clip(np.searchsorted(xx, tt, side="right"), 1, xx.size - 1)
+        subs1 = subs - 1
+        del1 = tt - xx[subs1]
+        del2 = xx[subs] - tt
+        dels = xx[subs] - xx[subs1]
+        exps1 = np.exp(sigmap * del1)
+        sinhd1 = 0.5 * (exps1 - 1.0 / exps1)
+        exps = np.exp(sigmap * del2)
+        sinhd2 = 0.5 * (exps - 1.0 / exps)
+        exps = exps1 * exps
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        return ((yp[subs] * sinhd1 + yp[subs1] * sinhd2) / sinhs
+                + ((yy[subs] - yp[subs]) * del1 + (yy[subs1] - yp[subs1]) * del2) / dels)
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +330,8 @@ _DZ2013_LAST_DT = _datetime(2012, 9, 14, 0, 0, 0, tzinfo=_tz.utc)
 def _ground_curve(date_str: str, band: str):
     """eis_ea.pro: a four-point spline through the log of the latest ground table."""
     wave, area = _ground_table(band, latest=True)
-    log_area = np.log(area)
-    return lambda wl: np.exp(_idl_interpol_spline(wave, log_area, wl))
+    spline = _IdlInterpolSpline(wave, np.log(area))
+    return lambda wl: np.exp(spline(wl))
 
 
 # The wavelengths eis_ltds.pro corrects, each band's open interval; elsewhere
@@ -327,35 +346,28 @@ def _dz2013_curve(date_str: str, band: str):
     The correction is the ground table over the Del Zanna curve, both put at
     the wavelength by INTERPOL /SPLINE, the curve having been put on the
     table's grid the same way first. Before launch it is 1, and after 14
-    September 2012 the long-wavelength decay is held, as eis_ltds.pro does,
-    each with a warning, as eis_ltds.pro prints one.
+    September 2012 the long-wavelength decay is held, as eis_ltds.pro does;
+    :func:`effective_area` says so, as eis_ltds.pro prints.
     """
     ground = _ground_curve(date_str, band)
     when = _parse_date(date_str)
     if when < _DZ2013_REF_DT:
-        warnings.warn(f"{date_str} is before 22 September 2006, where the dz2013 EIS "
-                      f"calibration begins, so the ground calibration is used, as "
-                      f"eis_ltds.pro does.", UserWarning, stacklevel=5)
         return ground
     grid, table = _ground_table(band)
     if band == "SW":
-        curve = _idl_interpol_spline(_DZ2013_SW_WAVE, _DZ2013_SW_EA, grid)
+        curve = _IdlInterpolSpline(_DZ2013_SW_WAVE, _DZ2013_SW_EA)(grid)
     else:
-        curve = _idl_interpol_spline(_DZ2013_LW_WAVE, _DZ2013_LW_EA, grid)
-        if when > _DZ2013_LAST_DT:
-            warnings.warn(f"{date_str} is after 14 September 2012, the last date the dz2013 "
-                          f"long-wavelength decay is fitted to, so the decay is held there, as "
-                          f"eis_ltds.pro does.", UserWarning, stacklevel=5)
-            when = _DZ2013_LAST_DT
+        curve = _IdlInterpolSpline(_DZ2013_LW_WAVE, _DZ2013_LW_EA)(grid)
+        when = min(when, _DZ2013_LAST_DT)
         curve = np.polyval(_DZ2013_LW_COEFF[::-1], (when - _DZ2013_REF_DT).total_seconds()) * curve
     low, high = _DZ2013_CORRECTED[band]
+    table_spline, curve_spline = _IdlInterpolSpline(grid, table), _IdlInterpolSpline(grid, curve)
 
     def area(wl):
         wl = np.atleast_1d(np.asarray(wl, dtype=float))
         correction = np.ones(wl.shape)
         inside = (wl > low) & (wl < high)
-        correction[inside] = (_idl_interpol_spline(grid, table, wl[inside])
-                              / _idl_interpol_spline(grid, curve, wl[inside]))
+        correction[inside] = table_spline(wl[inside]) / curve_spline(wl[inside])
         return ground(wl) / correction
 
     return area
@@ -429,15 +441,10 @@ def _dz2025_reference(date_str: str, band: str) -> tuple[np.ndarray, np.ndarray]
     year_fr = table["year_fr"]
 
     # The fit covers 2007-2022; outside it the endpoint value is held, as
-    # interpol_eis_ea.pro does, which also says so. Extrapolating a
-    # degradation curve would be worse than saying so.
+    # interpol_eis_ea.pro does, which also says so, as effective_area does.
+    # Extrapolating a degradation curve would be worse than saying so.
     tai = table["tai"]
-    when = Time(_parse_date(date_str)).tai.mjd
-    if not tai[0] <= when <= tai[-1]:
-        warnings.warn(f"{date_str} is outside {table['dates'][0]} to {table['dates'][-1]}, the "
-                      f"dates the dz2025 EIS calibration is fitted to, so the nearer end of the "
-                      f"fit is used, as interpol_eis_ea.pro does.", UserWarning, stacklevel=6)
-    when = np.clip(when, tai[0], tai[-1])
+    when = np.clip(Time(_parse_date(date_str)).tai.mjd, tai[0], tai[-1])
 
     area = np.array([np.interp(when, tai, ref_area[i, :])
                      for i in range(len(ref_wave))])
@@ -447,14 +454,13 @@ def _dz2025_reference(date_str: str, band: str) -> tuple[np.ndarray, np.ndarray]
 def _warren2014_curve(date_str: str, band: str):
     """eis_ea_nrl.pro: IDL's tension spline through the log of the areas at the knots."""
     knots, area = _warren2014_reference(date_str, band)
-    log_area = np.log(area)
-    return lambda wl: np.exp(_idl_tension_spline(knots, log_area, wl))
+    spline = _IdlTensionSpline(knots, np.log(area))
+    return lambda wl: np.exp(spline(wl))
 
 
 def _dz2025_curve(date_str: str, band: str):
     """interpol_eis_ea.pro: a four-point spline through the areas at the fitted wavelengths."""
-    wave, area = _dz2025_reference(date_str, band)
-    return lambda wl: _idl_interpol_spline(wave, area, wl)
+    return _IdlInterpolSpline(*_dz2025_reference(date_str, band))
 
 
 # ---------------------------------------------------------------------------
@@ -490,10 +496,38 @@ def _interpolator(method: str, date_str: str, band: str):
     Cached because ``radiometric.add_telescope_throughput`` evaluates the
     telescope response one wavelength sample at a time, in a Python loop, on
     every Monte Carlo iteration. Rebuilding a 49-point spline per sample would
-    dominate the run time. The cache holds interpolators, not results, so it
-    is exact.
+    dominate the run time. The cache holds interpolators with their splines
+    made, not results, so it is exact. Nothing is said from here, since a
+    cached call would not say it: :func:`effective_area` says what it must.
     """
     return _METHODS[_check_method(method)](date_str, band)
+
+
+@lru_cache(maxsize=256)
+def _beyond_the_fit(method: str, date_str: str) -> tuple:
+    """
+    What the SolarSoft routine prints for a date beyond the dates *method* is fitted to.
+
+    Pairs of the bands it concerns and the message, none for a date within.
+    """
+    if method == "dz2013":
+        when = _parse_date(date_str)
+        if when < _DZ2013_REF_DT:
+            return ((("SW", "LW"), f"{date_str} is before 22 September 2006, where the dz2013 "
+                     f"EIS calibration begins, so the ground calibration is used, as "
+                     f"eis_ltds.pro does."),)
+        if when > _DZ2013_LAST_DT:
+            return ((("LW",), f"{date_str} is after 14 September 2012, the last date the dz2013 "
+                     f"long-wavelength decay is fitted to, so the decay is held there, as "
+                     f"eis_ltds.pro does."),)
+    if method == "dz2025":
+        table = _dz2025_table()
+        when = Time(_parse_date(date_str)).tai.mjd
+        if not table["tai"][0] <= when <= table["tai"][-1]:
+            return ((("SW", "LW"), f"{date_str} is outside {table['dates'][0]} to "
+                     f"{table['dates'][-1]}, the dates the dz2025 EIS calibration is fitted to, "
+                     f"so the nearer end of the fit is used, as interpol_eis_ea.pro does."),)
+    return ()
 
 
 def band_of(wavelength_aa: float) -> str | None:
@@ -546,9 +580,17 @@ def effective_area(wavelengths_aa, date=None, method="ground") -> np.ndarray:
     wavelengths = np.atleast_1d(np.asarray(wavelengths_aa, dtype=np.float64))
     out = np.full(wavelengths.shape, np.nan, dtype=np.float64)
 
+    bands = []
     for band, (low, high) in (("SW", SW_BAND), ("LW", LW_BAND)):
         mask = (wavelengths >= low) & (wavelengths <= high)
         if np.any(mask):
             out[mask] = _interpolator(method, date_str, band)(wavelengths[mask])
+            bands.append(band)
+
+    # Every call says so, once however many bands it spans.
+    if date_str:
+        for concerned, message in _beyond_the_fit(method, date_str):
+            if set(concerned) & set(bands):
+                warnings.warn(message, UserWarning, stacklevel=2)
 
     return out
