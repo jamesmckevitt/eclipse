@@ -617,8 +617,11 @@ def _compute_single_ion(args):
                 # positive, include many weak transitions within a few mA of
                 # strong lines, and a name a little off the observed
                 # wavelength would pick one of those, up to 1e12 times fainter.
+                # An ion with none observed has only its theoretical ones,
+                # which compute_goft_fiasco says.
                 observed = np.asarray(ion.transitions.is_observed[bound])
-                candidates = observed if observed.any() else np.ones_like(observed)
+                any_observed = bool(observed.any())
+                candidates = observed if any_observed else np.ones_like(observed)
                 distance = np.where(candidates, np.abs(bb_wl.to_value(u.AA)
                                                        - np.array([[w] for _, w in lines])),
                                     np.inf)
@@ -646,6 +649,7 @@ def _compute_single_ion(args):
             "ion": stage,
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
+            "observed": any_observed,
             "transition": idx,
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
             # The root this Ion was built against.  fiasco resolves it to the
@@ -675,7 +679,12 @@ def compute_goft_fiasco(
 
     For each line specification (e.g. "Fe12_195.1190"), creates a fiasco Ion,
     computes the contribution function over a (T, n_e) grid, and extracts the
-    transition closest to the requested wavelength.
+    line CHIANTI has observed nearest the requested wavelength, with a warning
+    if that is further from it than the name's digits. CHIANTI's theoretical
+    wavelengths are not matched, since many are weak transitions a few mA from
+    strong lines, except for an ion with no observed wavelengths, which is
+    warned of. The line is placed at CHIANTI's wavelength, ``wl0``, not the
+    name's.
 
     The CHIANTI contribution function is::
 
@@ -824,7 +833,13 @@ def compute_goft_fiasco(
             # Further from the name than the digits it was written to.
             number = line_name.split("_", 1)[1]
             decimals = len(number.partition(".")[2])
-            if info["delta_aa"] > 0.5 * 10.0 ** -decimals:
+            if not info["observed"]:
+                warnings.warn(
+                    f"{line_name}: CHIANTI has no observed wavelengths for this ion, so the "
+                    f"line is the nearest of its theoretical ones, at "
+                    f"{info['matched_wl_aa']:.4f} Angstrom, {info['delta_aa']:.4f} Angstrom "
+                    f"from the name. It is synthesised there.", UserWarning, stacklevel=2)
+            elif info["delta_aa"] > 0.5 * 10.0 ** -decimals:
                 warnings.warn(
                     f"{line_name}: the nearest line CHIANTI has observed for this ion is at "
                     f"{info['matched_wl_aa']:.4f} Angstrom, {info['delta_aa']:.4f} Angstrom "
