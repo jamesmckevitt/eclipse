@@ -65,3 +65,21 @@ def test_the_wavelength_axis_carries_the_grid_it_was_built_on(velocities):
 
     assert np.allclose(cube.axis_world_coords(2)[0].to_value(u.cm), wl_grid.value,
                        rtol=0, atol=1e-13)
+
+
+def test_the_wavelength_step_is_the_grids_one_spacing_not_its_first():
+    """A grid rounded to single precision steps unevenly; its first step would misplace the far end."""
+    wl_grid = _wavelengths(np.linspace(-300, 300, 121) * u.km / u.s)
+    rounded = wl_grid.value.astype(np.float32).astype(float) * u.cm
+    step = (rounded[-1] - rounded[0]).value / (rounded.size - 1)
+    # Off by a part in about 1e3, which over 120 steps is a tenth of a pixel.
+    assert abs(np.diff(rounded.value)[0] - step) > 1e-4 * step
+    reference = create_atmosphere_ndcube(np.zeros((3, 4, 4)) * u.K, voxel_dx=1 * u.Mm,
+                                         voxel_dy=1 * u.Mm, voxel_dz=1 * u.Mm)
+
+    cube = create_line_cube("Fe12_195.1190", _line(rounded, (4, 4)), reference,
+                            INTENSITY_UNIT, "z")
+
+    assert cube.wcs.wcs.cdelt[0] == pytest.approx(step, rel=1e-12)
+    ends = cube.axis_world_coords(2)[0].to_value(u.cm)[[0, -1]]
+    assert ends == pytest.approx(rounded.value[[0, -1]], rel=0, abs=1e-3 * step)

@@ -672,6 +672,13 @@ def check_config_keys(provided, allowed, context: str,
     )
 
 
+# How many units in the last place of single precision an evenly spaced grid
+# may be off by. MURaM's float32 heights lie up to 1.4 of them from even
+# (7 m at 42 Mm), and edges worked out from such centres add the rounding of
+# the arithmetic.
+_SINGLE_PRECISION_ULPS = 4
+
+
 def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     """
     Check that *values* is a finite, increasing, evenly spaced 1D grid.
@@ -689,15 +696,19 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     name : str
         Name to use in the error message.
     rtol : float, optional
-        How far any spacing may differ from the first spacing, relative to
-        the first spacing.  The default admits the rounding in ``np.arange``
-        and ``np.linspace`` without admitting a grid anyone built unevenly on
-        purpose.
+        How far any value may lie from the evenly spaced grid through the
+        first and last, relative to the spacing.  The default admits the
+        rounding in ``np.arange`` and ``np.linspace`` without admitting a
+        grid anyone built unevenly on purpose.  The rounding of a grid
+        computed or stored in single precision, as simulation codes often
+        write theirs, is admitted too, whatever *rtol*, where it is under
+        half a spacing.
 
     Returns
     -------
     float
-        The first spacing, in the units of *values*.
+        The spacing, in the units of *values*: the mean, which single
+        precision rounding of one cell does not skew.
     """
     plain = np.asarray(getattr(values, "value", values), dtype=float)
 
@@ -715,30 +726,60 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
         raise ValueError(f"{name} must be finite, got {plain[first_bad]} "
                          f"at index {first_bad}.")
 
-    diffs = np.diff(plain)
-    step = float(diffs[0])
-
-    if step <= 0.0:
+    if plain[1] <= plain[0] or plain[-1] <= plain[0]:
         raise ValueError(
             f"{name} must increase. Bin edges are built by stepping out from "
-            f"the first spacing, so a decreasing grid produces edges in "
+            f"the first value, so a decreasing grid produces edges in "
             f"descending order and every bin ends up empty."
         )
+    step = float(plain[-1] - plain[0]) / (plain.size - 1)
 
-    uneven = np.flatnonzero(np.abs(diffs - step) > rtol * step)
-    if uneven.size:
-        first_uneven = int(uneven[0])
+    # A value computed and stored in single precision is off by up to a few
+    # units in its last place, which is a part in about 1e7 of the largest
+    # value of the grid, however fine its spacing. Where that reaches half a
+    # spacing, single precision cannot hold the grid: a value that far off
+    # lies in its neighbour's cell. Below it, every value stays in its own
+    # cell and the grid increases throughout.
+    rounding = _SINGLE_PRECISION_ULPS * np.finfo(np.float32).eps * np.abs(plain).max()
+    tolerance = max(rtol * step, rounding if rounding < step / 2 else 0.0)
+    offsets = plain - (plain[0] + np.arange(plain.size) * step)
+    worst = int(np.argmax(np.abs(offsets)))
+    if abs(offsets[worst]) > tolerance:
         raise ValueError(
-            f"{name} must be evenly spaced. The first spacing is {step:.6g}, "
-            f"but the spacing between elements {first_uneven} and "
-            f"{first_uneven + 1} is {diffs[first_uneven]:.6g}. ECLIPSE takes "
-            f"the first spacing and uses it for every bin edge and for the "
-            f"wavelength CDELT, so an uneven grid puts emission in the wrong "
-            f"bins and writes wrong wavelength coordinates. Resample onto a "
-            f"uniform grid first."
+            f"{name} must be evenly spaced. Element {worst} is {plain[worst]:.10g}, "
+            f"{offsets[worst] / step:+.3g} of a spacing ({step:.6g}) from where an evenly "
+            f"spaced grid with the same first and last elements puts it. ECLIPSE uses "
+            f"one spacing for every bin edge and for the wavelength CDELT, so an uneven "
+            f"grid puts emission in the wrong bins and writes wrong wavelength "
+            f"coordinates. Resample onto a uniform grid first."
         )
 
     return step
+
+
+def velocity_grid(vel_res: u.Quantity, vel_lim: u.Quantity,
+                  names: tuple = ("vel_res", "vel_lim")) -> u.Quantity:
+    """
+    Velocity bin centres, *vel_res* apart, out to at least *vel_lim* either way, in cm/s.
+
+    The bins step out from zero in both directions, so that a static plasma
+    sits on the middle of one whatever the two values. Built from -vel_lim
+    instead, a grid whose limit was not a whole number of steps had no bin
+    at zero, and a static line came out Doppler shifted. *names* are what
+    the two are called in the error for a value that is not a positive
+    velocity.
+    """
+    values = []
+    for value, name in zip((vel_res, vel_lim), names):
+        value = u.Quantity(value)
+        if not value.unit.is_equivalent(u.km / u.s) or not np.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a positive velocity, got {value}.")
+        values.append(value.to_value(u.cm / u.s))
+    res, lim = values
+    # Whole steps to reach lim, a step more only when lim is not a whole
+    # number of them, however the division rounds.
+    steps = int(np.ceil(np.round(lim / res, 9)))
+    return np.arange(-steps, steps + 1) * res * (u.cm / u.s)
 
 
 def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
