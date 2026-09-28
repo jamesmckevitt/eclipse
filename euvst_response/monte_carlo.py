@@ -40,6 +40,13 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
     return results
 
 
+def _photons_on_pixels(cube: NDCube, t_exp: u.Quantity, det, tel, sim) -> NDCube:
+    """The photons per pixel *cube*'s radiance gives in *t_exp*, as simulate_once works them out."""
+    photons = add_telescope_throughput(intensity_to_photons(apply_exposure(cube, t_exp)), tel)
+    return photons_to_pixel_counts(photons, det.wvl_res, det.plate_scale_length,
+                                   angle_to_distance(sim.slit_width))
+
+
 def simulate_once(
     I_cube: NDCube,
     t_exp: u.Quantity,
@@ -50,10 +57,11 @@ def simulate_once(
     uniform_mode: bool = False,
     photon_shot_inverse_transform: bool = False,
     dark_current_inverse_transform: bool = False,
+    pinhole_light: Tuple[NDCube, NDCube] | None = None,
 ) -> Tuple[NDCube, ...]:
     """
     Run a single Monte Carlo simulation of the instrument response.
-    
+
     Parameters
     ----------
     I_cube : NDCube
@@ -78,7 +86,13 @@ def simulate_once(
         Use inverse-transform Poisson sampling for dark-current shot noise, so
         that common random numbers survive a change in dark-current level.
         Default False.
-        
+    pinhole_light : tuple of NDCube, optional
+        For a cube that went through the PSF in its rebinning, with pinholes:
+        the same scene rebinned with each weight of
+        :func:`~euvst_response.pinhole_diffraction.pinhole_light_weights`,
+        which give the pinholes' light that stays in the image and that is
+        diffracted, at each photon's own wavelength.
+
     Returns
     -------
     tuple of NDCube
@@ -99,22 +113,40 @@ def simulate_once(
     # Convert to pixel counts
     photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
 
-    # Apply focusing optics PSF (primary mirror + diffraction grating)
+    # Apply focusing optics PSF (primary mirror + diffraction grating), unless
+    # the cube was laid onto the pixels through it (rebin_atmosphere with a
+    # telescope), which is exact where blurring the pixels is not.
     def focus(cube):
         return apply_focusing_optics_psf(
             cube, tel, det, sim, convolve_spatial=not uniform_mode,
             boundary=getattr(sim, "psf_boundary", "replicate"),
         )
 
-    photons_focused = focus(photons_pixels) if sim.psf else photons_pixels
+    through_psf = sim.psf and (I_cube.meta or {}).get("psf_applied", False)
+    blur_here = sim.psf and not through_psf
+    photons_focused = focus(photons_pixels) if blur_here else photons_pixels
 
     # Apply EUV pinhole diffraction effects (after focusing optics, if enabled).
     # The filter's share of each wavelength is known before the blur mixes
-    # them, so the pinholes' light is worked out from there and blurred alike.
+    # them, so the pinholes' light is worked out from there and blurred alike:
+    # here, or where the cube went through the PSF, in its rebinning.
     if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
-        photons_euv_pinholes = apply_euv_pinhole_diffraction(
-            photons_focused, det, sim, tel,
-            **({"unfocused": photons_pixels, "focus": focus} if sim.psf else {}))
+        if pinhole_light is not None:
+            staying, diffracting = (
+                _photons_on_pixels(cube, t_exp, det, tel, sim).data for cube in pinhole_light)
+            shares = {"staying": staying, "diffracting": diffracting}
+        elif through_psf:
+            raise ValueError(
+                "This cube went through the PSF in its rebinning, which mixed the wavelengths "
+                "the filter passes in different shares, so the pinholes' light has to be worked "
+                "out there too: pass pinhole_light, the cubes rebin_atmosphere or rebin_spectra "
+                "give with each weight of pinhole_diffraction.pinhole_light_weights.")
+        elif blur_here:
+            shares = {"unfocused": photons_pixels, "focus": focus}
+        else:
+            shares = {}
+        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel,
+                                                             **shares)
     else:
         photons_euv_pinholes = photons_focused
 
@@ -156,12 +188,28 @@ def simulate_once(
             electrons_pinholes, dn)
 
 
+def _own_stream(rank: int) -> None:
+    """
+    Give this MPI rank draws of its own, from the state NumPy's generator is in and the rank.
+
+    Seeded alike on every rank, as the docs' recipe for comparing runs does,
+    the ranks would repeat one another's iterations, and the spread would
+    come out narrower by the square root of their number. The state each rank
+    starts from is combined with its rank, so a run repeats with the same
+    seed and number of ranks.
+    """
+    entropy = int(np.random.randint(0, 2**31 - 1))
+    np.random.seed(np.random.SeedSequence([entropy, rank]).generate_state(8))
+
+
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
                 fit_config=None, offchip_bin_slit: int = 1,
                 fit_signals: str = "both", uniform_mode: bool = False,
                 *,
                 photon_shot_inverse_transform: bool = False,
-                dark_current_inverse_transform: bool = False) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
+                dark_current_inverse_transform: bool = False,
+                pinhole_light: Tuple[NDCube, NDCube] | None = None,
+                ) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
     """
     Run Monte Carlo simulations and fit results.
     
@@ -203,7 +251,10 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         Use inverse-transform Poisson sampling for dark-current shot noise, so
         that common random numbers survive a change in dark-current level.
         Default False.
-        
+    pinhole_light : tuple of NDCube, optional
+        As for :func:`simulate_once`: with pinholes, for a cube that went
+        through the PSF in its rebinning.
+
     Returns
     -------
     tuple
@@ -224,6 +275,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
     if world_size > 1:
+        _own_stream(rank)
         base, remainder = divmod(n_iter, world_size)
         local_n_iter = base + (1 if rank < remainder else 0)
         if rank == 0:
@@ -249,6 +301,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
                 dark_current_inverse_transform=dark_current_inverse_transform,
+                pinhole_light=pinhole_light,
             )
 
             if i == 0 and rank == 0:
@@ -330,6 +383,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
                 dark_current_inverse_transform=dark_current_inverse_transform,
+                pinhole_light=pinhole_light,
             )
 
             # Store first iteration signals only on rank 0 (binned, to match fit shapes)

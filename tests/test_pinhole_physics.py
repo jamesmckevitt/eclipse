@@ -291,3 +291,102 @@ def test_windows_of_the_same_numbers_in_other_shapes_are_each_their_own():
     fresh = apply_euv_pinhole_diffraction(_window(120, 1, 61, 1000.0), det, sim, tel)
     assert second.data.shape == (120, 1, 61)
     assert np.array_equal(second.data, fresh.data)
+
+
+def _scene_of_one_wavelength(wavelength_index, n_fine=301):
+    """A synthesis cube with light at one of its fine wavelengths only, in every cell."""
+    rest = 195.119 * u.AA
+    data = np.zeros((8, 24, n_fine))
+    data[..., wavelength_index] = 1e13
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
+    wcs.wcs.cunit = ["Angstrom", "Mm", "Mm"]
+    wcs.wcs.crpix = [(n_fine + 1) / 2, 12.5, 4.5]
+    wcs.wcs.crval = [rest.to_value(u.AA), 0.0, 0.0]
+    wcs.wcs.cdelt = [0.00169, 0.0725, 0.0725]
+    return NDCube(data, wcs=wcs, unit=u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                  meta={"rest_wav": rest})
+
+
+@pytest.mark.parametrize("wavelength_index", [150, 163])
+def test_the_pinholes_light_through_the_psf_is_weighed_at_its_own_wavelength(wavelength_index):
+    """
+    Light of one wavelength, over however many pixels the PSF spreads it, is weighed at that wavelength.
+
+    Weighed at each pixel's wavelength instead, as when the pinholes' light
+    was worked out from the blurred pixels, it would vary across them.
+    """
+    from euvst_response.data_processing import rebin_atmosphere
+    from euvst_response.pinhole_diffraction import pinhole_light_weights
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=True)
+    scene = _scene_of_one_wavelength(wavelength_index)
+    own = scene.axis_world_coords(2)[0][wavelength_index]
+    observed = rebin_atmosphere(scene, det, sim, tel=tel)
+    assert np.count_nonzero(observed.data[4, 3] > 1e-6 * observed.data.max()) > 3
+    for weight in pinhole_light_weights(tel):
+        weighed = rebin_atmosphere(scene, det, sim, tel=tel, weight=weight)
+        assert weighed.data == pytest.approx(float(weight(own)) * observed.data, rel=1e-12,
+                                             abs=0)
+        at_pixels = weight(observed.axis_world_coords(2)[0])
+        assert np.ptp(at_pixels) > 0
+
+
+def test_a_cube_through_the_psf_needs_its_pinholes_light_worked_out_with_it():
+    from euvst_response.data_processing import rebin_atmosphere
+    from euvst_response.monte_carlo import simulate_once
+    from euvst_response.pinhole_diffraction import pinhole_light_weights
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=True, noise=False,
+                     enable_pinholes=True, pinhole_sizes=[50 * u.um], pinhole_positions=[0.5])
+    scene = _scene_of_one_wavelength(150)
+    observed = rebin_atmosphere(scene, det, sim, tel=tel)
+    with pytest.raises(ValueError, match="pass pinhole_light"):
+        simulate_once(observed, 1 * u.s, det, tel, sim)
+    light = tuple(rebin_atmosphere(scene, det, sim, tel=tel, weight=weight)
+                  for weight in pinhole_light_weights(tel))
+    steps = simulate_once(observed, 1 * u.s, det, tel, sim, pinhole_light=light)
+    focused, arrived = steps[4].data, steps[5].data
+    # The pinholes add 1 - T of the light through them: some, and not more
+    # than the image would have had without the filter.
+    assert 0 < (arrived - focused).sum() < focused.sum() / (
+        np.abs(tel.filter.amplitude_transmission(195.119 * u.AA)) ** 2)
+
+
+def test_a_run_with_the_psf_and_pinholes_lays_their_light_on_with_the_scene(tmp_path, monkeypatch):
+    import importlib
+    import sys
+
+    import yaml
+
+    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+
+    edges = np.arange(9) * 0.3 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-60, 61) * 0.003 * u.AA
+    profile = np.exp(-0.5 * ((wavelength - 195.119 * u.AA) / (0.03 * u.AA)).decompose() ** 2)
+    line = SpectralLine(intensity=np.ones((8, 8, 1)) * profile.value * 1e13
+                        * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    (tmp_path / "run.yaml").write_text(yaml.safe_dump({
+        "instrument": "SWC", "n_iter": 1, "ncpu": 1, "synthesis_file": str(tmp_path / "file.h5"),
+        "pinhole_sizes": ["50 um"], "pinhole_positions": [0.5],
+        "simulation": {"expos": "5 s", "slit_width": "0.4 arcsec", "psf": True,
+                       "enable_pinholes": True}}))
+    main_module = importlib.import_module("euvst_response.main")
+    passed = []
+    real = main_module.monte_carlo
+
+    def recording(cube, *args, **kwargs):
+        passed.append(kwargs.get("pinhole_light"))
+        return real(cube, *args, **kwargs)
+
+    monkeypatch.setattr(main_module, "monte_carlo", recording)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(tmp_path / "run.yaml")])
+    main_module.main()
+    assert len(passed) == 1 and len(passed[0]) == 2
+    assert all(cube.meta["psf_applied"] for cube in passed[0])

@@ -4,6 +4,7 @@ Command line interface for ECLIPSE.
 
 from __future__ import annotations
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -100,8 +101,26 @@ def main():
         print("\nSimulation interrupted by user.")
         sys.exit(1)
     except Exception as e:
-        print(f"Error during simulation: {e}")
-        sys.exit(1)
+        _fail(f"Error during simulation: {e}")
+
+
+def _fail(message: str) -> None:
+    """
+    Say *message* and end the run, every MPI rank of it.
+
+    A rank other than the first has its output silenced, so its message goes
+    to the stderr it started with, and an MPI run is aborted, since the other
+    ranks would otherwise wait for this one until the job's time runs out.
+    """
+    from .main import _STARTING_STDERR
+    from .utils import _get_mpi_info
+
+    comm, rank, size = _get_mpi_info()
+    if size > 1:
+        os.write(_STARTING_STDERR or 2, f"MPI rank {rank}: {message}\n".encode())
+        comm.Abort(1)
+    print(message)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

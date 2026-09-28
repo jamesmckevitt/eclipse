@@ -481,6 +481,31 @@ def _spread(sources: np.ndarray, kernel_of_column) -> np.ndarray:
 _LAST_ADDED: dict = {}
 
 
+def pinhole_light_weights(tel) -> tuple:
+    """
+    What a pinhole adds, per photon the filter passes, at each wavelength.
+
+    Two functions of wavelength: the light that stays in the image,
+    2 Re[conj(t) (1 - t)] / T, and the light that is diffracted,
+    |1 - t|^2 / T, with t the filter's amplitude transmission and T = |t|^2.
+    Given as ``weight`` to :func:`~euvst_response.data_processing.rebin_atmosphere`
+    or :func:`~euvst_response.data_processing.rebin_spectra`, they weigh the
+    light at its own wavelength before the PSF mixes wavelengths the filter
+    passes in different shares.
+    """
+    def share(part):
+        def weight(wavelength):
+            t = np.asarray(tel.filter.amplitude_transmission(u.Quantity(wavelength)),
+                           dtype=complex)
+            throughput = np.abs(t) ** 2
+            return np.divide(part(t), throughput, out=np.zeros(throughput.shape),
+                             where=throughput > 0)
+        return weight
+
+    return (share(lambda t: 2 * np.real(np.conj(t) * (1 - t))),
+            share(lambda t: np.abs(1 - t) ** 2))
+
+
 def apply_euv_pinhole_diffraction(
     photon_counts: NDCube,
     det,
@@ -489,6 +514,8 @@ def apply_euv_pinhole_diffraction(
     *,
     unfocused: NDCube | None = None,
     focus=None,
+    staying: np.ndarray | None = None,
+    diffracting: np.ndarray | None = None,
 ) -> NDCube:
     """
     Add the EUV light the filter's pinholes let through.
@@ -510,9 +537,11 @@ def apply_euv_pinhole_diffraction(
     so the light without the filter, and the shares of it that stay and are
     diffracted, are worked out from the photons before the blur, where each
     column holds its own wavelength, and then blurred by *focus* as the image
-    is. The Airy pattern the diffracted light spreads into is taken at the
-    wavelength of the pixel it was heading for, which the light in it
-    differs from by the width of the spectral blur, a part in some 1e4.
+    is, or come as *staying* and *diffracting*, where the blur was in the
+    rebinning (:func:`pinhole_light_weights`). The Airy pattern the
+    diffracted light spreads into is taken at the wavelength of the pixel it
+    was heading for, which the light in it differs from by the width of the
+    spectral blur, a part in some 1e4.
 
     Parameters
     ----------
@@ -531,6 +560,13 @@ def apply_euv_pinhole_diffraction(
     focus : callable, optional
         The blur of the focusing optics, taking a cube like *unfocused* to
         one like *photon_counts*.
+    staying, diffracting : np.ndarray, optional
+        The photons per pixel, as the focusing optics leave them, of the
+        light each pixel's pinholes add that stays and that is diffracted,
+        before the share of the hole's area in each: the photons after the
+        filter, weighted at their own wavelengths by
+        :func:`pinhole_light_weights` before the blur. In place of
+        *unfocused* and *focus*.
 
     Returns
     -------
@@ -543,15 +579,16 @@ def apply_euv_pinhole_diffraction(
     if (unfocused is None) != (focus is None):
         raise ValueError("unfocused and focus go together: the photons before the focusing "
                          "optics' blur, and the blur.")
+    given = staying is not None or diffracting is not None
+    if given and (staying is None or diffracting is None or unfocused is not None):
+        raise ValueError("staying and diffracting go together, in place of unfocused and focus.")
     source = photon_counts if unfocused is None else unfocused
-    if source.data.shape != photon_counts.data.shape:
-        raise ValueError(f"The photons before the blur are {source.data.shape}, and after it "
-                         f"{photon_counts.data.shape}.")
+    for light in (source.data, staying, diffracting):
+        if light is not None and np.shape(light) != photon_counts.data.shape:
+            raise ValueError(f"The pinholes' light is {np.shape(light)}, and the photons "
+                             f"{photon_counts.data.shape}.")
     n_slit, n_scan, n_spectral = photon_counts.data.shape
-    wavelength = source.axis_world_coords(2)[0].to(u.m)
-    transmission = np.asarray(tel.filter.amplitude_transmission(wavelength), dtype=complex)
-    stays = 2 * np.real(np.conj(transmission) * (1 - transmission))
-    diffracted = np.abs(1 - transmission) ** 2
+    wavelength = photon_counts.axis_world_coords(2)[0].to(u.m)
 
     pixel = (det.pix_size * u.pix).to_value(u.m)
     distance = det.filter_distance.to_value(u.m)
@@ -566,23 +603,28 @@ def apply_euv_pinhole_diffraction(
 
     # The light is the same in every Monte Carlo iteration, which works it out
     # again before its noise is drawn, so the last answer is kept.
-    digest = hashlib.blake2b(np.ascontiguousarray(source.data).tobytes(), digest_size=16)
-    digest.update(repr((source.data.shape, focus is not None)).encode())
+    shares = pinhole_light_weights(tel)
+    digest = hashlib.blake2b(digest_size=16)
+    for light in ((staying, diffracting) if given else (source.data,)):
+        digest.update(np.ascontiguousarray(light, dtype=float).tobytes())
+    digest.update(repr((photon_counts.data.shape, given, focus is not None)).encode())
     digest.update(np.ascontiguousarray(wavelength.value).tobytes())
-    digest.update(transmission.tobytes())
+    if not given:
+        digest.update(np.ascontiguousarray([share(wavelength) for share in shares]).tobytes())
     digest.update(repr((pinholes, pixel, distance, footprint)).encode())
     key = digest.hexdigest()
     if key not in _LAST_ADDED:
-        # The light each pixel would have had without the filter, and the
-        # shares of it that stay and are diffracted, at its own wavelength,
-        # then as the focusing optics leave it.
-        unfiltered = source.data / (np.abs(transmission) ** 2)
-        staying, diffracting = unfiltered * stays, unfiltered * diffracted
-        if focus is not None:
-            staying, diffracting = (np.asarray(focus(NDCube(light, wcs=source.wcs,
-                                                            unit=source.unit,
-                                                            meta=source.meta)).data)
-                                    for light in (staying, diffracting))
+        if given:
+            staying, diffracting = np.asarray(staying, float), np.asarray(diffracting, float)
+        else:
+            # The shares of the light that stay and are diffracted, at its own
+            # wavelength, then as the focusing optics leave it.
+            staying, diffracting = (source.data * share(wavelength) for share in shares)
+            if focus is not None:
+                staying, diffracting = (np.asarray(focus(NDCube(light, wcs=source.wcs,
+                                                                unit=source.unit,
+                                                                meta=source.meta)).data)
+                                        for light in (staying, diffracting))
         added = np.zeros(photon_counts.data.shape)
         for radius, along_slit, along_spectral in pinholes:
             centre = pinhole_centre(along_slit, along_spectral, n_slit, n_spectral)
