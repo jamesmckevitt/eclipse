@@ -284,12 +284,10 @@ synthesise-spectra --help
 Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 
 - `Fe` - element symbol, capitalised as usual (`Fe`, `Si`, `S`, `O`).
-- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so
-  `Fe12` is Fe XII, not Fe XI or Fe XIII.
+- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so `Fe12` is Fe XII, not Fe XI or Fe XIII.
 - `195.1190` - rest wavelength in Angstrom.
 
-The same names are used by `--lines`, by the `reference_line` key in the
-instrument configuration, and as the keys of `line_cubes` in the output file.
+The same names are used by `--lines`, by the `reference_line` key in the instrument configuration, and as the keys of `line_cubes` in the output file.
 
 ECLIPSE takes the line of that ion whose wavelength in CHIANTI, written to as many decimals as the name gives, is the name's wavelength, so `Fe12_195.119` and `Fe12_195.12` both name Fe XII 195.119. Lines CHIANTI has only a theoretical wavelength for are named the same way, at that wavelength. Where an observed and a theoretical line are both at the name's wavelength, the observed one is taken, and of several transitions at one wavelength, the brightest. The line is synthesised at CHIANTI's wavelength, whatever the digits of the name.
 
