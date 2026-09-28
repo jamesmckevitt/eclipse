@@ -18,8 +18,9 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
                               pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
-from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
-                             synthesis_line_names)
+from .atmosphere import _is_pickle, _move_older_pickle_aside
+from .synthesis_file import (_synthesis_to_read, is_synthesis_file, read_synthesis,
+                             read_synthesis_products, synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import monte_carlo
@@ -583,6 +584,10 @@ def main() -> None:
                               f"{DEFAULT_SYNTHESIS_FILE}, where the synthesis now writes. "
                               f"Name the one to observe with 'synthesis_file'.",
                               UserWarning, stacklevel=2)
+        # A configuration written for an older version names the pickle its
+        # synthesis wrote, where the synthesis now writes an .h5. A pickle is
+        # read by load_atmosphere, which says if a later synthesis is beside it.
+        synthesis_file = str(_synthesis_to_read(synthesis_file, mention_newer=False))
         if not Path(synthesis_file).is_file():
             raise FileNotFoundError(
                 f"Synthesis file not found: {synthesis_file}. "
@@ -591,11 +596,18 @@ def main() -> None:
         synthesis_is_hdf5 = is_synthesis_file(synthesis_file)
         if synthesis_is_hdf5:
             reference_line = _reference_line(config, synthesis_file)
+        elif not _is_pickle(Path(synthesis_file)):
+            raise ValueError(
+                f"{synthesis_file} is neither a synthesis file, which is HDF5, nor a synthesis "
+                f"pickle as older versions of ECLIPSE wrote. A synthesis from another code is "
+                f"written as a synthesis file with euvst_response.write_synthesis.")
         else:
             warnings.warn(
                 f"{synthesis_file} is a synthesis pickle, as older versions of ECLIPSE "
                 f"wrote them. Pickles are deprecated and will not be read in a future "
-                f"release: re-run the synthesis, or convert the file with "
+                f"release: re-run the synthesis, which now writes "
+                f"{Path(synthesis_file).with_suffix('.h5').name}, and name that in "
+                f"'synthesis_file', or convert the file with "
                 f"euvst_response.convert_synthesis_pickle.", FutureWarning, stacklevel=2)
             reference_line = config.get("reference_line", DEFAULT_REFERENCE_LINE)
 
@@ -1200,14 +1212,7 @@ def main() -> None:
         # A rerun replaced the pickle of the same name when results were
         # pickles, so one left from an older version is moved aside rather
         # than read in place of these results.
-        stale = output_file.with_suffix(".pkl")
-        if stale.is_file():
-            try:
-                os.replace(stale, stale.with_name(stale.name + ".old"))
-                print(f"Moved {stale}, from an older version, to {stale.name}.old")
-            except OSError as error:
-                print(f"Could not move {stale}, from an older version, aside ({error}); "
-                      f"the results are {output_file}, not it")
+        _move_older_pickle_aside(Path(output_file), "the results")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
 

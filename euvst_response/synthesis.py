@@ -19,8 +19,8 @@ from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
                     velocity_centers_to_edges, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
-from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
-                         require_mass_per_electron)
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _move_older_pickle_aside,
+                         mass_per_electron, read_atmosphere, require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -2103,6 +2103,11 @@ def main(args=None) -> None:
                          time=(atmosphere_metadata or {}).get("time"))
 
     print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
+    if not write_pickle:
+        # Configurations written for older versions name the pickle their
+        # synthesis wrote, so one left from an older version is moved aside
+        # rather than observed in place of this synthesis.
+        _move_older_pickle_aside(output_file, "the synthesis")
     print("Synthesis complete!")
 
 if __name__ == "__main__":

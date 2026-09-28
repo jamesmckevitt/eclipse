@@ -334,7 +334,7 @@ print(f"Settings: {data['config']}")
 
 ??? note "Synthesis files from ECLIPSE 0.11.0 and earlier"
 
-    Older versions wrote the synthesis as a pickle. The instrument run still reads one, and `synthesise-spectra` still writes one for an `--output-name` ending in `.pkl`, with a warning, until a future release stops both. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
+    Older versions wrote the synthesis as a pickle. The instrument run still reads one, and `synthesise-spectra` still writes one for an `--output-name` ending in `.pkl`, with a warning, until a future release stops both. A synthesis written as `.h5` renames a pickle of the same name left beside it to `.pkl.old`, and a configuration or script that names the pickle then reads the `.h5`, with a warning. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites one as a synthesis file, keeping everything it held.
 
 ??? note "Reading MURaM's own files (deprecated)"
 

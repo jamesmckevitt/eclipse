@@ -38,7 +38,10 @@ the line of sight may be stretched, since it is integrated out cell by cell.
 from __future__ import annotations
 
 import argparse
+import os
+import secrets
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -411,6 +414,78 @@ def require_mass_per_electron(value) -> float:
 # ----------------------------------------------------------------------
 # HDF5
 # ----------------------------------------------------------------------
+def _new_partial(path: Path) -> Path:
+    """
+    An empty file beside *path* to write it in, of a name no other save has.
+
+    Made as any file is, so that the umask and the directory's default
+    permissions apply to it and so to *path*, as colleagues sharing a
+    project directory expect.
+    """
+    while True:
+        suffix = f".{secrets.token_hex(4)}.part"
+        # Within the 255 bytes most filesystems allow a name, however long *path*'s is.
+        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
+        partial = path.with_name(stem + suffix)
+        try:
+            os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+        except FileExistsError:
+            continue
+        return partial
+
+
+@contextmanager
+def _replacing(path: Path):
+    """
+    A new file beside *path* to write, which takes *path*'s place once written.
+
+    A write that is cut short, by an error, a full disk or the job being
+    killed, leaves the file already at *path* as it was, rather than a
+    partial file under its name.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Through a link to the file it names, as writing to the link would.
+    destination = Path(os.path.realpath(path)) if path.is_symlink() else path
+    partial = _new_partial(destination)
+    try:
+        yield partial
+        os.replace(partial, destination)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+
+
+def _move_older_pickle_aside(written: Path, what: str) -> None:
+    """
+    Move the pickle an older version wrote where *written* now is out of the way.
+
+    Configurations and scripts written for older versions name the pickle,
+    so one left beside the new file would be read in its place. It goes to
+    ``<name>.old``, or ``<name>.old.1`` and so on if that is taken, so that
+    no earlier file is lost.
+    """
+    stale = written.with_suffix(".pkl")
+    if not stale.is_file():
+        return
+    aside = stale.with_name(stale.name + ".old")
+    number = 0
+    while aside.exists():
+        number += 1
+        aside = stale.with_name(f"{stale.name}.old.{number}")
+    try:
+        os.replace(stale, aside)
+        print(f"Moved {stale}, {what} from an older version, to {aside.name}")
+    except OSError as error:
+        print(f"Could not move {stale}, {what} from an older version, aside ({error}); "
+              f"the new one is {written}, not it")
+
+
+def _is_pickle(path: Path) -> bool:
+    """Whether *path* starts as the pickles ECLIPSE wrote do, with dill's protocol marker."""
+    with open(path, "rb") as handle:
+        return handle.read(1) == b"\x80"
+
+
 def write_atmosphere(atmosphere: Atmosphere, path: str | Path,
                      compression: Optional[str] = None) -> Path:
     """
@@ -426,8 +501,7 @@ def write_atmosphere(atmosphere: Atmosphere, path: str | Path,
         writes them uncompressed, which reads fastest.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "w") as f:
+    with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FORMAT_NAME
         f.attrs["version"] = FORMAT_VERSION
         f.attrs["source"] = atmosphere.source

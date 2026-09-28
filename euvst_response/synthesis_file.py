@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import numbers
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
@@ -60,7 +61,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 
-from .atmosphere import _check_format, _read_dataset, _write_dataset
+from .atmosphere import _check_format, _is_pickle, _read_dataset, _replacing, _write_dataset
 from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
@@ -415,6 +416,44 @@ def is_synthesis_file(path: str | Path) -> bool:
     return h5py.is_hdf5(str(path))
 
 
+# The names older versions gave the synthesis pickle.
+_PICKLE_SUFFIXES = (".pkl", ".pickle", ".dill")
+
+
+def _synthesis_to_read(path: str | Path, *, stacklevel: int = 2,
+                       mention_newer: bool = True) -> Path:
+    """
+    The file to read for a synthesis named *path*.
+
+    Older versions wrote the synthesis as a pickle, and configurations and
+    scripts written for them name it. A pickle name that does not exist
+    reads the ``.h5`` the synthesis now writes in its place, with a warning,
+    and says what to run if that is missing too. A pickle that exists is
+    read as named, with a warning, unless *mention_newer* is False, if a
+    later synthesis is beside it.
+    """
+    path = Path(path).expanduser()
+    if path.suffix.lower() not in _PICKLE_SUFFIXES:
+        return path
+    written = path.with_suffix(".h5")
+    if not path.exists():
+        if written.is_file():
+            warnings.warn(f"{path} does not exist, so {written}, which synthesise-spectra now "
+                          f"writes in its place, is read instead. Name the .h5 file to read it "
+                          f"without this warning.", FutureWarning, stacklevel=stacklevel + 1)
+            return written
+        raise FileNotFoundError(
+            f"Synthesis file not found: {path}. synthesise-spectra now writes an HDF5 "
+            f"synthesis file rather than a pickle, {written.name} for this name, so name that "
+            f"file once the synthesis has run.")
+    if mention_newer and written.is_file() and written.stat().st_mtime > path.stat().st_mtime:
+        warnings.warn(f"{written}, beside {path}, is newer: it is the output of a later "
+                      f"synthesis, which now writes HDF5. {path} is read as named; name the .h5 "
+                      f"file to read the later synthesis.", UserWarning,
+                      stacklevel=stacklevel + 1)
+    return path
+
+
 def synthesis_line_names(path: str | Path) -> list:
     """The names of the lines in a synthesis file, in its order, without reading their spectra."""
     path = Path(path)
@@ -445,8 +484,7 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
         None writes them uncompressed, which reads fastest.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "w") as f:
+    with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FORMAT_NAME
         f.attrs["version"] = FORMAT_VERSION
         f.attrs["source"] = synthesis.source

@@ -515,6 +515,87 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
     assert not any(issubclass(warning.category, FutureWarning) for warning in seen)
 
 
+def test_a_configuration_naming_the_pickle_observes_the_file_written_in_its_place(
+        tmp_path, monkeypatch):
+    """Older versions' documentation had configurations name the pickle the synthesis wrote."""
+    write_line_cubes(_line_cubes(), tmp_path / "synthesis.h5")
+    with pytest.warns(FutureWarning, match="synthesis.h5, which synthesise-spectra now writes"):
+        by_old_name = _run(tmp_path, monkeypatch, "old_name", reference_line=LINE,
+                           synthesis_file=str(tmp_path / "synthesis.pkl"))
+    by_new_name = _run(tmp_path, monkeypatch, "new_name", reference_line=LINE,
+                       synthesis_file=str(tmp_path / "synthesis.h5"))
+    for key, expected in by_new_name["cube_reb_dict"].items():
+        assert np.array_equal(by_old_name["cube_reb_dict"][key].data, expected.data)
+
+    # With neither, the error says what the synthesis writes now.
+    with pytest.raises(FileNotFoundError, match="rather than a pickle, gone.h5 for this name"):
+        _run(tmp_path, monkeypatch, "gone", reference_line=LINE,
+             synthesis_file=str(tmp_path / "gone.pkl"))
+
+
+def test_a_new_synthesis_moves_an_older_pickle_of_its_name_aside(tmp_path, monkeypatch):
+    """Else a configuration naming the pickle would observe it rather than the new synthesis."""
+    from euvst_response import synthesis
+
+    monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
+    atmosphere = write_atmosphere(Atmosphere(
+        temperature=np.full((2, 2, 2), 1e6) * u.K,
+        electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
+        velocity_z=np.zeros((2, 2, 2)) * u.km / u.s, x_edges=np.arange(3) * u.Mm,
+        y_edges=np.arange(3) * u.Mm, z_edges=np.arange(3) * u.Mm), tmp_path / "box.h5")
+    for name in ("spectra.pkl", "spectra.h5") * 2:
+        monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", str(atmosphere),
+                                          "--lines", LINE, "--output-dir", str(tmp_path),
+                                          "--output-name", name])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            synthesis.main()
+    # Neither older pickle is lost.
+    assert not (tmp_path / "spectra.pkl").exists()
+    for aside in ("spectra.pkl.old", "spectra.pkl.old.1"):
+        with open(tmp_path / aside, "rb") as f:
+            assert LINE in dill.load(f)["line_cubes"]
+
+
+def test_load_atmosphere_given_the_pickle_name_reads_the_file_written_in_its_place(tmp_path):
+    from euvst_response.data_processing import load_atmosphere
+
+    write_line_cubes(_line_cubes(), tmp_path / "synthesis.h5")
+    with pytest.warns(FutureWarning, match="is read instead"):
+        got, _ = load_atmosphere(tmp_path / "synthesis.pkl", LINE)
+    expected, _ = load_atmosphere(tmp_path / "synthesis.h5", LINE)
+    assert np.array_equal(got.data, expected.data)
+
+
+def test_a_file_that_is_neither_a_synthesis_file_nor_a_pickle_is_called_neither(
+        tmp_path, monkeypatch):
+    from euvst_response.data_processing import load_atmosphere
+
+    (tmp_path / "spectra.fits").write_bytes(b"SIMPLE  =                    T")
+    with pytest.raises(ValueError, match="neither a synthesis file"):
+        _run(tmp_path, monkeypatch, "fits", reference_line=LINE,
+             synthesis_file=str(tmp_path / "spectra.fits"))
+    with pytest.raises(ValueError, match="neither a synthesis file"):
+        load_atmosphere(tmp_path / "spectra.fits", LINE)
+
+
+def test_a_write_cut_short_leaves_the_file_that_was_there(tmp_path, monkeypatch):
+    """As when a job is killed or the disk fills while the synthesis is written."""
+    import euvst_response.synthesis_file as synthesis_file
+
+    path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
+    before = path.read_bytes()
+
+    def disk_full(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(synthesis_file, "_write_dataset", disk_full)
+    with pytest.raises(OSError, match="No space left"):
+        write_synthesis(_synthesis(), path)
+    assert path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["spectra.h5"]
+
+
 # ----------------------------------------------------------------------
 # Onto the detector
 # ----------------------------------------------------------------------

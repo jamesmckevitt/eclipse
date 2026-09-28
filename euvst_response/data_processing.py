@@ -38,11 +38,19 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     tuple
         (summed_cube, dynamic_mode_info) where:
         - summed_cube: NDCube with summed line intensities
-        - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
-    """
-    from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
-                                 synthesis_line_names)
+        - dynamic_mode_info: dict with dynamic mode metadata, {"enabled": False}
+          for a static synthesis
 
+    A pickle name that does not exist, as a script written for an older
+    version gives, reads the .h5 the synthesis now writes in its place.
+    """
+    from .atmosphere import _is_pickle
+    from .synthesis_file import (_synthesis_to_read, is_synthesis_file, read_synthesis,
+                                 read_synthesis_products, synthesis_line_names)
+
+    pkl_file = _synthesis_to_read(pkl_file)
+    if not pkl_file.is_file():
+        raise FileNotFoundError(f"Synthesis file not found: {pkl_file}.")
     if is_synthesis_file(pkl_file):
         names = synthesis_line_names(pkl_file)
         if metadata_line is None and names:
@@ -56,6 +64,11 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
             "dynamic_mode", {"enabled": False})
         return (synthesis.summed_cube(metadata_line, meta={"dynamic_mode": dynamic_mode_info}),
                 dynamic_mode_info)
+
+    if not _is_pickle(pkl_file):
+        raise ValueError(
+            f"{pkl_file} is neither a synthesis file, which is HDF5, nor a synthesis pickle "
+            f"as older versions of ECLIPSE wrote.")
 
     with open(pkl_file, "rb") as f:
         tmp = dill.load(f)

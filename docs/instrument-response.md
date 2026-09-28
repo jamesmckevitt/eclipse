@@ -72,7 +72,7 @@ There is one exception: `telescope.psf_params` is itself a list-valued parameter
 **Top-level keys**:
 
 - `instrument`: `SWC` (EUVST Short Wavelength) or `EIS` (Hinode/EIS)
-- `synthesis_file`: the synthesis file to observe, from ECLIPSE's own synthesis or [another code](other-codes.md) (default `./run/input/synthesised_spectra.h5`). Pickles written by ECLIPSE 0.11.0 and earlier are still read, with a warning
+- `synthesis_file`: the synthesis file to observe, from ECLIPSE's own synthesis or [another code](other-codes.md) (default `./run/input/synthesised_spectra.h5`). Pickles written by ECLIPSE 0.11.0 and earlier are still read, with a warning. A configuration from an older version that names the pickle its synthesis wrote, such as `./run/input/synthesised_spectra.pkl`, reads the `.h5` a new synthesis writes in its place, with a warning.
 - `reference_line`: spectral line used as the wavelength-grid reference (default: the file's only line if it has one, otherwise `Fe12_195.1190`, which is always the default for a pickle). All lines in the synthesis file are added onto this line's wavelength grid, each keeping its flux, so this key effectively selects which spectral window is simulated, and any blends falling in that window are included. Run once per window. Line names follow the [usual convention](synthesis.md#naming-spectral-lines).
 - `n_iter`: number of Monte Carlo iterations
 - `ncpu`: CPU cores to use (`-1` = all available)

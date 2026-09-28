@@ -932,7 +932,7 @@ def test_what_save_results_is_given_is_checked_first(tmp_path, monkeypatch):
 def test_another_save_of_the_same_name_is_left_alone(tmp_path, monkeypatch):
     """Two runs saving one name at once write their own partial files, even if they draw the same name."""
     draws = iter(["aaaa", "bbbb"])
-    monkeypatch.setattr(results_file.secrets, "token_hex", lambda size: next(draws))
+    monkeypatch.setattr("euvst_response.atmosphere.secrets.token_hex", lambda size: next(draws))
     theirs = tmp_path / "out.h5.aaaa.part"
     theirs.write_bytes(b"another run's")
     path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
