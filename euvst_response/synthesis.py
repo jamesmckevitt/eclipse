@@ -17,7 +17,7 @@ import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
-                    velocity_centers_to_edges, VELOCITY_CONVENTION)
+                    velocity_centers_to_edges, velocity_grid, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
                          require_mass_per_electron)
@@ -142,9 +142,10 @@ def create_atmosphere_ndcube(
         voxel_dz.to(u.Mm).value
     ]
 
-    return NDCube(data.data,
+    # A plain array, as the docstring allows, has no unit.
+    return NDCube(np.asarray(getattr(data, "value", data)),
                   wcs=wcs,
-                  unit=data.unit)
+                  unit=getattr(data, "unit", None))
 
 
 def read_timestep_time(file_path: Path) -> float:
@@ -902,7 +903,9 @@ def compute_dem(
         em_n = np.sum(w3 * mask, axis=integration_axis_idx)  # cm^-5 * n_e
 
         dem[..., idx] = em / dlogT
-        avg_ne[..., idx] = np.divide(em_n, em, where=em > 0.0)
+        # Zero where no plasma is at this temperature, rather than whatever
+        # memory the division left there, which reached the saved G diagnostic.
+        avg_ne[..., idx] = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
 
     return dem, avg_ne
 
@@ -1058,6 +1061,19 @@ def build_em_tv(
     mask_V = (vel_cube[..., None] >= v_edges[:-1]) & \
              (vel_cube[..., None] <  v_edges[1:])
 
+    # Plasma faster than the grid reaches emits beyond the synthesised
+    # wavelengths, so its emission is not in the spectra, though the DEM keeps
+    # it. Said, since the default grid misses the fastest flows of a flare.
+    in_temperature = ne_sq_dh * mask_T.any(axis=-1)
+    beyond = in_temperature[~mask_V.any(axis=-1)].sum()
+    if beyond > 0:
+        warnings.warn(
+            f"{100 * beyond / in_temperature.sum():.3g} per cent of the emission measure is "
+            f"from plasma faster than the velocity grid reaches, "
+            f"{v_edges[0] / 1e5:.1f} to {v_edges[-1] / 1e5:.1f} km/s, and emits beyond the "
+            f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
+            f"it.", UserWarning, stacklevel=2)
+
     # Build the 4-D emission-measure cube EM(spatial,T,v) by summing over the integration axis
     ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
     mask_T_d   = da.from_array(mask_T,   chunks='auto')
@@ -1095,13 +1111,18 @@ def synthesise_spectra(
     em_tv : np.ndarray
         4D emission measure cube (n_rows, n_cols, nT, nv), in the spatial
         layout build_em_tv produces.
-    vel_grid : np.ndarray
-        Velocity grid centers for wavelength calculation.
+    vel_grid : u.Quantity or np.ndarray
+        Velocity grid centers for wavelength calculation, in any unit of
+        velocity; a plain array is taken to be in cm/s, as build_em_tv's is.
     logT_grid : np.ndarray
         Temperature bin centers.
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
+    # The Doppler shifts below are worked out in cm/s, which a grid in km/s
+    # was taken to be, moving every line by a factor of 1e5 too little.
+    vel_grid = (vel_grid.to(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
+                else np.asarray(vel_grid, dtype=float) * (u.cm / u.s))
 
     # The wavelength grid built below is the velocity grid mapped through
     # lambda_0 (1 + v/c), and create_line_cube writes its CDELT from the first
@@ -1196,6 +1217,19 @@ def synthesise_cubes(
                          out=np.zeros_like(temperature)).astype(precision)
 
     dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
+
+    # The contribution functions are worked out on a grid of densities and
+    # taken as zero off it; said, with how much of the emission that is.
+    occupied = dem_map > 0
+    log_ne = np.log10(avg_ne_map, where=avg_ne_map > 0,
+                      out=np.full(avg_ne_map.shape, -np.inf))
+    off_grid = occupied & ((log_ne < logN_grid[0]) | (log_ne > logN_grid[-1]))
+    if off_grid.any():
+        warnings.warn(
+            f"{100 * dem_map[off_grid].sum() / dem_map[occupied].sum():.3g} per cent of the "
+            f"emission measure is at electron densities outside the {10 ** logN_grid[0]:.0e} "
+            f"to {10 ** logN_grid[-1]:.0e} cm^-3 the contribution functions are worked out "
+            f"for, where they are taken as zero.", UserWarning, stacklevel=2)
 
     lines = {name: dict(info) for name, info in goft.items()}
     interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
@@ -1760,6 +1794,8 @@ def main(args=None) -> None:
     downsample = args.downsample if args.downsample > 1 else False
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
+    # Checked now, before the atmosphere is read or anything computed.
+    velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
 
@@ -1980,11 +2016,7 @@ def main(args=None) -> None:
     # ---------------- Common processing (both modes) -----------------
     
     # Build velocity grid
-    vel_grid = np.arange(
-        -vel_lim.to(u.cm / u.s).value,
-        vel_lim.to(u.cm / u.s).value + vel_res.to(u.cm / u.s).value,
-        vel_res.to(u.cm / u.s).value
-    ) * (u.cm / u.s)
+    vel_grid = velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
     # The electron density: the atmosphere's own where it gives one, otherwise
     # the mass density over the mass per free electron.

@@ -49,7 +49,7 @@ from .synthesis import (
 )
 from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
-from .utils import VELOCITY_CONVENTION, angle_to_distance, require_uniform_grid
+from .utils import VELOCITY_CONVENTION, angle_to_distance, require_uniform_grid, velocity_grid
 
 __all__ = ["SynthesisSettings", "RasterPlan", "Exposure", "AtmosphereSeries",
            "RasterSynthesiser", "SynthesisSeries", "SynthesisRaster"]
@@ -115,9 +115,7 @@ class SynthesisSettings:
 
     def velocity_grid(self) -> u.Quantity:
         """The velocity bin centres, as synthesise-spectra builds them."""
-        lim = self.vel_lim.to_value(u.cm / u.s)
-        res = self.vel_res.to_value(u.cm / u.s)
-        return np.arange(-lim, lim + res, res) * (u.cm / u.s)
+        return velocity_grid(self.vel_res, self.vel_lim)
 
 
 @dataclass(frozen=True)

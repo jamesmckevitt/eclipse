@@ -167,3 +167,73 @@ def test_a_uniform_grid_still_synthesises_end_to_end():
     # CDELT is the wavelength step the uniform velocity grid implies.
     expected = (REST * (25.0 * u.km / u.s) / const.c).to_value(u.cm)
     assert cube.wcs.wcs.cdelt[0] == pytest.approx(expected, rel=1e-6)
+
+
+# ----------------------------------------------------------------------
+# The velocity grid, and what falls off it
+# ----------------------------------------------------------------------
+from euvst_response.synthesis import build_em_tv, compute_dem  # noqa: E402
+from euvst_response.utils import velocity_grid  # noqa: E402
+
+
+@pytest.mark.parametrize("res, lim", [(3, 10), (0.7, 300), (20, 250), (5, 300)])
+def test_the_velocity_grid_has_a_bin_centred_on_zero_and_reaches_its_limit(res, lim):
+    """Built from -lim, a limit that was not a whole number of steps left zero between bins."""
+    grid = velocity_grid(res * u.km / u.s, lim * u.km / u.s).to_value(u.km / u.s)
+    assert np.min(np.abs(grid)) == 0.0
+    assert grid == pytest.approx(-grid[::-1], abs=1e-9)
+    assert grid[-1] >= lim - 1e-9 and grid[-1] < lim + res
+    assert np.diff(grid) == pytest.approx(res)
+    if (res, lim) == (5, 300):
+        # The default grid is the one there always was.
+        assert grid.size == 121
+
+
+@pytest.mark.parametrize("res, lim", [("0 km/s", "300 km/s"), ("5 km/s", "-5 km/s"),
+                                      ("5 km", "300 km/s")])
+def test_a_velocity_grid_that_cannot_be_built_is_refused_naming_the_option(res, lim):
+    with pytest.raises(ValueError, match="--vel-.* must be a positive velocity"):
+        velocity_grid(u.Quantity(res), u.Quantity(lim), ("--vel-res", "--vel-lim"))
+
+
+def test_a_velocity_grid_in_any_unit_shifts_the_lines_alike():
+    """A grid in km/s was taken to be in cm/s, moving every line 1e5 times too little."""
+    ny, nx, n_temp = 1, 1, 2
+    grid = velocity_grid(10 * u.km / u.s, 100 * u.km / u.s)
+    em_tv = np.zeros((ny, nx, n_temp, grid.size))
+    em_tv[0, 0, 0, -3] = 1.0e27  # +80 km/s
+    spectra = {}
+    for unit in (u.cm / u.s, u.km / u.s, u.m / u.s):
+        goft = _one_line_goft(ny, nx, n_temp)
+        synthesise_spectra(goft, em_tv, grid.to(unit), np.array([6.0, 6.2]))
+        spectra[unit] = goft["Fe12_195.1190"]
+    reference = spectra[u.cm / u.s]
+    for spectrum in spectra.values():
+        assert np.allclose(spectrum["si"], reference["si"], rtol=1e-12)
+        assert u.allclose(spectrum["wl_grid"], reference["wl_grid"], rtol=1e-15)
+
+
+def test_emission_beyond_the_velocity_grid_is_left_out_and_said_to_be():
+    """A 500 km/s flow emits beyond a +-300 km/s window, while the DEM keeps it."""
+    logT = np.full((2, 1, 1), 6.1)
+    velocity = np.array([0.0, 500.0e5]).reshape(2, 1, 1)
+    grid = velocity_grid(5 * u.km / u.s, 300 * u.km / u.s).to_value(u.cm / u.s)
+    with pytest.warns(UserWarning, match="^50 per cent of the emission measure"):
+        em_tv = build_em_tv(logT, velocity, np.array([6.0, 6.2]), grid * (u.cm / u.s),
+                            np.ones((2, 1, 1)), "z")
+    assert em_tv.sum() == pytest.approx(1.0)
+
+
+def test_the_density_of_a_temperature_with_no_plasma_is_zero():
+    """It was whatever memory the division left, which reached the saved G diagnostic."""
+    logT = np.full((3, 4, 5), 6.0)
+    logN = np.full((3, 4, 5), 9.0)
+    _, avg_ne = compute_dem(logT, logN, 1.0e8, np.array([5.5, 6.0, 6.5]), "z")
+    assert np.all(avg_ne[..., [0, 2]] == 0.0)
+    assert avg_ne[..., 1] == pytest.approx(1.0e9)
+
+
+def test_a_plain_array_makes_a_cube_with_no_unit():
+    """As the docstring allows."""
+    cube = create_atmosphere_ndcube(np.ones((2, 3, 4)), 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
+    assert cube.unit is None and cube.data.shape == (2, 3, 4)
