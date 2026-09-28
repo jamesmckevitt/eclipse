@@ -177,6 +177,31 @@ def multi_gaussian(wave, *params, n_components=1):
     return result
 
 
+def pixel_mean_gaussians(wave, *params, n_components=1, pixel=1.0):
+    """
+    :func:`multi_gaussian` averaged over pixels *pixel* wide centred on *wave*.
+
+    What a detector pixel records of the same Gaussians, which for a line
+    narrower than a pixel is not the Gaussian at the pixel's centre. The
+    parameters are the Gaussians', as for :func:`multi_gaussian`.
+    """
+    from scipy.special import erf
+
+    result = np.zeros_like(wave, dtype=float)
+    half = pixel / 2
+    for i in range(n_components):
+        peak = params[3 * i]
+        centre = params[3 * i + 1]
+        sigma = params[3 * i + 2]
+        if sigma == 0:
+            continue
+        scale = np.sqrt(2.0) * sigma
+        result += (peak * sigma * np.sqrt(np.pi / 2) / pixel
+                   * (erf((wave + half - centre) / scale) - erf((wave - half - centre) / scale)))
+    result += params[-1]  # background
+    return result
+
+
 def _bin_edges(centres: np.ndarray) -> np.ndarray:
     """Boundaries of the bins centred on *centres*: halfway between neighbours, and the outer ones as far out as the inner ones are in."""
     inner = 0.5 * (centres[1:] + centres[:-1])
