@@ -3,10 +3,11 @@ Hinode/EIS effective area, as a function of wavelength and observation date.
 
 EIS is included in ECLIPSE as a reference instrument, so its throughput has to
 be as honest as the EUVST one. The effective area is strongly
-wavelength-dependent - roughly 0.33 cm^2 at Fe XII 195 against 0.013 cm^2 at
-Ca XV 181.9, a factor of 25 across the short-wavelength channel alone - and it
-has fallen substantially since launch, by more than an order of magnitude in
-parts of the long-wavelength channel. Any study comparing photon statistics
+wavelength-dependent - 0.30 cm^2 at Fe XII 195 against 0.029 cm^2 at Ca XV
+181.9 in the ground calibration, a factor of ten across the short-wavelength
+channel alone - and it has fallen substantially since launch, by up to a
+factor of seven in parts of the long-wavelength channel by 2022 in the dz2025
+calibration. Any study comparing photon statistics
 between lines, or between epochs, depends on both.
 
 Four calibrations are available, matching the ``calib=`` keywords of
@@ -50,10 +51,12 @@ References
 from __future__ import annotations
 
 from datetime import date as _date, datetime as _datetime, timezone as _tz
+import warnings
 from functools import lru_cache
 from importlib.resources import as_file, files
 
 import numpy as np
+from astropy.time import Time
 from scipy.interpolate import CubicSpline
 
 __all__ = [
@@ -67,9 +70,8 @@ __all__ = [
 ]
 
 # EIS observes two disjoint bands; there is no effective area between them.
-# Edges as in eis_get_band (eis_ea_nrl.pro). The ground tables are sampled
-# 165-212 and 245-292 Angstrom, so the last Angstrom of the short-wavelength
-# band is extrapolated, as it is in eis_ea.pro.
+# Edges as in eis_get_band (eis_ea_nrl.pro). The latest ground tables, which
+# eis_ea.pro reads, are sampled 165-213 and 245-292 Angstrom.
 SW_BAND = (165.0, 213.0)
 LW_BAND = (245.0, 292.0)
 
@@ -144,9 +146,16 @@ def _date_to_year_fraction(date_str: str) -> float:
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=None)
-def _ground_table(band: str) -> tuple[np.ndarray, np.ndarray]:
-    """Wavelength (Angstrom) and effective area (cm^2) from the SSW tables."""
-    fname = "EIS_EffArea_B.004" if band == "SW" else "EIS_EffArea_A.004"
+def _ground_table(band: str, latest: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Wavelength (Angstrom) and effective area (cm^2) from the SSW tables.
+
+    eis_ltds.pro names the .004 tables. eis_ea.pro reads the latest, which
+    for the short band is B.005, the same with a point at 213 Angstrom added,
+    so *latest* gives that.
+    """
+    fname = ("EIS_EffArea_B.005" if latest else "EIS_EffArea_B.004") if band == "SW" \
+        else "EIS_EffArea_A.004"
     wave, area = [], []
     for line in (_DATA_DIR / fname).read_text().splitlines():
         line = line.strip()
@@ -156,6 +165,123 @@ def _ground_table(band: str) -> tuple[np.ndarray, np.ndarray]:
         wave.append(float(parts[0]))
         area.append(float(parts[1]))
     return np.array(wave), np.array(area)
+
+
+# ---------------------------------------------------------------------------
+# IDL's interpolants, as the SolarSoft routines call them
+# ---------------------------------------------------------------------------
+
+class _IdlInterpolSpline:
+    """
+    IDL's ``INTERPOL(y, x, xout, /SPLINE)`` through the points *x*, *y*, called with *xout*.
+
+    Not one spline through all the points: at each output point, a natural
+    cubic spline through the four data points around it, the interval it is
+    in and one either side, or the end four beyond the data, from which it
+    extrapolates. As interpol.pro in IDL 8.8. The splines are made once, so
+    that a call only evaluates them.
+    """
+
+    def __init__(self, x, y):
+        self.x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        # One for each interval with a point either side, by its first point.
+        self.splines = [CubicSpline(self.x[first - 1:first + 3], y[first - 1:first + 3],
+                                    bc_type="natural")
+                        for first in range(1, self.x.size - 2)]
+
+    def __call__(self, xout) -> np.ndarray:
+        xout = np.atleast_1d(np.asarray(xout, dtype=float))
+        # VALUE_LOCATE, kept to the intervals that have a point either side.
+        start = np.clip(np.searchsorted(self.x, xout, side="right") - 1, 1, self.x.size - 3)
+        out = np.empty(xout.shape)
+        for first in np.unique(start):
+            here = start == first
+            out[here] = self.splines[first - 1](xout[here])
+        return out
+
+
+class _IdlTensionSpline:
+    """
+    IDL's ``SPLINE(x, y, t)`` through the points *x*, *y*, called with *t*.
+
+    A spline under tension *sigma*, as spline.pro in IDL 8.8. Its end slopes
+    are those of the quadratics through the first and last three points.
+    Ported step for step, in double precision, with the solve done once, so
+    that a call only evaluates it.
+    """
+
+    def __init__(self, x, y, sigma: float = 1.0):
+        xx = np.asarray(x, dtype=float)
+        yy = np.asarray(y, dtype=float)
+        self.xx, self.yy = xx, yy
+        self.yp, self.sigmap = self._solve(xx, yy, sigma)
+
+    @staticmethod
+    def _solve(xx, yy, sigma):
+        n = xx.size
+        nm1 = n - 1
+        yp = np.zeros(2 * n)
+
+        delx1 = xx[1] - xx[0]
+        dx1 = (yy[1] - yy[0]) / delx1
+        delx2 = xx[2] - xx[1]
+        delx12 = xx[2] - xx[0]
+        slpp1 = (-(delx12 + delx1) / delx12 / delx1 * yy[0] + delx12 / delx1 / delx2 * yy[1]
+                 - delx1 / delx12 / delx2 * yy[2])
+        deln = xx[nm1] - xx[nm1 - 1]
+        delnm1 = xx[nm1 - 1] - xx[nm1 - 2]
+        delnn = xx[nm1] - xx[nm1 - 2]
+        slppn = (deln / delnn / delnm1 * yy[nm1 - 2] - delnn / deln / delnm1 * yy[nm1 - 1]
+                 + (delnn + deln) / delnn / deln * yy[nm1])
+
+        sigmap = sigma * nm1 / (xx[nm1] - xx[0])
+        dels = sigmap * delx1
+        exps = np.exp(dels)
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        sinhin = 1.0 / (delx1 * sinhs)
+        diag1 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
+        yp[0] = (dx1 - slpp1) / diag1
+        yp[n] = sinhin * (sinhs - dels) / diag1
+
+        delx2 = np.diff(xx)
+        dx2 = np.diff(yy) / delx2
+        dels = sigmap * delx2
+        exps = np.exp(dels)
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        sinhin = 1.0 / (delx2 * sinhs)
+        diag2 = sinhin * (dels * 0.5 * (exps + 1.0 / exps) - sinhs)
+        diag2 = np.concatenate([[0.0], diag2[:-1] + diag2[1:]])
+        dx2nm1 = dx2[nm1 - 1]
+        dx2 = np.concatenate([[0.0], np.diff(dx2)])
+        spdiag = sinhin * (sinhs - dels)
+        for i in range(1, nm1):
+            diagin = 1.0 / (diag2[i] - spdiag[i - 1] * yp[i + n - 1])
+            yp[i] = diagin * (dx2[i] - spdiag[i - 1] * yp[i - 1])
+            yp[i + n] = diagin * spdiag[i]
+        diagin = 1.0 / (diag1 - spdiag[nm1 - 1] * yp[n + nm1 - 1])
+        yp[nm1] = diagin * (slppn - dx2nm1 - spdiag[nm1 - 1] * yp[nm1 - 1])
+        for i in range(n - 2, -1, -1):
+            yp[i] = yp[i] - yp[i + n] * yp[i + 1]
+        return yp, sigmap
+
+    def __call__(self, t) -> np.ndarray:
+        xx, yy, yp, sigmap = self.xx, self.yy, self.yp, self.sigmap
+        tt = np.atleast_1d(np.asarray(t, dtype=float))
+        # The knot at or beyond each point, from the second to the last.
+        subs = np.clip(np.searchsorted(xx, tt, side="right"), 1, xx.size - 1)
+        subs1 = subs - 1
+        del1 = tt - xx[subs1]
+        del2 = xx[subs] - tt
+        dels = xx[subs] - xx[subs1]
+        exps1 = np.exp(sigmap * del1)
+        sinhd1 = 0.5 * (exps1 - 1.0 / exps1)
+        exps = np.exp(sigmap * del2)
+        sinhd2 = 0.5 * (exps - 1.0 / exps)
+        exps = exps1 * exps
+        sinhs = 0.5 * (exps - 1.0 / exps)
+        return ((yp[subs] * sinhd1 + yp[subs1] * sinhd2) / sinhs
+                + ((yy[subs] - yp[subs]) * del1 + (yy[subs1] - yp[subs1]) * del2) / dels)
 
 
 # ---------------------------------------------------------------------------
@@ -201,20 +327,50 @@ _DZ2013_REF_DT = _datetime(2006, 9, 22, 21, 36, 0, tzinfo=_tz.utc)
 _DZ2013_LAST_DT = _datetime(2012, 9, 14, 0, 0, 0, tzinfo=_tz.utc)
 
 
-def _dz2013_reference(date_str: str, band: str) -> tuple[np.ndarray, np.ndarray]:
-    """DZ2013 areas on the ground-calibration wavelength grid."""
-    grid_wave, _ = _ground_table(band)
+def _ground_curve(date_str: str, band: str):
+    """eis_ea.pro: a four-point spline through the log of the latest ground table."""
+    wave, area = _ground_table(band, latest=True)
+    spline = _IdlInterpolSpline(wave, np.log(area))
+    return lambda wl: np.exp(spline(wl))
 
+
+# The wavelengths eis_ltds.pro corrects, each band's open interval; elsewhere
+# its correction is 1.
+_DZ2013_CORRECTED = {"SW": (165.0, 212.0), "LW": (245.0, 292.0)}
+
+
+def _dz2013_curve(date_str: str, band: str):
+    """
+    eis_ea_gdz.pro: eis_ea.pro's ground area over eis_ltds.pro's correction.
+
+    The correction is the ground table over the Del Zanna curve, both put at
+    the wavelength by INTERPOL /SPLINE, the curve having been put on the
+    table's grid the same way first. Before launch it is 1, and after 14
+    September 2012 the long-wavelength decay is held, as eis_ltds.pro does;
+    :func:`effective_area` says so, as eis_ltds.pro prints.
+    """
+    ground = _ground_curve(date_str, band)
+    when = _parse_date(date_str)
+    if when < _DZ2013_REF_DT:
+        return ground
+    grid, table = _ground_table(band)
     if band == "SW":
-        area = np.interp(grid_wave, _DZ2013_SW_WAVE, _DZ2013_SW_EA)
-        return grid_wave, area
+        curve = _IdlInterpolSpline(_DZ2013_SW_WAVE, _DZ2013_SW_EA)(grid)
+    else:
+        curve = _IdlInterpolSpline(_DZ2013_LW_WAVE, _DZ2013_LW_EA)(grid)
+        when = min(when, _DZ2013_LAST_DT)
+        curve = np.polyval(_DZ2013_LW_COEFF[::-1], (when - _DZ2013_REF_DT).total_seconds()) * curve
+    low, high = _DZ2013_CORRECTED[band]
+    table_spline, curve_spline = _IdlInterpolSpline(grid, table), _IdlInterpolSpline(grid, curve)
 
-    area = np.interp(grid_wave, _DZ2013_LW_WAVE, _DZ2013_LW_EA)
+    def area(wl):
+        wl = np.atleast_1d(np.asarray(wl, dtype=float))
+        correction = np.ones(wl.shape)
+        inside = (wl > low) & (wl < high)
+        correction[inside] = table_spline(wl[inside]) / curve_spline(wl[inside])
+        return ground(wl) / correction
 
-    elapsed = (_parse_date(date_str) - _DZ2013_REF_DT).total_seconds()
-    elapsed = min(max(elapsed, 0.0),
-                  (_DZ2013_LAST_DT - _DZ2013_REF_DT).total_seconds())
-    return grid_wave, np.polyval(_DZ2013_LW_COEFF[::-1], elapsed) * area
+    return area
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +419,13 @@ def _dz2025_table() -> dict:
     # For a normal install as_file just hands back the path unchanged.
     with as_file(_DZ2025_SAV) as path:
         fit_ea = scipy.io.readsav(str(path))["fit_ea"]
+    dates = [date.decode() for date in fit_ea["DATE_OBS"][0]]
     return {
         "year_fr": fit_ea["YEAR_FR"][0].astype(np.float64),
+        # The fitted dates as TAI days, which interpol_eis_ea.pro interpolates
+        # in; decimal years are not linear in time across a year's end.
+        "dates": dates,
+        "tai": Time(dates, scale="utc").tai.mjd,
         "SW_ea": fit_ea["SW_EA"][0].astype(np.float64),
         "SW_wave": fit_ea["SW_WAVE"][0].astype(np.float64),
         "LW_ea": fit_ea["LW_EA"][0].astype(np.float64),
@@ -280,31 +441,42 @@ def _dz2025_reference(date_str: str, band: str) -> tuple[np.ndarray, np.ndarray]
     year_fr = table["year_fr"]
 
     # The fit covers 2007-2022; outside it the endpoint value is held, as
-    # interpol_eis_ea.pro does. Extrapolating a degradation curve would be
-    # worse than saying so.
-    year = np.clip(_date_to_year_fraction(date_str), year_fr[0], year_fr[-1])
+    # interpol_eis_ea.pro does, which also says so, as effective_area does.
+    # Extrapolating a degradation curve would be worse than saying so.
+    tai = table["tai"]
+    when = np.clip(Time(_parse_date(date_str)).tai.mjd, tai[0], tai[-1])
 
-    area = np.array([np.interp(year, year_fr, ref_area[i, :])
+    area = np.array([np.interp(when, tai, ref_area[i, :])
                      for i in range(len(ref_wave))])
     return ref_wave, area
+
+
+def _warren2014_curve(date_str: str, band: str):
+    """eis_ea_nrl.pro: IDL's tension spline through the log of the areas at the knots."""
+    knots, area = _warren2014_reference(date_str, band)
+    spline = _IdlTensionSpline(knots, np.log(area))
+    return lambda wl: np.exp(spline(wl))
+
+
+def _dz2025_curve(date_str: str, band: str):
+    """interpol_eis_ea.pro: a four-point spline through the areas at the fitted wavelengths."""
+    return _IdlInterpolSpline(*_dz2025_reference(date_str, band))
 
 
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
-# Each calibration is (reference-point builder, interpolation convention).
-# 'log_spline' is a natural cubic spline through log(EA), which is what the
-# IDL routines do for the ground and Warren curves; 'spline' and 'linear' are
-# the conventions of interpol_eis_ea.pro and eis_ltds.pro respectively. The
-# choice matters: on the ground tables, a linear interpolation differs from
-# the log spline by up to 1.3 percent where the curve turns over sharply,
-# around Fe XIII 203.8.
+# Each calibration's area against wavelength, for a date and a band, built as
+# the SolarSoft routine it ports builds it. The interpolation matters: a
+# linear one in place of eis_ltds.pro's splines put Fe XIII 203.83 12 per cent
+# too bright in dz2013, and the other routines' local splines differ from one
+# spline through every point by up to a few per cent.
 _METHODS = {
-    "ground": (lambda date, band: _ground_table(band), "log_spline"),
-    "dz2013": (_dz2013_reference, "linear"),
-    "warren2014": (_warren2014_reference, "log_spline"),
-    "dz2025": (_dz2025_reference, "spline"),
+    "ground": _ground_curve,
+    "dz2013": _dz2013_curve,
+    "warren2014": _warren2014_curve,
+    "dz2025": _dz2025_curve,
 }
 
 
@@ -324,20 +496,38 @@ def _interpolator(method: str, date_str: str, band: str):
     Cached because ``radiometric.add_telescope_throughput`` evaluates the
     telescope response one wavelength sample at a time, in a Python loop, on
     every Monte Carlo iteration. Rebuilding a 49-point spline per sample would
-    dominate the run time. The cache holds interpolators, not results, so it
-    is exact.
+    dominate the run time. The cache holds interpolators with their splines
+    made, not results, so it is exact. Nothing is said from here, since a
+    cached call would not say it: :func:`effective_area` says what it must.
     """
-    build, kind = _METHODS[_check_method(method)]
-    wave, area = build(date_str, band)
+    return _METHODS[_check_method(method)](date_str, band)
 
-    if kind == "linear":
-        return lambda wl: np.interp(wl, wave, area)
-    if kind == "spline":
-        return CubicSpline(wave, area, extrapolate=True)
-    if kind == "log_spline":
-        spline = CubicSpline(wave, np.log(area), bc_type="natural")
-        return lambda wl: np.exp(spline(wl))
-    raise AssertionError(f"Unhandled interpolation convention {kind!r}.")
+
+@lru_cache(maxsize=256)
+def _beyond_the_fit(method: str, date_str: str) -> tuple:
+    """
+    What the SolarSoft routine prints for a date beyond the dates *method* is fitted to.
+
+    Pairs of the bands it concerns and the message, none for a date within.
+    """
+    if method == "dz2013":
+        when = _parse_date(date_str)
+        if when < _DZ2013_REF_DT:
+            return ((("SW", "LW"), f"{date_str} is before 22 September 2006, where the dz2013 "
+                     f"EIS calibration begins, so the ground calibration is used, as "
+                     f"eis_ltds.pro does."),)
+        if when > _DZ2013_LAST_DT:
+            return ((("LW",), f"{date_str} is after 14 September 2012, the last date the dz2013 "
+                     f"long-wavelength decay is fitted to, so the decay is held there, as "
+                     f"eis_ltds.pro does."),)
+    if method == "dz2025":
+        table = _dz2025_table()
+        when = Time(_parse_date(date_str)).tai.mjd
+        if not table["tai"][0] <= when <= table["tai"][-1]:
+            return ((("SW", "LW"), f"{date_str} is outside {table['dates'][0]} to "
+                     f"{table['dates'][-1]}, the dates the dz2025 EIS calibration is fitted to, "
+                     f"so the nearer end of the fit is used, as interpol_eis_ea.pro does."),)
+    return ()
 
 
 def band_of(wavelength_aa: float) -> str | None:
@@ -390,9 +580,17 @@ def effective_area(wavelengths_aa, date=None, method="ground") -> np.ndarray:
     wavelengths = np.atleast_1d(np.asarray(wavelengths_aa, dtype=np.float64))
     out = np.full(wavelengths.shape, np.nan, dtype=np.float64)
 
+    bands = []
     for band, (low, high) in (("SW", SW_BAND), ("LW", LW_BAND)):
         mask = (wavelengths >= low) & (wavelengths <= high)
         if np.any(mask):
             out[mask] = _interpolator(method, date_str, band)(wavelengths[mask])
+            bands.append(band)
+
+    # Every call says so, once however many bands it spans.
+    if date_str:
+        for concerned, message in _beyond_the_fit(method, date_str):
+            if set(concerned) & set(bands):
+                warnings.warn(message, UserWarning, stacklevel=2)
 
     return out
