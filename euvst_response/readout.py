@@ -32,11 +32,13 @@ SOLC-EUVST-MSSL-ICD-0003 v3.1: the same sequence at the FEE to SEB interface.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Sequence, Tuple
 
 import astropy.units as u
 import numpy as np
+from scipy.optimize import brentq
 from scipy.signal import fftconvolve
 
 # Wavelength in Angstrom as a function of position along the dispersion, in mm
@@ -195,24 +197,63 @@ class FocalPlane_SWC:
         Which CCD records a wavelength, and at which row.
 
         Returns the row as a float, where an integer value is the centre of that
-        row.  Raises if the wavelength falls in the gap or off the focal plane.
-        Give *column* to include the drift of a line along the slit.
+        row, and the outer edges of the first and last rows are -0.5 and
+        ``n_rows - 0.5``.  Raises if the wavelength falls in the gap or off the
+        focal plane.  Give *column* to include the drift of a line along the
+        slit.
         """
         target = u.Quantity(wavelength).to_value(u.Angstrom)
-        rows = np.arange(self.n_rows)
         for ccd in ("left", "right"):
-            lam = self.wavelength(rows, ccd, column).to_value(u.Angstrom)
-            if min(lam) <= target <= max(lam):
-                order = np.argsort(lam)
-                return ccd, float(np.interp(target, lam[order], rows[order]))
+            row = self._row_on(ccd, target, column)
+            if -0.5 <= row <= self.n_rows - 0.5:
+                return ccd, row
+        ends = {ccd: self.row_edges(ccd, column)[[0, -1]] for ccd in ("left", "right")}
         raise ValueError(
             f"{u.Quantity(wavelength)} is not on either CCD. The left CCD covers "
-            f"{self.wavelength(0, 'left'):.2f} to "
-            f"{self.wavelength(self.n_rows - 1, 'left'):.2f}, the right CCD "
-            f"{self.wavelength(self.n_rows - 1, 'right'):.2f} to "
-            f"{self.wavelength(0, 'right'):.2f}, and the gap between them is not "
-            f"recorded."
+            f"{ends['left'][0]:.4f} to {ends['left'][1]:.4f}, the right CCD "
+            f"{ends['right'][1]:.4f} to {ends['right'][0]:.4f}, and the gap "
+            f"between them is not recorded."
         )
+
+    def _row_on(self, ccd: str, target: float, column=None) -> float:
+        """
+        The row of *ccd* at which *target*, in Angstrom, lands, counted as
+        :meth:`row_of_wavelength` counts them: below -0.5 or above
+        ``n_rows - 0.5``, and infinite if it is beyond every row, when it is
+        off the CCD.
+        """
+        ends = (-0.5, self.n_rows - 0.5)
+
+        def beyond(row):
+            return self.wavelength(row, ccd, column).to_value(u.Angstrom) - target
+
+        at_ends = [beyond(end) for end in ends]
+        if at_ends[0] == 0.0:
+            return ends[0]
+        if at_ends[1] == 0.0:
+            return ends[1]
+        if np.sign(at_ends[0]) == np.sign(at_ends[1]):
+            # Off the CCD, on the side of the end nearer to it in wavelength.
+            return -np.inf if abs(at_ends[0]) < abs(at_ends[1]) else np.inf
+        # The dispersion is monotonic across a CCD, so there is one root.
+        return float(brentq(beyond, *ends, xtol=1e-12, rtol=4 * np.finfo(float).eps))
+
+    def _extreme_columns(self) -> List[float]:
+        """
+        The columns at which a line lands furthest each way along the
+        dispersion: the two ends of the slit and, when the curvature turns the
+        drift back within them, the columns either side of the turn.  With no
+        :attr:`slit_image_tilt` a line lands on the same row at all of them.
+        """
+        columns = [0.0, float(self.n_columns - 1)]
+        linear, quadratic = self.slit_image_tilt
+        if quadratic != 0.0:
+            # line_shift is linear * f + quadratic * f**2 in the field angle f
+            # in units of TILT_REFERENCE_ANGLE, which turns at -linear / 2 quadratic.
+            turn = (-linear / (2 * quadratic) * TILT_REFERENCE_ANGLE
+                    / self.plate_scale).to_value(u.dimensionless_unscaled) + (self.n_columns - 1) / 2
+            columns += [float(c) for c in (np.floor(turn), np.ceil(turn)) if 0 <= c <= self.n_columns - 1]
+        return columns
 
     def lit_rows(self, ccd: str, column=None) -> Tuple[int, int]:
         """
@@ -269,7 +310,10 @@ class ReadoutSequence:
         area on the way out.
     dump_rows : int
         Row transfers used to clear the image area before the exposure.  The
-        default clears a whole CCD.
+        default clears a whole CCD.  A frame here always starts from an empty
+        chip, so fewer rows leave out the charge a partial clear leaves
+        behind, which :func:`smear_photons` and :func:`dark_current_time`
+        warn of.
     windows : list of tuple of int
         Inclusive row ranges that are read out.  An empty list reads every row,
         which is the slowest case.
@@ -357,20 +401,47 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
     """
     Turn wavelength ranges into the row ranges a read-out window covers.
 
+    A window holds every row any part of the range lands on, at any column:
+    with a :attr:`~FocalPlane_SWC.slit_image_tilt` a line drifts along the
+    dispersion from one end of the slit to the other, and the window follows
+    it.  A row the range only touches at its edge is left out.
+
     Both CCDs share one row timeline, so the returned ranges are row numbers
     without a CCD attached: a window over rows 1850 to 1880 makes those rows
     slow on both devices, whatever wavelength they are on the other one.  A
     range that crosses the gap runs from each of its ends to the butted edge,
-    so its window goes on to the last row.
+    so its window goes on to the last row.  The parts of a range in the gap or
+    beyond the ends of the focal plane are not recorded and need no rows.
     """
+    n_rows = focal_plane.n_rows
     windows = []
     for low, high in ranges:
-        (ccd_low, row_low), (ccd_high, row_high) = (
-            focal_plane.row_of_wavelength(w) for w in (low, high))
-        first = min(row_low, row_high)
-        last = max(row_low, row_high) if ccd_low == ccd_high else focal_plane.n_rows - 1
-        windows.append((int(np.floor(first)), int(np.ceil(last))))
+        targets = [u.Quantity(w).to_value(u.Angstrom) for w in (low, high)]
+        first, last = np.inf, -np.inf
+        for column in focal_plane._extreme_columns():
+            for ccd in ("left", "right"):
+                rows = [focal_plane._row_on(ccd, target, column) for target in targets]
+                # The rows the range covers on this CCD, cut to its edges.
+                start, end = max(min(rows), -0.5), min(max(rows), n_rows - 0.5)
+                if start <= end:
+                    first, last = min(first, start), max(last, end)
+        if first > last:
+            raise ValueError(
+                f"No part of {u.Quantity(low)} to {u.Quantity(high)} is on either CCD.")
+        # The rows whose span, from half a row below their centre to half a
+        # row above, overlaps the range; a range of no width is on one row.
+        top = int(np.ceil(last + 0.5)) - 1
+        windows.append((min(int(np.floor(first - 0.5)) + 1, top), top))
     return windows
+
+
+def _warn_of_a_partial_clear(sequence: ReadoutSequence, n_rows: int, what: str) -> None:
+    """Say that a clear of fewer rows than the CCD has leaves out the charge it does not clear."""
+    if sequence.dump_rows < n_rows:
+        warnings.warn(
+            f"dump_rows is {sequence.dump_rows}, fewer than the {n_rows} rows of the CCD, so "
+            f"the clear leaves charge from before it in the image area. The {what} here "
+            f"starts from an empty chip and leaves that charge out.", UserWarning, stacklevel=3)
 
 
 def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
@@ -409,6 +480,7 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
     total_rows = n_rows + sequence.parallel_overscan_rows
     if sequence.shutter:
         return np.zeros((total_rows, rate.shape[1]))
+    _warn_of_a_partial_clear(sequence, n_rows, "smear")
 
     # Read-out.  The packet leaving row r is at row r - k while image row k - 1
     # is in the register, so the smear is a convolution of the rate with the
@@ -416,6 +488,14 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
     # image row.
     kernel = np.concatenate([[0.0], sequence.dwell(n_rows)])
     smear = fftconvolve(rate, kernel[:, np.newaxis], mode="full", axes=0)[:total_rows]
+    # The FFT leaves rounding noise, of order 1e-16 of the brightest row, in
+    # packets no light reached, which would give them a mean photon energy
+    # made of noise.  Those are the packets whose path crossed no lit pixel: a
+    # count of lit pixels, which the same convolution gives to far better
+    # than a half.
+    crossed = fftconvolve((rate > 0).astype(float), (kernel > 0).astype(float)[:, np.newaxis],
+                          mode="full", axes=0)[:total_rows]
+    smear[crossed < 0.5] = 0.0
 
     # Clearing the image area.  The packet that ends the clear at row r has
     # come down from row r + dump_rows, collecting one row transfer at each row
@@ -473,6 +553,7 @@ def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
     the read-out.  None of that needs light, so it is the same with a shutter
     as without one.  The serial register's own dark current is not included.
     """
+    _warn_of_a_partial_clear(sequence, n_rows, "dark current")
     dwell = sequence.dwell(n_rows)
     packets = np.arange(n_rows + sequence.parallel_overscan_rows)
     image = packets < n_rows

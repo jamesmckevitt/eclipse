@@ -52,6 +52,11 @@ KEY_LINES = {
 }
 
 
+# The small frames here are mostly not cleared, which ECLIPSE warns of; the
+# warning has its own test below.
+pytestmark = pytest.mark.filterwarnings("ignore:dump_rows is")
+
+
 def small_sequence(**kwargs):
     """A short frame, so that a test can write the clocking out by hand."""
     defaults = dict(shutter=False, row_transfer_time=15.0 * u.us,
@@ -276,13 +281,12 @@ def test_clearing_the_image_area_smears_from_the_rows_above():
 
 
 def test_no_clear_means_no_smear_from_the_rows_above():
-    # The tolerance is for the FFT the convolution uses, which leaves rounding
-    # noise around 1e-20 photons where the answer is zero.
     rate = np.zeros((6, 1))
     rate[4] = 5.0
     sequence = small_sequence(dump_rows=0)
     smear = smear_photons(rate, sequence)
-    assert smear[:4, 0] == pytest.approx(0.0, abs=1e-15)
+    # Exactly: the rounding noise of the FFT is not left where no light went.
+    assert np.all(smear[:4, 0] == 0.0)
 
 
 def test_one_bright_row_streaks_toward_the_register():
@@ -397,3 +401,80 @@ def test_a_packet_collects_dark_current_wherever_it_collects_light(windows, dump
 def test_a_sequence_rejects_a_backwards_window():
     with pytest.raises(ValueError, match="first row to its last"):
         ReadoutSequence(windows=[(100, 50)])
+
+
+# ---------------------------------------------------------------------------
+# The edges of the CCDs, the windows, and the rows no light reaches
+# ---------------------------------------------------------------------------
+
+def test_row_of_wavelength_inverts_wavelength_exactly():
+    fp = FocalPlane_SWC()
+    for ccd in ("left", "right"):
+        for row in (-0.5, 0, 17.3, 1861, 2047, 2047.5):
+            where, back = fp.row_of_wavelength(fp.wavelength(row, ccd))
+            assert where == ccd
+            assert back == pytest.approx(row, abs=1e-9)
+
+
+@pytest.mark.parametrize("wavelength, ccd, rows", [
+    (198.2550, "left", (2047.0, 2047.5)),    # the butted half of the left CCD's last row
+    (199.5150, "right", (2047.0, 2047.5)),   # and of the right CCD's
+    (163.5500, "left", (-0.5, 0.0)),         # the register half of the left CCD's first row
+])
+def test_the_half_of_an_edge_row_beyond_its_centre_is_on_the_ccd(wavelength, ccd, rows):
+    """Only row centres were looked at, so these were said to be in the gap or off the focal plane."""
+    where, row = FocalPlane_SWC().row_of_wavelength(wavelength * u.Angstrom)
+    assert where == ccd and rows[0] < row < rows[1]
+
+
+def _rows_overlapping(fp, low, high, column=None):
+    """Every row, on either CCD, whose span between its edges overlaps low to high."""
+    rows = set()
+    for ccd in ("left", "right"):
+        edges = fp.row_edges(ccd, column).to_value(u.Angstrom)
+        below, above = np.minimum(edges[:-1], edges[1:]), np.maximum(edges[:-1], edges[1:])
+        rows |= set(np.flatnonzero((above > low) & (below < high)).tolist())
+    return rows
+
+
+@pytest.mark.parametrize("low, high", [(194.9, 195.3), (192.0, 192.06), (195.119, 200.972),
+                                       (198.0, 198.6), (160.0, 164.0)])
+def test_a_window_is_the_rows_its_wavelengths_land_on_and_no_more(low, high):
+    """Rounding each end outward added a row whenever an end fell in the inner half of its row."""
+    fp = FocalPlane_SWC()
+    (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
+    wanted = _rows_overlapping(fp, low, high)
+    assert (first, last) == (min(wanted), max(wanted))
+
+
+def test_a_window_follows_a_tilted_line_along_the_whole_slit():
+    """Placed at the centre of the field, the window missed the row the line reached at one end."""
+    fp = FocalPlane_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT)
+    low, high = 194.9, 195.3
+    (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
+    wanted = set()
+    for column in range(0, fp.n_columns, 7):
+        wanted |= _rows_overlapping(fp, low, high, column)
+    wanted |= _rows_overlapping(fp, low, high, fp.n_columns - 1)
+    assert (first, last) == (min(wanted), max(wanted))
+    assert last > max(_rows_overlapping(fp, low, high, (fp.n_columns - 1) / 2))
+
+
+def test_a_range_on_neither_ccd_has_no_window():
+    with pytest.raises(ValueError, match="No part of"):
+        windows_from_wavelengths(FocalPlane_SWC(), [(198.4 * u.Angstrom, 198.8 * u.Angstrom)])
+
+
+def test_a_partial_clear_is_said_to_leave_out_the_charge_it_leaves():
+    rate = np.ones((6, 1))
+    with pytest.warns(UserWarning, match="dump_rows is 2, fewer than the 6 rows"):
+        smear_photons(rate, small_sequence(dump_rows=2))
+    with pytest.warns(UserWarning, match="The dark current here starts from an empty chip"):
+        dark_current_time(1.0 * u.s, small_sequence(dump_rows=2, shutter=True), 6)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        smear_photons(rate, small_sequence(dump_rows=6))
+        dark_current_time(1.0 * u.s, small_sequence(dump_rows=6), 6)
+        # With a shutter the smear is none whatever the clear.
+        smear_photons(rate, small_sequence(dump_rows=2, shutter=True))
