@@ -471,10 +471,14 @@ def test_the_mass_per_electron_follows_from_the_abundances():
         mass_per_electron_from_abundances({"He": 0.085})
 
 
-def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(monkeypatch):
+def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(
+        tmp_path, monkeypatch):
     """Every element in the database is asked for, through one of its ions; those the set leaves out hold none."""
     listed = {"H": 1.0, "He": 0.085, "O": 4.9e-4}  # a set with no iron in it
     asked = []
+    database, default = tmp_path / "chianti.h5", tmp_path / "default.h5"
+    database.touch()
+    default.touch()
 
     class MissingDatasetException(Exception):
         pass
@@ -497,10 +501,13 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(mo
     fiasco.list_ions = lambda hdf5_dbase_root=None: ["H 1", "H 2", "He 1", "He 2", "He 3",
                                                      "O 1", "O 9", "Fe 1", "Fe 27"]
     fiasco.Ion = Ion
+    fiasco.defaults = {"hdf5_dbase_root": str(default)}
     exceptions = types.ModuleType("fiasco.util.exceptions")
     exceptions.MissingDatasetException = MissingDatasetException
     util = types.ModuleType("fiasco.util")
     util.exceptions = exceptions
+    offered = []
+    util.check_database = lambda hdf5_dbase_root, **kwargs: offered.append(hdf5_dbase_root)
     fiasco.util = util
     for name, module in (("fiasco", fiasco), ("fiasco.util", util),
                          ("fiasco.util.exceptions", exceptions)):
@@ -510,7 +517,7 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(mo
     # a real database's answer into this test or this test's out of it.
     mass_per_electron.cache_clear()
     try:
-        value = mass_per_electron("a set", "/data/chianti.h5")
+        value = mass_per_electron("a set", str(database))
         asked_with_database = list(asked)
         asked.clear()
         mass_per_electron("a set")
@@ -523,9 +530,38 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(mo
 
     assert value == pytest.approx(
         mass_per_electron_from_abundances({"H": 1.0, "He": 0.085, "O": 4.9e-4}))
-    assert asked_with_database == [(f"{symbol} 1", "a set", "/data/chianti.h5")
+    assert asked_with_database == [(f"{symbol} 1", "a set", str(database))
                                    for symbol in ("H", "He", "O", "Fe")]
-    assert [database for _, _, database in asked_with_default] == [None] * 4
+    assert [root for _, _, root in asked_with_default] == [None] * 4
+    # A new user's database is offered to be built before it is read, as
+    # fiasco itself offers only once an Ion is made.
+    assert offered[:2] == [str(database), str(default)]
+
+    # A database that the user declined to build stops the run, saying so.
+    mass_per_electron.cache_clear()
+    try:
+        with pytest.raises(FileNotFoundError, match="no CHIANTI database.*not built"):
+            mass_per_electron("a set", str(tmp_path / "declined.h5"))
+    finally:
+        mass_per_electron.cache_clear()
+
+
+def test_the_database_is_offered_before_workers_that_cannot_ask_are_spawned(
+        tmp_path, monkeypatch):
+    """Spawned workers have no terminal, so fiasco's question there would end the run."""
+    import fiasco.util
+
+    class Asked(Exception):
+        pass
+
+    def check_database(hdf5_dbase_root, **kwargs):
+        raise Asked(str(hdf5_dbase_root))
+
+    monkeypatch.setattr(fiasco.util, "check_database", check_database)
+    missing = tmp_path / "chianti_dbase.h5"
+    with pytest.raises(Asked, match="chianti_dbase.h5"):
+        synthesis.compute_goft_fiasco(["Fe12_195.1190", "Fe09_171.0730"], n_workers=2,
+                                      hdf5_dbase_root=str(missing))
 
 
 # ----------------------------------------------------------------------
