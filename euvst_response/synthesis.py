@@ -645,15 +645,22 @@ def _compute_single_ion(args):
     return results
 
 
+# The grids G(T, n_e) is worked out on unless given others: log10 T from 4 to 9
+# every 0.05, and log10 n_e from 7 to 13 every 0.3. density_grid carries the
+# density grid on, on the same points, as far as an atmosphere needs.
+_LOGT_MIN, _LOGT_MAX, _N_T = 4.0, 9.0, 101
+_LOGN_MIN, _LOGN_MAX, _N_N = 7.0, 13.0, 21
+
+
 def compute_goft_fiasco(
     line_names: List[str],
     abundance: str = "sun_coronal_2021_chianti",
-    logT_min: float = 4.0,
-    logT_max: float = 9.0,
-    nT: int = 101,
-    logN_min: float = 7.0,
-    logN_max: float = 13.0,
-    nN: int = 21,
+    logT_min: float = _LOGT_MIN,
+    logT_max: float = _LOGT_MAX,
+    nT: int = _N_T,
+    logN_min: float = _LOGN_MIN,
+    logN_max: float = _LOGN_MAX,
+    nN: int = _N_N,
     precision: type = np.float64,
     n_workers: int = 0,
     hdf5_dbase_root=None,
@@ -878,13 +885,7 @@ def compute_dem(
     else:  # "z"
         output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nx, nT)
     
-    # Create temperature bin edges from centers
-    dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
-    logT_edges = np.concatenate([
-        [logT_grid[0] - dlogT/2],
-        logT_grid[:-1] + dlogT/2,
-        [logT_grid[-1] + dlogT/2]
-    ])
+    dlogT, logT_edges = _temperature_bins(logT_grid)
 
     ne = 10.0 ** logN_cube.astype(np.float64)
     dh = along_line_of_sight(voxel_dh_cm, integration_axis)
@@ -908,6 +909,104 @@ def compute_dem(
         avg_ne[..., idx] = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
 
     return dem, avg_ne
+
+
+def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
+    """The width and the edges of the DEM's temperature bins, centred on *logT_grid*."""
+    dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
+    logT_edges = np.concatenate([
+        [logT_grid[0] - dlogT/2],
+        logT_grid[:-1] + dlogT/2,
+        [logT_grid[-1] + dlogT/2]
+    ])
+    return dlogT, logT_edges
+
+
+def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
+               precision: type) -> Tuple[np.ndarray, np.ndarray]:
+    """log10 of the temperature and the electron density, as the synthesis works with them.
+
+    A cell with no electrons has a log density of minus infinity, so that it
+    adds nothing to the emission measure; one with no temperature is put at
+    log T = 0, below every temperature grid.
+    """
+    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
+                         out=np.full_like(electron_density, -np.inf)).astype(precision)
+    logT_cube = np.log10(temperature, where=temperature > 0.0,
+                         out=np.zeros_like(temperature)).astype(precision)
+    return logT_cube, logN_cube
+
+
+def density_grid(
+    temperature: np.ndarray,
+    electron_density: np.ndarray,
+    logT_grid: np.ndarray,
+    precision: type = np.float64,
+) -> Tuple[float, float, int]:
+    """The density grid to work G(T, n_e) out on for an atmosphere.
+
+    The contribution functions are read at the mean density of each
+    temperature along each line of sight, and taken as zero off their grid.
+    This grid has the points of the default one, every 0.3 in log10 n_e
+    through 10**7 cm^-3, and goes each way until it is past the density of
+    every cell whose temperature is on *logT_grid*, and no further. No mean
+    density falls off it, and an atmosphere with a narrower range of
+    densities than the default grid needs fewer points.
+
+    Parameters
+    ----------
+    temperature, electron_density : np.ndarray
+        The temperature of every cell in K and its electron density in cm^-3.
+    logT_grid : np.ndarray
+        The temperature grid of the DEM, as :func:`compute_goft_fiasco`
+        returns it.
+    precision : type
+        The precision of the synthesis, which the densities are rounded to as
+        :func:`synthesise_cubes` rounds them.
+
+    Returns
+    -------
+    logN_min, logN_max : float
+    nN : int
+        The grid, for :func:`compute_goft_fiasco`. It is the default grid if
+        no cell has electrons at a temperature on *logT_grid*.
+    """
+    points = _density_points(temperature, electron_density, logT_grid, precision)
+    if points is None:
+        return _LOGN_MIN, _LOGN_MAX, _N_N
+    first, last = points
+    return _density_point(first), _density_point(last), last - first + 1
+
+
+def _density_point(index: int) -> float:
+    """log10 n_e of a point of the default density grid, counted from its first."""
+    return _LOGN_MIN + index * (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+
+
+def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
+                    logT_grid: np.ndarray, precision: type) -> Optional[Tuple[int, int]]:
+    """The first and last point of :func:`density_grid`, counted as :func:`_density_point` counts them.
+
+    None if no cell has electrons at a temperature on *logT_grid*.
+    """
+    logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
+    _, logT_edges = _temperature_bins(logT_grid)
+    counted = ((logT_cube >= logT_edges[0]) & (logT_cube < logT_edges[-1])
+               & np.isfinite(logN_cube))
+    if not counted.any():
+        return None
+
+    step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+    # Where the lowest and highest densities fall among the default grid's
+    # points, counted in steps from its first; rounded, so that a density on a
+    # point, but for the arithmetic that put it there, counts as on it.
+    lowest, highest = (
+        round((float(extreme) - _LOGN_MIN) / step, 9) for extreme in (
+            np.min(logN_cube, where=counted, initial=np.inf),
+            np.max(logN_cube, where=counted, initial=-np.inf)))
+    # The points just past them, so that a mean density a rounding error
+    # beyond the lowest or the highest is still on the grid.
+    return int(np.ceil(lowest)) - 1, int(np.floor(highest)) + 1
 
 
 def interpolate_g_on_dem(
@@ -1211,10 +1310,7 @@ def synthesise_cubes(
     em_tv : np.ndarray
         As :func:`build_em_tv` returns it.
     """
-    logN_cube = np.log10(electron_density, where=electron_density > 0.0,
-                         out=np.zeros_like(electron_density)).astype(precision)
-    logT_cube = np.log10(temperature, where=temperature > 0.0,
-                         out=np.zeros_like(temperature)).astype(precision)
+    logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
 
     dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
 
@@ -2035,9 +2131,15 @@ def main(args=None) -> None:
     vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
 
     # ---------------- Compute contribution functions (fiasco) ---------
-    print(f"Computing contribution functions via fiasco ({print_mem()})")
+    # At the densities this atmosphere has, and no others.
+    logN_min, logN_max, nN = density_grid(
+        temp_cube.data, ne_values,
+        np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
+    print(f"Computing contribution functions via fiasco at 10^{logN_min:.1f} to "
+          f"10^{logN_max:.1f} cm^-3 ({print_mem()})")
     goft, logT_goft, logN_grid = compute_goft_fiasco(
         args.lines, abundance=args.abundance, precision=precision,
+        logN_min=logN_min, logN_max=logN_max, nN=nN,
         n_workers=args.n_workers,
         hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
         temperature_chunk=getattr(args, "goft_temperature_chunk", None),

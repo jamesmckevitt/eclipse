@@ -7,6 +7,8 @@ which is what these tests pin down: the shape of the right answer for a
 uniform grid, and a refusal rather than a plausible number for every way a
 grid can fail to be one.
 """
+import warnings
+
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
@@ -237,3 +239,69 @@ def test_a_plain_array_makes_a_cube_with_no_unit():
     """As the docstring allows."""
     cube = create_atmosphere_ndcube(np.ones((2, 3, 4)), 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
     assert cube.unit is None and cube.data.shape == (2, 3, 4)
+
+
+# ----------------------------------------------------------------------
+# The density grid, sized to the atmosphere
+# ----------------------------------------------------------------------
+from euvst_response.synthesis import density_grid, synthesise_cubes  # noqa: E402
+
+LOG_T = np.linspace(4.0, 9.0, 101)
+
+
+def _grid_points(log_ne, temperature=1.0e6):
+    density = 10.0 ** np.asarray(log_ne, dtype=float).reshape(-1, 1, 1)
+    logN_min, logN_max, nN = density_grid(np.full(density.shape, temperature), density, LOG_T)
+    return np.linspace(logN_min, logN_max, nN)
+
+
+@pytest.mark.parametrize("log_ne, expected", [
+    # Inside the default grid: its own points, past the densities, and no more.
+    ([8.5, 11.0], [8.2, 8.5, 8.8, 9.1, 9.4, 9.7, 10.0, 10.3, 10.6, 10.9, 11.2]),
+    # On one of its points: the points either side, so that a mean density a
+    # rounding error off it is still on the grid.
+    ([10.0], [9.7, 10.0, 10.3]),
+    # Beyond it either way: carried on, on the same points.
+    ([5.0, 7.2], np.round(np.arange(4.9, 7.5, 0.3), 1)),
+    ([12.5, 14.0], np.round(np.arange(12.4, 14.4, 0.3), 1)),
+])
+def test_the_density_grid_takes_in_every_density_on_the_default_grids_points(log_ne, expected):
+    assert _grid_points(log_ne) == pytest.approx(expected, abs=1e-9)
+
+
+def test_only_cells_with_electrons_at_a_temperature_on_the_grid_count():
+    """A photosphere below 10^4 K, or a cell with no electrons, needs no contribution function."""
+    temperature = np.array([5.0e3, 1.0e6, 1.0e6]).reshape(-1, 1, 1)
+    density = np.array([1.0e17, 1.0e9, 0.0]).reshape(-1, 1, 1)
+    logN_min, logN_max, _ = density_grid(temperature, density, LOG_T)
+    assert (logN_min, logN_max) == pytest.approx((8.8, 9.1))
+    # With none, the default grid.
+    assert density_grid(temperature[:1], density[:1], LOG_T) == (7.0, 13.0, 21)
+
+
+def _flat_goft_on(logN_grid, n_temp):
+    return {"Fe12_195.1190": {"wl0": REST.to(u.cm), "atom": 26, "ion": 12,
+                              "g_tn": np.full((logN_grid.size, n_temp), 1.0e-24)}}
+
+
+@pytest.mark.parametrize("log_ne", [5.0, 7.0, 13.0, 14.5])
+def test_no_emission_is_lost_at_densities_the_default_grid_did_not_reach(log_ne):
+    """G(T, n) was taken as zero below 10^7 and above 10^13 cm^-3."""
+    shape = (3, 1, 2)
+    temperature = np.full(shape, 1.0e6)
+    density = np.full(shape, 10.0 ** log_ne)
+    density[:, :, 1] = 0.0  # a column with no electrons emits nothing and is no warning
+    vel_grid = velocity_grid(5 * u.km / u.s, 150 * u.km / u.s)
+    logN_min, logN_max, nN = density_grid(temperature, density, LOG_T)
+    logN_grid = np.linspace(logN_min, logN_max, nN)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        lines, dem_map, _ = synthesise_cubes(
+            temperature, density, np.zeros(shape), 1.0e8, _flat_goft_on(logN_grid, LOG_T.size),
+            LOG_T, logN_grid, vel_grid, "z", np.float64)
+    intensity = lines["Fe12_195.1190"]["si"].sum(axis=-1)
+    assert intensity[0, 0] > 0 and intensity[0, 1] == 0
+    # G n_e^2 dh over 4 pi, in erg / (s cm^2 sr), whatever the density.
+    wavelength_step = np.diff(lines["Fe12_195.1190"]["wl_grid"].to_value(u.cm))[0]
+    expected = 1.0e-24 * 3 * 10.0 ** (2 * log_ne) * 1.0e8 / (4 * np.pi)
+    assert intensity[0, 0] * wavelength_step == pytest.approx(expected, rel=1e-6)

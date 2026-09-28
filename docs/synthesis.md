@@ -94,6 +94,8 @@ The contribution functions need the electron density. If your code calculates on
 
 If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This can be set with `--mass-per-electron`.
 
+The contribution functions are worked out at the densities the atmosphere has, every 0.3 in log10 n_e, from just below the lowest density of the plasma between 10^4 and 10^9 K to just above the highest. An atmosphere with a wide range of densities takes longer and needs more memory.
+
 ### Cropping and downsampling
 
 `--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.

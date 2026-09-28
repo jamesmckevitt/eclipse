@@ -791,7 +791,6 @@ def main() -> None:
         series = AtmosphereSeries(series_paths)
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         raster = RasterSynthesiser(series, synthesis_settings)
-        print(f"  CHIANTI database: {raster.goft_dbase_root}")
     elif synthesis_series_mode:
         # The spectra are read per combination inside the loop, a strip of
         # columns at a time, and each column once.
