@@ -1,11 +1,11 @@
 """The velocity and wavelength grids have to be uniform, and now say so.
 
-ECLIPSE takes one spacing from the start of the velocity grid and uses it for
-every bin edge, and writes the output cube's wavelength CDELT from the first
-step alone. Both are correct for a uniform grid and quietly wrong otherwise,
-which is what these tests pin down: the shape of the right answer for a
-uniform grid, and a refusal rather than a plausible number for every way a
-grid can fail to be one.
+ECLIPSE takes one spacing for the whole velocity grid and uses it for every
+bin edge, and writes the output cube's wavelength CDELT from it. Both are
+correct for a uniform grid and quietly wrong otherwise, which is what these
+tests pin down: the shape of the right answer for a uniform grid, and a
+refusal rather than a plausible number for every way a grid can fail to be
+one.
 """
 import warnings
 
@@ -57,32 +57,59 @@ def test_quantity_grids_are_accepted_and_keep_their_units():
 
 
 def test_uneven_grid_is_refused():
-    """A grid that is uniform at the start is the dangerous case.
-
-    The first spacing is the one ECLIPSE would have propagated, so a grid that
-    only goes uneven later is exactly the one that looks fine and is not.
-    """
+    """A grid that is uniform at the start is the dangerous case: it looks fine and is not."""
     centres = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     with pytest.raises(ValueError, match="evenly spaced"):
         velocity_centers_to_edges(centres)
 
 
-def test_error_points_at_the_first_uneven_spacing_not_the_worst():
-    """A small slip at elements 2 to 3 comes before a large gap at 4 to 5."""
+def test_error_points_at_the_element_furthest_from_even():
+    """The grid through the first and last elements, spaced by 8, has element 4 at 32, not 21."""
     centres = np.array([0.0, 5.0, 10.0, 16.0, 21.0, 40.0])
-    with pytest.raises(ValueError, match="between elements 2 and 3 is 6"):
+    with pytest.raises(ValueError, match=r"Element 4 is 21, -1.38 of a spacing \(8\)"):
         require_uniform_grid(centres, "vel_grid")
 
 
-def test_edges_use_the_first_spacing():
-    """Within the tolerance, the first spacing is the one applied everywhere.
+def test_edges_use_the_mean_spacing():
+    """
+    Within the tolerance, the one spacing applied everywhere is the mean.
 
     The second spacing here is off by 5e-7 of a bin, which the check lets
-    through; the edges must still step out by exactly the first spacing.
+    through. The first spacing would carry that slip to every later edge.
     """
     centres = np.array([0.0, 1.0, 2.0 + 5e-7, 3.0 + 5e-7])
-    assert require_uniform_grid(centres, "vel_grid") == 1.0
-    assert velocity_centers_to_edges(centres)[0] == -0.5
+    step = (3.0 + 5e-7) / 3
+    assert require_uniform_grid(centres, "vel_grid") == pytest.approx(step, rel=1e-15)
+    assert velocity_centers_to_edges(centres)[0] == pytest.approx(-step / 2, rel=1e-15)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_a_grid_rounded_to_single_precision_counts_as_even(dtype):
+    """
+    As MURaM's heights are, 0.064 Mm apart up to 42 Mm and stored as float32.
+
+    The rounding stays in the values when they are cast to double. A slip of
+    two thousandths of a spacing is still refused.
+    """
+    heights = (np.arange(656, dtype=np.float32) * np.float32(0.064)).astype(dtype)
+    assert heights[-1] > 41.9 and np.ptp(np.diff(heights.astype(float))) > 1e-6 * 0.064
+    assert require_uniform_grid(heights, "z") == pytest.approx(0.064, rel=1e-6)
+    slipped = heights.astype(float)
+    slipped[300:] += 2e-3 * 0.064
+    with pytest.raises(ValueError, match="z must be evenly spaced"):
+        require_uniform_grid(slipped, "z")
+
+
+def test_single_precision_rounding_is_not_admitted_where_it_reaches_half_a_spacing():
+    """
+    Near 1e8 single precision rounds by more than a spacing of 1, so it cannot hold such a grid.
+
+    Spacings of 1, 1, 1 and 7 are uneven there as anywhere, and an even grid
+    there is held to the usual tolerance and passes it.
+    """
+    with pytest.raises(ValueError, match=r"Element 3 is 100000003, -1.8 of a spacing"):
+        require_uniform_grid(1e8 + np.array([0.0, 1.0, 2.0, 3.0, 10.0]), "z")
+    assert require_uniform_grid(1e8 + np.arange(5.0), "z") == 1.0
 
 
 @pytest.mark.parametrize("centres", [

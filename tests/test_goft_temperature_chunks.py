@@ -53,10 +53,17 @@ class _Ion:
 
 
 @pytest.fixture
-def fake_fiasco(monkeypatch):
+def fake_fiasco(tmp_path, monkeypatch):
     module = types.ModuleType("fiasco")
     module.Ion = _Ion
+    (tmp_path / "chianti_dbase.h5").touch()
+    module.defaults = {"hdf5_dbase_root": str(tmp_path / "chianti_dbase.h5")}
+    # The database is there, so the offer to build it asks nothing.
+    util = types.ModuleType("fiasco.util")
+    util.check_database = lambda hdf5_dbase_root, **kwargs: None
+    module.util = util
     monkeypatch.setitem(sys.modules, "fiasco", module)
+    monkeypatch.setitem(sys.modules, "fiasco.util", util)
     _Ion.temperatures_per_call = []
     return _Ion
 
