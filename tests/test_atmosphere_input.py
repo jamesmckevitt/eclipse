@@ -689,6 +689,22 @@ def test_a_stretched_line_of_sight_integrates_the_true_cell_sizes(tmp_path, monk
         SPACING["x"].to_value(u.Mm))
 
 
+def test_heights_rounded_to_single_precision_can_be_seen_from_the_side(tmp_path, monkeypatch):
+    """As the docs' MURaM recipe builds them, from the float32 heights of the FITS files."""
+    heights = (np.float32(41.9) + np.arange(SHAPE[0] + 1, dtype=np.float32)
+               * np.float32(0.064)) * u.Mm
+    assert np.ptp(np.diff(heights.value.astype(float))) > 1e-6 * 0.064
+    atmosphere = _atmosphere(z_edges=heights, velocity_x=np.zeros(SHAPE) * u.km / u.s)
+    assert atmosphere.nonuniform_axes() == []
+    path = write_atmosphere(atmosphere, tmp_path / "float32_z.h5")
+    saved = _synthesise(tmp_path, monkeypatch, "side", "--atmosphere", str(path),
+                        "--integration-axis", "x",
+                        "--mass-per-electron", str(MASS_PER_ELECTRON))
+    assert saved["atmosphere"]["nonuniform_axes"] == []
+    # Float32 42 Mm up holds the heights to about 4e-6 Mm.
+    assert saved["voxel_sizes"]["dz"].to_value(u.Mm) == pytest.approx(0.064, rel=1e-4)
+
+
 def test_a_stretched_image_axis_is_refused(tmp_path, monkeypatch):
     path = write_atmosphere(_atmosphere(x_edges=STRETCHED_X,
                                         velocity_x=np.zeros(SHAPE) * u.km / u.s),
