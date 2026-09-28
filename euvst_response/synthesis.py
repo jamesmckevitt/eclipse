@@ -19,8 +19,8 @@ from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
                     velocity_centers_to_edges, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
-from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, mass_per_electron, read_atmosphere,
-                         require_mass_per_electron)
+from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
+                         mass_per_electron, read_atmosphere, require_mass_per_electron)
 
 ##############################################################################
 # ---------------------------------------------------------------------------
@@ -782,6 +782,9 @@ def compute_goft_fiasco(
     if temperature_chunk is not None and temperature_chunk < nT:
         print(f"  {nT} temperatures in chunks of {temperature_chunk}")
 
+    # Here, since spawned workers cannot ask whether to build it.
+    _offer_database_build(dbase_root)
+
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
     if n_workers <= 0:
@@ -1267,7 +1270,7 @@ def _world_at(coords: u.Quantity, crpix: float) -> float:
     """
     if coords.size == 1:
         return coords[0].value
-    step = (coords[1] - coords[0]).value
+    step = (coords[-1] - coords[0]).value / (coords.size - 1)
     return coords[0].value + (crpix - 1) * step
 
 
@@ -1323,11 +1326,11 @@ def create_line_cube(
     # distance across one pixel, which any WCS answers, cropped ones included.
     cell_size = [_cell_size_mm(spatial_cube, pixel_axis) for pixel_axis in range(3)]
 
-    # The WCS below carries a single linear CDELT taken from the first
-    # wavelength step, so the grid has to be uniform for that to describe it.
-    # Checked here as well as in synthesise_spectra because this is a public
-    # entry point: the DEM and VDEM routes call it directly.
-    require_uniform_grid(line_data["wl_grid"], "wl_grid")
+    # The WCS below carries a single linear CDELT, the grid's one spacing, so
+    # the grid has to be uniform for that to describe it. Checked here as
+    # well as in synthesise_spectra because this is a public entry point: the
+    # DEM and VDEM routes call it directly.
+    wl_step = require_uniform_grid(line_data["wl_grid"].to(u.cm), "wl_grid")
 
     # Get spatial coordinate information from the reference cube,
     # whose array axes are (z, y, x)
@@ -1340,7 +1343,7 @@ def create_line_cube(
         spatial_axes = ['WAVE', 'SOLY', 'SOLZ']  # Wavelength, Y, Z
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
-            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            wl_step,
             cell_size[1],
             cell_size[2],
         ]
@@ -1360,7 +1363,7 @@ def create_line_cube(
         spatial_axes = ['WAVE', 'SOLX', 'SOLZ']  # Wavelength, X, Z
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
-            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            wl_step,
             cell_size[0],
             cell_size[2],
         ]
@@ -1380,7 +1383,7 @@ def create_line_cube(
         spatial_axes = ['WAVE', 'SOLX', 'SOLY']  # Wavelength, X, Y
         spatial_units = ['cm', 'Mm', 'Mm']
         spatial_cdelt = [
-            np.diff(line_data["wl_grid"].to(u.cm).value)[0],
+            wl_step,
             cell_size[0],
             cell_size[1],
         ]
