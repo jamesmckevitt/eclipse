@@ -152,6 +152,20 @@ def simulate_once(
             electrons_pinholes, dn)
 
 
+def _own_stream(rank: int) -> None:
+    """
+    Give this MPI rank draws of its own, from the state NumPy's generator is in and the rank.
+
+    Seeded alike on every rank, as the docs' recipe for comparing runs does,
+    the ranks would repeat one another's iterations, and the spread would
+    come out narrower by the square root of their number. The state each rank
+    starts from is combined with its rank, so a run repeats with the same
+    seed and number of ranks.
+    """
+    entropy = int(np.random.randint(0, 2**31 - 1))
+    np.random.seed(np.random.SeedSequence([entropy, rank]).generate_state(8))
+
+
 def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 5,
                 fit_config=None, offchip_bin_slit: int = 1,
                 fit_signals: str = "both", uniform_mode: bool = False,
@@ -220,6 +234,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
     if world_size > 1:
+        _own_stream(rank)
         base, remainder = divmod(n_iter, world_size)
         local_n_iter = base + (1 if rank < remainder else 0)
         if rank == 0:
