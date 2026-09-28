@@ -27,6 +27,7 @@ LINES = ["Fe12_195.1190", "Fe12_195.1790"]
 class _Transitions:
     wavelength = np.array([171.073, 195.119, 195.179, 180.0]) * u.AA
     is_bound_bound = np.array([True, True, True, False])
+    is_observed = np.array([True, True, True, False])
 
 
 class _Ion:

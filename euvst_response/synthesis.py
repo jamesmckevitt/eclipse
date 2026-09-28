@@ -610,9 +610,20 @@ def _compute_single_ion(args):
             # The transitions do not depend on temperature, so the lines are
             # matched once, on the first chunk.
             if start == 0:
-                bb_wl = ion.transitions.wavelength[ion.transitions.is_bound_bound]
-                line_idx = {line_name: int(np.argmin(np.abs(bb_wl - target_wl_aa * u.AA)))
-                            for line_name, target_wl_aa in lines}
+                bound = ion.transitions.is_bound_bound
+                bb_wl = ion.transitions.wavelength[bound]
+                # The nearest line CHIANTI has observed. Its theoretical
+                # wavelengths, which it stores negative and fiasco gives
+                # positive, include many weak transitions within a few mA of
+                # strong lines, and a name a little off the observed
+                # wavelength would pick one of those, up to 1e12 times fainter.
+                observed = np.asarray(ion.transitions.is_observed[bound])
+                candidates = observed if observed.any() else np.ones_like(observed)
+                distance = np.where(candidates, np.abs(bb_wl.to_value(u.AA)
+                                                       - np.array([[w] for _, w in lines])),
+                                    np.inf)
+                line_idx = {line_name: int(np.argmin(row))
+                            for (line_name, _), row in zip(lines, distance)}
             for line_name, idx in line_idx.items():
                 g_parts[line_name].append(
                     g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
@@ -635,6 +646,7 @@ def _compute_single_ion(args):
             "ion": stage,
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
+            "transition": idx,
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
             # The root this Ion was built against.  fiasco resolves it to the
             # fiascorc default when the caller did not choose one, so this is
@@ -806,8 +818,27 @@ def compute_goft_fiasco(
                 f"matched {info['matched_wl_aa']:.4f} Angstrom "
                 f"(delta={info['delta_aa']:.4f} Angstrom)"
             )
+            # Further from the name than the digits it was written to.
+            number = line_name.split("_", 1)[1]
+            decimals = len(number.partition(".")[2])
+            if info["delta_aa"] > 0.5 * 10.0 ** -decimals:
+                warnings.warn(
+                    f"{line_name}: the nearest line CHIANTI has observed for this ion is at "
+                    f"{info['matched_wl_aa']:.4f} Angstrom, {info['delta_aa']:.4f} Angstrom "
+                    f"from the name. It is synthesised there.", UserWarning, stacklevel=2)
+            same = [other for other, seen in goft_dict.items()
+                    if (seen["atom"], seen["ion"], seen["transition"])
+                    == (info["atom"], info["ion"], info["transition"])]
+            if same:
+                raise ValueError(
+                    f"{same[0]} and {line_name} are the same line, CHIANTI's at "
+                    f"{info['matched_wl_aa']:.4f} Angstrom, which would be synthesised twice "
+                    f"and summed. Give it once.")
             goft_dict[line_name] = {
-                "wl0": info["target_wl_cm"] * u.cm,
+                # The line is where CHIANTI has observed it, whatever
+                # digits the name gave.
+                "wl0": info["matched_wl_aa"] * u.AA.to(u.cm) * u.cm,
+                "transition": info["transition"],
                 "g_tn": info["g_tn"].astype(precision),
                 "atom": info["atom"],
                 "ion": info["ion"],

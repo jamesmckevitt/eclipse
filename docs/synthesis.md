@@ -291,15 +291,21 @@ Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 The same names are used by `--lines`, by the `reference_line` key in the
 instrument configuration, and as the keys of `line_cubes` in the output file.
 
-The wavelength does not have to be exact. ECLIPSE finds the nearest transition of
-that ion in CHIANTI and prints both the requested and matched wavelengths:
+The wavelength does not have to be exact. ECLIPSE finds the nearest line of that
+ion whose wavelength CHIANTI has observed, and synthesises the line at that
+wavelength, whatever the digits of the name. CHIANTI also lists theoretical
+wavelengths, many of them weak transitions within a few mA of strong lines, and
+these are not matched. It prints both the requested and matched wavelengths:
 
 ```text
   Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom (delta=0.0000 Angstrom)
 ```
 
-Check that line. A large difference means the transition you meant is not in the
-database for that ion, and a neighbouring one was picked up instead. A name that
+Check that line. When the match is further from the name than the digits it
+was written to, ECLIPSE also warns. A large difference means the line you meant
+is not in the database for that ion, and a neighbouring one was picked up
+instead. Two names that match the same line are refused, since the line would
+be synthesised twice and summed. A name that
 does not match the pattern at all raises `ValueError` immediately.
 
 ## Performance tips
