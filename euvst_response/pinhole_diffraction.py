@@ -1,15 +1,44 @@
 """
-Pinhole diffraction effects for aluminum filter modeling.
+Pinholes in the SW aluminium filter.
 
-This module calculates the diffraction patterns from pinholes in the aluminum filter,
-including both EUV and visible light contributions.
+The filter sits ``Detector_SWC.filter_distance`` in front of the detector, in
+the beam converging on it. A pinhole passes light the foil would have
+attenuated, EUV and visible alike, and this module works out where it lands.
+
+EUV. The light at the filter is the image on its way to focus. The light for
+each point of the detector crosses the filter as a cone, whose section there
+is the SW pupil, the half of the 280 mm primary on one side of a cut along the
+slit, scaled to :func:`beam_footprint_radius`. A pinhole passes, for every
+point whose cone covers it, the share (hole area / cone area) of that point's
+light that crosses it, without the foil. The points it serves make a half disc
+of the image beside it, on the long-wavelength side. That light is part of the
+same wave as the light through the foil around the hole, so the two
+interfere: with t the filter's amplitude transmission and T = |t|^2, the hole
+adds 1 - T of the light through it, of which |1 - t|^2 is diffracted by the
+hole, and 2 Re[conj(t) (1 - t)] stays in the image, in the pixel it was
+already heading for. A hole diffracts a wave converging on a point into
+exactly the Airy pattern of the hole, centred on that point, whatever its
+size. The light is taken from the image as the focusing optics leave it.
+
+Visible. Where the visible stray light comes from is not known, so it is taken
+to reach the filter head-on as a plane wave, and the hole's light is its
+near-field diffraction pattern, centred under the hole, worked out in the full
+Rayleigh-Sommerfeld geometry rather than in the far-field limit a large hole
+is not in. The foil passes some 1e-9 of the visible, so its interference with
+the light through the hole, at most 2 |t| of it, some 1e-4, is left out.
+
+A pinhole's position is a fraction of the simulated window along each axis,
+not of the whole detector.
 """
 
 from __future__ import annotations
+import functools
+import hashlib
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-from scipy.special import j1
+from scipy.interpolate import CubicSpline
+from scipy.special import j1, jv
 from ndcube import NDCube
 from typing import List, Tuple
 
@@ -188,6 +217,268 @@ def calculate_pinhole_diffraction_pattern(
     return pattern
 
 
+
+
+# ---------------------------------------------------------------------------
+# Where a pinhole is, and the beam it sits in
+# ---------------------------------------------------------------------------
+def pinhole_centre(position_slit: float, position_spectral: float | None,
+                   n_slit: int, n_spectral: int) -> Tuple[float, float]:
+    """
+    The pixel under a pinhole's centre, as (row along the slit, column along
+    the dispersion), from its positions as fractions of the simulated window.
+    Without a spectral position it is under the middle column.
+    """
+    if position_spectral is None:
+        column = float(n_spectral // 2)
+    else:
+        if not 0.0 <= position_spectral <= 1.0:
+            raise ValueError(
+                "pinhole_position_spectral is a fraction of the window along "
+                f"the dispersion and must lie in [0, 1], got {position_spectral}.")
+        column = position_spectral * (n_spectral - 1)
+    return position_slit * (n_slit - 1), column
+
+
+def beam_footprint_radius(det, tel) -> u.Quantity:
+    """
+    Radius at the filter of the cone of light converging on one point of the detector.
+
+    The beam's f-number is its focal length, from the pixel size and the plate
+    scale, over the diameter of the entrance pupil, and ``det.filter_distance``
+    before focus the cone is that distance over twice the f-number in radius.
+    The optical design has the same plate scale along the dispersion as along
+    the slit (RSC-2022021C), so the cone is round before SW takes its half.
+    """
+    focal_length = (det.pix_size / det.plate_scale_angle.to(u.rad / u.pix)).to(
+        u.m, equivalencies=u.dimensionless_angles())
+    f_number = (focal_length / tel.D_ap).to_value(u.dimensionless_unscaled)
+    return (det.filter_distance / (2 * f_number)).to(u.mm)
+
+
+def _disc_corner_area(x, y, radius):
+    """
+    Area of the disc of *radius* about the origin inside the rectangle with
+    corners at the origin and at (x, y), negative when one of x and y is.
+    """
+    sign = np.sign(x) * np.sign(y)
+    x = np.minimum(np.abs(x), radius)
+    y = np.minimum(np.abs(y), radius)
+    # The disc's edge is above y up to turn, and below it after.
+    turn = np.sqrt(np.maximum(radius**2 - y**2, 0.0))
+
+    def under_edge(t):
+        # The area under the disc's edge from 0 to t.
+        return 0.5 * (t * np.sqrt(np.maximum(radius**2 - t**2, 0.0))
+                      + radius**2 * np.arcsin(np.clip(t / radius, -1.0, 1.0)))
+
+    return sign * np.where(x <= turn, x * y, turn * y + under_edge(x) - under_edge(turn))
+
+
+def half_disc_fractions(shape: Tuple[int, int], centre: Tuple[float, float], radius: float,
+                        toward_higher_columns: bool) -> np.ndarray:
+    """
+    The share of each pixel's area inside a half disc: *radius* pixels about
+    *centre* (row, column), on the side of higher columns or of lower ones.
+    """
+    n_rows, n_columns = shape
+    rows = np.arange(n_rows)[:, np.newaxis] - centre[0]
+    columns = np.arange(n_columns)[np.newaxis, :] - centre[1]
+    low, high = columns - 0.5, columns + 0.5
+    if toward_higher_columns:
+        low, high = np.maximum(low, 0.0), np.maximum(high, 0.0)
+    else:
+        low, high = np.minimum(low, 0.0), np.minimum(high, 0.0)
+
+    def corner(x, y):
+        return _disc_corner_area(x, y, radius)
+
+    # The four corners' areas cancel to rounding error, of either sign, where
+    # a pixel is wholly outside or inside.
+    return np.clip(corner(high, rows + 0.5) - corner(low, rows + 0.5)
+                   - corner(high, rows - 0.5) + corner(low, rows - 0.5), 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Diffraction, integrated over the pixels
+# ---------------------------------------------------------------------------
+def _gauss_nodes(n: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Gauss-Legendre nodes and weights on [0, 1]."""
+    nodes, weights = np.polynomial.legendre.leggauss(n)
+    return (nodes + 1) / 2, weights / 2
+
+
+def _nodes_per_pixel(diameter: float, wavelength: float, distance: float, pixel: float) -> int:
+    """Gauss-Legendre nodes across a pixel for fringes wavelength * distance / diameter apart."""
+    return 4 + int(np.ceil(3 * pixel * diameter / (wavelength * distance)))
+
+
+def _airy_irradiance(r, radius: float, wavelength: float, distance: float):
+    """
+    Irradiance, per unit of the light a hole of *radius* passes toward a point
+    *distance* beyond it, at *r* from that point, all in metres.
+
+    The Airy pattern of the hole at the angle r subtends, with the
+    Rayleigh-Sommerfeld obliquity and the slant of the detector to the light.
+    """
+    return _airy_of_squared(np.square(r), radius, wavelength, distance)
+
+
+def _airy_of_squared(r2, radius: float, wavelength: float, distance: float):
+    """:func:`_airy_irradiance` at the squared distances *r2*, which is quicker to have."""
+    cos2 = distance**2 / (r2 + distance**2)
+    v = (2 * np.pi * radius / wavelength) * np.sqrt(1 - cos2)
+    # 2 J1(v) / v is 1 at v = 0, where the quotient cannot be taken.
+    centre = v == 0
+    pattern = np.square(2 * j1(v) / np.where(centre, 1.0, v))
+    pattern[centre] = 1.0
+    return (np.pi * radius**2 / (wavelength * distance) ** 2) * cos2 * cos2 * np.sqrt(cos2) * pattern
+
+
+@functools.lru_cache(maxsize=1024)
+def _converging_kernel(n_rows: int, n_columns: int, radius: float, wavelength: float,
+                       distance: float, pixel: float) -> np.ndarray:
+    """
+    ``K[m, n]``: of the light a hole of *radius* passes toward the points of
+    one pixel, spread evenly over it, the share landing on the pixel *m* rows
+    and *n* columns away. All lengths in metres. Cached, since every Monte
+    Carlo iteration asks for the same ones, and read-only.
+    """
+    s, w = _gauss_nodes(_nodes_per_pixel(2 * radius, wavelength, distance, pixel))
+    # Two pixels u apart overlap by 1 - |u| of one along each axis, a function
+    # with a kink at 0, so each side of it has its own nodes.
+    offsets = np.concatenate([-s, s])
+    weights = np.concatenate([w * (1 - s), w * (1 - s)])
+    rows2 = np.square(pixel * (np.arange(n_rows)[:, np.newaxis] + offsets))
+    columns2 = np.square(pixel * (np.arange(n_columns)[:, np.newaxis] + offsets))
+    kernel = np.empty((n_rows, n_columns))
+    chunk = max(1, int(4e6) // (n_columns * offsets.size ** 2))
+    for start in range(0, n_rows, chunk):
+        r2 = rows2[start:start + chunk, np.newaxis, :, np.newaxis] + columns2[np.newaxis, :, np.newaxis, :]
+        kernel[start:start + chunk] = pixel**2 * np.einsum(
+            "abij,i,j->ab", _airy_of_squared(r2, radius, wavelength, distance), weights, weights)
+    kernel.flags.writeable = False
+    return kernel
+
+
+def _head_on_irradiance(r, radius: float, wavelength: float, distance: float) -> np.ndarray:
+    """
+    Irradiance, per unit of the light through a hole of *radius* lit head-on
+    by a plane wave, at *r* from the point under its centre *distance* below,
+    all in metres.
+
+    The path s from a point (rho, phi) of the hole to the detector is taken to
+    second order in rho about the path from the centre, S = sqrt(distance^2 +
+    r^2), at the angle theta from the axis::
+
+        s - S = -rho sin(theta) cos(phi) + rho^2 (1 - sin^2(theta) cos^2(phi)) / (2 S)
+
+    which is good to a phase of k rho^3 sin(theta) / (2 S^2), 2e-4 rad for a
+    500 micron hole in the visible at the corner of the detector. The integral
+    over phi is then a series of Bessel functions,
+
+        Phi(rho) = 2 pi exp(-i c) sum_n (-1)^n (-i)^n J_2n(k rho sin(theta)) J_n(c),
+        c = k rho^2 sin^2(theta) / (4 S),
+
+    the field is U = cos(theta) / (i lambda S) int_0^R exp(i k rho^2 / (2 S))
+    Phi(rho) rho d rho, with the Rayleigh-Sommerfeld obliquity, and the
+    detector receives |U|^2 cos(theta) per unit area.
+    """
+    r = np.atleast_1d(np.asarray(r, dtype=float))
+    k = 2 * np.pi / wavelength
+    slant = np.hypot(distance, r)
+    sin_theta, cos_theta = r / slant, distance / slant
+    widest = k * radius * sin_theta.max()
+    n_rho = 32 + int(np.ceil(widest + k * radius**2 / (2 * distance)))
+    x, w = _gauss_nodes(n_rho)
+    rho, w = radius * x, radius * w
+    top = int(np.ceil(k * radius**2 * sin_theta.max() ** 2 / (4 * distance))) + 8
+    orders = np.arange(-top, top + 1)
+    out = np.empty(r.size)
+    chunk = max(1, int(2e6) // (n_rho * orders.size))
+    for start in range(0, r.size, chunk):
+        part = slice(start, start + chunk)
+        a = k * rho * sin_theta[part, np.newaxis]
+        c = k * rho**2 * sin_theta[part, np.newaxis] ** 2 / (4 * slant[part, np.newaxis])
+        series = np.zeros(a.shape, dtype=complex)
+        for n in orders:
+            series += (-1.0) ** n * (-1j) ** n * jv(2 * n, a) * jv(n, c)
+        integrand = (np.exp(1j * k * rho**2 / (2 * slant[part, np.newaxis]))
+                     * 2 * np.pi * np.exp(-1j * c) * series * rho)
+        field = np.abs(integrand @ w) ** 2
+        out[part] = (cos_theta[part] ** 3 / (wavelength * slant[part]) ** 2 * field
+                     / (np.pi * radius**2))
+    return out
+
+
+@functools.lru_cache(maxsize=64)
+def head_on_pinhole_fractions(shape: Tuple[int, int], centre: Tuple[float, float],
+                              diameter: float, wavelength: float, distance: float,
+                              pixel: float) -> np.ndarray:
+    """
+    The share of the light through a pinhole lit head-on that lands in each pixel.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The window, (rows along the slit, columns along the dispersion).
+    centre : tuple of float
+        The pixel under the hole's centre, (row, column).
+    diameter, wavelength, distance, pixel : float
+        The hole's diameter, the light's wavelength, the filter's distance
+        from the detector and the pixel size, in metres.
+
+    Returns
+    -------
+    np.ndarray
+        The shares, of *shape*, integrated over each pixel. They add up to
+        less than one by the light that misses the window. Read-only.
+    """
+    n_rows, n_columns = shape
+    s, w = _gauss_nodes(_nodes_per_pixel(diameter, wavelength, distance, pixel))
+    s = s - 0.5
+    rows = (np.arange(n_rows) - centre[0])[:, np.newaxis] + s
+    columns = (np.arange(n_columns) - centre[1])[:, np.newaxis] + s
+    r = pixel * np.hypot(rows[:, np.newaxis, :, np.newaxis], columns[np.newaxis, :, np.newaxis, :])
+    # The pattern is worked out on radii finely enough spaced that a cubic
+    # spline through them is good to about 1e-9 of it, and read off at the
+    # nodes.
+    step = min(pixel / 8, wavelength * distance / (256 * diameter))
+    radii = np.arange(0.0, r.max() + 2 * step, step)
+    spline = CubicSpline(radii, _head_on_irradiance(radii, diameter / 2, wavelength, distance),
+                         bc_type=((1, 0.0), "not-a-knot"))
+    fractions = pixel**2 * np.einsum("abij,i,j->ab", spline(r), w, w)
+    fractions.flags.writeable = False
+    return fractions
+
+
+def _spread(sources: np.ndarray, kernel_of_column) -> np.ndarray:
+    """
+    The light of *sources* ``(rows, scans, columns)`` as each source column's
+    kernel ``(rows, columns)``, from :func:`_converging_kernel`, spreads it.
+    """
+    n_rows, n_scans, n_columns = sources.shape
+    # Long enough that the convolution along the slit does not wrap round.
+    size = 1 << int(np.ceil(np.log2(3 * n_rows)))
+    scans_at_once = max(1, int(1e7) // (n_columns * size))
+    spread = np.zeros((n_scans, n_columns, n_rows))
+    along = np.moveaxis(sources, 0, -1)  # (scans, columns, rows)
+    for column in np.flatnonzero(np.any(sources != 0, axis=(0, 1))):
+        kernel = kernel_of_column(column)
+        # Offsets from -(n_rows - 1) to n_rows - 1 along the slit, and the
+        # offset of every column from this one.
+        both_ways = np.concatenate([kernel[:0:-1], kernel])[:, np.abs(np.arange(n_columns) - column)]
+        kernel_spectrum = np.fft.rfft(both_ways.T, size)[np.newaxis, :, :]
+        for first in range(0, n_scans, scans_at_once):
+            scans = slice(first, first + scans_at_once)
+            product = np.fft.rfft(along[scans, column, :], size)[:, np.newaxis, :] * kernel_spectrum
+            spread[scans] += np.fft.irfft(product, size)[..., n_rows - 1:2 * n_rows - 1]
+    return np.moveaxis(spread, -1, 0)
+
+
+_LAST_ADDED: dict = {}
+
+
 def apply_euv_pinhole_diffraction(
     photon_counts: NDCube,
     det,
@@ -195,152 +486,83 @@ def apply_euv_pinhole_diffraction(
     tel
 ) -> NDCube:
     """
-    Apply EUV pinhole diffraction effects to photon counts.
-    
-    This adds EUV light that bypasses the aluminum filter through pinholes
-    and creates diffraction patterns. This should be applied after the 
-    focusing optics PSF (primary mirror + grating) since the filter is 
-    positioned after these optical elements.
-    
-    This function correctly handles the physics by:
-    1. Subtracting the filtered EUV signal in pinhole regions 
-    2. Adding the unattenuated EUV signal through pinholes
-    
+    Add the EUV light the filter's pinholes let through.
+
+    Each pinhole passes, for every pixel whose cone of light covers it, the
+    share (hole area / cone area) of that pixel's light that crosses it: the
+    pixels of a half disc :func:`beam_footprint_radius` in radius, beside the
+    hole on the long-wavelength side, each counted by the share of its area
+    inside. Without the foil that light is 1 / T times brighter. Of what the
+    hole adds, 1 - T of the light through it, |1 - t|^2 is diffracted into the
+    hole's Airy pattern about the pixel it was heading for, integrated over
+    the pixels it lands on, and 2 Re[conj(t) (1 - t)] stays in that pixel,
+    where t is the filter's amplitude transmission,
+    :meth:`~euvst_response.config.AluminiumFilter.amplitude_transmission`,
+    at each column's wavelength.
+
     Parameters
     ----------
     photon_counts : NDCube
-        EUV photon counts per pixel (shape: n_slit, n_scan, n_spectral)
-        These should already have filter throughput applied.
+        EUV photons per pixel after the filter and the focusing optics,
+        ``(n_slit, n_scan, n_spectral)``.
     det : Detector_SWC
-        Detector configuration
     sim : Simulation
-        Simulation configuration containing pinhole parameters
+        The pinholes: their diameters, and their positions as fractions of
+        the window.
     tel : Telescope_EUVST
-        Telescope configuration (needed to calculate filter throughput)
-        
+        The filter, and the entrance pupil the beam's f-number comes from.
+
     Returns
     -------
     NDCube
-        Modified photon counts with EUV pinhole contributions added
+        The photons with the pinholes' light added.
     """
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return photon_counts  # No pinholes enabled
-    
-    # Get detector and data properties
-    data_shape = photon_counts.data.shape  # (n_slit, n_scan, n_spectral)
-    n_slit, n_scan, n_spectral = data_shape
-    
-    # Get rest wavelength for EUV calculations
-    rest_wavelength = photon_counts.meta['rest_wav']
-    
-    # Calculate pixel area
-    pixel_area = (det.pix_size*1*u.pix)**2
-    
-    # Initialize additional photon contributions
-    additional_photons = np.zeros_like(photon_counts.data)
-    
-    # Get the wavelength axis and calculate filter throughput for EUV
-    wl_axis = photon_counts.axis_world_coords(2)[0]
-    
-    # Calculate filter throughput at each wavelength
-    filter_throughput_spectrum = np.array([tel.filter.total_throughput(wl) for wl in wl_axis])
-    
-    # Spectral positions are optional here for the same reason as in the
-    # visible path: without them every pinhole projects to the centre of the
-    # spectral window, as it always did.
+
+    n_slit, n_scan, n_spectral = photon_counts.data.shape
+    wavelength = photon_counts.axis_world_coords(2)[0].to(u.m)
+    transmission = np.asarray(tel.filter.amplitude_transmission(wavelength), dtype=complex)
+    stays = 2 * np.real(np.conj(transmission) * (1 - transmission))
+    diffracted = np.abs(1 - transmission) ** 2
+    # The light each pixel would have had without the filter.
+    unfiltered = photon_counts.data / (np.abs(transmission) ** 2)
+
+    pixel = (det.pix_size * u.pix).to_value(u.m)
+    distance = det.filter_distance.to_value(u.m)
+    footprint = beam_footprint_radius(det, tel).to_value(u.m)
+    footprint_area = np.pi * footprint**2 / 2
+    longer_is_higher = bool(wavelength[-1] > wavelength[0])
     spectral_positions = (list(sim.pinhole_positions_spectral)
                           or [None] * len(sim.pinhole_sizes))
+    pinholes = [((diameter / 2).to_value(u.m), float(along_slit), along_spectral)
+                for diameter, along_slit, along_spectral in zip(
+                    sim.pinhole_sizes, sim.pinhole_positions, spectral_positions)]
 
-    for pinhole_diameter, pinhole_position, pinhole_spectral in zip(
-            sim.pinhole_sizes, sim.pinhole_positions, spectral_positions):
-        # Calculate pinhole area
-        pinhole_area = np.pi * (pinhole_diameter / 2)**2
+    # The light is the same in every Monte Carlo iteration, which works it out
+    # again before its noise is drawn, so the last answer is kept.
+    digest = hashlib.blake2b(np.ascontiguousarray(photon_counts.data).tobytes(), digest_size=16)
+    digest.update(np.ascontiguousarray(wavelength.value).tobytes())
+    digest.update(transmission.tobytes())
+    digest.update(repr((pinholes, pixel, distance, footprint)).encode())
+    key = digest.hexdigest()
+    if key not in _LAST_ADDED:
+        added = np.zeros(photon_counts.data.shape)
+        for radius, along_slit, along_spectral in pinholes:
+            centre = pinhole_centre(along_slit, along_spectral, n_slit, n_spectral)
+            share = (np.pi * radius**2 / footprint_area) * half_disc_fractions(
+                (n_slit, n_spectral), centre, footprint / pixel, longer_is_higher)
+            through = unfiltered * share[:, np.newaxis, :]
+            added += through * stays
+            added += _spread(through * diffracted, lambda column: _converging_kernel(
+                n_slit, n_spectral, radius, float(wavelength[column].to_value(u.m)), distance, pixel))
+        added.flags.writeable = False
+        _LAST_ADDED.clear()
+        _LAST_ADDED[key] = added
+    added = _LAST_ADDED[key]
 
-        # === Physics Correction for EUV ===
-        # Current photon_counts already have filter attenuation applied
-        # We need to:
-        # 1. Back-calculate what the unfiltered signal would be
-        # 2. Apply pinhole diffraction to that unfiltered signal  
-        # 3. Subtract the over-counted filtered signal in pinhole regions
-
-        area_ratio = (pinhole_area / pixel_area).to(u.dimensionless_unscaled).value
-        
-        # Calculate theoretical diffraction size for validation
-        # First Airy minimum: r = 1.22 * lambda * distance / diameter
-        theoretical_radius = (1.22 * rest_wavelength * det.filter_distance / pinhole_diameter).to(u.m)
-        theoretical_radius_pixels = (theoretical_radius / (det.pix_size*1*u.pix)).to(u.dimensionless_unscaled).value
-        
-        # Calculate EUV diffraction pattern
-        euv_pattern = calculate_pinhole_diffraction_pattern(
-            detector_shape=(n_slit, n_spectral),
-            pixel_size=det.pix_size*u.pix,
-            pinhole_diameter=pinhole_diameter,
-            pinhole_position_slit=pinhole_position,
-            slit_width=sim.slit_width,
-            plate_scale=det.plate_scale_angle,
-            distance=det.filter_distance,
-            wavelength=rest_wavelength,
-            pinhole_position_spectral=pinhole_spectral,
-        )
-        
-        # Scale the pattern by its absolute normalisation, exactly as the
-        # visible path does.  Dividing by the sum over the detector array would
-        # force every photon through the pinhole onto the detector: the array
-        # would sum to 1 by construction whatever the geometry.  The EUV Airy
-        # pattern is about thirty times smaller than the visible one at the
-        # same diameter, but not small enough for that to be harmless - a
-        # 1 micron hole at 195 Angstrom still has its first minimum 5.95 mm out
-        # against a detector a few mm across, so most of its light misses and
-        # must be lost rather than redistributed.  euv_pattern peaks at 1.0, so
-        # multiplying by the peak per-pixel fraction gives the correct fraction
-        # everywhere and the array sums to less than 1 when light falls off the
-        # detector.
-        peak_fraction = airy_peak_fraction_per_pixel(
-            pinhole_diameter=pinhole_diameter,
-            distance=det.filter_distance,
-            wavelength=rest_wavelength,
-            pixel_size=det.pix_size * u.pix,
-        )
-        euv_pattern_normalized = euv_pattern * peak_fraction
-
-
-        # Process each scan position
-        for i in range(n_scan):
-            # Current filtered signal at this scan position
-            filtered_signal = photon_counts.data[:, i, :]  # Shape: (n_slit, n_spectral)
-            
-            # Back-calculate unfiltered signal (before filter attenuation)
-            # filtered_signal = unfiltered_signal * filter_throughput
-            # So: unfiltered_signal = filtered_signal / filter_throughput
-            unfiltered_signal = filtered_signal / filter_throughput_spectrum[np.newaxis, :]
-            
-            # Calculate what would come through pinhole (unattenuated).
-            # unfiltered_signal * area_ratio is the light collected over the
-            # pinhole's area; the scaled pattern says what fraction of it
-            # reaches each pixel, and does not have to add up to all of it.
-            pinhole_signal = unfiltered_signal * area_ratio * euv_pattern_normalized
-            
-            # Calculate what we incorrectly have from filter in pinhole regions
-            # (filtered signal weighted by diffraction pattern and area ratio)
-            overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
-            
-            # Net correction: add unfiltered pinhole signal, subtract overcounted filtered signal
-            # This simplifies to: filtered_signal * area_ratio * pattern * (1/filter_throughput - 1)
-            # Physical meaning: 
-            # - unfiltered * area_ratio * pattern = total light through pinhole
-            # - filtered * area_ratio * pattern = incorrectly counted filtered light
-            # - difference = net additional light from pinhole
-            correction = (pinhole_signal - overcounted_filtered)
-            
-            # Equivalent simplified form (more efficient):
-            # correction = filtered_signal * area_ratio * euv_pattern * (1/filter_throughput_spectrum[np.newaxis, :] - 1)
-            additional_photons[:, i, :] += correction
-    
-    # Create new photon counts with EUV pinhole contributions
-    new_data = photon_counts.data + additional_photons
-    
     return NDCube(
-        data=new_data,
+        data=photon_counts.data + added,
         wcs=photon_counts.wcs.deepcopy(),
         unit=photon_counts.unit,
         meta=photon_counts.meta,

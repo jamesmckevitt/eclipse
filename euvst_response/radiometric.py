@@ -803,8 +803,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         return electrons  # No pinholes enabled
     
     # Import here to avoid circular imports
-    from .pinhole_diffraction import (
-        airy_peak_fraction_per_pixel, calculate_pinhole_diffraction_pattern)
+    from .pinhole_diffraction import head_on_pinhole_fractions, pinhole_centre
     
     # Get detector and data properties
     data_shape = electrons.data.shape  # Should be (n_slit, n_scan, n_spectral)
@@ -831,36 +830,15 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         vis_photons_per_sec_through_pinhole = sim.vis_sl * pinhole_area
         vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
         
-        # Calculate visible diffraction pattern - this shows how the pinhole photons spread
+        # The share of those photons landing in each pixel: the hole's
+        # near-field diffraction pattern, integrated over the pixels, which
+        # adds up to less than one by the light that misses the window.
         n_slit, n_scan, n_spectral = data_shape
-        vis_pattern = calculate_pinhole_diffraction_pattern(
-            detector_shape=(n_slit, n_spectral),
-            pixel_size=det.pix_size*u.pix,
-            pinhole_diameter=pinhole_diameter,
-            pinhole_position_slit=pinhole_position,
-            slit_width=sim.slit_width,
-            plate_scale=det.plate_scale_angle,
-            distance=det.filter_distance,
-            wavelength=visible_wavelength,
-            pinhole_position_spectral=pinhole_spectral,
-        )
-
-        # Scale the pattern by its ABSOLUTE normalisation rather than by its
-        # sum over the detector array.  Dividing by the array sum forces every
-        # transmitted photon onto the detector, which is badly wrong for small
-        # pinholes: a 1 micron hole at 250 mm puts its first Airy minimum
-        # 183 mm out, so nearly all of its light misses a detector tens of mm
-        # across and must be lost, not redistributed.  vis_pattern peaks at
-        # 1.0, so multiplying by the peak per-pixel fraction gives the correct
-        # per-pixel fraction everywhere, and the array simply sums to less
-        # than 1 when light falls off the detector.
-        peak_fraction = airy_peak_fraction_per_pixel(
-            pinhole_diameter=pinhole_diameter,
-            distance=det.filter_distance,
-            wavelength=visible_wavelength,
-            pixel_size=det.pix_size * u.pix,
-        )
-        vis_pattern_normalized = vis_pattern * peak_fraction
+        vis_pattern_normalized = head_on_pinhole_fractions(
+            (n_slit, n_spectral),
+            pinhole_centre(pinhole_position, pinhole_spectral, n_slit, n_spectral),
+            float(pinhole_diameter.to_value(u.m)), float(visible_wavelength.to_value(u.m)),
+            float(det.filter_distance.to_value(u.m)), float((det.pix_size * u.pix).to_value(u.m)))
 
         vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
 

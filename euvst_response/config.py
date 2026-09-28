@@ -190,6 +190,34 @@ class AluminiumFilter:
     oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
     c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
+    # The layers' indices of refraction, n = 1 - delta + i beta, at the
+    # densities of the throughput tables and from the same source; the
+    # throughput tables' transmission is beta's. Their delta is the phase the
+    # filter gives the light it passes, which amplitude_transmission needs.
+    al_index_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'index_aluminium.dat')
+    oxide_index_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'index_aluminium_oxide.dat')
+    c_index_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'index_carbon.dat')
+
+    def amplitude_transmission(self, wl0: u.Quantity) -> complex | np.ndarray:
+        """
+        The filter's transmission of the light's amplitude, at a wavelength or at each of an array of them.
+
+        Its squared modulus is :meth:`total_throughput`. Its phase is how far
+        the layers put the light behind light that passed through nothing,
+        -2 pi / lambda times the sum of each layer's delta times its
+        thickness. It matters where the two meet: the light through a pinhole
+        interferes with the light through the foil around it.
+        """
+        wl_nm = u.Quantity(wl0).to_value(u.nm)
+        # The index tables are read as the throughput tables are: wavelength
+        # and then delta, the column after it.
+        optical_path = sum(
+            _interp_tr(wl_nm, *_load_throughput_table(table)) * thickness.to_value(u.nm)
+            for table, thickness in ((self.al_index_table, self.al_thickness),
+                                     (self.oxide_index_table, self.oxide_thickness),
+                                     (self.c_index_table, self.c_thickness)))
+        modulus = np.sqrt(u.Quantity(self.total_throughput(u.Quantity(wl0))).to_value(u.dimensionless_unscaled))
+        return modulus * np.exp(-2j * np.pi * optical_path / wl_nm)
 
     def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
         """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""

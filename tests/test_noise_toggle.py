@@ -14,8 +14,8 @@ from ndcube import NDCube
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.monte_carlo import simulate_once
 from euvst_response.pinhole_diffraction import (
-    airy_peak_fraction_per_pixel,
-    calculate_pinhole_diffraction_pattern,
+    head_on_pinhole_fractions,
+    pinhole_centre,
 )
 from euvst_response.radiometric import (
     add_pinhole_visible_light,
@@ -151,14 +151,11 @@ def test_pinhole_light_contributes_its_mean():
                                     Telescope_EUVST(), noise=False)
 
     through = (sim.vis_sl * np.pi * (diameter / 2) ** 2 * t_exp).to_value(u.photon)
-    pattern = calculate_pinhole_diffraction_pattern(
-        detector_shape=(NSLIT, NWAVE), pixel_size=det.pix_size * u.pix,
-        pinhole_diameter=diameter, pinhole_position_slit=0.25,
-        slit_width=sim.slit_width, plate_scale=det.plate_scale_angle,
-        distance=det.filter_distance, wavelength=VISIBLE)
-    peak = airy_peak_fraction_per_pixel(diameter, det.filter_distance, VISIBLE,
-                                        det.pix_size * u.pix)
-    expected = (through * peak * pattern * det.qe_vis
+    shares = head_on_pinhole_fractions(
+        (NSLIT, NWAVE), pinhole_centre(0.25, None, NSLIT, NWAVE), diameter.to_value(u.m),
+        VISIBLE.to_value(u.m), det.filter_distance.to_value(u.m),
+        (det.pix_size * u.pix).to_value(u.m))
+    expected = (through * shares * det.qe_vis
                 * _electrons_per_photon(det, VISIBLE))
 
     assert np.all(expected > 0)
