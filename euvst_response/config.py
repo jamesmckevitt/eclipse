@@ -111,6 +111,13 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
 def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float | np.ndarray:
     """Linear interpolation: a float for one wavelength, an array for several."""
     f = scipy.interpolate.interp1d(wl_tab, tr_tab, bounds_error=False, fill_value=np.nan)
+    # A table's own end, reached through a change of unit, can land a part in
+    # 1e16 beyond it, as 214 Angstrom does at 21.400000000000002 nm.
+    wavelength_nm = np.asarray(wavelength_nm, dtype=float)
+    ends = np.asarray(wl_tab.value if hasattr(wl_tab, "value") else wl_tab, dtype=float)
+    for end in (ends[0], ends[-1]):
+        wavelength_nm = np.where(np.isclose(wavelength_nm, end, rtol=1e-12, atol=0.0),
+                                 end, wavelength_nm)
     out = f(wavelength_nm)
     return float(out) if np.ndim(out) == 0 else out
 
@@ -238,7 +245,8 @@ class Detector_SWC:
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
 
     def __post_init__(self):
-        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature,
+                                                        self._dark_current_293k)
 
     @property
     def si_fano(self) -> float:
@@ -246,9 +254,11 @@ class Detector_SWC:
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
     @staticmethod
-    def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
-        """Calculate dark current for SWC (NIMO) CCD."""
-        return calculate_dark_current(temp, Detector_SWC._dark_current_293k, ccd_type="NIMO")
+    def calculate_dark_current(temp: u.Quantity,
+                               dark_current_293k: u.Quantity | None = None) -> u.Quantity:
+        """Calculate dark current for SWC (NIMO) CCD, from its rate at 293 K, the default if not given."""
+        rate = Detector_SWC._dark_current_293k if dark_current_293k is None else dark_current_293k
+        return calculate_dark_current(temp, rate, ccd_type="NIMO")
 
     @property
     def plate_scale_length(self) -> u.Quantity:
@@ -277,16 +287,19 @@ class Detector_EIS:
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
     def __post_init__(self):
-        self.dark_current = self.calculate_dark_current(self.ccd_temperature)
+        self.dark_current = self.calculate_dark_current(self.ccd_temperature,
+                                                        self._dark_current_293k)
 
     @property
     def plate_scale_length(self) -> u.Quantity:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
     @staticmethod
-    def calculate_dark_current(temp: u.Quantity) -> u.Quantity:
-        """Calculate dark current for EIS (AIMO) CCD."""
-        return calculate_dark_current(temp, Detector_EIS._dark_current_293k, ccd_type="AIMO")
+    def calculate_dark_current(temp: u.Quantity,
+                               dark_current_293k: u.Quantity | None = None) -> u.Quantity:
+        """Calculate dark current for EIS (AIMO) CCD, from its rate at 293 K, the default if not given."""
+        rate = Detector_EIS._dark_current_293k if dark_current_293k is None else dark_current_293k
+        return calculate_dark_current(temp, rate, ccd_type="AIMO")
 
 
 @dataclass
@@ -304,6 +317,12 @@ class Telescope_EUVST:
     # slit width (giving 0.405 arcsec, 43.00 mA), so the spectral PSF of any
     # other slit is worked out from it; see radiometric.spectral_psf_fwhm.
     psf_slit_width: u.Quantity = 0.2 * u.arcsec
+    # The telescope's blur across the slit: the FWHM of the image it forms at
+    # the slit, which decides how much light from beside the slit falls into
+    # it. None leaves it out, so that the slit takes in only the light it
+    # covers. It is not psf_params[0], the blur along the slit measured at the
+    # detector, which includes the spectrograph after the slit.
+    psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -455,6 +474,9 @@ class Telescope_EIS:
     # same whichever slit is used. Setting this says which slit psf_params was
     # measured with, and the spectral PSF then follows the slit as for SWC.
     psf_slit_width: u.Quantity | None = None
+    # The telescope's blur across the slit, the FWHM of its image at the
+    # slit, as for Telescope_EUVST. None leaves it out.
+    psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
     calibration: str = "ground"
     date: str | None = None
 
@@ -525,7 +547,7 @@ class Simulation:
     slit_width: u.Quantity = 0.2 * u.arcsec
     ncpu: int = -1
     instrument: str = "SWC"
-    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before filter
+    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before SWC's filter; at EIS's CCD
     psf: bool = False
     # What the spatial PSF convolution assumes lies beyond the ends of the
     # slit. "replicate" continues the edge rows outward, which says the Sun

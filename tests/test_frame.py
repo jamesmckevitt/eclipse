@@ -427,6 +427,18 @@ def test_noise_draws_around_the_same_mean():
     assert noisy.std() > 0.0
 
 
+def test_read_noise_takes_a_dark_pixel_below_zero_as_often_as_above():
+    """A CCD reads out above a bias level; clipping at zero raised the mean of a dark frame."""
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.dark_current = 0 * u.electron / (u.pix * u.s)
+    det.read_noise_rms = 50 * u.electron / u.pix
+    np.random.seed(20260928)
+    electrons = detect(np.zeros((200, 200)), np.full(200, 192.03) * u.Angstrom, 1.0 * u.s, det)
+    assert (electrons < 0).any()
+    # The mean of zero, to a few standard errors of the pixels drawn.
+    assert abs(electrons.mean()) < 5 * 50 / np.sqrt(electrons.size)
+
+
 def test_whole_photons_are_required_with_noise_on():
     det = Detector_SWC()
     with pytest.raises(ValueError, match="whole numbers"):
