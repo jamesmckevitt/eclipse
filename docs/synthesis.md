@@ -286,23 +286,18 @@ synthesise-spectra --help
 Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 
 - `Fe` - element symbol, capitalised as usual (`Fe`, `Si`, `S`, `O`).
-- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so
-  `Fe12` is Fe XII, not Fe XI or Fe XIII.
+- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so `Fe12` is Fe XII, not Fe XI or Fe XIII.
 - `195.1190` - rest wavelength in Angstrom.
 
-The same names are used by `--lines`, by the `reference_line` key in the
-instrument configuration, and as the keys of `line_cubes` in the output file.
+The same names are used by `--lines`, by the `reference_line` key in the instrument configuration, and as the keys of `line_cubes` in the output file.
 
-The wavelength does not have to be exact. ECLIPSE finds the nearest transition of
-that ion in CHIANTI and prints both the requested and matched wavelengths:
+The wavelength does not have to be exact. ECLIPSE finds the nearest transition of that ion in CHIANTI and prints both the requested and matched wavelengths:
 
 ```text
   Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom (delta=0.0000 Angstrom)
 ```
 
-Check that line. A large difference means the transition you meant is not in the
-database for that ion, and a neighbouring one was picked up instead. A name that
-does not match the pattern at all raises `ValueError` immediately.
+Check that line. A large difference means the transition you meant is not in the database for that ion, and a neighbouring one was picked up instead. A name that does not match the pattern at all raises `ValueError` immediately.
 
 ## Performance tips
 
