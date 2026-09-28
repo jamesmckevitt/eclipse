@@ -59,6 +59,57 @@ _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
 # Simulation objects itself and only takes these from the section. The rest
 # (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
 # writing one here would have been parsed and then dropped.
+# Under MPI, a copy of the stderr a rank other than the first started with,
+# before its output is silenced.
+_STARTING_STDERR = None
+
+
+def _cpu_list(text: str) -> list:
+    """The CPUs of a Linux CPU list such as ``0-3,8,10-11``."""
+    cpus = []
+    for part in text.strip().split(","):
+        if part:
+            first, _, last = part.partition("-")
+            cpus.extend(range(int(first), int(last or first) + 1))
+    return cpus
+
+
+def _allowed_cpus() -> list:
+    """
+    The CPUs this process's cpuset allows, which SLURM confines a job step to on its node.
+
+    The current affinity where there is no cpuset to read, which an MPI
+    library may already have narrowed to a core.
+    """
+    try:
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            hierarchy, controllers, path = line.split(":", 2)
+            if hierarchy == "0" or "cpuset" in controllers.split(","):
+                root = Path("/sys/fs/cgroup") if hierarchy == "0" else Path("/sys/fs/cgroup/cpuset")
+                for name in ("cpuset.cpus.effective", "cpuset.cpus"):
+                    listed = root / path.lstrip("/") / name
+                    if listed.is_file() and listed.read_text().strip():
+                        return _cpu_list(listed.read_text())
+    except (OSError, ValueError):
+        pass
+    return sorted(os.sched_getaffinity(0))
+
+
+def _rank_cpus(environ, allowed: list) -> list:
+    """
+    This MPI rank's CPUs: SLURM_CPUS_PER_TASK of *allowed*, taken in turn by its local task id.
+
+    All of *allowed* where there are not enough for every task on the node
+    to have its own, and none, to leave the affinity alone, where SLURM does
+    not say how many a task has.
+    """
+    per_task, local = environ.get("SLURM_CPUS_PER_TASK"), environ.get("SLURM_LOCALID")
+    if per_task is None or local is None:
+        return []
+    per_task, local = int(per_task), int(local)
+    share = allowed[local * per_task:(local + 1) * per_task]
+    return share if len(share) == per_task else list(allowed)
+
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
                     "spectral_psf", "noise", "enable_pinholes"}
 
@@ -430,11 +481,13 @@ def main() -> None:
     from .utils import _get_mpi_info
     _comm, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
-        # Intel MPI pins each rank to cores, breaking joblib/loky.
-        # Reset affinity to the full SLURM allocation.
-        _slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
-        if _slurm_cpus is not None:
-            os.sched_setaffinity(0, range(int(_slurm_cpus)))
+        # Intel MPI pins each rank to cores, breaking joblib/loky. Widen it
+        # to this rank's share of the CPUs the job step has on its node,
+        # rather than to CPUs 0 to n, which every rank shared and which, on a
+        # node shared with another job, need not be the job's at all.
+        _cpus = _rank_cpus(os.environ, _allowed_cpus())
+        if _cpus:
+            os.sched_setaffinity(0, _cpus)
 
         if _mpi_rank == 0:
             print(f"MPI distributed mode: {_mpi_size} processes "
@@ -444,6 +497,10 @@ def main() -> None:
             # output. Redirect at the OS file-descriptor level, not
             # just the Python objects, because SLURM captures fd 1/2 directly
             # and tqdm can bypass the Python sys.stderr object.
+            # The stderr it started with is kept, for an error that has to be
+            # said before the run is aborted.
+            global _STARTING_STDERR
+            _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
             os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
             os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
@@ -497,6 +554,11 @@ def main() -> None:
 
     n_iter = config.get("n_iter", 25)
     ncpu = config.get("ncpu", -1)
+    # joblib and reproject both take it, and agree only on these. 0, which
+    # means every CPU to the synthesis's n_workers, failed at the first fit.
+    if isinstance(ncpu, bool) or not isinstance(ncpu, int) or (ncpu < 1 and ncpu != -1):
+        raise ValueError(f"'ncpu' must be a whole number of CPUs, 1 or more, or -1 for all "
+                         f"of them, got {ncpu!r}.")
 
     # In MPI mode, if a ncpu value specified, cap it to
     # the CPUs available to this rank so joblib doesn't oversubscribe.

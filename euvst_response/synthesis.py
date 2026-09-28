@@ -773,7 +773,10 @@ def compute_goft_fiasco(
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
     if n_workers <= 0:
-        n_workers = os.cpu_count() or 1
+        # The CPUs this process may run on, as a SLURM step gives it, not
+        # the whole node's, which would start a worker per CPU of the node.
+        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
+                     else os.cpu_count() or 1)
     use_parallel = n_workers > 1 and n_ions > 1
 
     if use_parallel:
