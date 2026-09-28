@@ -701,7 +701,8 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
         rounding in ``np.arange`` and ``np.linspace`` without admitting a
         grid anyone built unevenly on purpose.  The rounding of a grid
         computed or stored in single precision, as simulation codes often
-        write theirs, is admitted too, whatever *rtol*.
+        write theirs, is admitted too, whatever *rtol*, where it is under
+        half a spacing.
 
     Returns
     -------
@@ -735,11 +736,15 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
 
     # A value computed and stored in single precision is off by up to a few
     # units in its last place, which is a part in about 1e7 of the largest
-    # value of the grid, however fine its spacing.
+    # value of the grid, however fine its spacing. Where that reaches half a
+    # spacing, single precision cannot hold the grid: a value that far off
+    # lies in its neighbour's cell. Below it, every value stays in its own
+    # cell and the grid increases throughout.
     rounding = _SINGLE_PRECISION_ULPS * np.finfo(np.float32).eps * np.abs(plain).max()
+    tolerance = max(rtol * step, rounding if rounding < step / 2 else 0.0)
     offsets = plain - (plain[0] + np.arange(plain.size) * step)
     worst = int(np.argmax(np.abs(offsets)))
-    if abs(offsets[worst]) > max(rtol * step, rounding):
+    if abs(offsets[worst]) > tolerance:
         raise ValueError(
             f"{name} must be evenly spaced. Element {worst} is {plain[worst]:.10g}, "
             f"{offsets[worst] / step:+.3g} of a spacing ({step:.6g}) from where an evenly "

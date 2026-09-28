@@ -98,6 +98,18 @@ def test_a_grid_rounded_to_single_precision_counts_as_even(dtype):
         require_uniform_grid(slipped, "z")
 
 
+def test_single_precision_rounding_is_not_admitted_where_it_reaches_half_a_spacing():
+    """
+    Near 1e8 single precision rounds by more than a spacing of 1, so it cannot hold such a grid.
+
+    Spacings of 1, 1, 1 and 7 are uneven there as anywhere, and an even grid
+    there is held to the usual tolerance and passes it.
+    """
+    with pytest.raises(ValueError, match=r"Element 3 is 100000003, -1.8 of a spacing"):
+        require_uniform_grid(1e8 + np.array([0.0, 1.0, 2.0, 3.0, 10.0]), "z")
+    assert require_uniform_grid(1e8 + np.arange(5.0), "z") == 1.0
+
+
 @pytest.mark.parametrize("centres", [
     np.array([np.nan, 5.0, 10.0, 15.0]),
     np.array([0.0, 5.0, np.nan, 15.0]),
