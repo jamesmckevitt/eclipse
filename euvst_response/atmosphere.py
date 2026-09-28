@@ -652,6 +652,28 @@ def mass_per_electron_from_abundances(abundances: Dict[str, float]) -> float:
     return mass / electrons
 
 
+def _offer_database_build(hdf5_dbase_root: Optional[str] = None) -> None:
+    """
+    Offer to build fiasco's CHIANTI database if it is missing, as a new user's first run needs.
+
+    fiasco asks only when an ``Ion`` is made. Anything that reads the
+    database before that, or makes its ions in worker processes, which have
+    no terminal to answer from, calls this first, in the process the user
+    runs.
+    """
+    import fiasco
+    from fiasco.util import check_database
+
+    root = fiasco.defaults["hdf5_dbase_root"] if hdf5_dbase_root is None else hdf5_dbase_root
+    check_database(root)
+    # Declined, so said here rather than by each worker asking again.
+    if not Path(root).is_file():
+        raise FileNotFoundError(
+            f"There is no CHIANTI database for fiasco at {root}, and it was not built. "
+            f"Answer yes when asked to build it, or build it as fiasco's documentation "
+            f"describes.")
+
+
 @lru_cache(maxsize=None)
 def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> float:
     """
@@ -676,6 +698,7 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
     import fiasco
     from fiasco.util.exceptions import MissingDatasetException
 
+    _offer_database_build(hdf5_dbase_root)
     ion_kwargs = {} if hdf5_dbase_root is None else {"hdf5_dbase_root": hdf5_dbase_root}
     ions = fiasco.list_ions(hdf5_dbase_root)
     abundances = {}

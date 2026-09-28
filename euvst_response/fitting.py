@@ -428,10 +428,10 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
 
     wv_A = wv_cm * CM_TO_A
 
-    # Loosen tolerances for both LM and TRF methods.  The spectra are
-    # noisy so 1e-4 tolerances introduce negligible velocity error
-    # (<0.01 km/s at good S/N, ~0.15 km/s at very faint signals).
-    # Cap function evaluations as a safety net (fits converge in ~50).
+    # The tolerances are scipy's own. Loosened to 1e-4 they stopped lm while
+    # a blend's centres were still over a km/s from where the fit converges:
+    # the centres are some 195 Angstrom from zero, so a relative step of
+    # 1e-4 in them is 30 km/s. Cap function evaluations as a safety net.
     # Explicitly select 'trf' when bounds are active, 'lm' otherwise;
     # each method uses a different keyword for max evaluations.
     #
@@ -456,12 +456,10 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
             # evaluation count, so it is insurance against worse-conditioned
             # windows rather than a fix for an observed failure.
             "x_scale": "jac",
-            "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
     else:
         fit_kwargs: dict = {
             "method": "lm", "maxfev": max_iter * (n_free + 1),
-            "ftol": 1e-4, "gtol": 1e-4, "xtol": 1e-4,
         }
 
     with warnings.catch_warnings():
@@ -743,6 +741,24 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 # ---------------------------------------------------------------------------
 #  Public fitting entry point
 # ---------------------------------------------------------------------------
+def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarray,
+                  n_components: int) -> np.ndarray:
+    """
+    Which fits cannot have measured a line, to be counted as failed; the widths are made positive in place.
+
+    A Gaussian is the same whatever the sign of its width, so a fit that
+    found a negative one is kept with its sign turned, which also turns the
+    sign of the intensity worked out from it. A spectrum that is the same
+    at every wavelength, as one with no photons at all is, holds no line to
+    fit, and a component wider than the whole window is the background, not
+    a line.
+    """
+    widths = np.abs(params[..., 2:3 * n_components:3])
+    params[..., 2:3 * n_components:3] = widths
+    flat = np.all(spectra == spectra[..., :1], axis=-1)
+    too_wide = np.any(widths > np.ptp(wavelength), axis=-1)
+    return flat | too_wide
+
 
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
@@ -795,6 +811,16 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
 
+    # A component placed outside the window has no line to fit, and would
+    # come back at its guess with no spread, as a perfect measurement.
+    if fit_config is not None and not fit_config.is_single:
+        for idx, component in enumerate(fit_config.components):
+            if not wv.min() <= component.wavelength.to(wv.unit) <= wv.max():
+                raise ValueError(
+                    f"fitting.components[{idx}] is at {component.wavelength}, outside the "
+                    f"observed window, {wv.min().to(u.AA):.3f} to {wv.max().to(u.AA):.3f}, "
+                    f"so there is no line of it to fit. Check its wavelength.")
+
     # The iteration limit applies to every path. Without a fitting block there
     # is no FitConfig to carry it, so fall back to the same default.
     max_iter = FitConfig.max_iter if fit_config is None else fit_config.max_iter
@@ -818,6 +844,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
         data_array = np.stack([r[0] for r in results], axis=0)
         failed = ~np.stack([r[1] for r in results], axis=0)
+        failed |= _unmeasurable(data_array, signal_cube.data, wv.value, 1)
         units_list = [signal_cube.unit, wv.unit, wv.unit, signal_cube.unit]
         if return_failed:
             return data_array, units_list, failed
@@ -875,6 +902,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     data_array = np.stack([r[0] for r in results], axis=0)
     failed = ~np.stack([r[1] for r in results], axis=0)
+    failed |= _unmeasurable(data_array, signal_cube.data, wv.value, fit_config.n_components)
 
     # Build units list: [signal, wl, wl, signal, wl, wl, ..., signal]
     units_list = []
