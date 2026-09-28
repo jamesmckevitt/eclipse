@@ -167,3 +167,53 @@ class TestTelescope:
         tel = Telescope_EIS()
         assert tel.ea_and_throughput(195.0 * u.AA).isscalar
         assert not tel.ea_and_throughput([195.0, 196.0] * u.AA).isscalar
+
+
+# Areas from SolarSoft itself, IDL 8.8: eis_ea (ground), eis_ea_gdz, which is
+# eis_ea over eis_ltds's correction (dz2013), eis_ea_nrl (warren2014) and
+# interpol_eis_ea with the bundled smooth fit (dz2025). Between the tables'
+# nodes, where each routine's own interpolation decides the value: a linear
+# one in place of eis_ltds's splines put dz2013 over twice too bright near
+# 168 A. IDL works in single precision, which the tolerance allows for.
+IDL_BETWEEN_NODES = [
+    ("ground", None, 172.5, 8.67057301e-04),
+    ("ground", None, 203.75, 4.46710475e-02),
+    ("ground", None, 212.5, 8.83354433e-03),
+    ("ground", None, 268.25, 1.07728504e-01),
+    ("dz2013", "2010-01-01T00:00:00", 172.5, 3.56071861e-04),
+    ("dz2013", "2010-01-01T00:00:00", 203.75, 4.39554863e-02),
+    ("dz2013", "2010-01-01T00:00:00", 268.25, 6.07873648e-02),
+    ("warren2014", "2015-06-03T00:00:00", 172.5, 7.00180070e-04),
+    ("warren2014", "2015-06-03T00:00:00", 203.75, 8.20269734e-02),
+    ("warren2014", "2015-06-03T00:00:00", 212.5, 2.37968583e-02),
+    ("warren2014", "2015-06-03T00:00:00", 268.25, 6.13164417e-02),
+    ("dz2025", "2020-01-01T00:00:00", 172.5, 2.16257467e-04),
+    ("dz2025", "2020-01-01T00:00:00", 203.75, 3.23750749e-02),
+    ("dz2025", "2020-01-01T00:00:00", 212.5, 8.24429933e-03),
+    ("dz2025", "2020-01-01T00:00:00", 268.25, 3.77405398e-02),
+]
+
+
+@pytest.mark.parametrize("method, date, wavelength, expected", IDL_BETWEEN_NODES)
+def test_areas_between_the_nodes_match_solarsoft(method, date, wavelength, expected):
+    area = eis_calibration.effective_area(wavelength, date, method)[0]
+    assert area == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("method, date, message", [
+    ("dz2013", "2006-01-01", "before 22 September 2006.*ground calibration is used"),
+    ("dz2013", "2020-01-01", "after 14 September 2012.*decay is held"),
+    ("dz2025", "2024-01-01", "outside 2007-04-01.*nearer end of the fit"),
+])
+def test_a_date_beyond_a_fitted_range_is_said_to_be(method, date, message):
+    """SolarSoft prints the same; the value is SolarSoft's too."""
+    eis_calibration._interpolator.cache_clear()
+    with pytest.warns(UserWarning, match=message):
+        area = eis_calibration.effective_area(268.25, date, method)[0]
+    if method == "dz2013" and date.startswith("2006"):
+        assert area == pytest.approx(eis_calibration.effective_area(268.25)[0], rel=1e-12)
+    if method == "dz2013" and date.startswith("2020"):
+        assert area == pytest.approx(4.62971665e-02, rel=1e-4)
+    if method == "dz2025":
+        assert eis_calibration.effective_area(203.75, date, method)[0] == pytest.approx(
+            2.80065313e-02, rel=1e-4)
