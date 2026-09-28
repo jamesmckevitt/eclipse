@@ -45,14 +45,20 @@ def _shifted(rest, velocity):
     return rest * (1 + velocity / const.c)
 
 
-@pytest.mark.parametrize("backend", [None, "mpfit"])
-def test_a_noiseless_blend_is_fitted_to_where_it_is(backend):
-    """The default scipy lm stopped over 4 km/s short on this untied pair."""
+@pytest.mark.parametrize("backend, positive", [(None, False), (None, True), ("mpfit", False)])
+def test_a_noiseless_blend_is_fitted_to_where_it_is(backend, positive):
+    """
+    The default scipy lm stopped over 4 km/s short on this untied pair.
+
+    Bounding the amplitudes positive fits with trf instead, whose
+    tolerances changed too.
+    """
     velocity = 10 * u.km / u.s
     sigma = 0.03 * u.Angstrom
     profile = (_gaussian(1000.0, _shifted(REST, velocity), sigma)
                + _gaussian(300.0, _shifted(BLEND, velocity), sigma) + 10.0)
-    config = FitConfig(components=[FitComponent(REST), FitComponent(BLEND)], backend=backend)
+    config = FitConfig(components=[FitComponent(REST), FitComponent(BLEND)], backend=backend,
+                       constrain_positive_intensity=positive)
     data, _, failed = fit_cube_gauss(_cube(profile), n_jobs=1, fit_config=config,
                                      return_failed=True)
     assert not failed.any()
