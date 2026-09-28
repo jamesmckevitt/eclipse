@@ -259,7 +259,7 @@ synthesise-spectra --help
 **Velocity Grid:**
 
 - `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`)
-- `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`). The bins step out from zero, so a static plasma sits on the middle of one, and reach at least this far. Plasma faster than that emits beyond the synthesised wavelengths and is left out of the spectra, with a warning saying how much of the emission measure it is.
+- `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`). Plasma faster than this limit is left out of the spectra, with a warning saying how much of the emission measure it is.
 
 **Integration and Viewing:**
 
