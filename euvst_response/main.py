@@ -55,10 +55,6 @@ _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z
                    "goft_temperature_chunk"}
 _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
 
-# The Simulation dataclass has more fields than this, but main() builds its
-# Simulation objects itself and only takes these from the section. The rest
-# (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
-# writing one here would have been parsed and then dropped.
 # Under MPI, a copy of the stderr a rank other than the first started with,
 # before its output is silenced.
 _STARTING_STDERR = None
@@ -74,13 +70,8 @@ def _cpu_list(text: str) -> list:
     return cpus
 
 
-def _allowed_cpus() -> list:
-    """
-    The CPUs this process's cpuset allows, which SLURM confines a job step to on its node.
-
-    The current affinity where there is no cpuset to read, which an MPI
-    library may already have narrowed to a core.
-    """
+def _cpuset():
+    """The CPUs this process's cgroup cpuset allows, or None where there is none to read."""
     try:
         for line in Path("/proc/self/cgroup").read_text().splitlines():
             hierarchy, controllers, path = line.split(":", 2)
@@ -92,7 +83,26 @@ def _allowed_cpus() -> list:
                         return _cpu_list(listed.read_text())
     except (OSError, ValueError):
         pass
-    return sorted(os.sched_getaffinity(0))
+    return None
+
+
+def _allowed_cpus(environ, cpuset, affinity) -> list:
+    """
+    The CPUs this job step has on its node, for its ranks to share.
+
+    SLURM confines a step to its CPUs with a cpuset, which may be wider than
+    the *affinity* an MPI library narrowed a rank to, so the *cpuset* is
+    taken where it is the step's: no more CPUs than SLURM_CPUS_ON_NODE says
+    the job has there, and holding the affinity. Where SLURM does not
+    confine steps, the cpuset is the whole node, and taking CPUs from it
+    could land on another job's, so the affinity is kept, as it is where
+    there is no cpuset or SLURM does not say.
+    """
+    on_node = environ.get("SLURM_CPUS_ON_NODE")
+    if (cpuset and on_node is not None and on_node.isdigit()
+            and len(cpuset) <= int(on_node) and set(affinity) <= set(cpuset)):
+        return list(cpuset)
+    return list(affinity)
 
 
 def _rank_cpus(environ, allowed: list) -> list:
@@ -110,6 +120,11 @@ def _rank_cpus(environ, allowed: list) -> list:
     share = allowed[local * per_task:(local + 1) * per_task]
     return share if len(share) == per_task else list(allowed)
 
+
+# The Simulation dataclass has more fields than this, but main() builds its
+# Simulation objects itself and only takes these from the section. The rest
+# (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
+# writing one here would have been parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
                     "spectral_psf", "noise", "enable_pinholes"}
 
@@ -485,7 +500,8 @@ def main() -> None:
         # to this rank's share of the CPUs the job step has on its node,
         # rather than to CPUs 0 to n, which every rank shared and which, on a
         # node shared with another job, need not be the job's at all.
-        _cpus = _rank_cpus(os.environ, _allowed_cpus())
+        _cpus = _rank_cpus(os.environ, _allowed_cpus(os.environ, _cpuset(),
+                                                     sorted(os.sched_getaffinity(0))))
         if _cpus:
             os.sched_setaffinity(0, _cpus)
 

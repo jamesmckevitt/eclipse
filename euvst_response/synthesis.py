@@ -751,7 +751,8 @@ def compute_goft_fiasco(
         spawns a separate process (to avoid HDF5 fork-safety issues) and
         imports fiasco independently, so there is a startup cost per
         worker.  Only useful when computing lines from 2+ distinct ions.
-        Defaults to 0, which uses ``os.cpu_count()``.
+        Defaults to 0, which uses the number of CPUs this process may run
+        on, as a SLURM job step gives it, rather than the whole node's.
     hdf5_dbase_root : str or `~pathlib.Path`, optional
         CHIANTI HDF5 database to use.  Defaults to fiasco's own, which comes
         from ``~/.fiasco/fiascorc``.  Pass this to run against a database

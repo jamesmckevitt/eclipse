@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from euvst_response import cli
-from euvst_response.main import _cpu_list, _rank_cpus
+from euvst_response.main import _allowed_cpus, _cpu_list, _rank_cpus
 
 # The package's own monte_carlo is the function, not the module.
 monte_carlo = importlib.import_module("euvst_response.monte_carlo")
@@ -43,6 +43,24 @@ def test_a_cpu_list_is_read_as_linux_writes_it():
 ])
 def test_each_rank_runs_on_its_share_of_the_jobs_cpus(environ, cpus):
     assert _rank_cpus(environ, list(range(16, 24))) == cpus
+
+
+STEP = list(range(16, 24))
+NODE = list(range(128))
+
+
+@pytest.mark.parametrize("environ, cpuset, affinity, allowed", [
+    # The step's cpuset, wider than the core an MPI library pinned the rank to.
+    ({"SLURM_CPUS_ON_NODE": "8"}, STEP, [17], STEP),
+    # A cpuset that is the whole node, where SLURM does not confine steps to
+    # their cores, could hold other jobs' CPUs: the affinity is kept.
+    ({"SLURM_CPUS_ON_NODE": "8"}, NODE, [17], [17]),
+    ({}, STEP, [17], [17]),
+    ({"SLURM_CPUS_ON_NODE": "8"}, None, [17], [17]),
+    ({"SLURM_CPUS_ON_NODE": "8"}, STEP, [3], [3]),
+])
+def test_the_cpuset_is_shared_only_where_it_is_the_jobs(environ, cpuset, affinity, allowed):
+    assert _allowed_cpus(environ, cpuset, affinity) == allowed
 
 
 def test_a_failing_rank_says_so_and_ends_the_run(monkeypatch, capfd):
