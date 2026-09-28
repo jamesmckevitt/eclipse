@@ -1219,3 +1219,18 @@ def test_a_pickle_of_a_class_this_version_lacks_is_named(tmp_path, monkeypatch):
         load_results(tmp_path / "old.pkl")
     with pytest.raises(ValueError, match="cannot be unpickled"):
         results_file.convert_results_pickle(tmp_path / "old.pkl")
+
+
+def test_a_wcs_keeps_its_time_and_its_observer(tmp_path):
+    """The file promises them back; a sunpy map's WCS carries both."""
+    wcs = _wcs()
+    wcs.wcs.dateobs = "2024-03-20T00:00:00"
+    wcs.wcs.aux.hgln_obs = 0.0
+    wcs.wcs.aux.hglt_obs = 7.1
+    wcs.wcs.aux.dsun_obs = 1.4e11
+    wcs.wcs.aux.rsun_ref = 695700000.0
+    save_results(tmp_path / "out.h5", {"wcs": wcs})
+    back = load_results(tmp_path / "out.h5")["wcs"]
+    assert back.wcs.dateobs.startswith("2024-03-20T00:00:00")
+    assert (back.wcs.aux.hgln_obs, back.wcs.aux.hglt_obs, back.wcs.aux.dsun_obs,
+            back.wcs.aux.rsun_ref) == pytest.approx((0.0, 7.1, 1.4e11, 695700000.0))
