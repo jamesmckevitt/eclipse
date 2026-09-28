@@ -15,8 +15,8 @@ import gzip
 import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
-from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
-                              pad_spectral_axis, rebin_spectra)
+from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
+                              create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
@@ -1003,6 +1003,20 @@ def main() -> None:
     for combo_values in combinations:
         _combination(combo_values)
 
+    def _check_offchip_bins(combinations, fov_along_slit):
+        """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""
+        for combo_values in combinations:
+            _, n_bin, _, _, _, det, _ = _combination(combo_values)
+            n_slit = _whole_pixels(fov_along_slit, det.plate_scale_angle)
+            if n_bin > n_slit:
+                raise ValueError(
+                    f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
+                    f"slit, so there would be nothing left; bin at most {n_slit}.")
+
+    # The off-chip binning is checked against the scene once it is first
+    # rebinned; a uniform intensity is made with the rows it bins.
+    offchip_checked = uniform_intensity_mode
+
     for combination_idx, combo_values in enumerate(combinations, start=1):
         (combo, offchip_bin_slit, raster_repeat, filter_obj, TEL, DET,
          SIM) = _combination(combo_values)
@@ -1098,6 +1112,13 @@ def main() -> None:
                         meta=raster_meta if synthesis_series_mode else file_meta)
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
+                if not offchip_checked:
+                    # The scene is as long along the slit for every
+                    # combination, so the rows each one's plate scale gives
+                    # it are known now, before any combination has run.
+                    _check_offchip_bins(combinations,
+                                        cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
+                    offchip_checked = True
 
         cube_reb = cube_reb_cache[cube_reb_key]
 

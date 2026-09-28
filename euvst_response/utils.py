@@ -442,6 +442,11 @@ def _construct_mapping_once(loader, node, deep=False):
     # written twice lost the whole of its first block to the defaults.
     seen = set()
     for key_node, _ in node.value:
+        # A merge key, as in "<<: *anchor", is not a key of its own:
+        # construct_mapping brings in the anchor's keys, which the keys given
+        # beside it may override, as YAML has it.
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
         key = loader.construct_object(key_node, deep=deep)
         if key in seen:
             raise yaml.constructor.ConstructorError(
@@ -498,6 +503,11 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
         if key in list_fields:
             parsed = parse_yaml_input(val)
             fixed[key] = parsed if isinstance(parsed, list) else [parsed]
+        elif key.endswith("_table") and isinstance(val, (list, tuple)):
+            # A result's parameters leave out the tables, which are files,
+            # so a sweep over them would give each table's results one key.
+            raise ValueError(f"'{class_name}.{key}' names one table; to compare tables, "
+                             f"run each in its own configuration.")
         else:
             if key in string_fields:
                 parsed = list(val) if isinstance(val, (list, tuple)) else val

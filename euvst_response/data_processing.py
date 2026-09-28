@@ -372,7 +372,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
         order='bilinear',
     ) * new_cube_spec_hp.unit
 
-    return new_cube_spec_hp_spat
+    # The scene's extent along the slit, from which the rows it covers at
+    # any plate scale follow, as main checks off-chip binning against.
+    return NDCube(new_cube_spec_hp_spat.data, wcs=new_cube_spec_hp_spat.wcs,
+                  unit=new_cube_spec_hp_spat.unit,
+                  meta={**(new_cube_spec_hp_spat.meta or {}), "fov_along_slit": fov_y.to(u.arcsec)})
 
 
 def rebin_atmosphere(cube_sim, det, sim, use_dask=False):

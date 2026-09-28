@@ -68,6 +68,32 @@ def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
     assert np.isfinite(telescope.primary_mirror_efficiency(172.0 * u.AA))
 
 
+def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
+    """Skipped, 0.l03 would have left the curve interpolated across the row it was in."""
+    (tmp_path / "slip.dat").write_text("# reflectance\n17.0 0.097\n17.2 0.l03\n17.4 0.110\n")
+    with pytest.raises(ValueError, match=r"slip.dat, line 3: '17.2 0.l03' is not a wavelength"):
+        _load_throughput_table(tmp_path / "slip.dat")
+    (tmp_path / "empty.dat").write_text("# nothing here\n")
+    with pytest.raises(ValueError, match="has no lines of a wavelength and a throughput"):
+        _load_throughput_table(tmp_path / "empty.dat")
+
+
+def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
+    """A result's parameters leave the tables out, so a sweep would give both tables one key."""
+    with pytest.raises(ValueError, match="'telescope.pm_table' names one table"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "telescope": {"pm_table": ["a.dat", "b.dat"]}})
+
+
+def test_a_yaml_merge_key_is_read_as_yaml_reads_it():
+    from euvst_response.utils import load_yaml_config
+
+    text = "a: &a {x: 1, y: 1}\nb:\n  <<: *a\n  y: 2\n"
+    assert load_yaml_config(text) == yaml.safe_load(text) == {"a": {"x": 1, "y": 1},
+                                                              "b": {"x": 1, "y": 2}}
+    with pytest.raises(yaml.constructor.ConstructorError, match="'y' is given twice"):
+        load_yaml_config(text + "  y: 3\n")
+
+
 @pytest.mark.parametrize("text, message", [
     ("instrument: SWC\nuniform_intensity: 5000 erg / (s cm2 sr)\n"
      "simulation:\n  expos: 10 s\nsimulation:\n  slit_width: 0.4 arcsec\n", "'simulation' is given twice"),
@@ -108,6 +134,24 @@ def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path,
     with pytest.raises(ValueError, match="slit_width must be 0.2, 0.4, 0.8, or 1.6"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {
             "expos": ["5 s", "10 s"], "slit_width": ["0.2 arcsec", "0.3 arcsec"]}})
+    assert "Combination 1" not in capsys.readouterr().out
+
+
+def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combination_runs(
+        tmp_path, monkeypatch, capsys):
+    """A scene one row long can be binned by 1 but not 2; 2 was found only when its turn came."""
+    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+
+    edges = np.arange(3) * 0.1 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    with pytest.raises(ValueError, match="offchip_bin_slit 2 bins more rows than the 1"):
+        _run(tmp_path, monkeypatch, {"instrument": "SWC", "n_iter": 1,
+                                     "synthesis_file": str(tmp_path / "file.h5"),
+                                     "offchip_bin_slit": [1, 2]})
     assert "Combination 1" not in capsys.readouterr().out
 
 

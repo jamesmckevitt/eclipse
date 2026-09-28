@@ -155,17 +155,27 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     key = str(path)
     if key not in _THROUGHPUT_TABLES:
         content = Path(path).read_text()
-        # Headers and comments are skipped as lines that are not numbers,
-        # however many there are: skipping the first two, as the packaged
-        # tables have, lost the data rows of a table with fewer.
+        # Headers are skipped as the lines before the data that are not two
+        # numbers, however many there are: skipping the first two, as the
+        # packaged tables have, lost the data rows of a table with fewer. A
+        # line that is not two numbers once the data has begun is a slip in
+        # the table, which would otherwise change the curve.
         data = []
-        for line in content.splitlines():
-            if not line.strip() or line.strip().startswith('#'):
+        for number, line in enumerate(content.splitlines(), start=1):
+            text = line.strip()
+            if not text or text.startswith('#'):
                 continue
             try:
-                data.append([float(x) for x in line.split()[:2]])
+                row = [float(x) for x in text.split()[:2]]
             except ValueError:
-                continue
+                row = []
+            if len(row) == 2:
+                data.append(row)
+            elif data:
+                raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
+                                 f"throughput, and the table's data had begun.")
+        if not data:
+            raise ValueError(f"{path} has no lines of a wavelength and a throughput.")
         arr = np.array(data)
         wl = arr[:, 0] * u.nm
         tr = arr[:, 1]
