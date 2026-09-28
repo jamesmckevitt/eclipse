@@ -11,7 +11,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
+from euvst_response.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.monte_carlo import simulate_once
 from euvst_response.pinhole_diffraction import (
     airy_peak_fraction_per_pixel,
@@ -19,6 +19,7 @@ from euvst_response.pinhole_diffraction import (
 )
 from euvst_response.radiometric import (
     add_pinhole_visible_light,
+    add_telescope_throughput,
     add_visible_stray_light,
     sample_photon_arrivals,
     to_electrons,
@@ -119,8 +120,46 @@ def test_read_noise_is_dropped_not_averaged():
     assert np.allclose(quiet.data, 0.0)
 
 
+def test_read_noise_takes_a_dark_pixel_below_zero_as_often_as_above():
+    """A CCD reads out above a bias level; clipping at zero raised the mean of faint pixels."""
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    det.dark_current = 0 * u.electron / (u.pix * u.s)
+    det.read_noise_rms = 50 * u.electron / u.pix
+    np.random.seed(5)
+    noisy = to_electrons(_photon_cube(0.0), 1 * u.s, det)
+    assert (noisy.data < 0).any()
+    # The mean of zero, to a few standard errors of the pixels drawn.
+    assert abs(noisy.data.mean()) < 5 * 50 / np.sqrt(noisy.data.size)
+
+
+def test_the_dark_current_is_worked_out_from_the_rate_given():
+    """The rate at 293 K was read from the class default whatever the detector was given."""
+    for detector in (Detector_SWC, Detector_EIS):
+        default = detector(ccd_temperature=-20 * u.deg_C)
+        doubled = detector(ccd_temperature=-20 * u.deg_C,
+                           _dark_current_293k=2 * default._dark_current_293k)
+        assert doubled.dark_current == 2 * default.dark_current
+
+
+def test_a_window_beyond_the_band_is_refused_and_the_band_edge_is_inside_it():
+    """Beyond the throughput tables there is no detector; 214 A itself had rounded out of them."""
+    tel = Telescope_EUVST()
+    assert np.isfinite(tel.ea_and_throughput(214.0 * u.AA).value)
+    assert np.isfinite(tel.ea_and_throughput(170.0 * u.AA).value)
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
+    wcs.wcs.cunit = ["Angstrom", "Mm", "Mm"]
+    wcs.wcs.crval = [213.95, 0.0, 0.0]
+    wcs.wcs.cdelt = [0.0169, 1.0, 1.0]
+    wcs.wcs.crpix = [1, 1, 1]
+    cube = NDCube(np.ones((2, 2, 10)), wcs=wcs, unit=u.photon / (u.s * u.cm**2 * u.sr),
+                  meta={"rest_wav": 214.0 * u.AA})
+    with pytest.raises(ValueError, match="where the telescope's throughput tables"):
+        add_telescope_throughput(cube, tel)
+
+
 def test_stray_light_contributes_its_mean():
-    """Flux * pixel area * t * qe * gain, with no filter in the way."""
+    """Flux * pixel area * t * qe, one electron per photon, with no filter in the way."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.qe_vis = 0.37  # the SWC default of 1 would hide a missing QE factor
     sim = Simulation(instrument="SWC",
@@ -130,14 +169,23 @@ def test_stray_light_contributes_its_mean():
     out = add_visible_stray_light(_electron_cube(), t_exp, det, sim, noise=False)
 
     photons = (sim.vis_sl * (det.pix_size * u.pix) ** 2 * t_exp).to_value(u.photon)
-    expected = photons * det.qe_vis * _electrons_per_photon(det, VISIBLE)
+    # A visible photon frees one electron, not an EUV photon's many.
+    expected = photons * det.qe_vis
     assert np.allclose(out.data, expected, rtol=1e-6)
     again = add_visible_stray_light(_electron_cube(), t_exp, det, sim, noise=False)
     assert np.array_equal(out.data, again.data)
 
+    # With noise, a Poisson count of photons, each detected with the QE: its
+    # variance is its mean.
+    np.random.seed(3)
+    noisy = np.stack([add_visible_stray_light(_electron_cube(), t_exp, det, sim).data
+                      for _ in range(200)])
+    assert noisy.mean() == pytest.approx(expected, rel=0.02)
+    assert noisy.var() == pytest.approx(expected, rel=0.05)
+
 
 def test_pinhole_light_contributes_its_mean():
-    """Photons through the hole * diffraction pattern * qe * gain, in every scan."""
+    """Photons through the hole * diffraction pattern * qe, one electron each, in every scan."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.qe_vis = 0.37
     diameter = 50 * u.um
@@ -158,8 +206,7 @@ def test_pinhole_light_contributes_its_mean():
         distance=det.filter_distance, wavelength=VISIBLE)
     peak = airy_peak_fraction_per_pixel(diameter, det.filter_distance, VISIBLE,
                                         det.pix_size * u.pix)
-    expected = (through * peak * pattern * det.qe_vis
-                * _electrons_per_photon(det, VISIBLE))
+    expected = through * peak * pattern * det.qe_vis
 
     assert np.all(expected > 0)
     for scan in range(NSCAN):
@@ -167,6 +214,11 @@ def test_pinhole_light_contributes_its_mean():
     again = add_pinhole_visible_light(_electron_cube(), t_exp, det, sim,
                                       Telescope_EUVST(), noise=False)
     assert np.array_equal(out.data, again.data)
+
+    # With noise, each scan position its own photons, not one draw repeated.
+    noisy = add_pinhole_visible_light(_electron_cube(), t_exp, det, sim, Telescope_EUVST())
+    assert not all(np.array_equal(noisy.data[:, 0, :], noisy.data[:, scan, :])
+                   for scan in range(1, NSCAN))
 
 
 def test_a_noiseless_run_is_reproducible_end_to_end():

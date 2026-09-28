@@ -622,10 +622,19 @@ def main() -> None:
     if instrument == "EIS":
         if config.get("filter"):
             warnings.warn(
-                "EIS does not use an aluminium filter. The 'filter:' section will be ignored.",
+                "The 'filter:' section describes SWC's filter and is ignored for EIS, whose "
+                "filters are folded into its effective area tables.",
                 UserWarning,
             )
             fil_fixed, fil_sweep = {}, {}
+        vis_sl = [sim_fixed["vis_sl"]] if "vis_sl" in sim_fixed else sim_sweep.get("vis_sl", [])
+        if any(np.any(u.Quantity(value).value > 0) for value in vis_sl):
+            warnings.warn(
+                "EIS's filters are not modelled for visible light, so vis_sl reaches its CCD "
+                "as given, where for SWC it is the flux before the filter. Give EIS the flux "
+                "after its filters.",
+                UserWarning,
+            )
         for key in ("microroughness_sigma",):
             if key in tel_fixed or key in tel_sweep:
                 warnings.warn(
@@ -791,7 +800,6 @@ def main() -> None:
         series = AtmosphereSeries(series_paths)
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         raster = RasterSynthesiser(series, synthesis_settings)
-        print(f"  CHIANTI database: {raster.goft_dbase_root}")
     elif synthesis_series_mode:
         # The spectra are read per combination inside the loop, a strip of
         # columns at a time, and each column once.

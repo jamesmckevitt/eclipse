@@ -94,6 +94,8 @@ The contribution functions need the electron density. If your code calculates on
 
 If the file only has `mass_density`, ECLIPSE divides it by the mass per free electron. By default this is calculated from the abundances chosen with `--abundance`, for a fully ionised plasma, which gives about 1.16 atomic mass units per electron for coronal abundances. This can be set with `--mass-per-electron`.
 
+The contribution functions are worked out at the densities the atmosphere has, every 0.3 in log10 n_e, from just below the lowest density of the plasma between 10^4 and 10^9 K to just above the highest. An atmosphere with a wide range of densities takes longer and needs more memory.
+
 ### Cropping and downsampling
 
 `--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and each kept cell takes the boundaries of the N cells it replaces, so the box keeps its size.
@@ -257,7 +259,7 @@ synthesise-spectra --help
 **Velocity Grid:**
 
 - `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`)
-- `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`)
+- `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`). Plasma faster than this limit is left out of the spectra, with a warning saying how much of the emission measure it is.
 
 **Integration and Viewing:**
 
@@ -284,23 +286,20 @@ synthesise-spectra --help
 Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 
 - `Fe` - element symbol, capitalised as usual (`Fe`, `Si`, `S`, `O`).
-- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so
-  `Fe12` is Fe XII, not Fe XI or Fe XIII.
+- `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so `Fe12` is Fe XII, not Fe XI or Fe XIII.
 - `195.1190` - rest wavelength in Angstrom.
 
-The same names are used by `--lines`, by the `reference_line` key in the
-instrument configuration, and as the keys of `line_cubes` in the output file.
+The same names are used by `--lines`, by the `reference_line` key in the instrument configuration, and as the keys of `line_cubes` in the output file.
 
-The wavelength does not have to be exact. ECLIPSE finds the nearest transition of
-that ion in CHIANTI and prints both the requested and matched wavelengths:
+ECLIPSE takes the line of that ion whose wavelength in CHIANTI, written to as many decimals as the name gives, is the name's wavelength, so `Fe12_195.119` and `Fe12_195.12` both name Fe XII 195.119. Lines CHIANTI has only a theoretical wavelength for are named the same way, at that wavelength. Where an observed and a theoretical line are both at the name's wavelength, the observed one is taken, and of several transitions at one wavelength, the brightest. The line is synthesised at CHIANTI's wavelength, whatever the digits of the name.
+
+If no line of the ion is at the name's wavelength, as when it comes from another line list, ECLIPSE takes the nearest line CHIANTI has observed and warns, rather than the nearest theoretical wavelength, since many of those are weak transitions within a few mA of strong lines. It prints the requested and matched wavelengths for every line:
 
 ```text
-  Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom (delta=0.0000 Angstrom)
+  Fe12_195.1190: requested 195.1190 Angstrom, matched 195.1190 Angstrom, observed (delta=0.0000 Angstrom)
 ```
 
-Check that line. A large difference means the transition you meant is not in the
-database for that ion, and a neighbouring one was picked up instead. A name that
-does not match the pattern at all raises `ValueError` immediately.
+Check that line. A large difference means the line you meant is not in the database for that ion, and a neighbouring one was picked up instead. Two names that match the same line are refused, since the line would be synthesised twice and summed. A name that does not match the pattern at all raises `ValueError` immediately.
 
 ## Performance tips
 

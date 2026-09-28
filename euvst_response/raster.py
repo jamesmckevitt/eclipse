@@ -43,6 +43,12 @@ from .atmosphere import (Atmosphere, read_atmosphere, read_edges, read_time,
                          require_mass_per_electron)
 from .data_processing import sum_line_cubes
 from .synthesis import (
+    _LOGT_MAX,
+    _LOGT_MIN,
+    _N_N,
+    _N_T,
+    _density_point,
+    _density_points,
     compute_goft_fiasco,
     line_of_sight_velocity,
     synthesise_cubes,
@@ -50,7 +56,8 @@ from .synthesis import (
 from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
 from .sampling import pixel_weights
-from .utils import VELOCITY_CONVENTION, _fwhm_to_sigma, angle_to_distance, require_uniform_grid
+from .utils import (VELOCITY_CONVENTION, _fwhm_to_sigma, angle_to_distance, require_uniform_grid,
+                    velocity_grid)
 
 __all__ = ["SynthesisSettings", "RasterPlan", "Exposure", "AtmosphereSeries",
            "RasterSynthesiser", "SynthesisSeries", "SynthesisRaster"]
@@ -116,9 +123,7 @@ class SynthesisSettings:
 
     def velocity_grid(self) -> u.Quantity:
         """The velocity bin centres, as synthesise-spectra builds them."""
-        lim = self.vel_lim.to_value(u.cm / u.s)
-        res = self.vel_res.to_value(u.cm / u.s)
-        return np.arange(-lim, lim + res, res) * (u.cm / u.s)
+        return velocity_grid(self.vel_res, self.vel_lim)
 
 
 @dataclass(frozen=True)
@@ -570,9 +575,12 @@ class RasterSynthesiser(_SlitRaster):
     """
     Synthesises the spectra a slit sees over a plan, one exposure at a time.
 
-    The contribution functions are computed once. Each column of each
-    snapshot is synthesised the first time an exposure needs it and kept,
-    so a sweep over exposure times or slit widths reuses most of the work.
+    The contribution functions are computed when the first strip is
+    synthesised, at the densities it has, and only the densities a later
+    strip adds are computed after that, which can take as long as the first
+    if the plasma reaches far beyond them. Each column of each snapshot is
+    synthesised the first time an exposure needs it and kept, so a sweep
+    over exposure times or slit widths reuses most of the work.
 
     Parameters
     ----------
@@ -584,13 +592,14 @@ class RasterSynthesiser(_SlitRaster):
         super().__init__(series)
         self.settings = settings
         self.vel_grid = settings.velocity_grid()
-        print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines")
-        self.goft, self.logT_grid, self.logN_grid = compute_goft_fiasco(
-            list(settings.lines), abundance=settings.abundance,
-            precision=settings.precision, n_workers=settings.n_workers,
-            hdf5_dbase_root=settings.hdf5_dbase_root,
-            temperature_chunk=settings.goft_temperature_chunk)
-        self.goft_dbase_root = next(iter(self.goft.values()))["hdf5_dbase_root"]
+        # The contribution functions are worked out when the first strip is
+        # synthesised, at the densities it has, and at more densities when a
+        # later strip has others.
+        self.goft: Optional[Dict[str, dict]] = None
+        self.logT_grid = np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(settings.precision)
+        self.logN_grid: Optional[np.ndarray] = None
+        self.goft_dbase_root: Optional[str] = None
+        self._density_points: Optional[Tuple[int, int]] = None
         self._mass_per_electron: Optional[Tuple[float, str]] = None
         self._wl_grids: Dict[str, u.Quantity] = {}
         self._rows: Optional[u.Quantity] = None
@@ -614,6 +623,47 @@ class RasterSynthesiser(_SlitRaster):
 
     def _load_strip(self, snapshot: int, first: int, last: int) -> None:
         self._synthesise_strip(snapshot, first, last)
+
+    def _cover_densities(self, temperature: np.ndarray, electron_density: np.ndarray) -> None:
+        """Work the contribution functions out at every density these cells need and they lack."""
+        settings = self.settings
+        needed = _density_points(temperature, electron_density, self.logT_grid,
+                                 settings.precision)
+        if needed is None:
+            if self.goft is not None:
+                return
+            needed = (0, _N_N - 1)
+        have = self._density_points
+        if have is None:
+            missing = [needed]
+        else:
+            missing = ([(needed[0], have[0] - 1)] if needed[0] < have[0] else []) + (
+                [(have[1] + 1, needed[1])] if needed[1] > have[1] else [])
+        for first, last in missing:
+            print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines "
+                  f"at 10^{_density_point(first):.1f} to 10^{_density_point(last):.1f} cm^-3")
+            goft, self.logT_grid, logN_grid = compute_goft_fiasco(
+                list(settings.lines), abundance=settings.abundance,
+                logN_min=_density_point(first), logN_max=_density_point(last),
+                nN=last - first + 1, precision=settings.precision,
+                n_workers=settings.n_workers, hdf5_dbase_root=settings.hdf5_dbase_root,
+                temperature_chunk=settings.goft_temperature_chunk)
+            if self.goft is None:
+                self.goft, self.logN_grid = goft, logN_grid
+                self.goft_dbase_root = next(iter(goft.values()))["hdf5_dbase_root"]
+                print(f"  CHIANTI database: {self.goft_dbase_root}")
+                self._density_points = (first, last)
+                continue
+            # Each density is worked out on its own, so the new ones go on
+            # either end of the table as they are.
+            below = first < self._density_points[0]
+            for name, info in goft.items():
+                parts = [info["g_tn"], self.goft[name]["g_tn"]]
+                self.goft[name]["g_tn"] = np.concatenate(parts if below else parts[::-1])
+            parts = [logN_grid, self.logN_grid]
+            self.logN_grid = np.concatenate(parts if below else parts[::-1])
+            self._density_points = (min(first, self._density_points[0]),
+                                    max(last, self._density_points[1]))
 
     def _synthesise_strip(self, snapshot: int, first: int, last: int) -> None:
         """Synthesise columns *first* to *last* of one snapshot into the cache."""
@@ -642,6 +692,7 @@ class RasterSynthesiser(_SlitRaster):
             strip.velocity("z").astype(precision).to_value(u.cm / u.s), "z")
         dh_cm = strip.cell_thickness("z").to_value(u.cm)
 
+        self._cover_densities(temperature, electron_density)
         lines, _, _ = synthesise_cubes(
             temperature, electron_density, velocity, dh_cm, self.goft,
             self.logT_grid, self.logN_grid, self.vel_grid, "z", precision)

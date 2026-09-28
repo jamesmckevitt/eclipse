@@ -135,9 +135,7 @@ filter:
   mesh_throughput: 0.8
 ```
 
-Any parameter from the `Detector_SWC`, `Telescope_EUVST`, or `AluminiumFilter`
-dataclasses in `config.py` can be added to the corresponding section. For
-example, to sweep over detector quantum efficiency:
+Any parameter from the `Detector_SWC`, `Telescope_EUVST`, or `AluminiumFilter` dataclasses in `config.py` can be added to the corresponding section. For example, to sweep over detector quantum efficiency:
 
 ```yaml
 detector:
@@ -145,8 +143,7 @@ detector:
   qe_euv: [0.5, 0.65, 0.76]   # sweep over three QE values
 ```
 
-For guidance on recommended values, see
-[McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000).
+For guidance on recommended values, see [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000).
 
 !!! warning "Parameters must go inside their section"
 

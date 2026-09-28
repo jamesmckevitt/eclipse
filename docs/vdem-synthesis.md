@@ -18,8 +18,7 @@ A DEM carries no velocity information, so the [DEM route](dem-synthesis.md) puts
 
 This recipe is as in the [DEM example](dem-synthesis.md#minimal-example) with two changes.
 
-**Replace steps 1 to 3** with your VDEM, laid out as
-`vdem[y, x, logT, v]` in cm^-5, one value per temperature and velocity bin:
+**Replace steps 1 to 3** with your VDEM, laid out as `vdem[y, x, logT, v]` in cm^-5, one value per temperature and velocity bin:
 
 ```python
 # 1. The VDEM: a logT grid, a velocity grid, and EM in each (logT, v) bin.
@@ -31,8 +30,7 @@ nx, ny = 2, 2
 vdem = my_code_output(nx, ny, logT, vel_grid)   # cm^-5, shape (ny, nx, nT, nv)
 ```
 
-**Replace step 6** - the one that collapses everything into the zero-velocity
-bin - with the VDEM itself:
+**Replace step 6** - the one that collapses everything into the zero-velocity bin - with the VDEM itself:
 
 ```python
 # 6. The VDEM is already EM(y, x, T, v), so it goes straight in.
