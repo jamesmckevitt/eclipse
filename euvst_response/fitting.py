@@ -938,7 +938,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         *return_failed* is True.
     """
     n_slit, n_scan, _ = signal_cube.shape
-    wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
+    wv = signal_cube.axis_world_coords_values(2)[0].cgs  # wavelength axis
 
     # A component placed outside the window has no line to fit, and would
     # come back at its guess with no spread, as a perfect measurement.
@@ -1075,7 +1075,7 @@ def component_names(fit_config: FitConfig | None,
 
 def spectral_pixel_width(cube: NDCube) -> u.Quantity:
     """Width of one spectral pixel of a cube with wavelength on its last axis."""
-    wavelength = u.Quantity(cube.axis_world_coords(2)[0]).to(u.cm)
+    wavelength = u.Quantity(cube.axis_world_coords_values(2)[0]).to(u.cm)
     return wavelength[1] - wavelength[0]
 
 
