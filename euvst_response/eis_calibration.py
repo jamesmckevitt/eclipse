@@ -123,10 +123,9 @@ def _parse_date(date_str: str) -> _datetime:
     hours early.
     """
     text = normalise_date(date_str).replace("Z", "+00:00")
-    try:
-        parsed = _datetime.fromisoformat(text)
-    except ValueError:
-        parsed = _datetime.fromisoformat(text.split("+")[0])
+    # Every ISO form, offsets included, is read whole from Python 3.11; one
+    # that is not is refused, rather than read with what follows a + dropped.
+    parsed = _datetime.fromisoformat(text)
     if parsed.tzinfo is None:
         # Naive input is taken to be UTC, which is what EIS dates are.
         return parsed.replace(tzinfo=_tz.utc)
