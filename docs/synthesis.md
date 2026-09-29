@@ -252,7 +252,7 @@ synthesise-spectra --help
 
 - `--lines`: The lines to synthesise, for example `--lines Fe12_195.1190 Fe12_195.1790` (required)
 - `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
-- `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
+- `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
 - `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.
 - `--goft-temperature-chunk`: Compute the contribution functions for this many temperatures at a time, rather than the whole grid at once, to use less memory (default: the whole grid). With several ions and `--n-workers`, every worker needs that memory at the same time.
 

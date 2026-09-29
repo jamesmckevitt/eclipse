@@ -2,7 +2,7 @@
 
 ECLIPSE works in two steps. First `synthesise-spectra` turns a model of the solar atmosphere into the spectra it emits. Then `eclipse` passes those spectra through the instrument, adds noise, and fits the lines as you would fit real data.
 
-## From the command line
+## Command line interface
 
 ```bash
 # Make the spectrum of Fe XII 195.119 Angstrom from an atmosphere file
@@ -30,7 +30,7 @@ Both commands list their options with `--help`, and [Simulating a single snapsho
 
 You don't need an MHD simulation. You can start from an observed DEM instead ([From a DEM](dem-synthesis.md)). If you only want to know how precisely a line of a given brightness can be measured, start from a single intensity ([From a single intensity](uniform-intensity.md)), which skips `synthesise-spectra` altogether.
 
-## From Python
+## Python API
 
 Everything is also available as a Python package, `euvst_response`. For example, the effective area at Fe XII 195.119 Angstrom:
 
@@ -42,7 +42,7 @@ telescope = Telescope_EUVST()
 detector = Detector_SWC()
 wavelength = 195.119 * u.AA
 
-# Collecting area, times the throughput of the mirror, grating and filter, times the detector's quantum efficiency
+# Collecting area, times the throughput of the mirror (with its roughness), grating and filter, times the detector's quantum efficiency
 effective_area = telescope.ea_and_throughput(wavelength) * detector.qe_euv
 print(effective_area.to(u.cm**2))
 
@@ -53,7 +53,7 @@ grating = telescope.grating_efficiency(wavelength)
 filter_throughput = telescope.filter.total_throughput(wavelength)
 ```
 
-## Looking at the results
+## Working with results
 
 `eclipse` writes its results to `run/result/<config name>.h5`, so here `run/result/config.h5`. To load them:
 

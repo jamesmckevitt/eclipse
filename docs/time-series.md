@@ -45,7 +45,7 @@ The `synthesis:` section takes these settings, which mean what they do in `synth
 | `precision` | `float32` or `float64` | `float64` |
 | `mass_per_electron` | Atomic mass units per free electron, for files with only a mass density | worked out from the abundances |
 | `hdf5_dbase_root` | The CHIANTI database for fiasco | fiasco's default |
-| `n_workers` | Processes computing the contribution functions | one per CPU |
+| `n_workers` | Processes computing the contribution functions, one ion each at a time | one per CPU, but no more than one per ion |
 | `goft_temperature_chunk` | How many temperatures to compute the contribution functions for at once; fewer uses less memory | the whole grid |
 
 `reference_line` chooses the spectral window to observe, as for a single snapshot. It defaults to the first of `lines`.
@@ -69,7 +69,7 @@ simulation:
   psf: True
 ```
 
-Each file needs a `time`. All of them must be seen from the same side, on the same grid of pixels, and hold the same lines on the same wavelengths. ECLIPSE's own synthesis copies the atmosphere file's time into the synthesis file. `reference_line` works as it does for a [single snapshot](instrument-response.md), and defaults to the files' only line. The observing plan, and what each exposure sees, are the same as for atmosphere files.
+Each file needs a `time`. All of them must be seen from the same side, on the same grid of pixels, and hold the same lines on the same wavelengths within the window observed. Lines outside that window are not read. ECLIPSE's own synthesis copies the atmosphere file's time into the synthesis file. `reference_line` works as it does for a [single snapshot](instrument-response.md), and defaults to the files' only line. The observing plan, and what each exposure sees, are the same as for atmosphere files.
 
 Synthesising every snapshot with `synthesise-spectra`, then observing the synthesis files with the same `reference_line`, gives the same result as observing the atmosphere files. It just takes longer, since it synthesises every column of every snapshot rather than only those under the slit.
 
