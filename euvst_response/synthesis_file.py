@@ -825,7 +825,7 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
                                  f"share one image.")
         meta = cube.meta or {}
         lines[name] = SpectralLine(intensity=np.asarray(cube.data) * cube.unit,
-                                   wavelength=cube.axis_world_coords(-1)[0],
+                                   wavelength=cube.axis_world_coords_values(-1)[0],
                                    rest_wavelength=meta["rest_wav"],
                                    **{key: int(meta[key]) for key in IDENTITY
                                       if meta.get(key) is not None})

@@ -173,7 +173,7 @@ def intensity_to_photons(I: NDCube) -> NDCube:
     NDCube
         The photons, in photon / (cm2 sr cm).
     """
-    wl_axis = I.axis_world_coords(2)[0]
+    wl_axis = I.axis_world_coords_values(2)[0]
     E_ph = (const.h * const.c / wl_axis).to("erg") * (1 / u.photon)
     
     photon_data = (I.data * I.unit / E_ph).to(u.photon / u.cm**2 / u.sr / u.cm)
@@ -209,7 +209,7 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
         tables.
     """
     wl0 = ph_flux.meta['rest_wav']
-    wl_axis = ph_flux.axis_world_coords(2)[0]
+    wl_axis = ph_flux.axis_world_coords_values(2)[0]
     throughput = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
     # Beyond the throughput tables there is no detector to collect the light,
     # and a pixel of the window there would be a pixel the instrument does not

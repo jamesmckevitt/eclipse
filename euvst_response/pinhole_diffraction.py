@@ -237,7 +237,7 @@ def apply_euv_pinhole_diffraction(
     additional_photons = np.zeros_like(photon_counts.data)
     
     # Get the wavelength axis and calculate filter throughput for EUV
-    wl_axis = photon_counts.axis_world_coords(2)[0]
+    wl_axis = photon_counts.axis_world_coords_values(2)[0]
     
     # Calculate filter throughput at each wavelength
     filter_throughput_spectrum = np.array([tel.filter.total_throughput(wl) for wl in wl_axis])
