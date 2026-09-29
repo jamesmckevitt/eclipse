@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import traceback
 from pathlib import Path
 
 from . import __version__
@@ -13,7 +14,7 @@ from .main import main as run_simulation
 from .synthesis import main as run_synthesis
 
 
-ASCII_LOGO = """
+ASCII_LOGO = r"""
   ______ _____ _      _____ _____   _____ ______ 
  |  ____/ ____| |    |_   _|  __ \ / ____|  ____|
  | |__ | |    | |      | | | |__) | (___ | |__   
@@ -76,7 +77,7 @@ def main():
     if not args.config:
         print("Usage: eclipse --config <config.yaml>")
         print("\nTo run instrument response simulation, provide a YAML config file.")
-        print("Example config files can be found in the run/input/ directory.")
+        print("The documentation says how to write one: https://solarc-eclipse.readthedocs.io")
         print("\nFor more help: eclipse --help")
         return
 
@@ -101,7 +102,11 @@ def main():
         print("\nSimulation interrupted by user.")
         sys.exit(1)
     except Exception as e:
-        _fail(f"Error during simulation: {e}")
+        # ECLIPSE refuses what it cannot run with a ValueError that says why;
+        # anything else is unexpected, and its traceback says where.
+        if not isinstance(e, (ValueError, FileNotFoundError)):
+            traceback.print_exc()
+        _fail(f"Error during simulation: {type(e).__name__}: {e}")
 
 
 def _fail(message: str) -> None:

@@ -14,7 +14,7 @@ import sunpy.map
 import h5py
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
@@ -353,6 +353,40 @@ def analyse_fit_statistics(
     }
 
 
+def _same_parameter(name: str, asked, stored) -> bool:
+    """
+    Whether *asked* is the value of parameter *name* that a combination was run with, *stored*.
+
+    Compared in the stored value's own unit, to a part in 1e9 of its size:
+    compared in SI to 1e-8 of at least one, every length under 10 nm, a
+    microroughness or a thickness, was the same as every other. A quantity
+    of another kind is refused rather than matched, as 5 m matched 5 s, and
+    so is one with a unit for a setting run as a number without one. A
+    number with no unit is compared with the stored value in SI, as before.
+    """
+    numbers = (int, float, np.integer, np.floating)
+    if isinstance(asked, u.Quantity) and isinstance(stored, (bool, np.bool_)):
+        raise ValueError(f"{name} is a switch, true or false; {asked} is not.")
+    if isinstance(asked, u.Quantity) and isinstance(stored, numbers):
+        if not asked.unit.is_equivalent(u.dimensionless_unscaled):
+            raise ValueError(f"{name} was run as a number with no unit; {asked} is a "
+                             f"{asked.unit.physical_type}.")
+        asked = asked.to_value(u.dimensionless_unscaled)
+    if isinstance(asked, u.Quantity) and isinstance(stored, u.Quantity):
+        try:
+            asked = asked.to_value(stored.unit, equivalencies=u.temperature())
+        except u.UnitConversionError:
+            raise ValueError(f"{name} was run in {stored.unit}, a unit of "
+                             f"{stored.unit.physical_type}; {asked} is not.") from None
+        stored = stored.value
+    else:
+        asked, stored = _to_canonical_scalar(asked), _to_canonical_scalar(stored)
+    if (isinstance(asked, numbers) and isinstance(stored, numbers)
+            and not isinstance(asked, bool) and not isinstance(stored, bool)):
+        return bool(np.isclose(asked, stored, rtol=1e-9, atol=0.0))
+    return asked == stored
+
+
 def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     """
     Get results for a specific parameter combination.
@@ -397,28 +431,10 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
 
     query = dict(kwargs)
 
-    # Convert query values to canonical scalars (unit-agnostic comparison)
-    query_canonical = {k: _to_canonical_scalar(v) for k, v in query.items()}
-
-    matches = []
-    for combo_results in all_combinations.values():
-        params = combo_results["parameters"]
-        is_match = True
-        for qk, qv in query_canonical.items():
-            if qk not in params:
-                is_match = False
-                break
-            pv = _to_canonical_scalar(params[qk])
-            if isinstance(qv, float) and isinstance(pv, float):
-                scale = max(abs(qv), abs(pv), 1.0)
-                if abs(qv - pv) > 1e-8 * scale:
-                    is_match = False
-                    break
-            elif qv != pv:
-                is_match = False
-                break
-        if is_match:
-            matches.append(combo_results)
+    matches = [combo_results for combo_results in all_combinations.values()
+               if all(key in combo_results["parameters"]
+                      and _same_parameter(key, value, combo_results["parameters"][key])
+                      for key, value in query.items())]
 
     if len(matches) == 1:
         return matches[0]
@@ -459,13 +475,23 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     Raises
     ------
     KeyError
-        If DEM data is not found in the results (older format).
+        If DEM data is not found in the results, which it never is: no
+        released version wrote it there.
+
+    .. deprecated:: 0.12.0
+        The DEM and the emission measure are in the synthesis file; read
+        them with :func:`euvst_response.read_synthesis_products`.
     """
+    warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
+                  "release: no released version wrote DEM data into the results. The DEM is "
+                  "in the synthesis file; read it with "
+                  "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
+                  FutureWarning, stacklevel=2)
     if "dem_data" not in results:
         raise KeyError(
-            "DEM data not found in results. This appears to be from an older "
-            "simulation that didn't include DEM data. Please re-run the simulation "
-            "with the updated package to include DEM data in the results."
+            "DEM data is not in the results, as no released version wrote it there. It is "
+            "in the synthesis file: read it with "
+            "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
         )
     
     return results["dem_data"]
@@ -542,6 +568,30 @@ def summary_table(results: Dict[str, Any]) -> None:
             print(f"  {name}" + (f" ({', '.join(notes)})" if notes else ""))
 
 
+def _utc_date(value, what: str) -> str:
+    """
+    *value* as an ISO date and time in UTC, which sunpy reads.
+
+    A date with an offset, as YAML gives an unquoted time ending in Z, was
+    written as it came; sunpy could not read it and stamped the maps with
+    the time they were made instead, different on every call.
+    """
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, date):
+        moment = datetime(value.year, value.month, value.day)
+    else:
+        text = str(value).strip().replace("Z", "+00:00")
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            raise ValueError(f"{what} {value!r} is not a date and time sunpy can read; give "
+                             f"it in ISO form, such as 2024-03-20T00:00:00.") from None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment.isoformat()
+
+
 def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
     """
     Settle on the observation date to write into the maps.
@@ -565,14 +615,12 @@ def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
         An ISO-8601 date string for the ``DATE-OBS`` keyword.
     """
     if date_obs is not None:
-        if isinstance(date_obs, (datetime, date)):
-            return date_obs.isoformat()
-        return str(date_obs)
+        return _utc_date(date_obs, "date_obs")
 
     telescope = combination_results.get("config_objects", {}).get("telescope")
     calibration_date = getattr(telescope, "date", None)
     if calibration_date:
-        return str(calibration_date)
+        return _utc_date(calibration_date, "The EIS calibration date")
 
     raise ValueError(
         "These maps have no observation date. A synthesised scene does not "
@@ -613,11 +661,13 @@ def _map_header(wcs_2d, date_obs: str, bunit: str):
     header["DATE-OBS"] = date_obs
     header["BUNIT"] = bunit
     # Heliographic Stonyhurst position of the observer: on the Sun-disc-centre
-    # line, one au out. Latitude and longitude are zero for the same reason
+    # line, one au from the emitting surface, as the radiometric chain has
+    # it, so one au and a solar radius from the Sun's centre, which is what
+    # DSUN_OBS measures. Latitude and longitude are zero for the same reason
     # the WCS reference is disc centre - ECLIPSE models no B0 angle.
     header["HGLN_OBS"] = 0.0
     header["HGLT_OBS"] = 0.0
-    header["DSUN_OBS"] = const.au.to_value(u.m)
+    header["DSUN_OBS"] = (const.au + const.R_sun).to_value(u.m)
     header["RSUN_REF"] = const.R_sun.to_value(u.m)
     return header
 
@@ -770,29 +820,37 @@ def create_sunpy_maps_from_combo(
         nlevels = len(exp_times)
         shape = next(iter(analysis_per_exp.values()))["v_std"].shape
         best_exp = np.full(shape, np.nan)
-        
-        # Find minimum exposure time that meets precision requirement for each pixel
-        for i, s in enumerate(exp_times):
+
+        # The shortest exposure time, in seconds, that meets the precision
+        # requirement in each pixel. It held the exposure's index instead,
+        # under a unit of seconds, so that a saved map, or one read without
+        # the colorbar helper, gave 0, 1, 2 for the exposures.
+        for s in exp_times:
             vstd = analysis_per_exp[s]["v_std"].to_value(u.km / u.s)
             msk = (vstd <= precision_requirement.to_value(u.km / u.s)) & np.isnan(best_exp)
-            best_exp[msk] = i  # Use index instead of actual exposure time
-        
-        # For pixels that don't meet the precision requirement even at max exposure,
-        # assign them a value above the valid range so they show as "over" values
-        still_nan = np.isnan(best_exp)
-        best_exp[still_nan] = nlevels  # This will be above the valid range (0 to nlevels-1)
-        
-        # Create discrete colormap for exposure times
+            best_exp[msk] = s
+
+        # Pixels that don't meet the precision requirement even at the
+        # longest exposure need longer than any run: above the scale.
+        best_exp[np.isnan(best_exp)] = np.inf
+
+        # One colour per exposure time, each spanning halfway to the next.
+        times = np.asarray(exp_times, dtype=float)
+        if nlevels > 1:
+            middles = 0.5 * (times[1:] + times[:-1])
+            bounds = np.concatenate([[times[0] - (middles[0] - times[0])], middles,
+                                     [times[-1] + (times[-1] - middles[-1])]])
+        else:
+            bounds = np.array([0.5 * times[0], 1.5 * times[0]])
         cmap = ListedColormap(plt.get_cmap("viridis")(np.linspace(0, 1, nlevels)))
         cmap.set_over("white")
         cmap.set_bad("gray")  # Change bad color so we can distinguish from over
-        # Create normalization with proper boundaries to handle values 0 to nlevels-1, with nlevels as "over"
-        norm = BoundaryNorm(np.arange(-0.5, nlevels + 0.5, 1), nlevels)
+        norm = BoundaryNorm(bounds, nlevels)
 
         maps['exposure_time'] = sunpy.map.Map(
             best_exp, _map_header(wcs_2d, date_obs, 's'))
         maps['exposure_time'].plot_settings.update(dict(cmap=cmap, norm=norm))
-        
+
         # Store exposure time information for custom colorbar formatting
         maps['exposure_time']._exposure_times = exp_times
         maps['exposure_time']._exposure_indices = list(range(nlevels))
@@ -843,9 +901,10 @@ def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Qu
     precision_requirement : u.Quantity, optional
         Velocity precision requirement for the title (default: 2.0 km/s).
     """
-    # Set tick positions at the center of each color segment
-    tick_positions = map_obj._exposure_indices
-    tick_labels = [f"{exp_time:.1f}" for exp_time in map_obj._exposure_times]
+    # A tick at each exposure time, in the middle of its colour, written as
+    # given, so that 0.25 s reads as 0.25.
+    tick_positions = list(map_obj._exposure_times)
+    tick_labels = [f"{exp_time:g}" for exp_time in map_obj._exposure_times]
     
     colorbar.set_ticks(tick_positions)
     colorbar.set_ticklabels(tick_labels)
