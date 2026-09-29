@@ -10,8 +10,8 @@ import sys
 import pytest
 
 from euvst_response.main import (
-    _FITTING_COMPONENT_KEYS, _FITTING_KEYS, _SIMULATION_KEYS, _TOP_LEVEL_KEYS,
-    _validate_config_keys, main,
+    _FITTING_COMPONENT_KEYS, _FITTING_KEYS, _RASTER_KEYS, _SIMULATION_KEYS,
+    _SYNTHESIS_KEYS, _TOP_LEVEL_KEYS, _validate_config_keys, main,
 )
 from euvst_response.utils import check_config_keys, suggest_config_key
 
@@ -213,11 +213,14 @@ _CONFIG_READERS = ("main", "_parse_pinhole_config", "_parse_fitting_config",
                    "_series_paths", "_reference_line")
 
 
-def _keys_main_reads(*names):
+def _keys_main_reads(*names, readers=_CONFIG_READERS):
     """String keys main() looks up in any of the dicts called *names*.
 
-    Covers ``d["key"]``, ``d.get("key")`` and ``"key" in d``, in main() and in
-    the helpers listed in ``_CONFIG_READERS``.
+    Covers ``d["key"]``, ``d.get("key")``, ``"key" in d`` and the section
+    helpers ``_quantity_or_none(d, "key", ...)`` and ``_range_or_none``, in
+    the functions *readers*, main() and the helpers it hands the config to
+    by default. A key held by a loop over a tuple of names, or of tuples
+    starting with one, stands for every name in it.
     """
     import ast
     import importlib
@@ -226,42 +229,65 @@ def _keys_main_reads(*names):
 
     source = Path(importlib.import_module("euvst_response.main").__file__)
     tree = ast.parse(source.read_text())
-    readers = [node for node in tree.body
-               if isinstance(node, ast.FunctionDef)
-               and node.name in _CONFIG_READERS]
-    assert {node.name for node in readers} == set(_CONFIG_READERS)
+    functions = [node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name in readers]
+    assert {node.name for node in functions} == set(readers)
+    def lookups(tree):
+        """The key of every lookup in one of the dicts *names* under *tree*."""
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                target, key = node.value, node.slice
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "get" and node.args):
+                target, key = node.func.value, node.args[0]
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id in ("_quantity_or_none", "_range_or_none")):
+                target, key = node.args[0], node.args[1]
+            elif (isinstance(node, ast.Compare) and len(node.ops) == 1
+                  and isinstance(node.ops[0], (ast.In, ast.NotIn))):
+                target, key = node.comparators[0], node.left
+            else:
+                continue
+            if isinstance(target, ast.Name) and target.id in names:
+                yield key
 
     keys = set()
-    for node in (n for reader in readers for n in ast.walk(reader)):
-        if isinstance(node, ast.Subscript):
-            target, key = node.value, node.slice
-        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-              and node.func.attr == "get" and node.args):
-            target, key = node.func.value, node.args[0]
-        elif (isinstance(node, ast.Compare) and len(node.ops) == 1
-              and isinstance(node.ops[0], (ast.In, ast.NotIn))):
-            target, key = node.comparators[0], node.left
-        else:
-            continue
-        if (isinstance(target, ast.Name) and target.id in names
-                and isinstance(key, ast.Constant) and isinstance(key.value, str)):
-            keys.add(key.value)
+    for function in functions:
+        for key in lookups(function):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+        # A key held by a loop variable, within that loop.
+        for loop in ast.walk(function):
+            if not (isinstance(loop, ast.For) and isinstance(loop.iter, (ast.Tuple, ast.List))):
+                continue
+            target = loop.target.elts[0] if isinstance(loop.target, ast.Tuple) else loop.target
+            items = [item.elts[0] if isinstance(item, ast.Tuple) else item
+                     for item in loop.iter.elts]
+            if not (isinstance(target, ast.Name) and all(
+                    isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    for item in items)):
+                continue
+            if any(isinstance(key, ast.Name) and key.id == target.id
+                   for statement in loop.body for key in lookups(statement)):
+                keys |= {item.value for item in items}
     return keys
 
 
-@pytest.mark.parametrize("names, accepted", [
-    (("config",), _TOP_LEVEL_KEYS),
-    (("all_sim", "sim_fixed", "sim_sweep"), _SIMULATION_KEYS),
-    (("fitting_cfg",), _FITTING_KEYS),
-    (("comp_dict",), _FITTING_COMPONENT_KEYS),
-], ids=["top-level", "simulation", "fitting", "fitting.components"])
-def test_the_key_lists_match_what_main_reads(names, accepted):
+@pytest.mark.parametrize("names, accepted, readers", [
+    (("config",), _TOP_LEVEL_KEYS, _CONFIG_READERS),
+    (("all_sim", "sim_fixed", "sim_sweep"), _SIMULATION_KEYS, _CONFIG_READERS),
+    (("fitting_cfg",), _FITTING_KEYS, _CONFIG_READERS),
+    (("comp_dict",), _FITTING_COMPONENT_KEYS, _CONFIG_READERS),
+    (("section",), _SYNTHESIS_KEYS, ("_parse_synthesis_settings",)),
+    (("section",), _RASTER_KEYS, ("_parse_raster_plan",)),
+], ids=["top-level", "simulation", "fitting", "fitting.components", "synthesis", "raster"])
+def test_the_key_lists_match_what_main_reads(names, accepted, readers):
     """The lists are written out by hand, so a new key can be missed.
 
     simulation.noise is the example: main() reads it, and a key list written
     before it existed would refuse every config that sets it.
     """
-    read = _keys_main_reads(*names)
+    read = _keys_main_reads(*names, readers=readers)
     assert read - accepted == set(), (
         f"main() reads {sorted(read - accepted)} but the validator rejects them")
     assert accepted - read == set(), (
@@ -284,10 +310,12 @@ def _doc_yaml_blocks():
 
     docs = Path(__file__).resolve().parent.parent / "docs"
     blocks = []
-    for page in sorted(docs.glob("*.md")):
+    # The internal pages too, which are out of the site's navigation but not
+    # out of use.
+    for page in sorted(docs.rglob("*.md")):
         for match in re.finditer(r"```yaml\n(.*?)```", page.read_text(), re.S):
-            blocks.append((page.name, match.group(1)))
-    for notebook in sorted(docs.glob("*.ipynb")):
+            blocks.append((str(page.relative_to(docs)), match.group(1)))
+    for notebook in sorted(docs.rglob("*.ipynb")):
         for cell in json.loads(notebook.read_text())["cells"]:
             source = "".join(cell["source"])
             first_line, _, body = source.partition("\n")

@@ -482,7 +482,7 @@ def read_atmosphere(path: str | Path,
     """
     path = Path(path)
     wanted = AXES if velocities is None else tuple(_check_axis(axis) for axis in velocities)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path) as f:
         _check_format(f, path)
         # A velocity asked for that the file lacks is refused before any cube
         # is read, since the cubes of a large simulation take gigabytes.
@@ -522,7 +522,7 @@ def read_time(path: str | Path) -> Optional[u.Quantity]:
     that is NaN, infinite or not a single value is refused here too.
     """
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path) as f:
         _check_format(f, path)
         if "time" not in f:
             return None
@@ -536,7 +536,7 @@ def read_time(path: str | Path) -> Optional[u.Quantity]:
 def read_edges(path: str | Path) -> Dict[str, u.Quantity]:
     """The cell boundaries of an atmosphere file, keyed by axis, without reading a cube."""
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path) as f:
         _check_format(f, path)
         return {axis: _read_dataset(f, EDGES[axis]) for axis in AXES}
 
@@ -552,7 +552,7 @@ def describe_atmosphere_file(path: str | Path) -> str:
     described; the values in the cubes are checked only when they are read.
     """
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path) as f:
         _check_format(f, path)
         edges = {axis: _read_dataset(f, EDGES[axis]) for axis in AXES}
         try:
@@ -596,6 +596,18 @@ def _text_attribute(attrs, name: str, default=None):
     if isinstance(value, bytes):
         value = value.decode()
     return value
+
+
+def _open_to_read(path: Path, kind: str = "atmosphere") -> h5py.File:
+    """
+    *path* opened to read, refused in a sentence if it is there but not an
+    HDF5 file, as an ECLIPSE *kind* file is, where h5py said only that the
+    file signature was not found.
+    """
+    path = Path(path)
+    if path.is_file() and not h5py.is_hdf5(path):
+        raise ValueError(f"{path} is not an HDF5 file, so it is not an ECLIPSE {kind} file.")
+    return h5py.File(path, "r")
 
 
 def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
