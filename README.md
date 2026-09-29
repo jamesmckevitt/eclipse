@@ -11,7 +11,7 @@ The instrument model will be updated as EUVST is built, tested and commissioned.
 [![PyPI](https://img.shields.io/pypi/v/solarc-eclipse.svg)](https://pypi.org/project/solarc-eclipse/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.17543844-blue.svg)](https://doi.org/10.5281/zenodo.17543844)
 
-The documentation, with installation, a quick start, guides to synthesising spectra and simulating the instrument, and a worked example, is at **[solarc-eclipse.readthedocs.io](https://solarc-eclipse.readthedocs.io)**.
+The documentation, with installation and a first run, guides to synthesising spectra, simulating the instrument and analysing the results, and a worked example, is at **[solarc-eclipse.readthedocs.io](https://solarc-eclipse.readthedocs.io)**.
 
 ## Acknowledgements
 

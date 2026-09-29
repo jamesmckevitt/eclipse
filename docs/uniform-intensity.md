@@ -1,8 +1,8 @@
-# Synthesis from a single intensity
+# A single line of known intensity
 
 The simplest input is one spectral line of known total intensity. ECLIPSE makes a Gaussian line with that intensity and simulates the instrument observing it.
 
-Unlike the [MHD](synthesis.md) and [DEM](dem-synthesis.md) routes, there is no separate synthesis step and no synthesis file. Instead you describe the line in the instrument's configuration file with `uniform_intensity`, and run `eclipse` on it directly. [Simulating a single snapshot](instrument-response.md) describes the rest of that file.
+Unlike the [MHD](synthesis.md) and [DEM](dem-synthesis.md) routes, there is no separate synthesis step and no synthesis file. Instead you describe the line in the instrument's configuration file with `uniform_intensity`, and run `eclipse` on it directly. [Running a simulation](instrument-response.md) describes the rest of that file.
 
 ```yaml
 instrument: SWC

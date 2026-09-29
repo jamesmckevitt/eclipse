@@ -38,7 +38,7 @@ The `synthesis:` section takes these settings, which mean what they do in `synth
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `lines` | The lines to synthesise, named as on the [synthesis page](synthesis.md#naming-spectral-lines) | required |
+| `lines` | The lines to synthesise, named as in [Naming spectral lines](line-names.md) | required |
 | `abundance` | The CHIANTI abundance set | `sun_coronal_2021_chianti` |
 | `vel_res`, `vel_lim` | The velocity grid's spacing and half range | `5 km/s`, `300 km/s` |
 | `crop_y`, `crop_z` | Ranges to keep along y and z, as `[low, high]` with units | the whole box |
@@ -52,7 +52,7 @@ The `synthesis:` section takes these settings, which mean what they do in `synth
 
 ## From synthesis files
 
-A series can also be given as [synthesis files](other-codes.md#the-synthesis-file), one per snapshot, with `synthesis_series` in place of `atmosphere_series`. They can come from ECLIPSE's own synthesis or from another code. The slit then reads the columns under it rather than synthesising them, so there is no `synthesis:` section:
+A series can also be given as [synthesis files](files.md#synthesis-files), one per snapshot, with `synthesis_series` in place of `atmosphere_series`. They can come from ECLIPSE's own synthesis or from another code. The slit then reads the columns under it rather than synthesising them, so there is no `synthesis:` section:
 
 ```yaml
 instrument: SWC
@@ -99,4 +99,4 @@ The cube for each combination has one column per exposure, at the slit positions
 
 ## From the old dynamic mode
 
-Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated and will be removed in a future release; see the note at the end of the [synthesis page](synthesis.md). To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [MURaM example](synthesis.md#worked-example-a-muram-flare), and give the files as `atmosphere_series`.
+Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated. [Older versions](older-versions.md#dynamic-mode) says how to move a dynamic-mode run over to a time series of atmosphere files.
