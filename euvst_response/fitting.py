@@ -867,14 +867,14 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[False] = False
+                   return_failed: Literal[False] = False, pixel_mean: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit]]: ...
 
 
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[True]
+                   return_failed: Literal[True], pixel_mean: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit], np.ndarray]: ...
 
 
