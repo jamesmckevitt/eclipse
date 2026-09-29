@@ -264,11 +264,14 @@ MPI spreads Monte Carlo iterations across nodes, and joblib parallelises within 
 
 ## Common random numbers
 
-If you want to compare two instrument configurations whose noise is lower than another noise source, the scatter in the results will make finding trends difficult. The solution is to use the same random numbers for their shared noise. This is variance reduction by common random numbers.
+When you compare two instrument configurations, the noise in each run can hide a small difference between them. Giving both runs the same random numbers, known as [common random numbers](https://en.wikipedia.org/wiki/Variance_reduction#Common_Random_Numbers_%28CRN%29), makes their noise go up and down together, so it mostly cancels when you compare them.
 
-It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux therefore become out of step.
+This only works if both runs use the same number of random values at every step, or every later step gets different values. By default that fails when the runs differ in brightness, because NumPy's photon-count sampler uses more or fewer values depending on how many photons are expected. ECLIPSE can instead draw its counts by [inverse-transform sampling](https://en.wikipedia.org/wiki/Inverse_transform_sampling), which uses exactly one value for each pixel however bright it is. There are two options for this:
 
-Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages. The photon option also draws the quantum efficiency the same way, and the Fano spread from one value per pixel, so that the runs stay in step in every Monte Carlo iteration, not only the first:
+- `photon_shot_inverse_transform`, for runs that differ in photon flux. It covers the photons arriving, the number the detector catches (its quantum efficiency), and the spread in the number of electrons each photon frees (the Fano noise).
+- `dark_current_inverse_transform`, for runs that differ in dark current.
+
+They are arguments to `monte_carlo`:
 
 ```python
 import numpy as np
@@ -283,9 +286,9 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 )
 ```
 
-Both are keyword-only and both default to `False`. The distribution is the same, so a run's statistics do not change and only the correlation between two runs does. Inverting the CDF is slower than the default sampler.
+Both are off by default. They don't change a run's statistics, only how closely two runs follow each other, but they make the run slower.
 
-None of this has a configuration key, so this needs to be done with the Python API rather than run with `eclipse --config`. ECLIPSE does not seed NumPy's generator, so call `np.random.seed` with the same value before each run. Under MPI each rank draws its own numbers from that seed and its rank, so both runs also need the same number of ranks.
+They can only be switched on from Python, not in a config file run with `eclipse --config`. ECLIPSE doesn't seed NumPy's random number generator itself, so call `np.random.seed` with the same value before each run, as in the example. With MPI, both runs also need the same number of ranks, because each rank's random numbers come from the seed and its rank number.
 
 ## Output
 
