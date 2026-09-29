@@ -2,7 +2,7 @@
 
 Put wholly in the nearest bin, a uniform 2.4 km/s flow on the default 5 km/s
 grid was synthesised at rest and a 2.6 km/s one at 5 km/s, and a cell's
-contribution function was that of the nearest temperature bin, 0.05 dex away
+contribution function was that of the nearest temperature bin, 0.025 dex away
 at most. Shared in proportion to how near each bin is, a line's mean velocity
 is the cell's, and its contribution function is interpolated between the two
 temperatures.
