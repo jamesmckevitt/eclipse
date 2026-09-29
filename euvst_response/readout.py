@@ -421,9 +421,13 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
         for column in focal_plane._extreme_columns():
             for ccd in ("left", "right"):
                 rows = [focal_plane._row_on(ccd, target, column) for target in targets]
-                # The rows the range covers on this CCD, cut to its edges.
-                start, end = max(min(rows), -0.5), min(max(rows), n_rows - 0.5)
-                if start <= end:
+                # The rows the range covers on this CCD, cut to its edges. A
+                # range that reaches the CCD only at its outer edge is not on
+                # it; one of no width is on the row below the boundary it is
+                # on, as between two rows, which the lower edge has none of.
+                lo, hi = min(rows), max(rows)
+                start, end = max(lo, -0.5), min(hi, n_rows - 0.5)
+                if start < end or (lo == hi and -0.5 < lo <= n_rows - 0.5):
                     first, last = min(first, start), max(last, end)
         if first > last:
             raise ValueError(

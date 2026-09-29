@@ -478,3 +478,32 @@ def test_a_partial_clear_is_said_to_leave_out_the_charge_it_leaves():
         dark_current_time(1.0 * u.s, small_sequence(dump_rows=6), 6)
         # With a shutter the smear is none whatever the clear.
         smear_photons(rate, small_sequence(dump_rows=2, shutter=True))
+
+
+class _RowsAreWavelengths:
+    """A focal plane of ten rows on the left CCD only, each row at its own wavelength in Angstrom."""
+    n_rows = 10
+
+    def _extreme_columns(self):
+        return [0]
+
+    def _row_on(self, ccd, target, column):
+        return target if ccd == "left" else np.inf
+
+
+@pytest.mark.parametrize("low, high, window", [
+    (-3.0, 0.2, (0, 0)),
+    (2.0, 2.0, (2, 2)),
+    (3.5, 3.5, (3, 3)),     # a boundary between rows is the lower one's
+    (3.5, 4.5, (4, 4)),
+    (8.7, 12.0, (9, 9)),
+])
+def test_a_window_is_the_rows_a_range_overlaps(low, high, window):
+    assert windows_from_wavelengths(_RowsAreWavelengths(), [(low * u.AA, high * u.AA)]) == [window]
+
+
+@pytest.mark.parametrize("low, high", [(-3.0, -0.5), (9.5, 12.0), (-0.5, -0.5), (-3.0, -1.0)])
+def test_a_range_that_only_reaches_the_edge_of_the_ccd_is_not_on_it(low, high):
+    """Reaching row 0's outer edge from below gave the window (-1, -1)."""
+    with pytest.raises(ValueError, match="is on either CCD"):
+        windows_from_wavelengths(_RowsAreWavelengths(), [(low * u.AA, high * u.AA)])
