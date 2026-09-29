@@ -13,8 +13,18 @@ from ndcube import NDCube
 from scipy.optimize import curve_fit, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import gaussian, multi_gaussian, tqdm_joblib
+from .utils import gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
+
+
+def _line_profile(x, *params, n_components=1, pixel=None):
+    """
+    The fitted model: the Gaussians at the wavelengths *x*, or, with *pixel*,
+    their mean over pixels that wide centred there, as a detector records them.
+    """
+    if pixel is None:
+        return multi_gaussian(x, *params, n_components=n_components)
+    return pixel_mean_gaussians(x, *params, n_components=n_components, pixel=pixel)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +293,8 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
 
 
 def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
-                   max_iter: int = FitConfig.max_iter) -> tuple[np.ndarray, bool]:
+                   max_iter: int = FitConfig.max_iter,
+                   pixel: float | None = None) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian, using mpfit.
 
     The same model, initial guess and fallback as :func:`_fit_one`, with the
@@ -300,7 +311,7 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
         {"value": p0[2], "limited": [1, 0], "limits": [1e-30, 0.0]},
         {"value": p0[3]},
     ]
-    functkw = {"x": wv, "y": prof, "n_components": 1}
+    functkw = {"x": wv, "y": prof, "n_components": 1, "pixel": pixel}
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
                        functkw=functkw, quiet=True, maxiter=max_iter)
@@ -323,22 +334,26 @@ def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
 
 
 def _fit_one(wv: np.ndarray, prof: np.ndarray,
-             max_iter: int = FitConfig.max_iter) -> tuple[np.ndarray, bool]:
+             max_iter: int = FitConfig.max_iter,
+             pixel: float | None = None) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian.
 
     *max_iter* is an iteration count.  curve_fit uses lm here, since there are
     no bounds, and lm counts every residual call against maxfev including the
     one per parameter that builds each finite-difference Jacobian, so an
-    iteration costs len(p0) + 1 evaluations.
+    iteration costs len(p0) + 1 evaluations.  With *pixel*, the Gaussian is
+    averaged over pixels that wide (:func:`_line_profile`).
 
     Returns the parameters and whether the fit succeeded.  A failed fit,
     including one that runs out of iterations, returns the initial guess.
     """
     p0 = _guess_params(wv, prof)
+    model = gaussian if pixel is None else (
+        lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1, pixel=pixel))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(gaussian, wv, prof, p0=p0,
+            popt, _ = curve_fit(model, wv, prof, p0=p0,
                                 maxfev=max_iter * (len(p0) + 1))
             return popt, bool(np.all(np.isfinite(popt)))
         except:
@@ -349,8 +364,11 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
 #  Multi-component helpers  (scipy back-end -- fast, default)
 # ---------------------------------------------------------------------------
 
-def _build_scipy_multi(fit_config: FitConfig):
+def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = None):
     """Build a tied multi-Gaussian model for *curve_fit*.
+
+    With *pixel_angstrom*, the Gaussians are averaged over pixels that wide
+    (:func:`_line_profile`).
 
     Internally the model works in **Angstrom** for wavelength-related
     parameters (centres, sigmas) so that all free parameters are within
@@ -470,7 +488,7 @@ def _build_scipy_multi(fit_config: FitConfig):
 
     def model_func(x, *free_params):
         full = free_to_full_A(free_params)
-        return multi_gaussian(x, *full, n_components=nc)
+        return _line_profile(x, *full, n_components=nc, pixel=pixel_angstrom)
 
     return model_func, free_to_full_A, n_free, free_indices, ratio_spec, bounds, has_bounds
 
@@ -759,7 +777,7 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
 
 
 def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
-                     ratio_params=None):
+                     ratio_params=None, pixel=None):
     """Residual function in the form mpfit expects.
 
     Must return ``[status, residuals]`` where *status* is 0 for success.
@@ -768,15 +786,19 @@ def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
     if ratio_params:
         for child_idx, parent_idx in _in_dependency_order(ratio_params):
             p_eval[child_idx] = p_eval[parent_idx] * p[child_idx]
-    model = multi_gaussian(x, *p_eval, n_components=n_components)
+    model = _line_profile(x, *p_eval, n_components=n_components, pixel=pixel)
     return [0, y - model]
 
 
 def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
                    fit_config: FitConfig,
                    parinfo_template: list[dict],
-                   ratio_params: dict | None = None) -> tuple[np.ndarray, bool]:
+                   ratio_params: dict | None = None,
+                   pixel: float | None = None) -> tuple[np.ndarray, bool]:
     """Fit a single spectrum with mpfit.
+
+    With *pixel*, the Gaussians are averaged over pixels that wide
+    (:func:`_line_profile`).
 
     Returns the *full* parameter vector (length ``3*N + 1``) with
     absolute amplitudes (ratio parameters are converted back), and whether
@@ -801,7 +823,7 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
             p0[child_idx] = ratio
 
     functkw = {"x": wv, "y": prof, "n_components": fit_config.n_components,
-               "ratio_params": ratio_params}
+               "ratio_params": ratio_params, "pixel": pixel}
 
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
@@ -845,22 +867,27 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[False] = False
+                   return_failed: Literal[False] = False, pixel_mean: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit]]: ...
 
 
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[True]
+                   return_failed: Literal[True], pixel_mean: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit], np.ndarray]: ...
 
 
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: bool = False):
+                   return_failed: bool = False, pixel_mean: bool = False):
     """
     Fit Gaussian(s) to every (slit x wavelength) spectrum.
+
+    Each pixel is fitted with the Gaussians at its centre, as an observer
+    fits a spectrum, or with *pixel_mean* with their mean over the pixel,
+    which is what the pixel records; the two differ for a line not much
+    wider than a pixel. The fitted parameters are the Gaussians' either way.
 
     Parameters
     ----------
@@ -874,6 +901,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         ``backend`` when one is given.
     return_failed : bool, optional
         Also return which fits failed.  Keyword-only.  Default False.
+    pixel_mean : bool, optional
+        Fit the Gaussians' mean over each pixel.  Keyword-only.  Default False.
 
     Returns
     -------
@@ -906,6 +935,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     # The iteration limit applies to every path. Without a fitting block there
     # is no FitConfig to carry it, so fall back to the same default.
     max_iter = FitConfig.max_iter if fit_config is None else fit_config.max_iter
+    # The pixel width in the cm the fits take the wavelengths in.
+    pixel = spectral_pixel_width(signal_cube).to_value(wv.unit) if pixel_mean else None
 
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
@@ -916,7 +947,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             results = np.empty((spec_block.shape[0], 4))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = fit_one(wv.value, spec_block[i], max_iter)
+                results[i], succeeded[i] = fit_one(wv.value, spec_block[i], max_iter, pixel)
             return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
@@ -943,7 +974,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     if not use_mpfit:
         # scipy curve_fit -- LM when unconstrained, TRF when bounds active.
         (model_func, free_to_full, n_free,
-         free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(fit_config)
+         free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
+            fit_config, None if pixel is None else pixel * 1e8)
 
         def _fit_block_multi(spec_block):
             results = np.empty((spec_block.shape[0], n_params))
@@ -974,7 +1006,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             for i in range(spec_block.shape[0]):
                 results[i], succeeded[i] = _fit_one_multi(
                     wv.value, spec_block[i], fit_config,
-                    parinfo_template, ratio_params)
+                    parinfo_template, ratio_params, pixel)
             return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
@@ -1206,9 +1238,14 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
         maps, NaN where the fit failed.  There is no intensity, because the
         cube is in the units of the synthesis rather than in counts.
     """
+    # The cube holds each pixel's mean of the spectrum, so the truth is the
+    # Gaussians whose mean over each pixel it is. Fitted at the pixel centres,
+    # as the noisy spectra are, a line not much wider than a pixel comes out
+    # pulled toward the middle of its pixel and too wide, and the truth would
+    # hide the same error in the noisy fits.
     data, units, failed = fit_cube_gauss(cube, n_jobs=n_jobs,
                                          fit_config=fit_config,
-                                         return_failed=True)
+                                         return_failed=True, pixel_mean=True)
     quantities = fit_quantities(data, units, spectral_pixel_width(cube),
                                 cube.meta["rest_wav"], fit_config)
     components = {
