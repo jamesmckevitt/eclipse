@@ -41,6 +41,14 @@ def test_a_value_of_the_wrong_kind_is_refused_rather_than_matched():
                                                 "simulation.expos": 5 * u.m})
 
 
+def test_a_setting_run_without_a_unit_takes_a_number_or_a_fraction_but_not_a_length():
+    results = _results([0.64, 0.76], name="detector.qe_euv")
+    assert get_results_for_combination(results, **{"detector.qe_euv": 0.76})["index"] == 1
+    assert get_results_for_combination(results, **{"detector.qe_euv": 76 * u.percent})["index"] == 1
+    with pytest.raises(ValueError, match="detector.qe_euv was run as a number with no unit"):
+        get_results_for_combination(results, **{"detector.qe_euv": 0.76 * u.m})
+
+
 @pytest.mark.parametrize("given, expected", [
     ("2012-06-03T12:00:00Z", "2012-06-03T12:00:00"),
     ("2012-06-03T14:00:00+02:00", "2012-06-03T12:00:00"),

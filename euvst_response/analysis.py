@@ -360,9 +360,17 @@ def _same_parameter(name: str, asked, stored) -> bool:
     Compared in the stored value's own unit, to a part in 1e9 of its size:
     compared in SI to 1e-8 of at least one, every length under 10 nm, a
     microroughness or a thickness, was the same as every other. A quantity
-    of another kind is refused rather than matched, as 5 m matched 5 s. A
+    of another kind is refused rather than matched, as 5 m matched 5 s, and
+    so is one with a unit for a setting run as a number without one. A
     number with no unit is compared with the stored value in SI, as before.
     """
+    numbers = (int, float, np.integer, np.floating)
+    if (isinstance(asked, u.Quantity) and isinstance(stored, numbers)
+            and not isinstance(stored, bool)):
+        if not asked.unit.is_equivalent(u.dimensionless_unscaled):
+            raise ValueError(f"{name} was run as a number with no unit; {asked} is a "
+                             f"{asked.unit.physical_type}.")
+        asked = asked.to_value(u.dimensionless_unscaled)
     if isinstance(asked, u.Quantity) and isinstance(stored, u.Quantity):
         try:
             asked = asked.to_value(stored.unit, equivalencies=u.temperature())
@@ -372,7 +380,6 @@ def _same_parameter(name: str, asked, stored) -> bool:
         stored = stored.value
     else:
         asked, stored = _to_canonical_scalar(asked), _to_canonical_scalar(stored)
-    numbers = (int, float, np.integer, np.floating)
     if (isinstance(asked, numbers) and isinstance(stored, numbers)
             and not isinstance(asked, bool) and not isinstance(stored, bool)):
         return bool(np.isclose(asked, stored, rtol=1e-9, atol=0.0))
@@ -894,7 +901,7 @@ def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Qu
         Velocity precision requirement for the title (default: 2.0 km/s).
     """
     # A tick at each exposure time, in the middle of its colour, written as
-    # given: to one decimal, 0.25 s read as 0.2.
+    # given, so that 0.25 s reads as 0.25.
     tick_positions = list(map_obj._exposure_times)
     tick_labels = [f"{exp_time:g}" for exp_time in map_obj._exposure_times]
     
