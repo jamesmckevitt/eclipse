@@ -158,6 +158,11 @@ class RasterPlan:
     centre : u.Quantity, optional
         The heliocentric x at which the raster is centred, as a length. None
         centres it on the atmosphere.
+    direction : str
+        The way the slit steps: ``"increasing"`` x, the default, or
+        ``"decreasing"``, as the deprecated dynamic mode scanned. Either
+        way the image's columns run along increasing x, each observed at
+        its own exposure's time.
     """
 
     start: u.Quantity
@@ -166,6 +171,7 @@ class RasterPlan:
     repeats: int = 1
     cadence: Optional[u.Quantity] = None
     centre: Optional[u.Quantity] = None
+    direction: str = "increasing"
 
     def __post_init__(self):
         if not isinstance(self.start, u.Quantity) or not self.start.unit.is_equivalent(u.s):
@@ -187,6 +193,9 @@ class RasterPlan:
         if self.centre is not None and (not isinstance(self.centre, u.Quantity)
                                         or not self.centre.unit.is_equivalent(u.Mm)):
             raise ValueError(f"centre must be a length, got {self.centre!r}.")
+        if self.direction not in ("increasing", "decreasing"):
+            raise ValueError(f"direction must be 'increasing' or 'decreasing' x, got "
+                             f"{self.direction!r}.")
 
     def exposures(self, slit_width: u.Quantity, expos: u.Quantity,
                   atmosphere_centre: u.Quantity,
@@ -225,6 +234,8 @@ class RasterPlan:
             raise ValueError(f"The cadence, {cadence}, is shorter than the exposure, "
                              f"{expos}, so exposures would overlap.")
         step = angle_to_distance(slit_width if self.step is None else self.step).to(u.Mm)
+        if self.direction == "decreasing":
+            step = -step
         centre = (atmosphere_centre if self.centre is None else self.centre).to(u.Mm)
         first = centre - (self.steps - 1) / 2 * step
         exposures = []
@@ -474,6 +485,28 @@ class _SlitRaster:
         edges = self.series.x_edges
         return 0.5 * (edges[0] + edges[-1])
 
+    @classmethod
+    def check_plan(cls, series: _Series, plan: RasterPlan, slit_widths: Sequence[u.Quantity],
+                   exposure_times: Sequence[u.Quantity]) -> None:
+        """
+        Refuse *plan* if any of the slit widths and exposure times cannot observe *series*.
+
+        Every exposure of every raster has to lie within the series' times
+        and put the slit within its x grid. This is checked from the
+        series' times and edges alone, before anything is synthesised or
+        read, so that a sweep does not fail part-way through.
+        """
+        geometry = _SlitRaster(series)
+        geometry._extent = cls._extent
+        repeats = range(plan.repeats) if plan.repeats > 1 else [None]
+        for slit_width in slit_widths:
+            for expos in exposure_times:
+                for repeat in repeats:
+                    for exposure in plan.exposures(slit_width, expos,
+                                                   geometry.atmosphere_centre(), repeat):
+                        series.coverage(exposure.start, exposure.end)
+                        geometry.columns_under(exposure.position, slit_width)
+
     def columns_under(self, position: u.Quantity, slit_width: u.Quantity) -> Tuple[int, int, np.ndarray]:
         """
         The columns a slit at *position* covers: first index, last index plus one, and
@@ -575,6 +608,10 @@ class _SlitRaster:
         *across_slit* and *extend* are as for :meth:`columns_seen`.
         """
         exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
+        # The columns run along increasing x whichever way the slit stepped,
+        # so that the image is the same way round, each with its own times.
+        if plan.direction == "decreasing":
+            exposures = exposures[::-1]
         collected = [self.exposure_spectra(exposure, slit_width, across_slit, extend)
                      for exposure in exposures]
         positions = u.Quantity([e.position for e in exposures]).to(u.Mm)

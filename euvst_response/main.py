@@ -53,7 +53,7 @@ _TOP_LEVEL_KEYS = {
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
                    "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
                    "goft_temperature_chunk"}
-_RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre"}
+_RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre", "direction"}
 
 # Under MPI, a copy of the stderr a rank other than the first started with,
 # before its output is silenced.
@@ -297,13 +297,22 @@ def _parse_synthesis_settings(config: dict):
                              f"got {precision!r}.")
         settings["precision"] = np.float32 if precision == "float32" else np.float64
     if section.get("mass_per_electron") is not None:
-        settings["mass_per_electron"] = float(section["mass_per_electron"])
+        value = section["mass_per_electron"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"'synthesis.mass_per_electron' must be a number of atomic mass "
+                             f"units, such as 1.16, got {value!r}.")
+        settings["mass_per_electron"] = float(value)
     if section.get("hdf5_dbase_root") is not None:
         settings["hdf5_dbase_root"] = str(section["hdf5_dbase_root"])
-    if section.get("n_workers") is not None:
-        settings["n_workers"] = int(section["n_workers"])
-    if section.get("goft_temperature_chunk") is not None:
-        settings["goft_temperature_chunk"] = int(section["goft_temperature_chunk"])
+    # Whole numbers, which int() would otherwise make of a fraction.
+    for key, least in (("n_workers", 0), ("goft_temperature_chunk", 1)):
+        value = section.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < least:
+            raise ValueError(f"'synthesis.{key}' must be a whole number of {least} or more, "
+                             f"got {value!r}.")
+        settings[key] = value
     return SynthesisSettings(**settings)
 
 
@@ -326,6 +335,8 @@ def _parse_raster_plan(config: dict):
     plan["step"] = _quantity_or_none(section, "step", u.arcsec, "raster")
     plan["cadence"] = _quantity_or_none(section, "cadence", u.s, "raster")
     plan["centre"] = _quantity_or_none(section, "centre", u.Mm, "raster")
+    if section.get("direction") is not None:
+        plan["direction"] = section["direction"]
     return RasterPlan(**plan)
 
 
@@ -629,7 +640,8 @@ def main() -> None:
         series_paths = _series_paths(config, "atmosphere_series")
         synthesis_settings = _parse_synthesis_settings(config)
         raster_plan = _parse_raster_plan(config)
-        reference_line = config.get("reference_line", synthesis_settings.lines[0])
+        # Left empty, as not given: the first line.
+        reference_line = config.get("reference_line") or synthesis_settings.lines[0]
         if reference_line not in synthesis_settings.lines:
             raise ValueError(f"'reference_line' {reference_line!r} is not one of "
                              f"'synthesis.lines' {list(synthesis_settings.lines)}.")
@@ -819,6 +831,11 @@ def main() -> None:
         if attr not in det_fixed and attr not in det_sweep:
             det_fixed[attr] = default
 
+    def _swept(*attrs):
+        """Each of the simulation values *attrs*, as the list the sweep takes it through."""
+        return [list(sim_sweep[attr]) if attr in sim_sweep else [sim_fixed[attr]]
+                for attr in attrs]
+
     # Warnings
     psf_vals = list(sim_sweep.get("psf", [sim_fixed.get("psf", False)]))
     if any(psf_vals):
@@ -905,6 +922,8 @@ def main() -> None:
         print("\nReading the atmosphere series...")
         series = AtmosphereSeries(series_paths)
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
+        # Before the contribution functions, which take minutes and gigabytes.
+        RasterSynthesiser.check_plan(series, raster_plan, *_swept("slit_width", "expos"))
         raster = RasterSynthesiser(series, synthesis_settings)
     elif synthesis_series_mode:
         # The spectra are read per combination inside the loop, a strip of
@@ -914,6 +933,7 @@ def main() -> None:
         series = SynthesisSeries(series_paths, reference_line)
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
         print(f"  Lines in the window of {reference_line}: {', '.join(series.lines)}")
+        SynthesisRaster.check_plan(series, raster_plan, *_swept("slit_width", "expos"))
         raster = SynthesisRaster(series)
     else:
         print(f"\nLoading the synthesis from {synthesis_file}...")

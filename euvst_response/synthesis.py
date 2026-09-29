@@ -1834,7 +1834,8 @@ def check_atmosphere_options(args) -> None:
                 f"Dynamic mode (--slit-rest-time) is deprecated and will be "
                 f"removed in a future release: write the snapshots as atmosphere "
                 f"files and observe them as a time series in the instrument run, "
-                f"as described at {TIME_SERIES_DOCS}.",
+                f"as described at {TIME_SERIES_DOCS}, with 'direction: decreasing' "
+                f"under 'raster:' to scan the way dynamic mode does.",
                 FutureWarning, stacklevel=2)
         else:
             warnings.warn(
