@@ -5,6 +5,7 @@ Configuration classes for instruments, detectors, and simulation parameters.
 from __future__ import annotations
 import dataclasses
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -185,6 +186,14 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: st
 _THROUGHPUT_TABLES: dict = {}
 
 
+def _starts_with_a_number(text: str) -> bool:
+    try:
+        float(text.split()[0])
+    except ValueError:
+        return False
+    return True
+
+
 def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """
     Return (lambda, T) arrays from a 2-col ASCII table (skip comments). lambda is in nm.
@@ -217,6 +226,14 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
             elif data:
                 raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
                                  f"throughput, and the table's data had begun.")
+            elif _starts_with_a_number(text):
+                # Before the data, a header, as the packaged tables' are, but
+                # one that begins with a number may be a first line of data
+                # with a slip in it, which would change the curve's end.
+                warnings.warn(f"{path}, line {number}: {text!r} is taken as a header, but it "
+                              f"begins with a number. If it is a line of data, it has a slip "
+                              f"in it; if it is a header, a # in front of it says so.",
+                              stacklevel=2)
         if not data:
             raise ValueError(f"{path} has no lines of a wavelength and a throughput.")
         arr = np.array(data)
@@ -622,10 +639,10 @@ class Telescope_EIS:
                 f"{', '.join(eis_calibration.CALIBRATIONS)}."
             )
         if self.psf_slit_width is not None and not (
-                isinstance(self.psf_slit_width, u.Quantity)
+                isinstance(self.psf_slit_width, u.Quantity) and self.psf_slit_width.isscalar
                 and self.psf_slit_width.unit.is_equivalent(u.arcsec)
-                and self.psf_slit_width > 0):
-            raise ValueError(f"telescope.psf_slit_width must be a positive angle, got "
+                and np.isfinite(self.psf_slit_width.value) and self.psf_slit_width.value > 0):
+            raise ValueError(f"telescope.psf_slit_width must be a finite angle above zero, got "
                              f"{self.psf_slit_width!r}.")
         if self.date is not None:
             self.date = eis_calibration.normalise_date(self.date)

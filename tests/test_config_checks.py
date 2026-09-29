@@ -48,6 +48,10 @@ def _run(tmp_path, monkeypatch, config, text=None):
      r"pinhole_sizes\[0\] must be a diameter"),
     (lambda: Telescope_EIS(calibration="dz2025", date="03-Jun-2012"),
      "telescope.date '03-Jun-2012' is not a date ECLIPSE can read"),
+    (lambda: Telescope_EIS(calibration="dz2025", date="2012-06-03+garbage"),
+     r"telescope.date '2012-06-03\+garbage' is not a date ECLIPSE can read"),
+    (lambda: Telescope_EIS(psf_slit_width=np.inf * u.arcsec),
+     "psf_slit_width must be a finite angle above zero"),
     (lambda: FitComponent(195.119), "wavelength must be the wavelength of a line"),
     (lambda: FitConfig(components=[FitComponent(195.119 * u.AA), FitComponent(195.179 * u.AA)],
                        primary_component=1.0), "primary_component is 1.0"),
@@ -82,6 +86,27 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     (tmp_path / "word.dat").write_text("17.0 0.097\n17.2 0.103 garbage\n")
     with pytest.raises(ValueError, match="line 2: '17.2 0.103 garbage'"):
         _load_throughput_table(tmp_path / "word.dat")
+
+
+def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as_a_header(
+        tmp_path):
+    """It may be the first line of data with a slip in it; the packaged tables' headers are words."""
+    import shutil
+    import warnings
+    from importlib.resources import files
+
+    (tmp_path / "first.dat").write_text("17.0 0.l03\n17.2 0.103\n17.4 0.110\n")
+    with pytest.warns(UserWarning, match=r"line 1: '17.0 0.l03' is taken as a header, but it "
+                                         r"begins with a number"):
+        assert _load_throughput_table(tmp_path / "first.dat")[1].tolist() == [0.103, 0.110]
+    for table in (files("euvst_response") / "data" / "throughput").iterdir():
+        if not table.name.endswith(".dat"):
+            continue
+        copy = tmp_path / table.name
+        shutil.copyfile(table, copy)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _load_throughput_table(copy)
 
 
 @pytest.mark.parametrize("build, message", [
