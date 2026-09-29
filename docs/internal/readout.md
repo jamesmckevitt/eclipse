@@ -60,7 +60,7 @@ A frame is cleared, exposed, then read row by row. Rows inside a window go throu
 - `row_transfer_time`: 15 us by default, and configurable in flight.
 - `pixel_period`, `serial_prescan`, `serial_image_pixels`, `serial_overscan`: the register read, 50 + 1024 + 20 samples per output at 500 ns. Both scans are configurable in flight between 0 and 200.
 - `parallel_overscan_rows`: rows clocked and read after the last image row. Without a shutter they hold pure smear, since their charge crosses the whole illuminated area on the way out, which makes them a direct measurement of it.
-- `dump_rows`: transfers used to clear the image area before the exposure. The default clears a whole CCD.
+- `dump_rows`: transfers used to clear the image area before the exposure. The default clears a whole CCD. A frame always starts from an empty chip here, so fewer rows leave out the charge a partial clear would leave behind, and ECLIPSE warns when they do.
 - `windows`: inclusive row ranges to read. An empty list reads everything.
 
 !!! warning "One row timeline covers both CCDs"

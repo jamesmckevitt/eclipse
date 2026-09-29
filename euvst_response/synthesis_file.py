@@ -60,7 +60,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 
-from .atmosphere import _check_format, _read_dataset, _write_dataset
+from .atmosphere import _check_format, _read_dataset, _text_attribute, _write_dataset
 from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
@@ -595,8 +595,7 @@ def _line_wavelength(group: h5py.Group, name: str, path: Path) -> u.Quantity:
 
 
 def _source(f: h5py.File) -> str:
-    source = f.attrs.get("source", "")
-    return str(source.decode() if isinstance(source, bytes) else source)
+    return str(_text_attribute(f.attrs, "source", ""))
 
 
 def _identity(entry: h5py.Group) -> dict:
@@ -605,8 +604,8 @@ def _identity(entry: h5py.Group) -> dict:
 
 
 def _integration_axis(f: h5py.File) -> Optional[str]:
-    axis = f.attrs.get("integration_axis")
-    return None if axis is None else str(axis.decode() if isinstance(axis, bytes) else axis)
+    axis = _text_attribute(f.attrs, "integration_axis")
+    return None if axis is None else str(axis)
 
 
 def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:

@@ -440,9 +440,11 @@ def apply_cube_cropping(
         point1.append(None)
         point2.append(None)
     
-    temp_cube = temp_cube.crop(point1, point2)
-    rho_cube = rho_cube.crop(point1, point2)
-    vel_cube = vel_cube.crop(point1, point2)
+    # A crop that keeps one cell along an axis keeps the axis, which the
+    # synthesis needs all three of.
+    temp_cube = temp_cube.crop(point1, point2, keepdims=True)
+    rho_cube = rho_cube.crop(point1, point2, keepdims=True)
+    vel_cube = vel_cube.crop(point1, point2, keepdims=True)
     
     return temp_cube, rho_cube, vel_cube
 
@@ -687,6 +689,39 @@ def _compute_single_ion(args):
     return results
 
 
+# A line name: element, ionisation stage, and a wavelength in Angstrom, such
+# as Fe12_195.1190.
+_LINE_NAME = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
+
+
+def _parse_line_name(name: str) -> Tuple[str, int, float]:
+    """
+    The element, ionisation stage and wavelength in Angstrom of a line name
+    such as ``Fe12_195.1190``.
+
+    The element must be one, the stage one it has, from 1, neutral, to its
+    atomic number plus one, and the wavelength above zero: an element or
+    stage that is not was found only when its ion was made, after the
+    atmosphere had been read, and a wavelength of zero matched whichever
+    transition was shortest.
+    """
+    match = _LINE_NAME.match(name)
+    if not match:
+        raise ValueError(f"Cannot parse line name '{name}'. Expected format like "
+                         f"'Fe12_195.1190'.")
+    elem, stage, wavelength = match.group(1), int(match.group(2)), float(match.group(3))
+    try:
+        atomic_number = element(elem).atomic_number
+    except ValueError:
+        raise ValueError(f"Line name '{name}': {elem} is not an element.") from None
+    if not 1 <= stage <= atomic_number + 1:
+        raise ValueError(f"Line name '{name}': {elem} has ionisation stages 1 to "
+                         f"{atomic_number + 1}, got {stage}.")
+    if not (np.isfinite(wavelength) and wavelength > 0):
+        raise ValueError(f"Line name '{name}': the wavelength must be above zero, in "
+                         f"Angstrom.")
+    return elem, stage, wavelength
+
 # The grids G(T, n_e) is worked out on unless given others: log10 T from 4 to 9
 # every 0.05, and log10 n_e from 7 to 13 every 0.3. density_grid carries the
 # density grid on, on the same points, as far as an atmosphere needs.
@@ -802,19 +837,10 @@ def compute_goft_fiasco(
     densities_cm3 = 10.0 ** logN_grid
 
     # ---- parse line names and group by ion for efficiency ----
-    line_pattern = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
     ion_lines: Dict[Tuple[str, int], List[Tuple[str, float]]] = {}
 
     for name in line_names:
-        m = line_pattern.match(name)
-        if not m:
-            raise ValueError(
-                f"Cannot parse line name '{name}'. "
-                f"Expected format like 'Fe12_195.1190'."
-            )
-        elem = m.group(1)
-        stage = int(m.group(2))
-        wl = float(m.group(3))
+        elem, stage, wl = _parse_line_name(name)
         ion_lines.setdefault((elem, stage), []).append((name, wl))
 
     # Build worker arguments (all picklable plain types / numpy arrays)
@@ -1808,7 +1834,8 @@ def check_atmosphere_options(args) -> None:
                 f"Dynamic mode (--slit-rest-time) is deprecated and will be "
                 f"removed in a future release: write the snapshots as atmosphere "
                 f"files and observe them as a time series in the instrument run, "
-                f"as described at {TIME_SERIES_DOCS}.",
+                f"as described at {TIME_SERIES_DOCS}, with 'direction: decreasing' "
+                f"under 'raster:' to scan the way dynamic mode does.",
                 FutureWarning, stacklevel=2)
         else:
             warnings.warn(
@@ -1920,9 +1947,17 @@ def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str
 
 def resolve_mass_per_electron(args) -> Tuple[float, str]:
     """The mass per free electron to use, in atomic mass units, and where it came from."""
-    if args.mass_per_electron is not None:
+    given = getattr(args, "mass_per_electron", None)
+    # A script that sets the option's old name on its arguments still gets it.
+    if given is None and getattr(args, "mean_mol_wt", None) is not None:
+        warnings.warn(
+            "mean_mol_wt is the old name of mass_per_electron, the mass of the plasma per "
+            "free electron in atomic mass units; it is used, but set mass_per_electron "
+            "instead.", FutureWarning, stacklevel=2)
+        given = args.mean_mol_wt
+    if given is not None:
         try:
-            value = require_mass_per_electron(args.mass_per_electron)
+            value = require_mass_per_electron(given)
         except ValueError as error:
             raise ValueError(f"--mass-per-electron: {error}") from None
         return value, "given on the command line"
@@ -1971,6 +2006,10 @@ def main(args=None) -> None:
     if args.downsample < 1:
         raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
+    # Checked now, where a name that could not be read was found only once
+    # the atmosphere had been read, which can take minutes and gigabytes.
+    for name in args.lines:
+        _parse_line_name(name)
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
     # Checked now, before the atmosphere is read or anything computed.
@@ -2013,6 +2052,14 @@ def main(args=None) -> None:
         # Validate dynamic mode requirements
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
+        # The snapshots are laid across x, which the slit steps across in a
+        # view along z or y. Seen along x, x is the line of sight, and every
+        # pixel would add up cells from all the snapshots.
+        if integration_axis == "x":
+            raise ValueError(
+                "Dynamic mode lays its snapshots across x, which is the line of sight "
+                "of a view along x, so every pixel would add up all of them. View along "
+                "z or y.")
 
         base_dir = Path(args.data_dir)
         # Voxel sizes of the MURaM files. load_cube scales these itself when
