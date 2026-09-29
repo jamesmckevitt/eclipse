@@ -14,7 +14,7 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
+from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
@@ -1092,7 +1092,14 @@ def main() -> None:
     # that cannot be run does not end the sweep part-way, and lose the
     # combinations run before it, which are saved only at the end.
     for combo_values in _combinations():
-        _combination(combo_values)
+        _, _, _, _, tel, _, _ = _combination(combo_values)
+    # The throughput tables are read now too, where one that was missing or
+    # had a slip in it was found only when the first photons were counted.
+    # They cannot be swept, so every combination has the last one's.
+    if instrument == "SWC":
+        for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
+                      tel.filter.oxide_table, tel.filter.c_table):
+            _load_throughput_table(table)
 
     def _check_offchip_bins(fov_along_slit):
         """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""

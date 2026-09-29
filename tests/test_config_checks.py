@@ -92,6 +92,10 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     (tmp_path / "empty.dat").write_text("# nothing here\n")
     with pytest.raises(ValueError, match="has no lines of a wavelength and a throughput"):
         _load_throughput_table(tmp_path / "empty.dat")
+    (tmp_path / "one.dat").write_text("# reflectance\n17.0 0.097\n")
+    with pytest.raises(ValueError, match="has one line of a wavelength and a throughput, and "
+                                         "needs two or more"):
+        _load_throughput_table(tmp_path / "one.dat")
     # A column of numbers more is read; a word after the numbers is a slip.
     (tmp_path / "three.dat").write_text("17.0 0.097 0.001\n17.2 0.103 0.001\n")
     assert _load_throughput_table(tmp_path / "three.dat")[1].tolist() == [0.097, 0.103]
@@ -148,6 +152,21 @@ def test_the_psf_widths_and_the_tables_are_checked_when_built(build, message):
     """They were set by a default factory, which the checks of other settings pass by."""
     with pytest.raises(ValueError, match=message):
         build()
+
+
+@pytest.mark.parametrize("text, error, message", [
+    (None, FileNotFoundError, "missing.dat"),
+    ("# reflectance\n17.0 0.097\n17.2 0.l03\n", ValueError, "line 3: '17.2 0.l03'"),
+])
+def test_a_table_that_cannot_be_read_is_refused_before_the_first_combination_runs(
+        tmp_path, monkeypatch, capsys, text, error, message):
+    """It was read only when the first combination's photons were counted."""
+    table = tmp_path / "missing.dat"
+    if text is not None:
+        table.write_text(text)
+    with pytest.raises(error, match=message):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "telescope": {"grating_table": str(table)}})
+    assert "Combination 1" not in capsys.readouterr().out
 
 
 def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
@@ -277,6 +296,7 @@ def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
     ("Fe0_195.119", "Fe has ionisation stages 1 to 27, got 0"),
     ("Fe28_195.119", "Fe has ionisation stages 1 to 27, got 28"),
     ("Fe12_0", "'Fe12_0': the wavelength must be above zero"),
+    ("Fe12_" + "9" * 400, "the wavelength must be above zero"),
 ])
 def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(monkeypatch, name,
                                                                              message):

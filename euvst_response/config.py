@@ -245,6 +245,9 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
                               stacklevel=2)
         if not data:
             raise ValueError(f"{path} has no lines of a wavelength and a throughput.")
+        if len(data) < 2:
+            raise ValueError(f"{path} has one line of a wavelength and a throughput, and "
+                             f"needs two or more to interpolate between.")
         arr = np.array(data)
         wl = arr[:, 0] * u.nm
         tr = arr[:, 1]

@@ -715,7 +715,7 @@ def _parse_line_name(name: str) -> Tuple[str, int, float]:
     if not 1 <= stage <= atomic_number + 1:
         raise ValueError(f"Line name '{name}': {elem} has ionisation stages 1 to "
                          f"{atomic_number + 1}, got {stage}.")
-    if not wavelength > 0:
+    if not (np.isfinite(wavelength) and wavelength > 0):
         raise ValueError(f"Line name '{name}': the wavelength must be above zero, in "
                          f"Angstrom.")
     return elem, stage, wavelength
