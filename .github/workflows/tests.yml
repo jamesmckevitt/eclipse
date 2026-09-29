@@ -72,7 +72,7 @@ jobs:
       # release that version supports.
       - name: Name the database for this fiasco
         id: database
-        run: python -c "import fiasco; print(f'key=chianti-fiasco-{fiasco.__version__}')" >> "$GITHUB_OUTPUT"
+        run: python -c "import fiasco; print(f'key=chianti-fiasco-{fiasco.__version__}-checked')" >> "$GITHUB_OUTPUT"
 
       - name: Restore the database
         id: cache
@@ -81,10 +81,24 @@ jobs:
           path: ~/.fiasco/chianti_dbase.h5
           key: ${{ steps.database.outputs.key }}
 
+      # Downloaded over HTTPS, which the CHIANTI server gives though fiasco asks
+      # for HTTP, and each file checked against the hashes fiasco keeps for the
+      # release before it goes into the database.
       - name: Build the database
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          python -c "import fiasco; from fiasco.util import check_database; check_database(fiasco.defaults['hdf5_dbase_root'], ask_before=False)"
+          python - <<'PY'
+          import fiasco
+          from fiasco.util import check_database
+          from fiasco.util.setup_db import _get_chianti_dbase_url
+
+          url = _get_chianti_dbase_url()
+          if not url.startswith(("http://", "https://")):
+              raise SystemExit(f"Unexpected CHIANTI database URL: {url}")
+          url = "https://" + url.split("://", 1)[1]
+          check_database(fiasco.defaults["hdf5_dbase_root"], ask_before=False,
+                         ascii_dbase_url=url, check_hash=True)
+          PY
           rm -rf ~/.fiasco/chianti_dbase ~/.fiasco/tmp
 
       # With ECLIPSE_REQUIRE_CHIANTI set, a missing database stops the run
