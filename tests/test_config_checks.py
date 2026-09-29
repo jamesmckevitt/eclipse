@@ -72,6 +72,18 @@ def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
     assert np.isfinite(telescope.primary_mirror_efficiency(172.0 * u.AA))
 
 
+def test_a_table_inside_an_archive_is_read_as_a_packaged_one_may_be(tmp_path):
+    """importlib.resources gives a zipped package's tables as resources that read themselves but are not paths."""
+    import zipfile
+
+    with zipfile.ZipFile(tmp_path / "package.zip", "w") as archive:
+        archive.writestr("reflectance.dat", "Wavelength (nm), Reflectance\n17.0 0.097\n17.4 0.110\n")
+    table = zipfile.Path(tmp_path / "package.zip", "reflectance.dat")
+    telescope = Telescope_EUVST(pm_table=table)
+    assert telescope.pm_table is table
+    assert telescope.primary_mirror_efficiency(172.0 * u.AA) == pytest.approx(0.1035)
+
+
 def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     """Skipped, 0.l03 would have left the curve interpolated across the row it was in."""
     (tmp_path / "slip.dat").write_text("# reflectance\n17.0 0.097\n17.2 0.l03\n17.4 0.110\n")

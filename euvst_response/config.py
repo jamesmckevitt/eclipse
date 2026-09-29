@@ -204,7 +204,9 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """
     key = str(path)
     if key not in _THROUGHPUT_TABLES:
-        content = Path(path).read_text()
+        # A path given as text is made one; a package's own table may be a
+        # resource inside an archive, which reads itself but is not a path.
+        content = (path if hasattr(path, "read_text") else Path(path)).read_text()
         # Headers are skipped as the lines before the data that are not two
         # numbers, however many there are: skipping the first two, as the
         # packaged tables have, lost the data rows of a table with fewer. A
