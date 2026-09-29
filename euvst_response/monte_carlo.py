@@ -78,6 +78,7 @@ def simulate_once(
         If True the input cube is uniform along the slit, so the PSF is
         convolved in the spectral direction only.  See
         :func:`~euvst_response.radiometric.apply_focusing_optics_psf`.
+        Pinholes pass the light of the rows beyond the cube as well.
         Default False.
     photon_shot_inverse_transform : bool, optional
         Use inverse-transform Poisson sampling for photon shot noise, so that
@@ -146,7 +147,7 @@ def simulate_once(
         else:
             shares = {}
         photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel,
-                                                             **shares)
+                                                             uniform=uniform_mode, **shares)
     else:
         photons_euv_pinholes = photons_focused
 

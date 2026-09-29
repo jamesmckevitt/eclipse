@@ -33,4 +33,4 @@ EUV. A pinhole passes, for every point whose cone covers it, the share (hole are
 
 Visible. Where the visible stray light comes from is not known, so it is taken to reach the filter head-on as a plane wave. The hole's light is then its near-field diffraction pattern, centred under the hole, which a hole approaching sqrt(wavelength x distance) across, 390 um at 600 nm, needs in place of the far-field Airy pattern. The foil passes about 1e-9 of the visible, so its interference with the hole's light, at most 1e-4 of it, is left out.
 
-Both patterns are integrated over the pixels they land on, and the light that falls outside the window is lost rather than moved onto it.
+Both patterns are integrated over the pixels they land on, and the light that falls outside the window is lost rather than moved onto it. A uniform intensity stands for a scene that is the same all along the slit, so there the EUV pinholes also pass the light of the rows beyond the window, and what they diffract from those rows into the window is counted.

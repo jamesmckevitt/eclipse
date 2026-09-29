@@ -517,6 +517,7 @@ def apply_euv_pinhole_diffraction(
     focus=None,
     staying: np.ndarray | None = None,
     diffracting: np.ndarray | None = None,
+    uniform: bool = False,
 ) -> NDCube:
     """
     Add the EUV light the filter's pinholes let through.
@@ -568,6 +569,10 @@ def apply_euv_pinhole_diffraction(
         filter, weighted at their own wavelengths by
         :func:`pinhole_light_weights` before the blur. In place of
         *unfocused* and *focus*.
+    uniform : bool, optional
+        The photons are a uniform intensity, standing for a scene the same all
+        along the slit, so the rows beyond the window send the pinholes' light
+        into it too. Otherwise the scene is dark beyond the window.
 
     Returns
     -------
@@ -602,38 +607,50 @@ def apply_euv_pinhole_diffraction(
                 for diameter, along_slit, along_spectral in zip(
                     sim.pinhole_sizes, sim.pinhole_positions, spectral_positions)]
 
+    if given:
+        staying, diffracting = np.asarray(staying, float), np.asarray(diffracting, float)
+    else:
+        # The shares of the light that stay and are diffracted, at its own
+        # wavelength, then as the focusing optics leave it.
+        staying, diffracting = (source.data * share(wavelength)
+                                for share in pinhole_light_weights(tel))
+        if focus is not None:
+            staying, diffracting = (np.asarray(focus(NDCube(light, wcs=source.wcs,
+                                                            unit=source.unit,
+                                                            meta=source.meta)).data, float)
+                                    for light in (staying, diffracting))
+
     # The light is the same in every Monte Carlo iteration, which works it out
-    # again before its noise is drawn, so the last answer is kept.
-    shares = pinhole_light_weights(tel)
+    # again before its noise is drawn, so the last answer is kept, found by
+    # the light it spreads, as the optics left it, and where it goes.
     digest = hashlib.blake2b(digest_size=16)
-    for light in ((staying, diffracting) if given else (source.data,)):
-        digest.update(np.ascontiguousarray(light, dtype=float).tobytes())
-    digest.update(repr((photon_counts.data.shape, given, focus is not None)).encode())
+    for light in (staying, diffracting):
+        digest.update(np.ascontiguousarray(light).tobytes())
+    digest.update(repr((photon_counts.data.shape, bool(uniform))).encode())
     digest.update(np.ascontiguousarray(wavelength.value).tobytes())
-    if not given:
-        digest.update(np.ascontiguousarray([share(wavelength) for share in shares]).tobytes())
     digest.update(repr((pinholes, pixel, distance, footprint)).encode())
     key = digest.hexdigest()
     if key not in _LAST_ADDED:
-        if given:
-            staying, diffracting = np.asarray(staying, float), np.asarray(diffracting, float)
-        else:
-            # The shares of the light that stay and are diffracted, at its own
-            # wavelength, then as the focusing optics leave it.
-            staying, diffracting = (source.data * share(wavelength) for share in shares)
-            if focus is not None:
-                staying, diffracting = (np.asarray(focus(NDCube(light, wcs=source.wcs,
-                                                                unit=source.unit,
-                                                                meta=source.meta)).data)
-                                        for light in (staying, diffracting))
-        added = np.zeros(photon_counts.data.shape)
+        # A uniform intensity stands for a scene that is the same all along
+        # the slit, beyond the rows it is worked out on, and a pinhole passes
+        # the light of those rows too, as far as its half disc reaches, whose
+        # diffracted light lands on the rows worked out. The rows are carried
+        # on, alike, that far.
+        margin = int(np.ceil(footprint / pixel)) + 1 if uniform else 0
+        if margin:
+            staying, diffracting = (np.pad(light, ((margin, margin), (0, 0), (0, 0)), mode="edge")
+                                    for light in (staying, diffracting))
+        n_rows = n_slit + 2 * margin
+        added = np.zeros((n_rows, n_scan, n_spectral))
         for radius, along_slit, along_spectral in pinholes:
-            centre = pinhole_centre(along_slit, along_spectral, n_slit, n_spectral)
+            row, column = pinhole_centre(along_slit, along_spectral, n_slit, n_spectral)
             share = ((np.pi * radius**2 / footprint_area) * half_disc_fractions(
-                (n_slit, n_spectral), centre, footprint / pixel, longer_is_higher))[:, np.newaxis, :]
+                (n_rows, n_spectral), (margin + row, column), footprint / pixel,
+                longer_is_higher))[:, np.newaxis, :]
             added += staying * share
-            added += _spread(diffracting * share, lambda column: _converging_kernel(
-                n_slit, n_spectral, radius, float(wavelength[column].to_value(u.m)), distance, pixel))
+            added += _spread(diffracting * share, lambda source: _converging_kernel(
+                n_rows, n_spectral, radius, float(wavelength[source].to_value(u.m)), distance, pixel))
+        added = added[margin:margin + n_slit].copy()
         added.flags.writeable = False
         _LAST_ADDED.clear()
         _LAST_ADDED[key] = added

@@ -390,3 +390,57 @@ def test_a_run_with_the_psf_and_pinholes_lays_their_light_on_with_the_scene(tmp_
     main_module.main()
     assert len(passed) == 1 and len(passed[0]) == 2
     assert all(cube.meta["psf_applied"] for cube in passed[0])
+
+
+def test_the_answer_kept_is_the_one_for_the_blur_it_was_worked_out_with():
+    """Kept by the photons before the blur, a second blur of the same scene was given the first's answer."""
+    from euvst_response.pinhole_diffraction import _LAST_ADDED
+
+    det, tel = Detector_SWC(filter_distance=50 * u.mm), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", enable_pinholes=True, pinhole_sizes=[50 * u.um],
+                     pinhole_positions=[0.5], pinhole_positions_spectral=[0.25])
+    before = _window(121, 1, 61, 1000.0)
+    apply_euv_pinhole_diffraction(before, det, sim, tel, unfocused=before, focus=lambda cube: cube)
+    after = _shift_a_column_on(before)
+    second = apply_euv_pinhole_diffraction(after, det, sim, tel, unfocused=before,
+                                           focus=_shift_a_column_on)
+    _LAST_ADDED.clear()
+    fresh = apply_euv_pinhole_diffraction(after, det, sim, tel, unfocused=before,
+                                          focus=_shift_a_column_on)
+    assert np.array_equal(second.data, fresh.data)
+
+
+@pytest.mark.parametrize("diameter", [50, 5])
+def test_a_uniform_intensity_gains_the_pinholes_light_of_the_rows_beyond_it(diameter):
+    """
+    A row of a uniform intensity gains what the middle row of a window holding the whole half disc does.
+
+    Taken as dark beyond the row, it lost the light the rows around it
+    diffract into it.
+    """
+    det, tel = Detector_SWC(filter_distance=50 * u.mm), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", enable_pinholes=True, pinhole_sizes=[diameter * u.um],
+                     pinhole_positions=[0.5], pinhole_positions_spectral=[0.25])
+    one, whole = _window(1, 1, 61, 1000.0), _window(121, 1, 61, 1000.0)
+    uniform = (apply_euv_pinhole_diffraction(one, det, sim, tel, uniform=True).data - one.data)[0]
+    middle = (apply_euv_pinhole_diffraction(whole, det, sim, tel).data - whole.data)[60]
+    assert uniform == pytest.approx(middle, rel=1e-9, abs=1e-12 * middle.max())
+    alone = (apply_euv_pinhole_diffraction(one, det, sim, tel).data - one.data)[0]
+    assert uniform.sum() > 1.1 * alone.sum()
+
+
+def test_a_uniform_intensity_run_counts_the_pinholes_light_of_the_rows_beyond_it():
+    from euvst_response.data_processing import create_uniform_intensity_cube
+    from euvst_response.monte_carlo import simulate_once
+
+    det, tel = Detector_SWC(filter_distance=50 * u.mm), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=True, noise=False,
+                     enable_pinholes=True, pinhole_sizes=[50 * u.um], pinhole_positions=[0.5])
+    cube = create_uniform_intensity_cube(
+        total_intensity=5000 * u.erg / (u.s * u.cm**2 * u.sr), rest_wavelength=195.119 * u.AA,
+        thermal_width=20 * u.km / u.s, det=det, sim=sim, tel=tel)
+    gained = {}
+    for uniform in (True, False):
+        steps = simulate_once(cube, 1 * u.s, det, tel, sim, uniform_mode=uniform)
+        gained[uniform] = (steps[5].data - steps[4].data).sum()
+    assert gained[True] > 1.1 * gained[False] > 0
