@@ -203,3 +203,23 @@ def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
     assert last == 12 and fractions.sum() == pytest.approx(1.0)
     with pytest.raises(ValueError, match="reaches outside"):
         raster.columns_under(1.2 * u.Mm - half + 1e-3 * u.Mm, 0.2 * u.arcsec)
+
+
+def test_a_synthesis_files_text_attributes_written_as_one_element_arrays_are_read(tmp_path):
+    """As IDL writes them, for a synthesis another code wrote."""
+    from euvst_response.synthesis_file import (FORMAT_NAME, SpectralLine, Synthesis, read_synthesis,
+                                               read_synthesis_layout, write_synthesis)
+
+    edges = np.arange(3) * 0.1 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    path = write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges,
+                                     integration_axis="z"), tmp_path / "file.h5")
+    with h5py.File(path, "r+") as f:
+        f.attrs["format"] = np.array([FORMAT_NAME.encode()])
+        f.attrs["source"] = np.array([b"IDL run"])
+        f.attrs["integration_axis"] = np.array([b"z"])
+    synthesis = read_synthesis(path)
+    assert synthesis.source == "IDL run" and synthesis.integration_axis == "z"
+    assert read_synthesis_layout(path)["integration_axis"] == "z"
