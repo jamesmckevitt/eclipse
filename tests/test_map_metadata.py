@@ -67,11 +67,11 @@ def test_every_map_carries_the_date_it_was_given():
 
 
 def test_every_map_states_the_observer():
-    """One au on the disc-centre line, which is what the chain assumes."""
+    """On the disc-centre line, one au from the emitting surface, as the chain assumes."""
     maps = _make(date_obs=WHEN)
     for name, map_obj in maps.items():
         assert map_obj.meta["dsun_obs"] == pytest.approx(
-            const.au.to_value(u.m)), name
+            (const.au + const.R_sun).to_value(u.m)), name
         assert map_obj.meta["hgln_obs"] == 0.0, name
         assert map_obj.meta["hglt_obs"] == 0.0, name
 
@@ -80,7 +80,8 @@ def test_the_observer_survives_into_the_coordinate_frame():
     """The keywords are only worth writing if sunpy reads them back."""
     map_obj = _make(date_obs=WHEN)["total_dn"]
     observer = map_obj.observer_coordinate
-    assert observer.radius.to_value(u.au) == pytest.approx(1.0, rel=1e-9)
+    assert observer.radius.to_value(u.au) == pytest.approx(
+        1.0 + (const.R_sun / const.au).decompose().value, rel=1e-9)
     assert observer.lat.to_value(u.deg) == pytest.approx(0.0, abs=1e-9)
 
 
@@ -146,3 +147,23 @@ def test_the_wcs_still_describes_the_same_pixels():
     assert map_obj.data.shape == (NY, NX)
     assert map_obj.scale[0].to_value(u.arcsec / u.pix) == pytest.approx(0.2)
     assert map_obj.scale[1].to_value(u.arcsec / u.pix) == pytest.approx(0.16)
+
+
+def test_the_exposure_time_map_holds_the_exposure_times_in_seconds():
+    """It held each exposure's index under a unit of seconds, so a saved map read 0, 1, 2."""
+    runs = []
+    # Pixel (0, 0) meets 2 km/s from 1 s, (0, 1) from 2 s, (0, 2) from 5 s,
+    # and the rest not at all.
+    for expos, meeting in ((1.0, 1), (2.0, 2), (5.0, 3)):
+        combo = _combination_results()
+        std = np.zeros((NY, NX, 4))
+        std[..., 1] = 1e-2  # Angstrom: some 15 km/s
+        std[0, :meeting, 1] = 1e-4
+        combo["dn_fit_stats"]["std_data"] = std
+        combo["parameters"] = {"simulation.expos": expos * u.s}
+        runs.append(combo)
+    exposure = _make(date_obs=WHEN, exposure_time_results=runs)["exposure_time"]
+    assert exposure.meta["bunit"] == "s"
+    finite = exposure.data[np.isfinite(exposure.data)]
+    assert sorted(finite.tolist()) == [1.0, 2.0, 5.0]
+    assert np.isinf(exposure.data).sum() == NX * NY - 3

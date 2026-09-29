@@ -4,12 +4,14 @@ Utility functions for coordinate transformations, unit conversions, and general 
 
 from __future__ import annotations
 import contextlib
+import functools
 import difflib
 import dataclasses
 import subprocess
 from pathlib import Path
 import warnings
 import numpy as np
+import yaml
 import astropy.units as u
 import astropy.constants as const
 import joblib
@@ -80,9 +82,13 @@ def set_debug_mode(enabled: bool):
     DEBUG_MODE = enabled
 
 
-def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None):
+def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None,
+                traceback=None):
     """
     Break into IPython debugger if debug mode is enabled.
+
+    Without IPython, *traceback*, when given, is opened in pdb after the
+    fact, at the frame that raised; otherwise pdb stops here.
     
     Usage:
         debug_break("Check values here", locals(), globals())
@@ -99,11 +105,12 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
         from IPython import embed
         
         # Prepare namespace for IPython
+        # The module's names first, so that a local of the same name wins.
         user_ns = {}
-        if locals_dict:
-            user_ns.update(locals_dict)
         if globals_dict:
             user_ns.update(globals_dict)
+        if locals_dict:
+            user_ns.update(locals_dict)
             
         print("Starting IPython session...")
         print("Available variables:", list(user_ns.keys()) if user_ns else "None provided")
@@ -115,7 +122,10 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
     except ImportError:
         print("IPython not available. Using standard Python debugger...")
         import pdb
-        pdb.set_trace()
+        if traceback is not None:
+            pdb.post_mortem(traceback)
+        else:
+            pdb.set_trace()
 
 
 def debug_on_error(func):
@@ -127,16 +137,29 @@ def debug_on_error(func):
         def my_function():
             # your code here
     """
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception as e:
             if DEBUG_MODE:
-                print(f"\n=== EXCEPTION IN {func.__name__}: {e} ===")
-                # Get the frame where the exception occurred
-                import sys
-                frame = sys.exc_info()[2].tb_frame
-                debug_break(f"Exception in {func.__name__}: {e}", frame.f_locals, frame.f_globals)
+                print(f"\n=== EXCEPTION IN {func.__name__}: {type(e).__name__}: {e} ===")
+                # The session opens with the exception as `exception`, in the
+                # frame nearest where it was raised that is ECLIPSE's own: the
+                # decorated function's, the second of the traceback after
+                # this wrapper's, or that of a function it called. Deeper, in
+                # numpy or astropy, the locals say little about the run. pdb,
+                # without IPython, opens where it was raised and can go up.
+                package = __name__.split(".")[0]
+                frame = (e.__traceback__.tb_next or e.__traceback__).tb_frame
+                entry = e.__traceback__.tb_next
+                while entry is not None:
+                    if entry.tb_frame.f_globals.get("__name__", "").split(".")[0] == package:
+                        frame = entry.tb_frame
+                    entry = entry.tb_next
+                debug_break(f"Exception in {func.__name__}: {e}",
+                            {**frame.f_locals, "exception": e}, frame.f_globals,
+                            traceback=e.__traceback__)
             raise
     return wrapper
 
@@ -173,6 +196,31 @@ def multi_gaussian(wave, *params, n_components=1):
         if sigma == 0:
             continue
         result += peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2)
+    result += params[-1]  # background
+    return result
+
+
+def pixel_mean_gaussians(wave, *params, n_components=1, pixel=1.0):
+    """
+    :func:`multi_gaussian` averaged over pixels *pixel* wide centred on *wave*.
+
+    What a detector pixel records of the same Gaussians, which for a line
+    narrower than a pixel is not the Gaussian at the pixel's centre. The
+    parameters are the Gaussians', as for :func:`multi_gaussian`.
+    """
+    from scipy.special import erf
+
+    result = np.zeros_like(wave, dtype=float)
+    half = pixel / 2
+    for i in range(n_components):
+        peak = params[3 * i]
+        centre = params[3 * i + 1]
+        sigma = params[3 * i + 2]
+        if sigma == 0:
+            continue
+        scale = np.sqrt(2.0) * sigma
+        result += (peak * sigma * np.sqrt(np.pi / 2) / pixel
+                   * (erf((wave + half - centre) / scale) - erf((wave - half - centre) / scale)))
     result += params[-1]  # background
     return result
 
@@ -260,6 +308,9 @@ def rebin_slit_offchip(cube, n_bin: int):
 
     data = cube.data
     n_slit, n_scan, n_lam = data.shape
+    if n_bin > n_slit:
+        raise ValueError(f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
+                         f"slit, so there would be nothing left; bin at most {n_slit}.")
     n_keep = (n_slit // n_bin) * n_bin
     trimmed = data[:n_keep, :, :]
     rebinned = trimmed.reshape(n_keep // n_bin, n_bin, n_scan, n_lam).sum(axis=1)
@@ -333,10 +384,25 @@ def load_maps(path: str | Path) -> dict:
 
 
 def get_git_commit_id() -> str:
-    """Get the last git commit ID from the package's git repository."""
+    """
+    Get the last git commit ID from the package's git repository.
+
+    Only a git checkout of ECLIPSE itself, with the package at its top, has
+    one. A package installed into an environment that happens to sit inside
+    some other repository, such as a project's .venv, is not part of it, and
+    that repository's commit says nothing about ECLIPSE.
+    """
     try:
         from importlib.resources import files
         pkg_path = Path(str(files("euvst_response"))).parent
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, cwd=pkg_path, timeout=5,
+        )
+        if top.returncode != 0:
+            return "unknown (not a git repository)"
+        if Path(top.stdout.strip()).resolve() != pkg_path.resolve():
+            return "unknown (not installed from a git checkout of ECLIPSE)"
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,
@@ -424,9 +490,40 @@ _SECTION_STRING_FIELDS = {
     # then discarded. main() rejects it rather than letting it look effective.
     "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
-    "telescope": ["psf_type", "calibration", "date"],
-    "filter": [],
+    "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table"],
+    "filter": ["al_table", "oxide_table", "c_table"],
 }
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, but refusing a key a mapping gives twice."""
+
+
+def _construct_mapping_once(loader, node, deep=False):
+    # YAML forbids a repeated key; PyYAML keeps the last, so that a section
+    # written twice lost the whole of its first block to the defaults.
+    seen = set()
+    for key_node, _ in node.value:
+        # A merge key, as in "<<: *anchor", is not a key of its own:
+        # construct_mapping brings in the anchor's keys, which the keys given
+        # beside it may override, as YAML has it.
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"the key {key!r} is given twice in one mapping", key_node.start_mark)
+        seen.add(key)
+    return loader.construct_mapping(node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+                                 _construct_mapping_once)
+
+
+def load_yaml_config(text: str):
+    """A configuration file's YAML, as yaml.safe_load reads it, but refusing a repeated key."""
+    return yaml.load(text, Loader=_UniqueKeyLoader)
 
 
 def _parse_section(section_dict: dict, class_name: str) -> tuple:
@@ -460,9 +557,19 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
     sweep = {}
 
     for key, val in section_dict.items():
+        # Left empty, a key read as nothing: noise off, or no exposure times
+        # and so no run at all, which still said it had succeeded.
+        if val is None or (isinstance(val, (list, tuple)) and len(val) == 0):
+            raise ValueError(f"'{class_name}.{key}' is empty. Give it a value, or leave it "
+                             f"out for its default.")
         if key in list_fields:
             parsed = parse_yaml_input(val)
             fixed[key] = parsed if isinstance(parsed, list) else [parsed]
+        elif key.endswith("_table") and isinstance(val, (list, tuple)):
+            # A result's parameters leave out the tables, which are files,
+            # so a sweep over them would give each table's results one key.
+            raise ValueError(f"'{class_name}.{key}' names one table; to compare tables, "
+                             f"run each in its own configuration.")
         else:
             if key in string_fields:
                 parsed = list(val) if isinstance(val, (list, tuple)) else val

@@ -378,6 +378,41 @@ def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, f
         synthesiser.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, "Fe09_171.0730")
 
 
+def test_a_raster_can_step_towards_decreasing_x(tmp_path, flat_goft):
+    """As the deprecated dynamic mode scanned: the image is the same way round, its times reversed."""
+    snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
+    synthesiser = RasterSynthesiser(AtmosphereSeries(_series(tmp_path, snapshots)), _settings())
+    step = angle_to_distance(0.4 * u.arcsec).to_value(u.Mm)
+
+    plan = RasterPlan(start=0 * u.s, steps=3, direction="decreasing")
+    assert [e.position.to_value(u.Mm) for e in plan.exposures(
+        0.4 * u.arcsec, 10 * u.s, 0 * u.Mm)] == pytest.approx([step, 0.0, -step])
+    cube = synthesiser.line_cubes(plan, 0.4 * u.arcsec, 10 * u.s)[LINE]
+    assert cube.axis_world_coords(1)[0].to_value(u.Mm) == pytest.approx([-step, 0.0, step])
+    assert cube.wcs.wcs.cdelt[1] == pytest.approx(step)
+    assert cube.meta["starts"].to_value(u.s) == pytest.approx([20.0, 10.0, 0.0])
+    columns = cube.data.sum(axis=(0, 2))
+    assert columns / columns[-1] == pytest.approx([9.0, 4.0, 1.0], rel=1e-6)
+
+    with pytest.raises(ValueError, match="'increasing' or 'decreasing'"):
+        RasterPlan(start=0 * u.s, direction="-x")
+
+
+def test_a_plan_the_series_cannot_hold_is_refused_before_anything_is_synthesised(tmp_path):
+    """Any slit width and exposure time of the sweep is checked, not only the first."""
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(t) for t in (0.0, 10.0, 20.0)]))
+    plan = RasterPlan(start=0 * u.s, steps=3)
+    RasterSynthesiser.check_plan(series, plan, [0.2 * u.arcsec], [5 * u.s, 10 * u.s])
+    with pytest.raises(ValueError, match="outside the series"):
+        RasterSynthesiser.check_plan(series, plan, [0.2 * u.arcsec], [5 * u.s, 20 * u.s])
+    with pytest.raises(ValueError, match="reaches outside the atmosphere"):
+        RasterSynthesiser.check_plan(series, RasterPlan(start=0 * u.s, steps=12),
+                                     [0.2 * u.arcsec, 0.4 * u.arcsec], [1 * u.s])
+    alone = AtmosphereSeries(_series(tmp_path / "one", [_snapshot(0.0)]))
+    with pytest.raises(ValueError, match="series of one snapshot"):
+        RasterSynthesiser.check_plan(alone, plan, [0.2 * u.arcsec], [1 * u.s])
+
+
 # ----------------------------------------------------------------------
 # Through the instrument run
 # ----------------------------------------------------------------------
@@ -474,6 +509,20 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
         run(raster={"start": "0 s", "cadance": "5 s"})
     with pytest.raises(ValueError, match="not one of 'synthesis.lines'"):
         run(reference_line="Fe09_171.0730")
+    for key, value, match in (("n_workers", 2.7, "whole number of 0 or more"),
+                              ("goft_temperature_chunk", 0, "whole number of 1 or more"),
+                              ("mass_per_electron", "1.29 u", "number of atomic mass units")):
+        with pytest.raises(ValueError, match=f"'synthesis.{key}' must be a {match}"):
+            run(synthesis={"lines": [LINE], key: value})
+    # Before the contribution functions are computed, for any exposure time
+    # of the sweep.
+    monkeypatch.setattr(raster_module, "compute_goft_fiasco", None)
+    with pytest.raises(ValueError, match="outside the series"):
+        run(simulation={"slit_width": "0.4 arcsec", "expos": ["5 s", "15 s"], "psf": False})
+    # An empty reference_line is the first line, as docs/time-series.md says,
+    # so the run gets as far.
+    with pytest.raises(ValueError, match="outside the series"):
+        run(reference_line=None)
     with pytest.raises(FileNotFoundError, match="matches no file"):
         run(atmosphere_series=str(tmp_path / "nowhere" / "*.h5"))
     with pytest.raises(ValueError, match="belongs to an 'atmosphere_series' or 'synthesis_series' run"):

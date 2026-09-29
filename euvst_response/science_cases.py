@@ -9,6 +9,7 @@ configurations, and the ``eclipse-science-cases`` command writes them to files.
 from __future__ import annotations
 
 import argparse
+import copy
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
@@ -22,6 +23,7 @@ import yaml
 from mendeleev import element
 
 from .config import Telescope_EUVST, _load_throughput_table
+from .utils import load_yaml_config
 
 # What every configuration gets unless the base settings say otherwise: the
 # settings the cases were run with for the NASA PDR analysis.
@@ -36,6 +38,10 @@ DEFAULT_SETTINGS = {
 # cannot set them.
 _LINE_KEYS = ("instrument", "uniform_intensity", "rest_wavelength",
               "thermal_width", "synthesis_file", "reference_line")
+
+# Keys of a time series, which a configuration observing one line's intensity
+# cannot have.
+_SERIES_KEYS = ("atmosphere_series", "synthesis_series", "raster", "synthesis")
 
 # Two table entries for the same line can be written to different precision,
 # e.g. 195.119 and 195.12, so a wavelength picks lines within this.
@@ -205,7 +211,9 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     }
     config.update({k: v for k, v in settings.items()
                    if isinstance(v, dict) and k != "simulation"})
-    return config
+    # Its own copy of every list and section, which the defaults and the
+    # other configurations would otherwise share with it.
+    return copy.deepcopy(config)
 
 
 def science_case_configs(cases: list[str] | None = None,
@@ -254,6 +262,12 @@ def science_case_configs(cases: list[str] | None = None,
             raise ValueError(
                 f"The base settings cannot set '{key}': every configuration "
                 f"takes it from its line."
+            )
+    for key in _SERIES_KEYS:
+        if key in base:
+            raise ValueError(
+                f"The base settings cannot set '{key}': every configuration "
+                f"observes its line's intensity, not a time series."
             )
 
     # Merged with each case's settings, so it is checked here; the other
@@ -343,7 +357,7 @@ def main(argv: list[str] | None = None) -> None:
 
     base = {}
     if args.base:
-        base = yaml.safe_load(Path(args.base).read_text()) or {}
+        base = load_yaml_config(Path(args.base).read_text()) or {}
         if not isinstance(base, dict):
             raise ValueError(f"{args.base} has to hold a mapping of settings.")
 

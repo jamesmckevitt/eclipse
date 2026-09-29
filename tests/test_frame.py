@@ -491,3 +491,24 @@ def test_digitising_rounds_to_the_nearest_dn():
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
     dn = digitise(np.array([0.4, 1.4, 1.6, 2.6]) * gain, det)
     assert dn.tolist() == [0.0, 1.0, 2.0, 3.0]
+
+
+def test_a_pixel_no_light_reached_keeps_its_own_rows_wavelength():
+    """The FFT's rounding noise, around 1e-15 photons, was taken for light, with a mean
+    wavelength anywhere from 15 to 2900 Angstrom."""
+    import warnings
+
+    fp = FocalPlane_SWC()
+    rate = np.zeros((fp.n_rows, 3))
+    rate[1000:1010] = 1.0e4
+    wavelength = fp.wavelength(np.arange(fp.n_rows), "left")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        photons, mean = expose_with_wavelength(rate, wavelength, 1.0 * u.s,
+                                               ReadoutSequence(shutter=False, dump_rows=0))
+    # The packets below the lit rows cross nothing lit on their way to the register.
+    assert np.all(photons[:1000] == 0.0)
+    assert u.allclose(mean[:1000], wavelength[:1000, np.newaxis])
+    lit = mean[1000:fp.n_rows].to_value(u.Angstrom)
+    assert lit.min() >= wavelength[1000].to_value(u.Angstrom) - 1e-9
+    assert lit.max() <= wavelength[1009].to_value(u.Angstrom) + 1e-9
