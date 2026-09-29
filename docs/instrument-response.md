@@ -294,7 +294,7 @@ Results are written to `run/result/<config name>.h5`. The output includes:
 - Simulated detector signals (DN and photon counts)
 - For each fitted component, by name: the first fit, mean and standard deviation of its intensity, velocity and width, and the number of failed fits in each pixel
 - Statistical analysis of velocity precision vs. exposure time
-- Ground truth comparisons: the truth is the fit to the scene on the detector's pixels without noise or PSF, with the fitted lines averaged over each pixel as the pixels average the spectrum, so that a line narrower than a pixel is fitted where it is. The noisy spectra are fitted with the lines at the pixel centres, as an observer fits them, so their error includes what that costs.
+- Ground truth comparisons: the truth is the fit on the detector's pixels without noise or PSF.
 - Full config objects (`Detector`, `Telescope`, `Simulation`) for each parameter combination
 - The git commit ID and software version used to produce the results
 
