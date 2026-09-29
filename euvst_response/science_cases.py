@@ -23,6 +23,7 @@ import yaml
 from mendeleev import element
 
 from .config import Telescope_EUVST, _load_throughput_table
+from .utils import load_yaml_config
 
 # What every configuration gets unless the base settings say otherwise: the
 # settings the cases were run with for the NASA PDR analysis.
@@ -356,7 +357,7 @@ def main(argv: list[str] | None = None) -> None:
 
     base = {}
     if args.base:
-        base = yaml.safe_load(Path(args.base).read_text()) or {}
+        base = load_yaml_config(Path(args.base).read_text()) or {}
         if not isinstance(base, dict):
             raise ValueError(f"{args.base} has to hold a mapping of settings.")
 

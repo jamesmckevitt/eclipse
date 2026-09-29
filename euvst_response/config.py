@@ -3,6 +3,9 @@ Configuration classes for instruments, detectors, and simulation parameters.
 """
 
 from __future__ import annotations
+import dataclasses
+import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -24,6 +27,106 @@ DETECTOR_MATERIALS = {
         "fano_factor": 0.115,
     }
 }
+
+def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple = (),
+                    fractions: tuple = (), optional: tuple = ()) -> None:
+    """
+    Refuse any setting of *obj* not of its default's kind, or out of its range.
+
+    A quantity needs a unit of the same kind as its default: a number with
+    none, or with one of another kind, was read in whatever unit the code
+    happened to work in, so that a D_ap of 0.28, meant in metres, gave 1e4
+    times too few photons. A switch must be true or false, and a number a
+    number. *positive*, *non_negative* and *fractions* name the fields that
+    must be above zero, at or above it, or from 0 to 1, where a value outside
+    ran to completion and saved results that meant nothing; *optional* those
+    that may also be None.
+    """
+    for f in dataclasses.fields(obj):
+        if not f.init:
+            continue
+        name, value = f"{section}.{f.name.lstrip('_')}", getattr(obj, f.name)
+        if value is None and f.name in optional:
+            continue
+        default = None if f.default is dataclasses.MISSING else f.default
+        if isinstance(default, u.Quantity):
+            if not isinstance(value, u.Quantity):
+                raise ValueError(f"{name} needs a unit, of {default.unit.physical_type}, such as "
+                                 f"{default}; got {value!r}.")
+            if not value.unit.is_equivalent(default.unit, equivalencies=u.temperature()):
+                raise ValueError(f"{name} must be in a unit of {default.unit.physical_type}, "
+                                 f"such as {default.unit}; got {value.unit}.")
+            if not np.all(np.isfinite(value.value)):
+                raise ValueError(f"{name} must be finite, got {value}.")
+        elif isinstance(default, bool):
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be true or false, got {value!r}.")
+        elif isinstance(default, float):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a number, got {value!r}.")
+        magnitude = getattr(value, "value", value)
+        if f.name in positive and not np.all(magnitude > 0):
+            raise ValueError(f"{name} must be more than zero, got {value}.")
+        if f.name in non_negative and not np.all(magnitude >= 0):
+            raise ValueError(f"{name} cannot be negative, got {value}.")
+        if f.name in fractions and not (0 <= magnitude <= 1):
+            raise ValueError(f"{name} is a fraction, from 0 to 1, got {value}.")
+
+
+def _check_psf_params(tel, section: str = "telescope") -> None:
+    """
+    The PSF settings: a Gaussian, psf_params two widths in pixels, along the
+    slit and along the dispersion, above zero, and psf_across_slit None or an
+    angle above zero. Otherwise they are only read once the scene is being
+    laid onto the detector, part way through a run.
+    """
+    if not isinstance(tel.psf_type, str) or tel.psf_type.lower() != "gaussian":
+        raise ValueError(f"{section}.psf_type must be 'gaussian', the only PSF there is; got "
+                         f"{tel.psf_type!r}.")
+    value = tel.psf_params
+    if (not isinstance(value, (list, tuple)) or len(value) != 2
+            or not all(isinstance(q, u.Quantity) and q.unit.is_equivalent(u.pix)
+                       and np.isfinite(q.value) and q.value > 0 for q in value)):
+        raise ValueError(f"{section}.psf_params must be two FWHMs in pixels, along the slit "
+                         f"and along the dispersion, such as [2.66 pix, 2.54 pix]; got {value!r}.")
+    across = tel.psf_across_slit
+    if across is not None and not (isinstance(across, u.Quantity) and across.isscalar
+                                   and across.unit.is_equivalent(u.arcsec)
+                                   and np.isfinite(across.value) and across.value > 0):
+        raise ValueError(f"{section}.psf_across_slit must be a FWHM in an angle above zero, "
+                         f"such as 1 arcsec, or left out for none; got {across!r}.")
+
+
+def _check_tables(obj, names: tuple, section: str) -> None:
+    """
+    Each of *names* the path of a table; one named in a configuration comes as text.
+
+    Whether the table is there is left until it is read, since a results
+    file made on another machine rebuilds these with that machine's paths.
+    """
+    for name in names:
+        value = getattr(obj, name)
+        if isinstance(value, (str, os.PathLike)):
+            value = Path(value).expanduser()
+            setattr(obj, name, value)
+        if not hasattr(value, "is_file"):
+            raise ValueError(f"{section}.{name} must be the path of a table, got {value!r}.")
+
+
+def _check_detector(det, section: str = "detector") -> None:
+    """The checks both detectors share: kinds, ranges, a temperature above absolute zero and a known material."""
+    _check_settings(det, section,
+                    positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size", "wvl_res",
+                              "plate_scale_angle", "filter_distance"),
+                    non_negative=("read_noise_rms", "_dark_current_293k"),
+                    fractions=("qe_euv", "qe_vis"))
+    if det.ccd_temperature.to_value(u.K, equivalencies=u.temperature()) <= 0:
+        raise ValueError(f"{section}.ccd_temperature must be above absolute zero, got "
+                         f"{det.ccd_temperature}; -60 K was perhaps meant as -60 C.")
+    if det.material not in DETECTOR_MATERIALS:
+        raise ValueError(f"{section}.material must be one of {sorted(DETECTOR_MATERIALS)}, got "
+                         f"{det.material!r}.")
+
 
 def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: str = "NIMO") -> u.Quantity:
     """
@@ -83,6 +186,14 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: st
 _THROUGHPUT_TABLES: dict = {}
 
 
+def _starts_with_a_number(text: str) -> bool:
+    try:
+        float(text.split()[0])
+    except ValueError:
+        return False
+    return True
+
+
 def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """
     Return (lambda, T) arrays from a 2-col ASCII table (skip comments). lambda is in nm.
@@ -93,12 +204,50 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """
     key = str(path)
     if key not in _THROUGHPUT_TABLES:
-        content = path.read_text()
-        lines = content.strip().split('\n')[2:]  # Skip first 2 lines
+        # A path given as text is made one; a package's own table may be a
+        # resource inside an archive, which reads itself but is not a path.
+        content = (path if hasattr(path, "read_text") else Path(path)).read_text()
+        # Headers are skipped as the lines before the data that are not two
+        # numbers, however many there are: skipping the first two, as the
+        # packaged tables have, lost the data rows of a table with fewer. A
+        # line that is not two numbers once the data has begun is a slip in
+        # the table, which would otherwise change the curve.
         data = []
-        for line in lines:
-            if line.strip() and not line.strip().startswith('#'):
-                data.append([float(x) for x in line.split()])
+        for number, line in enumerate(content.splitlines(), start=1):
+            text = line.strip()
+            if not text or text.startswith('#'):
+                continue
+            # Every value of a line of data is a number, the first two its
+            # wavelength and throughput.
+            try:
+                row = [float(x) for x in text.split()]
+            except ValueError:
+                row = []
+            if len(row) >= 2:
+                # A throughput in per cent, or a nan, reached the effective
+                # area and made its every value meaningless.
+                wavelength, throughput = row[:2]
+                if not (np.isfinite(wavelength) and wavelength > 0
+                        and np.isfinite(throughput) and 0 <= throughput <= 1):
+                    raise ValueError(f"{path}, line {number}: {text!r} needs a wavelength "
+                                     f"above zero, in nm, and a throughput from 0 to 1.")
+                data.append([wavelength, throughput])
+            elif data:
+                raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
+                                 f"throughput, and the table's data had begun.")
+            elif _starts_with_a_number(text):
+                # Before the data, a header, as the packaged tables' are, but
+                # one that begins with a number may be a first line of data
+                # with a slip in it, which would change the curve's end.
+                warnings.warn(f"{path}, line {number}: {text!r} is taken as a header, but it "
+                              f"begins with a number. If it is a line of data, it has a slip "
+                              f"in it; if it is a header, a # in front of it says so.",
+                              stacklevel=2)
+        if not data:
+            raise ValueError(f"{path} has no lines of a wavelength and a throughput.")
+        if len(data) < 2:
+            raise ValueError(f"{path} has one line of a wavelength and a throughput, and "
+                             f"needs two or more to interpolate between.")
         arr = np.array(data)
         wl = arr[:, 0] * u.nm
         tr = arr[:, 1]
@@ -198,6 +347,12 @@ class AluminiumFilter:
     c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
 
+    def __post_init__(self):
+        _check_settings(self, "filter", positive=("table_thickness",),
+                        non_negative=("al_thickness", "oxide_thickness", "c_thickness"),
+                        fractions=("mesh_throughput",))
+        _check_tables(self, ("al_table", "oxide_table", "c_table"), "filter")
+
     def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
         """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""
         wl_nm = wl0.to_value(u.nm)
@@ -245,6 +400,7 @@ class Detector_SWC:
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
 
     def __post_init__(self):
+        _check_detector(self)
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
                                                         self._dark_current_293k)
 
@@ -287,6 +443,7 @@ class Detector_EIS:
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
     def __post_init__(self):
+        _check_detector(self)
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
                                                         self._dark_current_293k)
 
@@ -327,6 +484,12 @@ class Telescope_EUVST:
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
     grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
+
+    def __post_init__(self):
+        _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
+                        non_negative=("microroughness_sigma",), optional=("psf_slit_width",))
+        _check_psf_params(self)
+        _check_tables(self, ("pm_table", "grating_table"), "telescope")
 
     @property
     def collecting_area(self) -> u.Quantity:
@@ -481,13 +644,27 @@ class Telescope_EIS:
     date: str | None = None
 
     def __post_init__(self):
+        _check_psf_params(self)
         if self.calibration not in eis_calibration.CALIBRATIONS:
             raise ValueError(
                 f"Unknown EIS calibration {self.calibration!r}. Choose from: "
                 f"{', '.join(eis_calibration.CALIBRATIONS)}."
             )
+        if self.psf_slit_width is not None and not (
+                isinstance(self.psf_slit_width, u.Quantity) and self.psf_slit_width.isscalar
+                and self.psf_slit_width.unit.is_equivalent(u.arcsec)
+                and np.isfinite(self.psf_slit_width.value) and self.psf_slit_width.value > 0):
+            raise ValueError(f"telescope.psf_slit_width must be a finite angle above zero, got "
+                             f"{self.psf_slit_width!r}.")
         if self.date is not None:
             self.date = eis_calibration.normalise_date(self.date)
+            # Read now, rather than when the effective area is first wanted,
+            # part-way through a run.
+            try:
+                eis_calibration._parse_date(self.date)
+            except ValueError:
+                raise ValueError(f"telescope.date {self.date!r} is not a date ECLIPSE can "
+                                 f"read; give it in ISO form, such as 2012-06-03.") from None
         elif self.calibration in eis_calibration.TIME_DEPENDENT_CALIBRATIONS:
             raise ValueError(
                 f"The {self.calibration!r} EIS calibration is time-dependent, "
@@ -585,15 +762,26 @@ class Simulation:
         return self.slit_width
 
     def __post_init__(self):
+        _check_settings(self, "simulation", positive=("expos", "slit_width"),
+                        non_negative=("vis_sl",))
+        if isinstance(self.n_iter, bool) or not isinstance(self.n_iter, int) or self.n_iter < 1:
+            raise ValueError(f"n_iter must be a whole number of iterations, 1 or more, got "
+                             f"{self.n_iter!r}.")
+        for index, size in enumerate(self.pinhole_sizes):
+            if not (isinstance(size, u.Quantity) and size.unit.is_equivalent(u.um) and size > 0):
+                raise ValueError(f"pinhole_sizes[{index}] must be a diameter, a positive "
+                                 f"length, such as 5 um; got {size!r}.")
+        # EIS has 1 and 2 arcsec slits, and 40 and 266 arcsec slots, which
+        # ECLIPSE does not model.
         allowed_slits = {
-            "EIS": [1, 2, 4],
+            "EIS": [1, 2],
             "SWC": [0.2, 0.4, 0.8, 1.6],
         }
         inst = self.instrument.upper()
         slit_val = self.slit_width.to_value(u.arcsec)
         if inst == "EIS":
             if slit_val not in allowed_slits["EIS"]:
-                raise ValueError("For EIS, slit_width must be 1, 2, or 4 arcsec.")
+                raise ValueError("For EIS, slit_width must be 1 or 2 arcsec, its two slits.")
         elif inst in ("SWC"):
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
