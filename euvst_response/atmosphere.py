@@ -729,12 +729,14 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
 
     This is what turns a simulation's mass density into the electron density
     the contribution functions need, when the simulation gives no electron
-    density of its own. It assumes every element is fully ionised, which
-    holds where the EUV lines ECLIPSE synthesises form. Cooler cells get an
-    electron density higher than they have, but they emit none of those
-    lines. It is about 1.16 for coronal abundances, against 1.29 for a
-    neutral gas, so an atmosphere read with the neutral value has about 20
-    per cent too little emission measure.
+    density of its own. It assumes every element is fully ionised. Hydrogen
+    and helium, which give almost all the electrons, are, above about
+    log T 5.2, so the electron density there is within about 1 per cent even
+    where the metals are not. Cooler cells get an electron density higher
+    than they have, but they emit few of the lines ECLIPSE synthesises. It
+    is about 1.16 for coronal abundances, against 1.29 for a neutral gas, so
+    an atmosphere read with the neutral value has about 20 per cent too
+    little emission measure.
 
     Parameters
     ----------

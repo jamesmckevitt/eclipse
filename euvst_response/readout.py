@@ -48,7 +48,7 @@ from scipy.signal import fftconvolve
 # there, together with the ray-traced line positions drawn on its SW footprint
 # figure.  A single linear scale is not good enough: the design runs from 17.0
 # mA per row at the short-wavelength end to 16.8 at the long one, so the
-# nominal 16.9 misplaces a line by up to nine rows.
+# nominal 16.9 misplaces a line by up to about seven rows.
 DISPERSION_COEFFICIENTS = (198.885944, 1.2516577, -1.361114e-4)
 
 # A spectral line is an image of the slit, and the optics do not lay that image
@@ -455,10 +455,10 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
 
     Charge is clocked toward the register while the chip is still illuminated,
     so a packet collects light from every row it crosses.  For the packet read
-    out of row ``r``, the read-out contributes ``sum_k rate[r - k] * dwell[k]``,
-    and clearing the image area beforehand contributes ``row_transfer_time``
-    times the rows above it, since the packet that ends at row ``r`` was clocked
-    down from ``r + dump_rows``.
+    out of row ``r``, the read-out contributes ``sum_k rate[r - k] * dwell[k - 1]``
+    over ``k >= 1``, and clearing the image area beforehand contributes
+    ``row_transfer_time`` times the rows above it, since the packet that ends
+    at row ``r`` was clocked down from ``r + dump_rows``.
 
     Parameters
     ----------
@@ -534,9 +534,15 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
     Returns
     -------
     np.ndarray
-        Photons per pixel, shaped ``(n_rows + parallel_overscan_rows, n_columns)``.
-        Feed this to the detector stages in :mod:`euvst_response.radiometric` in
-        place of the exposure-only photon count.
+        The mean photons per pixel, shaped
+        ``(n_rows + parallel_overscan_rows, n_columns)``. Without a shutter a
+        pixel holds photons from every row its charge crossed, so for a frame
+        :func:`euvst_response.frame.expose_with_wavelength` gives these with
+        the wavelength that carries each pixel's mean photon energy. Drawn as
+        whole photons, a Poisson draw of each pixel, they go to
+        :func:`euvst_response.frame.detect` with that wavelength and
+        :func:`dark_current_time`; or the means go with ``noise=False``, for
+        the frame's mean.
     """
     rate = np.asarray(rate, dtype=float)
     signal = smear_photons(rate, sequence)
