@@ -194,15 +194,20 @@ def _starts_with_a_number(text: str) -> bool:
     return True
 
 
-def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
+def _load_throughput_table(path, *, index: bool = False) -> tuple[u.Quantity, np.ndarray]:
     """
     Return (lambda, T) arrays from a 2-col ASCII table (skip comments). lambda is in nm.
 
     Each table is read once: the effective area is asked for at every
     wavelength of a spectrum, and reading five tables again for each one made
     a spectrum take minutes.  The arrays are shared, so they are read-only.
+
+    With *index*, the table is of a layer's index of refraction, and the
+    column after the wavelength is delta, which is of either sign, where a
+    throughput is from 0 to 1.
     """
-    key = str(path)
+    quantity = "delta" if index else "throughput"
+    key = (str(path), index)
     if key not in _THROUGHPUT_TABLES:
         # A path given as text is made one; a package's own table may be a
         # resource inside an archive, which reads itself but is not a path.
@@ -226,15 +231,17 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
             if len(row) >= 2:
                 # A throughput in per cent, or a nan, reached the effective
                 # area and made its every value meaningless.
-                wavelength, throughput = row[:2]
-                if not (np.isfinite(wavelength) and wavelength > 0
-                        and np.isfinite(throughput) and 0 <= throughput <= 1):
+                wavelength, value = row[:2]
+                if not (np.isfinite(wavelength) and wavelength > 0 and np.isfinite(value)
+                        and (index or 0 <= value <= 1)):
                     raise ValueError(f"{path}, line {number}: {text!r} needs a wavelength "
-                                     f"above zero, in nm, and a throughput from 0 to 1.")
-                data.append([wavelength, throughput])
+                                     f"above zero, in nm, and "
+                                     + ("a finite delta." if index else
+                                        "a throughput from 0 to 1."))
+                data.append([wavelength, value])
             elif data:
                 raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
-                                 f"throughput, and the table's data had begun.")
+                                 f"{quantity}, and the table's data had begun.")
             elif _starts_with_a_number(text):
                 # Before the data, a header, as the packaged tables' are, but
                 # one that begins with a number may be a first line of data
@@ -244,9 +251,9 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
                               f"in it; if it is a header, a # in front of it says so.",
                               stacklevel=2)
         if not data:
-            raise ValueError(f"{path} has no lines of a wavelength and a throughput.")
+            raise ValueError(f"{path} has no lines of a wavelength and a {quantity}.")
         if len(data) < 2:
-            raise ValueError(f"{path} has one line of a wavelength and a throughput, and "
+            raise ValueError(f"{path} has one line of a wavelength and a {quantity}, and "
                              f"needs two or more to interpolate between.")
         arr = np.array(data)
         wl = arr[:, 0] * u.nm
@@ -368,7 +375,7 @@ class AluminiumFilter:
         # The index tables are read as the throughput tables are: wavelength
         # and then delta, the column after it.
         optical_path = sum(
-            _interp_tr(wl_nm, *_load_throughput_table(table)) * thickness.to_value(u.nm)
+            _interp_tr(wl_nm, *_load_throughput_table(table, index=True)) * thickness.to_value(u.nm)
             for table, thickness in ((self.al_index_table, self.al_thickness),
                                      (self.oxide_index_table, self.oxide_thickness),
                                      (self.c_index_table, self.c_thickness)))
@@ -379,7 +386,8 @@ class AluminiumFilter:
         _check_settings(self, "filter", positive=("table_thickness",),
                         non_negative=("al_thickness", "oxide_thickness", "c_thickness"),
                         fractions=("mesh_throughput",))
-        _check_tables(self, ("al_table", "oxide_table", "c_table"), "filter")
+        _check_tables(self, ("al_table", "oxide_table", "c_table", "al_index_table",
+                             "oxide_index_table", "c_index_table"), "filter")
 
     def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
         """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""

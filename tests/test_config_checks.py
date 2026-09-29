@@ -132,7 +132,7 @@ def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as
         shutil.copyfile(table, copy)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _load_throughput_table(copy)
+            _load_throughput_table(copy, index=table.name.startswith("index_"))
 
 
 @pytest.mark.parametrize("build, message", [
@@ -167,6 +167,29 @@ def test_a_table_that_cannot_be_read_is_refused_before_the_first_combination_run
     with pytest.raises(error, match=message):
         _run(tmp_path, monkeypatch, {**UNIFORM, "telescope": {"grating_table": str(table)}})
     assert "Combination 1" not in capsys.readouterr().out
+
+
+def test_an_index_table_is_a_path_and_is_read_before_the_first_combination_runs(
+        tmp_path, monkeypatch, capsys):
+    assert AluminiumFilter(al_index_table=str(tmp_path / "a.dat")).al_index_table == tmp_path / "a.dat"
+    with pytest.raises(FileNotFoundError, match="missing.dat"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "filter": {
+            "c_index_table": str(tmp_path / "missing.dat")}})
+    assert "Combination 1" not in capsys.readouterr().out
+
+
+def test_an_index_tables_delta_may_be_below_zero_as_aluminiums_is(tmp_path):
+    """A throughput is from 0 to 1; delta, 1 minus the index's real part, is of either sign."""
+    (tmp_path / "index.dat").write_text(" Al Density=2.699\n Wavelength (nm), Delta, Beta\n"
+                                        "16. -0.0136 0.0262\n17. -0.0201 0.0301\n")
+    assert _load_throughput_table(tmp_path / "index.dat", index=True)[1].tolist() == [-0.0136,
+                                                                                    -0.0201]
+    with pytest.raises(ValueError, match="a throughput from 0 to 1"):
+        _load_throughput_table(tmp_path / "index.dat")
+    (tmp_path / "nan.dat").write_text("16. nan 0.0262\n17. -0.0201 0.0301\n")
+    with pytest.raises(ValueError, match="line 1: '16. nan 0.0262' needs a wavelength above "
+                                         "zero, in nm, and a finite delta"):
+        _load_throughput_table(tmp_path / "nan.dat", index=True)
 
 
 def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):

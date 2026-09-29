@@ -429,7 +429,8 @@ _SECTION_STRING_FIELDS = {
     "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table"],
-    "filter": ["al_table", "oxide_table", "c_table"],
+    "filter": ["al_table", "oxide_table", "c_table", "al_index_table", "oxide_index_table",
+               "c_index_table"],
 }
 
 

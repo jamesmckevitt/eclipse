@@ -1103,6 +1103,9 @@ def main() -> None:
         for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
                       tel.filter.oxide_table, tel.filter.c_table):
             _load_throughput_table(table)
+        for table in (tel.filter.al_index_table, tel.filter.oxide_index_table,
+                      tel.filter.c_index_table):
+            _load_throughput_table(table, index=True)
 
     def _check_offchip_bins(fov_along_slit):
         """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""
