@@ -365,8 +365,9 @@ def _same_parameter(name: str, asked, stored) -> bool:
     number with no unit is compared with the stored value in SI, as before.
     """
     numbers = (int, float, np.integer, np.floating)
-    if (isinstance(asked, u.Quantity) and isinstance(stored, numbers)
-            and not isinstance(stored, bool)):
+    if isinstance(asked, u.Quantity) and isinstance(stored, (bool, np.bool_)):
+        raise ValueError(f"{name} is a switch, true or false; {asked} is not.")
+    if isinstance(asked, u.Quantity) and isinstance(stored, numbers):
         if not asked.unit.is_equivalent(u.dimensionless_unscaled):
             raise ValueError(f"{name} was run as a number with no unit; {asked} is a "
                              f"{asked.unit.physical_type}.")

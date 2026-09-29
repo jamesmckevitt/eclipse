@@ -49,6 +49,13 @@ def test_a_setting_run_without_a_unit_takes_a_number_or_a_fraction_but_not_a_len
         get_results_for_combination(results, **{"detector.qe_euv": 0.76 * u.m})
 
 
+def test_a_switch_is_not_matched_by_a_quantity():
+    results = _results([False, True], name="simulation.psf")
+    assert get_results_for_combination(results, **{"simulation.psf": True})["index"] == 1
+    with pytest.raises(ValueError, match="simulation.psf is a switch, true or false"):
+        get_results_for_combination(results, **{"simulation.psf": 1 * u.m})
+
+
 @pytest.mark.parametrize("given, expected", [
     ("2012-06-03T12:00:00Z", "2012-06-03T12:00:00"),
     ("2012-06-03T14:00:00+02:00", "2012-06-03T12:00:00"),
