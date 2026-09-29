@@ -55,6 +55,11 @@ class _Ion:
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):
+    # The real fiasco is imported first, so that the logger it names after
+    # itself is its own. Made first by the synthesis, under the stand-in, it
+    # is a plain one, which the real fiasco fails to set up when a later test
+    # imports it.
+    import fiasco  # noqa: F401
     module = types.ModuleType("fiasco")
     module.Ion = _Ion
     (tmp_path / "chianti_dbase.h5").touch()
