@@ -489,10 +489,12 @@ class _SlitRaster:
         # only when more than a millionth of a cell of it is under the slit.
         tolerance = 1e-6 * np.diff(edges).min()
         if low < edges[0] - tolerance or high > edges[-1] + tolerance:
+            where = (f"{edges[0] - low:.3g} Mm below it" if low < edges[0] - tolerance
+                     else f"{high - edges[-1]:.3g} Mm beyond it")
             raise ValueError(
                 f"A slit {width:.4g} Mm wide at x = {position.to_value(u.Mm):.4g} Mm reaches "
-                f"outside the {self._extent}, which spans x = {edges[0]:.4g} to "
-                f"{edges[-1]:.4g} Mm.")
+                f"outside the {self._extent}, {where}; the {self._extent} spans x = "
+                f"{edges[0]:.4g} to {edges[-1]:.4g} Mm.")
         overlap = np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low), 0.0, None)
         inside = np.flatnonzero(overlap > tolerance)
         if inside.size == 0:

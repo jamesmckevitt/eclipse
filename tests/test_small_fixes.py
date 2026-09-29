@@ -245,7 +245,7 @@ def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
     half = angle_to_distance(0.2 * u.arcsec).to(u.Mm) / 2
     first, last, fractions = raster.columns_under(1.2 * u.Mm - half + 2e-13 * u.Mm, 0.2 * u.arcsec)
     assert last == 12 and fractions.sum() == pytest.approx(1.0)
-    with pytest.raises(ValueError, match="reaches outside"):
+    with pytest.raises(ValueError, match="reaches outside the atmosphere, 0.001 Mm beyond it"):
         raster.columns_under(1.2 * u.Mm - half + 1e-3 * u.Mm, 0.2 * u.arcsec)
 
 
