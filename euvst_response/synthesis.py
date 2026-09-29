@@ -1251,9 +1251,10 @@ def build_em_tv(
 
     Each cell's emission measure is shared between the two temperature bins
     and the two velocity bins about it, in proportion to how near it is to
-    each (:func:`_neighbouring_bins`), so that a line's mean velocity is the
-    cell's and its contribution function is interpolated in temperature. A
-    value beyond the outermost bin centre, within that bin, goes to it alone.
+    each (:func:`_neighbouring_bins`), so that its mean velocity over the bins
+    is the cell's and its contribution function is interpolated in
+    temperature. A value beyond the outermost bin centre, within that bin,
+    goes to it alone.
 
     Parameters
     ----------
@@ -1296,11 +1297,11 @@ def build_em_tv(
     # each: put wholly in the nearest, a uniform 2.4 km/s flow on the default
     # 5 km/s grid was synthesised at rest and a 2.6 km/s one at 5 km/s, and a
     # cell's contribution function was that of the nearest temperature bin.
-    # Shared, the line's mean velocity is the cell's, its width grows by the
-    # spread of the two bins' velocities, at most a quarter of a bin squared
-    # in variance, and the contribution function is interpolated between the
-    # two temperatures. Past the outermost centres, within the outermost
-    # bins, a cell goes to that bin alone, as before.
+    # Shared, its mean velocity over the bins is the cell's, its line's width
+    # grows by the spread of the two bins' velocities, at most a quarter of a
+    # bin squared in variance, and the contribution function is interpolated
+    # between the two temperatures. Past the outermost centres, within the
+    # outermost bins, a cell goes to that bin alone, as before.
     lower_T, share_T, in_T = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
     lower_v, share_v, in_v = _neighbouring_bins(vel_cube, v_centres, v_edges)
 
