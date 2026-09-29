@@ -199,6 +199,22 @@ def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path,
     assert "Combination 1" not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("config, message", [
+    # At 0.05 arcsec a pixel, the 0.2 arcsec slit psf_params is for is 4
+    # pixels wide, more than its 2.54-pixel spectral FWHM.
+    ({**UNIFORM, "detector": {"plate_scale_angle": ["0.159 arcsec / pix", "0.05 arcsec / pix"]}},
+     "leaves nothing for the optics"),
+    ({**UNIFORM, "instrument": "EIS", "simulation": {
+        "slit_width": "1 arcsec", "psf": True, "spectral_psf": ["quadrature", "convolution"]}},
+     "Telescope_EIS has no psf_slit_width"),
+])
+def test_a_spectral_psf_the_telescope_and_detector_cannot_give_is_refused_before_the_first_runs(
+        tmp_path, monkeypatch, capsys, config, message):
+    with pytest.raises(ValueError, match=message):
+        _run(tmp_path, monkeypatch, config)
+    assert "Combination 1" not in capsys.readouterr().out
+
+
 def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combination_runs(
         tmp_path, monkeypatch, capsys):
     """A scene one row long can be binned by 1 but not 2; 2 was found only when its turn came."""

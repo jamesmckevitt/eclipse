@@ -23,7 +23,7 @@ from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_p
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import monte_carlo
-from .radiometric import spectral_psf_margin
+from .radiometric import spectral_optics_fwhm, spectral_psf_margin
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
@@ -1078,6 +1078,12 @@ def main() -> None:
             pinhole_positions=pinhole_positions if enable else [],
             pinhole_positions_spectral=pinhole_positions_spectral if enable else [],
         )
+        # The optics' spectral FWHM comes from the telescope and the detector
+        # together, and was worked out only once the combination's scene was
+        # laid onto the detector: every run needs it when psf_params is for a
+        # given slit, and the PSF convolved with the slit always does.
+        if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
+            spectral_optics_fwhm(tel, det)
         return combo, offchip, repeat, fil, tel, det, sim
 
     # Every combination is checked before the first is run, so that a value
