@@ -272,23 +272,41 @@ def _in_dependency_order(fainter_than: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
-    """Guess initial parameters for Gaussian fit."""
-    back = prof.min()
-    prof_c = prof - back
-    prof_c[prof_c < 0] = 0
-    peak = prof_c.max()
-    centre = wv[np.nanargmax(prof_c)]
-    if peak == 0:
+    """
+    Guess the peak, centre, width and background a Gaussian fit starts from.
+
+    Read so that the noise does not lead them. The background is the median,
+    as most of a window is off the line, where the minimum sat below it by
+    the noise's largest excursion. The line is found in the spectrum averaged
+    over three pixels, so that one noisy pixel does not take it, and its
+    width is that of the run of pixels about it above half its height, where
+    the first and last pixels above half maximum anywhere in the window took
+    in the noise far from the line and started the width several times too
+    wide. At a peak of two or three times the noise per pixel, the fits that
+    ended hundreds of km/s away, and the scatter of the fitted velocities,
+    were twice what the fit gives from a good start.
+    """
+    prof = np.asarray(prof, dtype=float)
+    back = float(np.median(prof))
+    height = prof - back
+    smooth = np.convolve(height, np.ones(3) / 3, mode="same") if prof.size >= 3 else height
+    peak_idx = int(np.nanargmax(smooth))
+    peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
+    centre = wv[peak_idx]
+    if smooth[peak_idx] <= 0:
         sigma = (wv.max() - wv.min()) / 10
     else:
-        # Simple FWHM estimate
-        half_max = 0.5 * peak
-        indices = np.where(prof_c >= half_max)[0]
-        if len(indices) > 1:
-            fwhm = wv[indices[-1]] - wv[indices[0]]
-            sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
-        else:
-            sigma = (wv.max() - wv.min()) / 10
+        above = smooth >= 0.5 * smooth[peak_idx]
+        lo = hi = peak_idx
+        while lo > 0 and above[lo - 1]:
+            lo -= 1
+        while hi < len(above) - 1 and above[hi + 1]:
+            hi += 1
+        # The run's pixels are each a pixel wide, the first and last included.
+        step = abs(float(np.median(np.diff(wv)))) if len(wv) > 1 else 0.0
+        fwhm = abs(float(wv[hi] - wv[lo])) + step
+        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+                 else (wv.max() - wv.min()) / 10)
     return [peak, centre, sigma, back]
 
 
