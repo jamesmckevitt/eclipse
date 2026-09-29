@@ -502,3 +502,53 @@ def test_older_results_files_still_analyse_but_cannot_choose_a_component():
         analyse_fit_statistics(combination, REST0, component="Fe XII 195.119")
     with pytest.raises(ValueError, match="stored by name"):
         list_fit_components(combination)
+
+
+def test_every_velocity_and_width_map_holds_its_own_quantity():
+    """With the first fit, the mean and the truth all different, each map shows the one it names."""
+    fit_config = _blend_config()
+    units = _blend_units()
+    velocities = np.array([4.0, 6.0])
+    offsets = np.array([3.0, 0.0, -1.5])  # the first fit, and two more: mean offset 0.5
+    sigmas = (np.array([0.036, 0.030, 0.027]) * u.AA)
+    fit_data = np.array([[[_blend_params(v + dv, sigma=sigma) for v in velocities]]
+                         for dv, sigma in zip(offsets, sigmas)])
+    failed = np.zeros(fit_data.shape[:3], dtype=bool)
+    truth_data = np.array([[_blend_params(v - 1.0, sigma=0.029 * u.AA) for v in velocities]])
+    truth = fit_quantities(truth_data, units, STEP, REST0, fit_config)
+    combination = {
+        "dn_fit_stats": summarise_fits(fit_data, failed, units, STEP, REST0, fit_config),
+        "ground_truth": {
+            "fit_truth_data": truth_data, "fit_truth_units": units,
+            "failed": np.zeros(truth_data.shape[:2], dtype=bool),
+            "components": {name: {key: values[key] for key in ("velocity", "width")}
+                           for name, values in truth["components"].items()}},
+    }
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
+    wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
+    wcs.wcs.cdelt = [STEP.to_value(u.AA), 0.2, 0.16]
+    wcs.wcs.crpix = [10.0, 1.0, 1.0]
+    wcs.wcs.crval = [REST0.to_value(u.AA), 0.0, 0.0]
+    combination.update({"first_signal_wcs": wcs,
+                        "first_dn_signal": NDCube(np.ones((1, 2, 20)), wcs=wcs, unit=u.DN / u.pix),
+                        "first_photon_signal": NDCube(np.ones((1, 2, 20)), wcs=wcs,
+                                                      unit=u.photon / u.pix)})
+
+    analysis = analyse_fit_statistics(combination)
+    for key, expected in (("v_first", [[7.0, 9.0]]), ("v_mean", [[4.5, 6.5]]),
+                          ("v_true", [[3.0, 5.0]]), ("v_err", [[-1.5, -1.5]])):
+        assert analysis[key].to_value(u.km / u.s) == pytest.approx(np.array(expected),
+                                                                   abs=1e-6), key
+    ratio = (analysis["w_first"] / analysis["w_mean"]).decompose().value
+    assert ratio == pytest.approx(0.036 / 0.031, rel=1e-9)
+
+    maps = create_sunpy_maps_from_combo(combination, date_obs=WHEN)
+    pairs = (("v_first", "velocity_from_fit"), ("v_mean", "velocity_mean"),
+             ("v_std", "velocity_std"), ("v_true", "velocity_true"), ("v_err", "velocity_err"),
+             ("w_first", "line_width_from_fit"), ("w_mean", "line_width_mean"),
+             ("w_std", "line_width_std"))
+    # Each map's values differ from every other's, so a map given another's is caught.
+    assert len({tuple(np.ravel(analysis[key].value)) for key, _ in pairs}) == len(pairs)
+    for key, name in pairs:
+        assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name

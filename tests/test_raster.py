@@ -862,6 +862,43 @@ def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch)
         run(raster={"start": "0 s", "centre": "5 Mm"})
 
 
+@pytest.mark.parametrize("steps", [2, 4])
+def test_a_plan_of_an_even_number_of_steps_is_centred_between_two_of_them(steps):
+    step = angle_to_distance(0.4 * u.arcsec).to_value(u.Mm)
+    exposures = RasterPlan(start=0 * u.s, steps=steps).exposures(
+        0.4 * u.arcsec, 2 * u.s, atmosphere_centre=1 * u.Mm, repeat=0)
+    expected = 1.0 + (np.arange(steps) - (steps - 1) / 2) * step
+    assert [e.position.to_value(u.Mm) for e in exposures] == pytest.approx(expected)
+
+
+def test_a_series_given_as_mass_density_is_seen_as_its_electron_density(tmp_path, flat_goft):
+    """The electron density is the mass density over the mass per free electron."""
+    amu = 1.2
+    electron = [_snapshot(t, density_scale=1.0 + t / 10, columns={5: (2.0, -10.0)})
+                for t in (0.0, 10.0)]
+    massive = [Atmosphere(temperature=a.temperature, velocity_z=a.velocity_z, time=a.time,
+                          mass_density=(a.electron_density * amu * const.u).to(u.g / u.cm**3),
+                          x_edges=a.x_edges, y_edges=a.y_edges, z_edges=a.z_edges)
+               for a in electron]
+    plan = RasterPlan(start=2 * u.s, steps=3)
+    (tmp_path / "ne").mkdir()
+    (tmp_path / "rho").mkdir()
+    expected = RasterSynthesiser(AtmosphereSeries(_series(tmp_path / "ne", electron)),
+                                 _settings()).summed_cube(plan, 0.4 * u.arcsec, 5 * u.s, LINE)
+    found = RasterSynthesiser(AtmosphereSeries(_series(tmp_path / "rho", massive)),
+                              _settings(mass_per_electron=amu)).summed_cube(
+                                  plan, 0.4 * u.arcsec, 5 * u.s, LINE)
+    assert np.max(np.abs(found.data - expected.data)) <= 1e-12 * np.max(expected.data)
+
+
+def test_a_raster_cube_is_labelled_with_the_wavelengths_it_was_synthesised_on(tmp_path, flat_goft):
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
+    synthesiser = RasterSynthesiser(series, _settings())
+    cube = synthesiser.line_cubes(RasterPlan(start=0 * u.s, steps=2), 0.4 * u.arcsec, 5 * u.s)[LINE]
+    labelled = cube.axis_world_coords(2)[0].to_value(u.AA)
+    assert labelled == pytest.approx(synthesiser._wl_grids[LINE].to_value(u.AA), rel=1e-12)
+
+
 def test_the_telescopes_blur_across_the_slit_brings_in_the_columns_beside_it(tmp_path, flat_goft):
     from euvst_response.sampling import pixel_weights
     from euvst_response.utils import _fwhm_to_sigma

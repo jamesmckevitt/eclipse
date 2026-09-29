@@ -452,6 +452,47 @@ def test_digitise_divides_by_the_gain_and_clips():
     assert dn.tolist() == [[0.0, 1.0, 1000.0, 65535.0]]
 
 
+def test_a_line_on_the_right_ccd_keeps_its_flux_and_lands_on_its_row():
+    """The right CCD's rows run the other way, from its register at the long-wavelength end."""
+    fp = FocalPlane_SWC()
+    row = 1348
+    wavelength = fp.wavelength(row, "right").to_value(u.Angstrom)
+    line = ([wavelength] * u.Angstrom, [5.0e4] * u.erg / (u.s * u.cm**2 * u.sr),
+            [0.02] * u.Angstrom)
+    rows = photons_from_lines(fp, "right", StubTelescope(), SLIT_WIDTH * u.arcsec, *line)
+    assert rows.unit == 1 / u.s
+    assert rows.value.sum() == pytest.approx(expected_photons(5.0e4, wavelength), rel=1e-4)
+    assert int(np.argmax(rows.value)) == row
+    left = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec, *line)
+    assert left.value.sum() < 1e-12 * rows.value.sum()
+
+
+def test_a_margin_adds_the_rows_past_each_end_and_leaves_the_chip_as_it_was():
+    """A line on the chip three rows from its register: its tail runs into the margin."""
+    fp = FocalPlane_SWC()
+    wavelength = fp.wavelength(3, "left").to_value(u.Angstrom)
+    line = ([wavelength] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
+            [0.05] * u.Angstrom)
+    margin = 30  # eleven of the line's widths past row 0
+    without = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec, *line,
+                                 lit_only=False).value
+    rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec, *line,
+                              lit_only=False, margin=margin).value
+    assert rows.size == fp.n_rows + 2 * margin
+    np.testing.assert_allclose(rows[margin:-margin], without, rtol=1e-12, atol=0)
+    assert rows[:margin].sum() > 0.1 * without.sum()
+    assert rows.sum() == pytest.approx(expected_photons(1.0, wavelength), rel=1e-6)
+    assert int(np.argmax(rows)) == margin + 3
+
+
+def test_digitising_rounds_to_the_nearest_dn():
+    """Electrons that were whole multiples of the gain could not tell rounding from truncating."""
+    det = Detector_SWC()
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    dn = digitise(np.array([0.4, 1.4, 1.6, 2.6]) * gain, det)
+    assert dn.tolist() == [0.0, 1.0, 2.0, 3.0]
+
+
 def test_a_pixel_no_light_reached_keeps_its_own_rows_wavelength():
     """The FFT's rounding noise, around 1e-15 photons, was taken for light, with a mean
     wavelength anywhere from 15 to 2900 Angstrom."""
