@@ -85,7 +85,7 @@ Synthesising every snapshot with `synthesise-spectra` and observing the files wi
 | `centre` | The heliocentric x, as a length, the raster is centred on | the middle of the box, or of the image |
 | `direction` | The way the slit steps: `increasing` x or `decreasing` x | `increasing` |
 
-Exposure *i* starts at `start + i * cadence` and lasts the exposure time. The slit steps towards increasing x, or towards decreasing x with `direction: decreasing`, and then the next raster begins. Either way the image's columns run along increasing x, each observed at the time of its own exposure.
+Exposure *i* starts at `start + i * cadence` and lasts the exposure time. The slit steps towards increasing x, or towards decreasing x with `direction: decreasing`, and then the next raster begins.
 
 With `repeats` above 1, each raster is a separate result: `raster.repeat` is added as a sweep dimension, so a raster is picked out like any swept parameter, for example `get_results_for_combination(results, **{"raster.repeat": 2, ...})`.
 
@@ -99,4 +99,4 @@ The cube for each combination has one column per exposure, at the slit positions
 
 ## From the old dynamic mode
 
-Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated and will be removed in a future release; see the note at the end of the [synthesis page](synthesis.md). To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [MURaM example](synthesis.md#worked-example-a-muram-flare), and give the files as `atmosphere_series`. Dynamic mode scanned towards decreasing x, so add `direction: decreasing` under `raster:` to observe each column at the same time as it did.
+Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated and will be removed in a future release; see the note at the end of the [synthesis page](synthesis.md). To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [MURaM example](synthesis.md#worked-example-a-muram-flare), and give the files as `atmosphere_series`.
