@@ -95,8 +95,8 @@ class FitConfig:
         How many iterations the optimiser may take on one spectrum. Default
         1000.
     bessel_correction : bool
-        Divide the standard deviations over the Monte Carlo iterations by
-        n - 1 rather than n. Default False.
+        Compute the standard deviations over the Monte Carlo iterations with
+        n - 1 in place of n (Bessel's correction). Default False.
     save_iterations : bool
         Keep every iteration's fit in the results, as well as the statistics.
         Default False.
@@ -111,7 +111,7 @@ class FitConfig:
     # so that it does not quietly shrink as components are added. EISPAC uses
     # 2000 for the same job; fits here converge in tens.
     max_iter: int = 1000
-    # Divide by n - 1 rather than n in the standard deviation over Monte Carlo
+    # Use n - 1 rather than n in the standard deviation over Monte Carlo
     # iterations (Bessel's correction). Off by default, which keeps results
     # comparable with runs made before it existed.
     bessel_correction: bool = False
@@ -1376,7 +1376,8 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
     Returns
     -------
     u.Quantity
-        The width in each pixel, in cm.
+        The width in each pixel: in cm for a plain array, as `fit_cube_gauss`
+        returns, or in the unit of *fit_arr* for quantities.
     """
     idx = 2 if (fit_config is None or fit_config.is_single) else fit_config.idx_sigma
     widths_raw = fit_arr[..., idx]  # (n_slit, n_scan)

@@ -231,7 +231,8 @@ def analyse_fit_statistics(
     Returns
     -------
     dict
-        Maps, one value per pixel. ``v_first``, ``w_first`` and ``i_first``:
+        Mostly maps, with one value per pixel. ``v_first``, ``w_first`` and
+        ``i_first``:
         the velocity, width and intensity of the first Monte Carlo iteration.
         ``v_mean``, ``w_mean`` and ``i_mean``: their means over the
         iterations. ``v_std``, ``w_std`` and ``i_std``: their standard
@@ -239,9 +240,13 @@ def analyse_fit_statistics(
         ``v_err``: the true velocity minus the mean. ``failed_fits`` and
         ``n_iterations``: the number of fits that failed, and of iterations.
         The width is the Gaussian's sigma, and the intensity the fitted
-        line's counts. Files from before the components were kept by name
-        give only ``v_first``, ``v_mean``, ``v_std``, ``v_true``, ``v_err``,
-        ``w_first``, ``w_mean`` and ``w_std``.
+        line's counts. ``component``, ``rest_wavelength`` and ``tied`` name
+        the component, give its rest wavelength and say what it is tied to.
+        ``fit_stats``, ``fit_truth_data`` and ``fit_truth_units`` are the fit
+        statistics and the fit to the truth as the results hold them. Files
+        from before the components were kept by name give only ``v_first``,
+        ``v_mean``, ``v_std``, ``v_true``, ``v_err``, ``w_first``, ``w_mean``,
+        ``w_std``, ``fit_stats``, ``fit_truth_data`` and ``fit_truth_units``.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
     ground_truth = combination_results["ground_truth"]

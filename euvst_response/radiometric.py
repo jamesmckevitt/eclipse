@@ -476,7 +476,7 @@ def apply_focusing_optics_psf(
     # ends of the slit that the scene does have. Zero fill is wrong for a
     # raster too, since the Sun carries on past the field of view; with the
     # default SWC PSF, seven rows wide, it costs the end row about a third of
-    # the kernel's weight, the next row 8 per cent, the one after 1.
+    # the kernel's weight, the next row 8 per cent, the one after 1 per cent.
     if boundary not in ("replicate", "zero"):
         raise ValueError(
             f"boundary must be 'replicate' or 'zero', got {boundary!r}."
@@ -843,7 +843,8 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
     Returns
     -------
     NDCube
-        The electrons in each pixel, with the stray light's added.
+        The electrons in each pixel, with the stray light's added, in electron
+        per pixel.
     """
     # Convert vis_sl from photon/s/cm2 to photon/s/pixel using detector pixel area
     pixel_area = ((det.pix_size*1*u.pix)**2)/u.pix  # cm/pix -> cm2/pixel
@@ -914,7 +915,8 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
     Returns
     -------
     NDCube
-        The electrons in each pixel, with the pinholes' added.
+        The electrons in each pixel, with the pinholes' added, in electron per
+        pixel.
     """
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return electrons  # No pinholes enabled

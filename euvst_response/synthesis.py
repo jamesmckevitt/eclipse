@@ -1148,7 +1148,10 @@ def interpolate_g_on_dem(
         The lines, as `compute_goft_fiasco` gives them, changed in place.
     avg_ne : np.ndarray
         The electron density in each pixel at each temperature, in cm-3,
-        shaped (rows, columns, temperatures).
+        shaped (rows, columns, temperatures). Where the cells along the line
+        of sight have different densities, give their mean weighted by
+        emission measure, as ECLIPSE's own synthesis does. For a DEM, give
+        the one density you choose.
     logT_grid : np.ndarray
         The temperatures to take G at, as log10(T / K).
     logN_grid : np.ndarray
