@@ -198,6 +198,15 @@ class Atmosphere:
                     f"{name} has shape {cube.shape} but the edges bound "
                     f"(nz, ny, nx) = {shape} cells. The cubes are (z, y, x): "
                     f"the first axis is height.")
+        # Else dropped from the synthesis without a word, as log10 has
+        # nothing to give them. An empty cell may have no density.
+        if np.any(self.temperature.value <= 0):
+            raise ValueError("temperature must be above zero in every cell, got "
+                             f"{self.temperature.min()} at least once.")
+        for name in ("mass_density", "electron_density"):
+            cube = getattr(self, name)
+            if cube is not None and np.any(cube.value < 0):
+                raise ValueError(f"{name} cannot be negative, got {cube.min()} at least once.")
         if self.mass_density is None and self.electron_density is None:
             raise ValueError("An atmosphere needs a mass_density or an "
                              "electron_density.")
