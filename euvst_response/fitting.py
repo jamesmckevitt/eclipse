@@ -1224,14 +1224,18 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
                       n_jobs: int = -1, fit_config: FitConfig | None = None) -> u.Quantity:
     """
     Convert fitted line centres to LOS velocity.
-    Works with either a Quantity array or an object-dtype array whose
-    elements are Quantities. Uses joblib.Parallel for speed.
+    Works with a Quantity array, an object-dtype array whose elements are
+    Quantities, or the plain array :func:`fit_cube_gauss` returns, whose
+    centres are in cm. Uses joblib.Parallel for speed.
     """
     idx = 1 if (fit_config is None or fit_config.is_single) else fit_config.idx_center
     centres_raw = fit_arr[..., idx]  # (n_slit, n_scan)
     # Ensure we have a pure Quantity array
     if isinstance(centres_raw, u.Quantity):
         centres = centres_raw.to(wl0.unit)
+    elif np.asarray(centres_raw).dtype != object:
+        # fit_cube_gauss fits in the cube's wavelengths in cgs.
+        centres = u.Quantity(centres_raw, u.cm).to(wl0.unit)
     else:  # object array of Quantity scalars
         get_val = np.vectorize(lambda q: q.to_value(wl0.unit))
         centres = u.Quantity(get_val(centres_raw), wl0.unit)
@@ -1255,13 +1259,16 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
 def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
                    fit_config: FitConfig | None = None) -> u.Quantity:
     """
-    Extract fitted line widths (sigma) from fit results.
+    Extract fitted line widths (sigma) from fit results, which may be the
+    plain array :func:`fit_cube_gauss` returns, in cm.
     """
     idx = 2 if (fit_config is None or fit_config.is_single) else fit_config.idx_sigma
     widths_raw = fit_arr[..., idx]  # (n_slit, n_scan)
     # Ensure we have a pure Quantity array
     if isinstance(widths_raw, u.Quantity):
         widths = widths_raw
+    elif np.asarray(widths_raw).dtype != object:
+        widths = u.Quantity(widths_raw, u.cm)
     else:  # object array of Quantity scalars
         get_val = np.vectorize(lambda q: q.value)
         get_unit = widths_raw.flat[0].unit  # Get unit from first element
