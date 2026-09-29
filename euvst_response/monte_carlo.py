@@ -72,8 +72,10 @@ def simulate_once(
         :func:`~euvst_response.radiometric.apply_focusing_optics_psf`.
         Default False.
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for photon shot noise, so that
-        common random numbers survive a change in photon flux.  Default False.
+        Use inverse-transform sampling for photon shot noise and the quantum
+        efficiency, and one Fano draw for every pixel, so that common random
+        numbers survive a change in photon flux, in every iteration.
+        Default False.
     dark_current_inverse_transform : bool, optional
         Use inverse-transform Poisson sampling for dark-current shot noise, so
         that common random numbers survive a change in dark-current level.
@@ -133,6 +135,7 @@ def simulate_once(
         photon_arrivals, t_exp, det,
         dark_current_inverse_transform=dark_current_inverse_transform,
         noise=noise,
+        photon_shot_inverse_transform=photon_shot_inverse_transform,
     )
 
     # Add visible stray light (with filter throughput)
@@ -209,8 +212,10 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         that fitting is parallelised over the n_iter iterations rather than
         over the spatial dimension.  Default: False.
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for photon shot noise, so that
-        common random numbers survive a change in photon flux.  Default False.
+        Use inverse-transform sampling for photon shot noise and the quantum
+        efficiency, and one Fano draw for every pixel, so that common random
+        numbers survive a change in photon flux, in every iteration.
+        Default False.
     dark_current_inverse_transform : bool, optional
         Use inverse-transform Poisson sampling for dark-current shot noise, so
         that common random numbers survive a change in dark-current level.

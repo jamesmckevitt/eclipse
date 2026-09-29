@@ -10,7 +10,7 @@ from ndcube import NDCube
 from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.special import erf
-from scipy.stats import poisson
+from scipy.stats import binom, poisson
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
 
@@ -50,8 +50,22 @@ def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
     return poisson.ppf(u_draw, mean_counts).astype(np.int64)
 
 
+def _binomial_inverse_transform(trials, probability: float) -> np.ndarray:
+    """
+    Draw binomial counts by inverse-transform sampling, one uniform per element.
+
+    As :func:`_poisson_inverse_transform` for the Poisson: the distribution
+    is ``np.random.binomial``'s, but the number of random values used does
+    not depend on the number of trials, so runs that differ only in photon
+    flux stay in step through the quantum efficiency.
+    """
+    u_draw = np.random.random(size=np.shape(trials))
+    np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
+    return binom.ppf(u_draw, trials, probability).astype(np.int64)
+
+
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
-                           *, noise: bool = True) -> np.ndarray:
+                           *, noise: bool = True, every_pixel: bool = False) -> np.ndarray:
     """
     Vectorized version of Fano noise calculation for improved performance.
 
@@ -67,6 +81,12 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
         When False, return the mean number of electrons each photon liberates
         rather than drawing around it.  The conversion gain is unchanged; only
         its spread is dropped.  Default True.
+    every_pixel : bool, optional
+        Draw the spread from one standard normal for every pixel, photons
+        or none, rather than one for each pixel with photons, so that the
+        random values used do not depend on how many pixels have photons
+        and runs that differ only in photon flux stay in step.  The
+        distribution is the same.  Default False.
 
     Returns
     -------
@@ -76,7 +96,9 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     # Handle zero or negative photon counts
     mask_positive = photon_counts > 0
     electron_counts = np.zeros_like(photon_counts)
-    
+    standard = (np.random.standard_normal(photon_counts.shape) if noise and every_pixel
+                else None)
+
     if not np.any(mask_positive):
         return electron_counts
     
@@ -117,10 +139,13 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
         std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
 
         # Sample total electrons per pixel
-        total_electrons = np.random.normal(
-            loc=mean_total_electrons,
-            scale=std_total_electrons
-        )
+        if standard is None:
+            total_electrons = np.random.normal(
+                loc=mean_total_electrons,
+                scale=std_total_electrons
+            )
+        else:
+            total_electrons = mean_total_electrons + std_total_electrons * standard[mask_positive]
 
         # Ensure non-negative
         total_electrons = np.maximum(total_electrons, 0)
@@ -482,6 +507,7 @@ def to_electrons(
     *,
     dark_current_inverse_transform: bool = False,
     noise: bool = True,
+    photon_shot_inverse_transform: bool = False,
 ) -> NDCube:
     """
     Convert a photon-count NDCube to an electron-count NDCube.
@@ -507,6 +533,14 @@ def to_electrons(
         efficiency becomes a straight multiplication, the Fano spread and the
         read noise are dropped, and the dark current contributes its expected
         number of electrons.  Default True.
+    photon_shot_inverse_transform : bool, optional
+        When True, as for :func:`sample_photon_arrivals`, draw the photons the
+        quantum efficiency detects by inverse-transform sampling, and the
+        Fano spread from one standard normal for every pixel, so that the
+        random values these stages use do not depend on the photon counts.
+        Otherwise two runs that differ only in photon flux share their
+        photon draws only in the first Monte Carlo iteration, and fall out
+        of step after it.  The distributions are unchanged.  Default False.
 
     Returns
     -------
@@ -520,14 +554,17 @@ def to_electrons(
     # whole photons; with it off the same expectation, qe * N, without the
     # cast to integers that a draw would need.
     incident = photon_counts.to(u.photon / u.pix).data
-    if noise:
-        photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
-    else:
+    if not noise:
         photons_detected = incident * det.qe_euv
+    elif photon_shot_inverse_transform:
+        photons_detected = _binomial_inverse_transform(incident.astype(int), det.qe_euv)
+    else:
+        photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
 
     # Apply proper Fano noise per pixel using a vectorized approach
     electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
-                                             rest_wavelength, det, noise=noise)
+                                             rest_wavelength, det, noise=noise,
+                                             every_pixel=photon_shot_inverse_transform)
 
     e = electron_counts * (u.electron / u.pixel)
 

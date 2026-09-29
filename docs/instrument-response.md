@@ -268,7 +268,7 @@ If you want to compare two instrument configurations whose noise is lower than a
 
 It does not work with `np.random.poisson`, which draws by rejection and so uses a different number of random values depending on the mean it is given. Two runs at different photon flux therefore become out of step.
 
-Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages:
+Inverse-transform sampling uses one random value per pixel whatever the mean, so the runs stay in step. There is an option for each of the two Poisson stages. The photon option also draws the quantum efficiency the same way, and the Fano spread from one value per pixel, so that the runs stay in step in every Monte Carlo iteration, not only the first:
 
 ```python
 import numpy as np
