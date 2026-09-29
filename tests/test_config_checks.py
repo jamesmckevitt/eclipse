@@ -88,6 +88,12 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     (lambda: Telescope_EUVST(psf_params=[2.66, 2.54]), "psf_params must be two FWHMs in pixels"),
     (lambda: Telescope_EUVST(psf_params=[2.66 * u.pix]), "psf_params must be two FWHMs in pixels"),
     (lambda: Telescope_EIS(psf_params=[3 * u.pix, -3 * u.pix]), "psf_params must be two FWHMs"),
+    (lambda: Telescope_EUVST(psf_type="airy"), "psf_type must be 'gaussian'"),
+    (lambda: Telescope_EIS(psf_type="moffat"), "psf_type must be 'gaussian'"),
+    (lambda: Telescope_EUVST(psf_across_slit=1.0), "psf_across_slit must be a FWHM in an angle"),
+    (lambda: Telescope_EUVST(psf_across_slit=2 * u.pix), "psf_across_slit must be a FWHM"),
+    (lambda: Telescope_EIS(psf_across_slit=-1 * u.arcsec), "psf_across_slit must be a FWHM"),
+    (lambda: Telescope_EUVST(psf_across_slit=np.inf * u.arcsec), "psf_across_slit must be"),
     (lambda: Telescope_EUVST(pm_table=3), "telescope.pm_table must be the path of a table"),
     (lambda: AluminiumFilter(al_table=None), "filter.al_table must be the path of a table"),
 ])
@@ -213,3 +219,8 @@ def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(mon
                                       "--lines", "FeXII_195.119"])
     with pytest.raises(ValueError, match="Cannot parse line name 'FeXII_195.119'"):
         synthesis.main()
+
+
+def test_a_gaussian_named_in_capitals_and_a_blur_across_the_slit_are_accepted():
+    Telescope_EUVST(psf_type="Gaussian", psf_across_slit=1 * u.arcsec)
+    Telescope_EIS(psf_across_slit=0.5 * u.arcmin)

@@ -73,13 +73,27 @@ def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple
 
 
 def _check_psf_params(tel, section: str = "telescope") -> None:
-    """psf_params must be two widths in pixels, along the slit and along the dispersion, above zero."""
+    """
+    The PSF settings: a Gaussian, psf_params two widths in pixels, along the
+    slit and along the dispersion, above zero, and psf_across_slit None or an
+    angle above zero. Otherwise they are only read once the scene is being
+    laid onto the detector, part way through a run.
+    """
+    if not isinstance(tel.psf_type, str) or tel.psf_type.lower() != "gaussian":
+        raise ValueError(f"{section}.psf_type must be 'gaussian', the only PSF there is; got "
+                         f"{tel.psf_type!r}.")
     value = tel.psf_params
     if (not isinstance(value, (list, tuple)) or len(value) != 2
             or not all(isinstance(q, u.Quantity) and q.unit.is_equivalent(u.pix)
                        and np.isfinite(q.value) and q.value > 0 for q in value)):
         raise ValueError(f"{section}.psf_params must be two FWHMs in pixels, along the slit "
                          f"and along the dispersion, such as [2.66 pix, 2.54 pix]; got {value!r}.")
+    across = tel.psf_across_slit
+    if across is not None and not (isinstance(across, u.Quantity) and across.isscalar
+                                   and across.unit.is_equivalent(u.arcsec)
+                                   and np.isfinite(across.value) and across.value > 0):
+        raise ValueError(f"{section}.psf_across_slit must be a FWHM in an angle above zero, "
+                         f"such as 1 arcsec, or left out for none; got {across!r}.")
 
 
 def _check_tables(obj, names: tuple, section: str) -> None:
