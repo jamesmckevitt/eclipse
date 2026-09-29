@@ -10,7 +10,6 @@ database, and are skipped without it.
 """
 import sys
 import types
-from pathlib import Path
 
 import astropy.units as u
 import numpy as np
@@ -118,15 +117,8 @@ def test_an_ion_with_no_observed_lines_falls_back_to_a_theoretical_one_saying_so
 # ---------------------------------------------------------------------------
 # Against CHIANTI itself
 # ---------------------------------------------------------------------------
-def _chianti_available():
-    try:
-        import fiasco
-    except ImportError:
-        return False
-    return Path(fiasco.defaults["hdf5_dbase_root"]).is_file()
-
-
-chianti = pytest.mark.skipif(not _chianti_available(), reason="needs fiasco's CHIANTI database")
+# Skipped where fiasco's database is not built; see conftest.
+chianti = pytest.mark.chianti
 
 
 @chianti

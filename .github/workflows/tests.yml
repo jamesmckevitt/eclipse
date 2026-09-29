@@ -49,3 +49,47 @@ jobs:
       # euvst_response/data resolve the way they do for a developer.
       - name: Run the tests
         run: python -m pytest tests/ -v
+
+  # The tests that check ECLIPSE against CHIANTI itself need fiasco's database,
+  # which the job above does not build, so they are skipped there. Here it is
+  # built, once per fiasco version, and kept in the cache; building it downloads
+  # the 1.1 GB CHIANTI release and takes a while, so a cache hit is the usual case.
+  chianti:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package and its test dependencies
+        run: python -m pip install --editable ".[dev]"
+
+      # fiasco reads a database built by its own version, for the CHIANTI
+      # release that version supports.
+      - name: Name the database for this fiasco
+        id: database
+        run: python -c "import fiasco; print(f'key=chianti-fiasco-{fiasco.__version__}')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the database
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.fiasco/chianti_dbase.h5
+          key: ${{ steps.database.outputs.key }}
+
+      - name: Build the database
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python -c "import fiasco; from fiasco.util import check_database; check_database(fiasco.defaults['hdf5_dbase_root'], ask_before=False)"
+          rm -rf ~/.fiasco/chianti_dbase ~/.fiasco/tmp
+
+      # With ECLIPSE_REQUIRE_CHIANTI set, a missing database stops the run
+      # rather than skipping these tests.
+      - name: Run the tests that need it
+        env:
+          ECLIPSE_REQUIRE_CHIANTI: "1"
+        run: python -m pytest tests/ -m chianti -v

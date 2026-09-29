@@ -7,7 +7,6 @@ the visible stray light, the row edges of a shifted or tilted focal plane,
 the effective area and the dark current, and the contribution function
 itself. Each is checked here against a value worked out independently.
 """
-from pathlib import Path
 
 import astropy.constants as const
 import astropy.units as u
@@ -163,13 +162,8 @@ def test_the_dark_current_at_the_operating_temperature():
 # ---------------------------------------------------------------------------
 fiasco = pytest.importorskip("fiasco")
 
-
-def _database():
-    return Path(fiasco.defaults["hdf5_dbase_root"])
-
-
-chianti = pytest.mark.skipif(not _database().exists(),
-                             reason="needs the CHIANTI database fiasco builds")
+# Skipped where fiasco's database is not built; see conftest.
+chianti = pytest.mark.chianti
 
 
 @chianti
