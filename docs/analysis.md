@@ -87,7 +87,7 @@ With `save_iterations: true` in the [fitting section](fitting.md#the-fit), the r
 
 ## The synthesis behind the results
 
-The DEM and the emission measure by temperature and velocity are in the synthesis file, not in the results. `read_synthesis_products` reads them; see [Files](files.md#synthesis-files).
+The DEM and the emission measure by temperature and velocity are in the synthesis file, not in the results. `read_synthesis_products` reads them; see [Files](files.md#synthesis-files). A time series of atmosphere files is synthesised during the run and writes no synthesis file, so these are not kept for it.
 
 For a [time series](time-series.md), `results["raster"]` holds the observing plan, the files and their times, and the cube each combination observed. With more than one raster, `raster.repeat` picks one out like any other setting.
 
