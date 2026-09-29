@@ -33,7 +33,24 @@ def _line_profile(x, *params, n_components=1, pixel=None):
 
 @dataclass
 class FitComponent:
-    """One spectral line component in a multi-Gaussian fit."""
+    """
+    One line of a blend, fitted as one Gaussian.
+
+    Parameters
+    ----------
+    wavelength : u.Quantity
+        The line's rest wavelength.
+    tie_center : int, optional
+        Fit this line at the same velocity as the component with this index.
+    tie_width : int, optional
+        Fit this line with the same width as the component with this index.
+    amplitude_greater_than : int, optional
+        Keep this line's amplitude above that of the component with this
+        index.
+    name : str, optional
+        The line's name in the results. Default its rest wavelength, such as
+        ``"195.1190 Angstrom"``.
+    """
     wavelength: u.Quantity
     tie_center: Optional[int] = None   # index of component whose centre this is tied to
     tie_width: Optional[int] = None    # index of component whose width this is tied to
@@ -58,16 +75,31 @@ def default_component_name(wavelength: u.Quantity) -> str:
 
 @dataclass
 class FitConfig:
-    """Configuration for Gaussian fitting.
+    """
+    How to fit the spectra: one Gaussian, or several for a blend.
 
-    With no *components* this configures the single-Gaussian fit, and every
-    setting applies except ``primary_component`` and
-    ``constrain_positive_intensity``. Otherwise there must be at least two
-    components: one on its own is not a blend, and the fitter would ignore its
-    wavelength and ties and fit one free Gaussian.
-
-    The ``primary_component`` index selects which component's centre and
-    width are used for velocity/width analysis downstream.
+    Parameters
+    ----------
+    components : list of FitComponent
+        The lines of a blend, two or more. Default empty, which fits one
+        Gaussian.
+    primary_component : int
+        The index of the component whose velocity and width are reported, for
+        a blend. Default 0.
+    constrain_positive_intensity : bool
+        Keep every component's amplitude at zero or above, for a blend. Default
+        False.
+    backend : str, optional
+        The optimiser, ``"scipy"`` or ``"mpfit"``. Default None, for scipy.
+    max_iter : int
+        How many iterations the optimiser may take on one spectrum. Default
+        1000.
+    bessel_correction : bool
+        Divide the standard deviations over the Monte Carlo iterations by
+        n - 1 rather than n. Default False.
+    save_iterations : bool
+        Keep every iteration's fit in the results, as well as the statistics.
+        Default False.
     """
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
@@ -900,42 +932,39 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
                    return_failed: bool = False, pixel_mean: bool = False):
     """
-    Fit Gaussian(s) to every (slit x wavelength) spectrum.
+    Fit a Gaussian, or several for a blend, on a flat background to the spectrum in every pixel.
 
-    Each pixel is fitted with the Gaussians at its centre, as an observer
-    fits a spectrum, or with *pixel_mean* with their mean over the pixel,
-    which is what the pixel records; the two differ for a line not much
-    wider than a pixel. The fitted parameters are the Gaussians' either way.
+    By default each Gaussian is taken at the centre of each wavelength pixel,
+    as an observer fits a spectrum. With ``pixel_mean``, it is averaged over
+    each pixel instead, which is what the pixel records. The two differ for a
+    line not much wider than a pixel.
 
     Parameters
     ----------
     signal_cube : NDCube
-        Data cube with shape (n_slit, n_scan, n_lambda).
-    n_jobs : int
-        Joblib parallelism (-1 = all cores).
+        The spectra, shaped (along the slit, slit positions, wavelength).
+    n_jobs : int, optional
+        How many processes to fit with; -1 for one per CPU. Default -1.
     fit_config : FitConfig, optional
-        Fit configuration.  When *None* or without components, a single
-        Gaussian is fitted, with the configuration's ``max_iter`` and
-        ``backend`` when one is given.
+        How to fit. Default None, for one Gaussian.
     return_failed : bool, optional
-        Also return which fits failed.  Keyword-only.  Default False.
+        Also return which fits failed. Keyword only. Default False.
     pixel_mean : bool, optional
-        Fit the Gaussians' mean over each pixel.  Keyword-only.  Default False.
+        Fit the Gaussians' mean over each pixel. Keyword only. Default False.
 
     Returns
     -------
-    data_array : ndarray
-        Shape ``(n_slit, n_scan, n_params)`` where *n_params* is 4 for a
-        single component (``[peak, centre, sigma, background]``) or
-        ``3*N+1`` for *N* components
-        (``[peak0, centre0, sigma0, ..., background]``).
+    data_array : np.ndarray
+        The fitted values, shaped (along the slit, slit positions,
+        parameters). The parameters are ``[peak, centre, sigma, background]``
+        for one Gaussian, and ``[peak0, centre0, sigma0, peak1, ...,
+        background]`` for several.
     units_list : list of Unit
-        One unit per parameter.
-    failed : ndarray of bool
-        Shape ``(n_slit, n_scan)``, True where the fit failed, including where
-        the optimiser ran out of ``max_iter``.  Those pixels hold the initial
-        guess (or, for mpfit, wherever it had got to).  Only returned when
-        *return_failed* is True.
+        The unit of each parameter.
+    failed : np.ndarray of bool
+        Where the fit failed, including where the optimiser ran out of
+        ``max_iter``, shaped (along the slit, slit positions). Only with
+        ``return_failed``.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords(2)[0].cgs  # wavelength axis
@@ -1278,10 +1307,27 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
 def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
                       n_jobs: int = -1, fit_config: FitConfig | None = None) -> u.Quantity:
     """
-    Convert fitted line centres to LOS velocity.
-    Works with a Quantity array, an object-dtype array whose elements are
-    Quantities, or the plain array :func:`fit_cube_gauss` returns, whose
-    centres are in cm. Uses joblib.Parallel for speed.
+    The line-of-sight velocity of each fitted line, from its centre.
+
+    A positive velocity is a redshift, away from the observer.
+
+    Parameters
+    ----------
+    fit_arr : np.ndarray or u.Quantity
+        Fitted values, as `fit_cube_gauss` returns them, with the parameters
+        on the last axis.
+    wl0 : u.Quantity
+        The rest wavelength the velocity is measured from.
+    n_jobs : int, optional
+        How many processes to use; -1 for one per CPU. Default -1.
+    fit_config : FitConfig, optional
+        For a blend, the fit's configuration, which says which parameter is
+        the primary component's centre.
+
+    Returns
+    -------
+    u.Quantity
+        The velocity in each pixel, in cm/s.
     """
     idx = 1 if (fit_config is None or fit_config.is_single) else fit_config.idx_center
     centres_raw = fit_arr[..., idx]  # (n_slit, n_scan)
@@ -1314,8 +1360,23 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
 def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
                    fit_config: FitConfig | None = None) -> u.Quantity:
     """
-    Extract fitted line widths (sigma) from fit results, which may be the
-    plain array :func:`fit_cube_gauss` returns, in cm.
+    The width of each fitted line: its Gaussian's sigma, in wavelength.
+
+    Parameters
+    ----------
+    fit_arr : np.ndarray or u.Quantity
+        Fitted values, as `fit_cube_gauss` returns them, with the parameters
+        on the last axis.
+    n_jobs : int, optional
+        Not used; kept so that existing calls still work.
+    fit_config : FitConfig, optional
+        For a blend, the fit's configuration, which says which parameter is
+        the primary component's width.
+
+    Returns
+    -------
+    u.Quantity
+        The width in each pixel, in cm.
     """
     idx = 2 if (fit_config is None or fit_config.is_single) else fit_config.idx_sigma
     widths_raw = fit_arr[..., idx]  # (n_slit, n_scan)
@@ -1335,7 +1396,27 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
 def analyse(fits_all: u.Quantity | np.ndarray, v_true: u.Quantity, wl0: u.Quantity,
             fit_config: FitConfig | None = None) -> dict:
     """
-    Monte-Carlo velocity statistics given pre-computed ground truth.
+    The mean and scatter of the velocity and width over Monte Carlo iterations.
+
+    Parameters
+    ----------
+    fits_all : np.ndarray or u.Quantity
+        The fits of every iteration, with the iterations on the first axis and
+        the parameters on the last.
+    v_true : u.Quantity
+        The true velocity, to compare with.
+    wl0 : u.Quantity
+        The rest wavelength the velocity is measured from.
+    fit_config : FitConfig, optional
+        For a blend, the fit's configuration.
+
+    Returns
+    -------
+    dict
+        ``v_mean``, ``v_std``, ``w_mean`` and ``w_std``: the mean and standard
+        deviation of the velocity and width over the iterations. ``v_err``:
+        the true velocity minus the mean. ``v_samples`` and ``w_samples``:
+        every iteration's values. ``v_true``: the true velocity.
     """
     v_all = velocity_from_fit(fits_all, wl0, fit_config=fit_config)
     w_all = width_from_fit(fits_all, fit_config=fit_config)

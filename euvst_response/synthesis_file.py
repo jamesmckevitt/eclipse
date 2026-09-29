@@ -354,10 +354,7 @@ class Synthesis:
 
     def summed_meta(self, reference: str) -> dict:
         """
-        The metadata of :meth:`summed`, as :func:`~euvst_response.data_processing.sum_line_cubes` gives it to a summed cube.
-
-        That is *reference*'s own, and the lines added up onto it, which are
-        those read.
+        The metadata of `summed`: *reference*'s own, and the names of the lines added up onto it.
         """
         return {**self.line_meta(reference), "combined_lines": list(self.lines),
                 "n_lines": len(self.lines), "metadata_source": reference,
@@ -365,19 +362,20 @@ class Synthesis:
 
     def line_cube(self, name: str):
         """
-        Line *name* as an NDCube like those of ECLIPSE's synthesis, indexed ``[y, x, wavelength]``, in erg / (s cm2 sr cm).
+        Line *name* as an NDCube, indexed ``[y, x, wavelength]``, in erg / (s cm2 sr cm).
 
-        The wavelengths have to be evenly spaced for a WCS to describe them.
+        Its wavelengths have to be evenly spaced, for the cube's coordinates
+        to describe them.
         """
         return self._cube(self.lines[name].radiance(), name, self.line_meta(name))
 
     def summed_cube(self, reference: str, summed: Optional[u.Quantity] = None,
                     meta: Optional[Mapping] = None):
         """
-        :meth:`summed` as an NDCube on the wavelengths of *reference*, which have to be evenly spaced.
+        `summed` as an NDCube on the wavelengths of *reference*, which have to be evenly spaced.
 
-        *summed*, if given, is :meth:`summed` already worked out, and *meta*
-        is added to :meth:`summed_meta`.
+        *summed*, if given, is `summed` already worked out, and *meta* is added
+        to `summed_meta`.
         """
         return self._cube(self.summed(reference) if summed is None else summed, reference,
                           {**self.summed_meta(reference), **(meta or {})})
@@ -429,21 +427,28 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
                     products: Optional[Mapping] = None,
                     compression: Optional[str] = None) -> Path:
     """
-    Write *synthesis* as a synthesis file.
+    Write a synthesis file.
+
+    The file is written beside its name and then moved into place, so a run
+    stopped part way leaves any file already there as it was.
 
     Parameters
     ----------
     synthesis : Synthesis
+        The spectra to write.
     path : str or Path
-        The file to write; an existing file is replaced.
+        The file to write. An existing file is replaced.
     products : mapping, optional
         What the synthesis worked out on the way, kept in the file's
-        ``synthesis`` group: arrays and quantities with dimensions as
-        datasets, compressed, and everything else as attributes. See
-        :func:`read_synthesis_products`.
+        ``synthesis`` group, as `read_synthesis_products` reads it back.
     compression : str, optional
-        An h5py compression filter such as ``"gzip"`` for the line spectra.
-        None writes them uncompressed, which reads fastest.
+        An HDF5 compression filter for the spectra, such as ``"gzip"``.
+        Default None, uncompressed, which reads fastest.
+
+    Returns
+    -------
+    Path
+        The file written.
     """
     path = Path(path)
     with _replacing(path) as partial, h5py.File(partial, "w") as f:
@@ -475,20 +480,23 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
 def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
                    columns: Optional[slice] = None) -> Synthesis:
     """
-    Read a synthesis file's spectra.
+    Read a synthesis file's spectra, with their wavelengths as they are.
 
     Parameters
     ----------
     path : str or Path
+        The file.
     reference_line : str, optional
-        The line the instrument will measure. Only the lines whose
-        wavelengths reach its window are read, since the others add nothing
-        to it, which keeps a synthesis of many lines cheap to observe one at
-        a time. None reads them all.
+        Read only the lines that reach this line's spectral window. Default
+        None, for every line.
     columns : slice, optional
-        Which pixels along x to read, as a slice of neighbouring x indices,
-        as a time series reads the strip under the slit. None reads the
-        whole image.
+        Which pixels along x to read, as a slice of neighbouring indices.
+        Default None, for the whole image.
+
+    Returns
+    -------
+    Synthesis
+        The spectra.
     """
     path = Path(path)
     with _open_to_read(path, "synthesis") as f:
@@ -626,23 +634,33 @@ def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
 
 def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = None) -> dict:
     """
-    What ECLIPSE's synthesis worked out on the way to the spectra, as it saved it.
+    What ECLIPSE's synthesis worked out on the way to the spectra.
 
-    For a file from ``synthesise-spectra`` these are ``dem_map``, ``em_tv``,
-    ``logT_grid``, ``vel_grid``, ``logN_grid``, ``goft`` (each line's
-    contribution functions), ``voxel_sizes``, ``atmosphere``,
-    ``dynamic_mode`` and ``config``, as the pickles of older versions held
-    them but for what JSON cannot keep, as tuples come back as lists and
-    dictionary keys as strings, and for each line's ``si`` and ``wl_grid``
-    in ``goft``, which are its spectra and their wavelengths, the lines
-    themselves. A file from another code has none, and gives an empty dict.
+    For a file from ``synthesise-spectra`` these are:
+
+    - ``dem_map``: the DEM in each pixel, on the temperatures ``logT_grid``
+    - ``em_tv``: the emission measure in each pixel by temperature and
+      velocity, on the velocities ``vel_grid``
+    - ``goft``: each line's contribution function, on the temperatures and
+      the densities ``logN_grid``
+    - ``voxel_sizes``, ``atmosphere``, ``dynamic_mode`` and ``config``: the
+      atmosphere and the settings the synthesis ran with
+
+    A file from another code has none of these, and gives an empty dict.
+    Tuples come back as lists, and dictionary keys as strings.
 
     Parameters
     ----------
     path : str or Path
+        The file.
     keys : iterable of str, optional
-        Read only these, which spares reading the emission measure cube,
-        often the largest part of the file. None reads everything.
+        Read only these. Leaving out ``em_tv``, often the largest part of the
+        file, saves time. Default None, for everything.
+
+    Returns
+    -------
+    dict
+        The products, by name.
     """
     path = Path(path)
     with _open_to_read(path, "synthesis") as f:
@@ -657,16 +675,22 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
 
 def load_synthesis(path: str | Path) -> dict:
     """
-    Everything in a synthesis file, much as the pickles of older versions held it.
+    Everything in a synthesis file: the spectra as line cubes, and the products of the synthesis.
 
-    ``line_cubes`` maps each line to an NDCube indexed ``[y, x, wavelength]``
-    in erg / (s cm2 sr cm), and the rest is :func:`read_synthesis_products`. Handy for looking at a
-    synthesis; the instrument run reads the file itself.
+    The line cubes need evenly spaced wavelengths, as ECLIPSE's own synthesis
+    writes them. For a file with uneven wavelengths, use `read_synthesis`.
 
-    An NDCube's WCS describes evenly spaced wavelengths, as ECLIPSE's own
-    synthesis writes them, so a file whose wavelengths are not evenly spaced
-    is refused here; :func:`read_synthesis` reads any synthesis file, with
-    its wavelengths as they are.
+    Parameters
+    ----------
+    path : str or Path
+        The file.
+
+    Returns
+    -------
+    dict
+        ``line_cubes``, an NDCube for each line, indexed ``[y, x,
+        wavelength]``, in erg / (s cm2 sr cm), and the products that
+        `read_synthesis_products` reads.
     """
     synthesis = read_synthesis(path)
     uneven = [name for name in synthesis.lines if not synthesis.evenly_spaced(name)]
@@ -756,25 +780,30 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
                      products: Optional[Mapping] = None,
                      time: Optional[u.Quantity] = None) -> Path:
     """
-    Write line cubes, as ECLIPSE's synthesis builds them, as a synthesis file.
+    Write line cubes, as ECLIPSE's synthesis makes them, as a synthesis file.
 
-    Each cube keeps its values, its wavelengths, its rest wavelength and its
-    atom and ion; the image grid is read off the first cube's WCS, which
-    every cube shares, and the axis the image was seen along off their
-    ``integration_axis``.
+    Each cube keeps its values, its wavelengths, its rest wavelength, and its
+    atom and ion. The cubes must share one image, which is read from the
+    first cube's coordinates.
 
     Parameters
     ----------
     line_cubes : mapping of str to NDCube
-        Cubes indexed ``[y, x, wavelength]`` with ``rest_wav`` in their
-        metadata, as :func:`euvst_response.synthesis.create_line_cube` makes.
+        The cubes, by line name, indexed ``[y, x, wavelength]``, with
+        ``rest_wav`` in their metadata, as `create_line_cube` makes them.
     path : str or Path
+        The file to write. An existing file is replaced.
     source : str, optional
         Free text naming the simulation.
     products : mapping, optional
-        What the synthesis worked out on the way; see :func:`write_synthesis`.
+        What the synthesis worked out on the way; see `write_synthesis`.
     time : u.Quantity, optional
         The time of the snapshot.
+
+    Returns
+    -------
+    Path
+        The file written.
     """
     cubes = dict(line_cubes)
     if not cubes:
@@ -823,16 +852,27 @@ def _pixel_edges(cube, wcs_axis: int) -> u.Quantity:
 
 def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
     """
-    Rewrite a synthesis pickle, as older versions wrote them, as a synthesis file.
+    Rewrite a synthesis pickle from ECLIPSE 0.11.0 and earlier as a synthesis file.
 
-    Everything the pickle holds is kept, its line cubes as the spectra and
-    the rest as the synthesis products, but for what repeats something
-    kept: each line's ``si`` and ``wl_grid`` in ``goft``, its spectra, and
-    the atmosphere's metadata each line cube carried as
-    ``spatial_reference``. A pickle whose line cubes have the
-    old axis order or the old Doppler sign is refused, as the instrument
-    run refuses it.
+    Everything the pickle holds is kept: its line cubes as the spectra, and
+    the rest as the synthesis products. A pickle made before the axis order
+    or the Doppler sign was corrected is refused, as `eclipse` refuses it.
+
+    Parameters
+    ----------
+    pickle_path : str or Path
+        The pickle.
+    path : str or Path
+        The synthesis file to write, which must not be the pickle itself.
+
+    Returns
+    -------
+    Path
+        The file written.
     """
+    # Only what repeats something kept is left out: each line's si and
+    # wl_grid in goft, its spectra, and the atmosphere's metadata each line
+    # cube carried as spatial_reference.
     import dill
 
     from .data_processing import check_old_line_cubes

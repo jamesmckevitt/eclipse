@@ -1,6 +1,6 @@
 # Python
 
-Everything `synthesise-spectra` and `eclipse` do is available from Python, in the `euvst_response` package. This page shows the parts most often used on their own.
+Everything `synthesise-spectra` and `eclipse` do is available from Python, in the `euvst_response` package. This page shows the parts most often used on their own, and the [API reference](api.md) describes every function and class.
 
 ## The instrument
 

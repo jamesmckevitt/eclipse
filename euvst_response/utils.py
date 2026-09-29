@@ -165,12 +165,44 @@ def debug_on_error(func):
 
 
 def wl_to_vel(wl: u.Quantity, wl0: u.Quantity) -> u.Quantity:
-    """Convert wavelength to line-of-sight velocity."""
+    """
+    The line-of-sight velocity that shifts a line from its rest wavelength to a wavelength.
+
+    A positive velocity is a redshift, away from the observer.
+
+    Parameters
+    ----------
+    wl : u.Quantity
+        The observed wavelength.
+    wl0 : u.Quantity
+        The rest wavelength.
+
+    Returns
+    -------
+    u.Quantity
+        The velocity.
+    """
     return (wl - wl0) / wl0 * const.c
 
 
 def vel_to_wl(v: u.Quantity, wl0: u.Quantity) -> u.Quantity:
-    """Convert line-of-sight velocity to wavelength."""
+    """
+    The wavelength a line is shifted to by a line-of-sight velocity.
+
+    A positive velocity is a redshift, away from the observer.
+
+    Parameters
+    ----------
+    v : u.Quantity
+        The velocity.
+    wl0 : u.Quantity
+        The rest wavelength.
+
+    Returns
+    -------
+    u.Quantity
+        The shifted wavelength.
+    """
     return wl0 * (1 + v / const.c)
 
 
@@ -271,7 +303,19 @@ def onto_wavelength_bins(spectra: np.ndarray, wavelength: np.ndarray,
 
 
 def angle_to_distance(angle: u.Quantity) -> u.Quantity:
-    """Convert angular size to linear distance at 1 AU."""
+    """
+    The length on the Sun that an angle covers, seen from 1 AU.
+
+    Parameters
+    ----------
+    angle : u.Quantity
+        The angle.
+
+    Returns
+    -------
+    u.Quantity
+        The length.
+    """
     if angle.unit.physical_type != "angle":
         raise ValueError("Input must be an angle")
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
@@ -333,7 +377,19 @@ def rebin_slit_offchip(cube, n_bin: int):
 
 
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:
-    """Convert linear distance to angular size at 1 AU."""
+    """
+    The angle that a length on the Sun covers, seen from 1 AU.
+
+    Parameters
+    ----------
+    distance : u.Quantity
+        The length.
+
+    Returns
+    -------
+    u.Quantity
+        The angle, in arcsec.
+    """
     if distance.unit.physical_type != "length":
         raise ValueError("Input must be a length")
     return (2 * np.arctan(distance / (2 * const.au))).to(u.arcsec)

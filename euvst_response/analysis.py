@@ -48,29 +48,25 @@ def load_instrument_response_results(filepath: str | Path,
                                      allow_wrong_velocity_sign: bool = False,
                                      ) -> Dict[str, Any]:
     """
-    Load instrument response results and reconstruct signals for compatibility.
-    Fit statistics are kept with units separated.
+    Read a results file that `eclipse` wrote.
 
     Parameters
     ----------
     filepath : str or Path
-        Path to the results file, ``run/result/<config name>.h5``. A pickle,
-        as ECLIPSE 0.11.0 and earlier wrote them, is read with a warning
-        unless it is named as an HDF5 file, and a ``.pkl`` name that no
-        longer exists reads the ``.h5`` beside it.
+        The results file, ``run/result/<config name>.h5``. A results pickle
+        from ECLIPSE 0.11.0 and earlier is read too, with a warning, and a
+        ``.pkl`` name that no longer exists reads the ``.h5`` beside it.
     allow_wrong_velocity_sign : bool, optional
-        Load a results file made from a synthesis file that an older ECLIPSE
-        wrote for a view along x or z, with a warning instead of an error.
-        Every velocity in such a file has the wrong sign, and its spectra are
-        mirrored in wavelength about the rest wavelength of each line, so
-        anything that interacts with a blend or another feature on one side
-        of a line can differ too.  Older views along y were already right and
-        load without it.
+        Read, with a warning instead of an error, results made from a
+        synthesis that an ECLIPSE from before the Doppler sign was corrected
+        wrote for a view along x or z. Every velocity in them has the wrong
+        sign. Default False.
 
     Returns
     -------
     dict
-        Dictionary containing all results and metadata with reconstructed signals.
+        The results. ``results["results"]["all_combinations"]`` holds each
+        combination's; `get_results_for_combination` picks one out.
     """
     data = load_results(filepath, _stacklevel=3)
     # An old pickle can hold anything.
@@ -137,21 +133,18 @@ def load_instrument_response_results(filepath: str | Path,
 
 def get_parameter_combinations(results: Dict[str, Any]) -> List[Dict]:
     """
-    Get all parameter combinations that were simulated.
-
-    Returns a list of the ``parameters`` dicts (one per combination), each
-    using ``section.attribute`` key names.  This is more useful than the raw
-    hash keys stored internally.
+    The settings of every combination the run simulated.
 
     Parameters
     ----------
     results : dict
-        Results dictionary from load_instrument_response_results.
+        The results, as `load_instrument_response_results` reads them.
 
     Returns
     -------
     list of dict
-        One parameters dict per simulated combination.
+        One dict for each combination, of its settings by section and key,
+        such as ``"simulation.expos"``.
     """
     return [combo["parameters"] for combo in results["results"]["all_combinations"].values()]
 
@@ -182,21 +175,22 @@ def _get_fit_stats(combination_results: Dict[str, Any], data_type: str) -> Dict[
 def list_fit_components(combination_results: Dict[str, Any],
                         data_type: str = "dn") -> List[str]:
     """
-    Names of the fitted components, in fit order.
+    The names of the fitted components, in the order they were fitted.
 
     Parameters
     ----------
     combination_results : dict
-        Results for a specific parameter combination.
+        One combination's results, as `get_results_for_combination` gives
+        them.
     data_type : str, optional
-        Either "dn" or "photon".
+        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
+        ``"photon"``.
 
     Returns
     -------
     list of str
-        The names to pass as ``component`` to :func:`analyse_fit_statistics`
-        and :func:`create_sunpy_maps_from_combo`.  The primary component's
-        name is in the fit statistics under ``primary_component``.
+        The names, to give as ``component`` to `analyse_fit_statistics` and
+        `create_sunpy_maps_from_combo`.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
     if "components" not in fit_stats:
@@ -212,36 +206,38 @@ def analyse_fit_statistics(
     component: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Velocity, line width and intensity statistics of one fitted component.
-    
+    How precisely one fitted line's velocity, width and intensity were measured, pixel by pixel.
+
     Parameters
     ----------
     combination_results : dict
-        Results for a specific parameter combination.
+        One combination's results, as `get_results_for_combination` gives
+        them.
     rest_wavelength : u.Quantity, optional
-        The rest wavelength velocities are measured from.  Results files
-        record each component's own, and a value given here has to match
-        it.  Only files written before components were stored by name need
-        it.
+        The rest wavelength velocities are measured from. Results files keep
+        each component's own, so this is only needed for files from before
+        the components were kept by name. If given, it must match.
     data_type : str, optional
-        Either "dn" or "photon" to specify which fit statistics to analyze.
+        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
+        ``"photon"``.
     fit_config : FitConfig, optional
-        Only used for files written before components were stored by name,
-        to find the primary component's parameters.
+        Only needed for files from before the components were kept by name.
     component : str, optional
-        Name of the component to analyse, from :func:`list_fit_components`.
-        Defaults to the primary component.
-        
+        The component, by a name from `list_fit_components`. Default the
+        primary component.
+
     Returns
     -------
     dict
-        ``v_first``, ``v_mean``, ``v_std``, ``v_true`` and ``v_err`` (truth
-        minus mean) for the velocity, and ``w_first``, ``w_mean`` and
-        ``w_std`` for the Gaussian width, where ``first`` is the first Monte
-        Carlo iteration.  Files with components stored by name also give
-        ``component``, ``rest_wavelength``, ``tied``, ``w_true``,
-        ``i_first``, ``i_mean`` and ``i_std`` for the intensity (the fitted
-        line's counts), ``failed_fits`` and ``n_iterations``.
+        Maps, one value per pixel. ``v_first``, ``w_first`` and ``i_first``:
+        the velocity, width and intensity of the first Monte Carlo iteration.
+        ``v_mean``, ``w_mean`` and ``i_mean``: their means over the
+        iterations. ``v_std``, ``w_std`` and ``i_std``: their standard
+        deviations. ``v_true`` and ``w_true``: the true velocity and width.
+        ``v_err``: the true velocity minus the mean. ``failed_fits`` and
+        ``n_iterations``: the number of fits that failed, and of iterations.
+        The width is the Gaussian's sigma, and the intensity the fitted
+        line's counts.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
     ground_truth = combination_results["ground_truth"]
@@ -389,34 +385,32 @@ def _same_parameter(name: str, asked, stored) -> bool:
 
 def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     """
-    Get results for a specific parameter combination.
+    Pick out one combination's results, by its settings.
 
-    Parameters are specified as keyword arguments using the full
-    ``section.attribute`` names stored in the results, e.g.::
+    Settings are named by their section and key, as `summary_table` prints
+    them. Python keyword arguments can't have a dot in them, so give them as
+    a dictionary:
 
-        get_results_for_combination(results, **{"simulation.expos": 40*u.s, "simulation.slit_width": 0.2*u.arcsec})
-        get_results_for_combination(results, **{"detector.qe_euv": 0.76})
-
-    Use ``summary_table(results)`` to see all available parameter names and
-    their values across combinations.
+        get_results_for_combination(results, **{"simulation.expos": 40 * u.s,
+                                                 "simulation.slit_width": 0.2 * u.arcsec})
 
     Parameters
     ----------
     results : dict
-        Results dictionary from :func:`load_instrument_response_results`.
+        The results, as `load_instrument_response_results` reads them.
     **kwargs
-        Parameter name-value pairs to match, using ``section.attribute`` names.
-        Values should be astropy Quantities where the stored value has units.
+        The settings to match, with their units where they have them. With a
+        single combination, none are needed.
 
     Returns
     -------
     dict
-        Results for the matched parameter combination.
+        The combination's results.
 
     Raises
     ------
     ValueError
-        If zero or more than one combination matches.
+        If no combination matches, or more than one does.
     """
     all_combinations = results["results"]["all_combinations"]
 
@@ -453,34 +447,20 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
 
 def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract DEM data from loaded instrument response results.
-    
+    Deprecated: no version of ECLIPSE wrote the DEM into the results.
+
+    The DEM and the emission measure are in the synthesis file. Read them
+    with ``read_synthesis_products(path, keys=["dem_map", "em_tv"])``.
+
     Parameters
     ----------
     results : dict
-        Results dictionary from load_instrument_response_results.
-        
-    Returns
-    -------
-    dict
-        Dictionary containing DEM data with keys:
-        - 'dem_map': DEM(T) map (numpy array, shape ny, nx, nT)
-        - 'em_tv': EM(T,v) map (numpy array, shape ny, nx, nT, nv)
-        - 'logT_centres': Temperature bin centers (numpy array)
-        - 'v_edges': Velocity bin edges (numpy array)
-        - 'goft': Contribution function data (dict)
-        - 'logT_grid': Temperature grid used for interpolation (numpy array)
-        - 'logN_grid': Density grid used for interpolation (numpy array)
-        
+        The results, as `load_instrument_response_results` reads them.
+
     Raises
     ------
     KeyError
-        If DEM data is not found in the results, which it never is: no
-        released version wrote it there.
-
-    .. deprecated:: 0.12.0
-        The DEM and the emission measure are in the synthesis file; read
-        them with :func:`euvst_response.read_synthesis_products`.
+        If the results hold no DEM, as results from `eclipse` never do.
     """
     warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
                   "release: no released version wrote DEM data into the results. The DEM is "
@@ -499,16 +479,16 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 def summary_table(results: Dict[str, Any]) -> None:
     """
-    Print a summary table of all parameter combinations.
+    Print what the results hold.
 
-    Column headers are discovered dynamically from the stored parameters, so
-    the table automatically reflects whatever was swept or overridden - no
-    code changes needed when new parameters are added.
+    It prints the version of ECLIPSE and the git commit that made the
+    results, the settings of every combination, which settings were swept,
+    and the names of the fitted components.
 
     Parameters
     ----------
     results : dict
-        Results dictionary from :func:`load_instrument_response_results`.
+        The results, as `load_instrument_response_results` reads them.
     """
     all_combinations = results["results"]["all_combinations"]
 
@@ -684,57 +664,51 @@ def create_sunpy_maps_from_combo(
     component: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Create SunPy maps from combination results using the new fit statistics structure.
-    
+    Make SunPy maps of one combination's results.
+
     Parameters
     ----------
     combination_results : dict
-        Results for a specific parameter combination from get_results_for_combination().
+        One combination's results, as `get_results_for_combination` gives
+        them.
     cube_reb : NDCube, optional
-        NDCube with helioprojective WCS to use for all maps.
-        If not provided, the WCS stored in the combination results is used.
+        A cube whose coordinates to give the maps. Default the coordinates
+        kept in the results.
     rest_wavelength : u.Quantity, optional
-        The rest wavelength velocities are measured from.  Results files
-        record each component's own, and a value given here has to match
-        it.  Files written before components were stored by name use it, and
-        default to 195.119 A (Fe XII).
+        The rest wavelength velocities are measured from. Only needed for
+        files from before the components were kept by name. If given, it must
+        match.
     data_type : str, optional
-        Either "dn" or "photon" to specify which fit statistics to use for velocity/width maps.
+        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
+        ``"photon"``.
     precision_requirement : u.Quantity, optional
-        Velocity precision requirement for exposure time map (default: 2.0 km/s).
+        The velocity precision for the ``exposure_time`` map. Default 2 km/s.
     exposure_time_results : list of dict, optional
-        List of results from get_results_for_combination() for different exposure times.
-        If provided, will create an exposure time map showing minimum exposure needed.
+        The combinations at each exposure time. Given these, the maps include
+        ``exposure_time``: the shortest of those exposures at which each
+        pixel's velocity is measured to within ``precision_requirement``.
     fit_config : FitConfig, optional
-        Only used for files written before components were stored by name,
-        to find the primary component's centre and width.
+        Only needed for files from before the components were kept by name.
     date_obs : str or datetime, optional
-        Observation date written to every map. A synthesised scene has no
-        date of its own, so this has to come from the caller. An EIS run
-        configured with a time-dependent calibration uses that calibration
-        date when this is not given; anything else raises rather than let
-        sunpy stamp the maps with the time the code ran.
+        The date to give the maps. A synthesised scene has no date of its
+        own, so this is needed, except for an EIS run with a dated
+        calibration, whose date is used.
     component : str, optional
-        Name of the fitted component to map, from
-        :func:`list_fit_components`.  Defaults to the primary component.
+        The component to map, by a name from `list_fit_components`. Default
+        the primary component.
 
     Returns
     -------
     dict
-        Dictionary of SunPy maps with keys:
-        - 'total_photons': Total photons (summed along wavelength) from first MC iteration
-        - 'total_dn': Total DN (summed along wavelength) from first MC iteration
-        - 'velocity_from_fit': Velocity from first fit of first MC iteration
-        - 'velocity_mean': Mean velocity across all MC iterations
-        - 'velocity_std': Velocity uncertainty (standard deviation)
-        - 'velocity_err': Velocity error (truth - mean)
-        - 'line_width_from_fit': Line width from first fit of first MC iteration  
-        - 'line_width_mean': Mean line width across all MC iterations
-        - 'line_width_std': Line width uncertainty (standard deviation)
-        - 'intensity_from_fit', 'intensity_mean', 'intensity_std': The same
-          for the fitted line's counts, and 'failed_fits': the number of
-          failed fits per pixel (files with components stored by name only)
-        - 'exposure_time': Minimum exposure time required to reach precision (if exposure_time_results provided)
+        The maps, by name. ``total_dn`` and ``total_photons``: the first
+        iteration's signal, summed over wavelength. ``velocity_from_fit``,
+        ``line_width_from_fit`` and ``intensity_from_fit``: the first
+        iteration's fit. ``velocity_mean``, ``line_width_mean`` and
+        ``intensity_mean``: the means over the iterations.
+        ``velocity_std``, ``line_width_std`` and ``intensity_std``: the
+        standard deviations. ``velocity_true`` and ``velocity_err``: the true
+        velocity, and the true velocity minus the mean. ``failed_fits``: the
+        number of fits that failed in each pixel.
     """
     
     date_obs = _resolve_date_obs(combination_results, date_obs)

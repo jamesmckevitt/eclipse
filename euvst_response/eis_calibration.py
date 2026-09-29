@@ -539,30 +539,29 @@ def band_of(wavelength_aa: float) -> str | None:
 
 
 def effective_area(wavelengths_aa, date=None, method="ground") -> np.ndarray:
-    """EIS effective area in cm^2, including the CCD quantum efficiency.
+    """
+    EIS's effective area, including its detector's quantum efficiency, from one of its calibrations.
 
     Parameters
     ----------
     wavelengths_aa : array_like
-        Wavelengths in Angstrom. May span both EIS bands.
+        Wavelengths in Angstrom, in either or both of EIS's bands.
     date : str or datetime or astropy.time.Time, optional
-        Observation date. Required for every calibration except ``ground``,
-        which is the pre-flight measurement and has no epoch.
-    method : str
-        One of ``ground``, ``dz2013``, ``warren2014``, ``dz2025``.
+        The date of the observation, which every calibration but ``"ground"``
+        needs.
+    method : str, optional
+        The calibration: ``"ground"`` (default), ``"dz2013"``,
+        ``"warren2014"`` or ``"dz2025"``.
 
     Returns
     -------
-    numpy.ndarray
-        Effective area in cm^2, NaN outside the two EIS bands.
-
-    Notes
-    -----
-    The bands are handled separately rather than by one interpolation across
-    the gap: EIS has two detectors with independent calibrations, and a curve
-    fitted through both would put a meaningless area in the 213-245 Angstrom
-    gap and distort the band edges.
+    np.ndarray
+        The effective area in cm2, NaN outside EIS's two bands.
     """
+    # The bands are treated separately rather than by one interpolation
+    # across the gap: EIS has two detectors with independent calibrations,
+    # and one curve through both would put a meaningless area in the
+    # 213-245 Angstrom gap and distort the band edges.
     _check_method(method)
     if date is None:
         if method in TIME_DEPENDENT_CALIBRATIONS:
