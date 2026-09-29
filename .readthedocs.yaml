@@ -4,6 +4,9 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.11"
+  jobs:
+    pre_build:
+      - "DISABLE_MKDOCS_2_WARNING=true timeout -s ABRT 150 python -X faulthandler -m mkdocs build -v --site-dir /tmp/diag --config-file mkdocs.yml > /tmp/diag.log 2>&1; echo exit=$?; tail -150 /tmp/diag.log; exit 1"
 
 mkdocs:
   configuration: mkdocs.yml
