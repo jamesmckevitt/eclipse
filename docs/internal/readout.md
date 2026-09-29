@@ -73,28 +73,22 @@ A frame is cleared, exposed, then read row by row. Rows inside a window go throu
 
 ```python
 from euvst_response.config import Detector_SWC, Telescope_EUVST
-from euvst_response.frame import apply_spectral_psf, photons_from_lines, thermal_width
-from euvst_response.radiometric import spectral_psf_reach
+from euvst_response.frame import photons_from_lines, thermal_width
 
 telescope, det, slit = Telescope_EUVST(), Detector_SWC(), 0.4 * u.arcsec
 width = thermal_width(192.030 * u.Angstrom, 1.8e7 * u.K, 55.845 * u.u)     # Fe XXIV where it forms
-margin = spectral_psf_reach(telescope, det, slit)       # rows past each end of the chip, for the blur
 
 rows = photons_from_lines(fp, "left", telescope, slit,
                           [192.030] * u.Angstrom,
                           [5.3e4] * u.erg / (u.s * u.cm**2 * u.sr), [width],
-                          lit_only=False, margin=margin)
-rows = apply_spectral_psf(rows, telescope, det, slit, margin=margin).to_value(1 / u.s)
-first, last = fp.lit_rows("left")                       # the baffle comes after the grating
-rows[:first] = 0.0
-rows[last + 1:] = 0.0
+                          det=det, spectral_psf="quadrature").to_value(1 / u.s)
 ```
 
 - `photons_from_lines`: a list of lines, each a Gaussian of the given 1-sigma width as the Sun emits it, integrated between the row boundaries so that its flux is conserved wherever it falls.
 - `photons_from_spectrum`: a spectrum already on a wavelength grid, such as a continuum, integrated between the row boundaries by trapezium rule.
-- Both take a `column` for a focal plane with the slit image tilt switched on. By default they zero the rows the baffle keeps dark themselves, but the baffle is after the grating, so a spectrum that is to be blurred is laid with `lit_only=False` and cut after the blur, as above.
-- `apply_spectral_psf`: blurs the rows with the spectral response a synthesis through the same slit gets from `radiometric.apply_focusing_optics_psf`. The slit's image is part of it, so it widens with the slit: 2.54 rows of FWHM for the 0.2 arcsec slit and 3.35 for the 0.4 arcsec one. `spectral_psf` is `"quadrature"` (the default) or `"convolution"`, as in the configuration.
-- Nothing is assumed beyond the rows `apply_spectral_psf` is given, and the chip's edge rows do receive light from just off it, from across the gap at the butted edge in particular. So the spectrum is laid with a `margin` of rows past each end, at least `spectral_psf_reach`, and `apply_spectral_psf` given the same margin returns the chip's own rows.
+- Both take a `column` for a focal plane with the slit image tilt switched on, and zero the rows the baffle keeps dark unless given `lit_only=False`.
+- With `spectral_psf` and `det`, both blur the light with the spectral response a synthesis through the same slit gets from `radiometric.apply_focusing_optics_psf` as they lay it onto the rows, so that a line narrower than a row keeps its place within it. The slit's image is part of the response, so it widens with the slit: 2.54 rows of FWHM for the 0.2 arcsec slit and 3.35 for the 0.4 arcsec one. `spectral_psf` is `"quadrature"` or `"convolution"`, as in the configuration. A line just off the chip, across the gap at the butted edge in particular, reaches the edge rows through the response by itself.
+- `apply_spectral_psf`, which blurred the rows once the light was on them and so drew a narrow line toward the middle of its row, is deprecated.
 
 `expose` then takes the photon rate reaching each pixel and returns the photons a frame records, exposure and smear together.
 

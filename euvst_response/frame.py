@@ -18,8 +18,9 @@ whole band, where the effective area changes by a factor of several.
 
 A line is spread over the rows by integrating a Gaussian between the row
 boundaries, so its flux is conserved whatever the sampling.  That Gaussian is
-the line as the Sun emits it; the instrument's own spectral response is a
-separate convolution, applied with :func:`apply_spectral_psf`.
+the line as the Sun emits it.  Given *spectral_psf*, the instrument's own
+spectral response is applied to it as it is laid onto the rows, so that a
+line narrower than a row keeps its place within the row.
 
 At the other end, :func:`detect` and :func:`digitise` take the photons a frame
 recorded through the detector stages of :mod:`euvst_response.radiometric`,
@@ -29,16 +30,19 @@ energy for each row, and a dark current time for each row.
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional
 
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
-from scipy.special import erf
+from scipy.special import erf, erfc
 
 from .radiometric import (
     _vectorized_fano_noise,
+    slit_image_width,
     spectral_line_spread,
+    spectral_optics_fwhm,
     spectral_psf_fwhm,
     spectral_psf_reach,
 )
@@ -70,6 +74,94 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int 
         edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
     return np.column_stack([np.minimum(edges[:-1], edges[1:]),
                             np.maximum(edges[:-1], edges[1:])])
+
+
+# A Gaussian's weight beyond this many sigma is below a part in 1e30 of it.
+_REACH_IN_SIGMA = 12.0
+
+
+def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
+              slit_width: u.Quantity, spectral_psf: str, wavelength: np.ndarray):
+    """
+    The instrument's spectral response at each of *wavelength* (Angstrom),
+    as the standard deviation of its Gaussian and the width of the slit's
+    image the Gaussian is convolved with, both in Angstrom, the second 0
+    with *spectral_psf* ``"quadrature"``, where the slit is in the Gaussian.
+
+    The response is a width in rows, the same that
+    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` gives a
+    synthesis, taken here at the width of the row the wavelength falls in,
+    which changes by less than a part in 1e4 across the response.
+    """
+    if spectral_psf == "quadrature":
+        sigma_rows = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
+        box_rows = 0.0
+    elif spectral_psf == "convolution":
+        sigma_rows = _fwhm_to_sigma(spectral_optics_fwhm(telescope, det))
+        box_rows = slit_image_width(slit_width, det)
+    else:
+        raise ValueError(
+            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
+        )
+    bounds = _row_bounds(focal_plane, ccd, column)
+    centres = bounds.mean(axis=1)
+    order = np.argsort(centres)
+    row_width = np.interp(wavelength, centres[order], (bounds[:, 1] - bounds[:, 0])[order])
+    return sigma_rows * row_width, box_rows * row_width
+
+
+def _integrated(v, sigma, order: int):
+    """
+    The *order*-th antiderivative, 1 (the cumulative distribution), 2 or 3,
+    of a unit Gaussian of *sigma*, vanishing at minus infinity.
+    """
+    cdf = 0.5 * erfc(-v / (np.sqrt(2.0) * sigma))
+    if order == 1:
+        return cdf
+    density = np.exp(-0.5 * (v / sigma) ** 2) / (np.sqrt(2.0 * np.pi) * sigma)
+    if order == 2:
+        return v * cdf + sigma**2 * density
+    return (v**2 + sigma**2) / 2 * cdf + sigma**2 * v / 2 * density
+
+
+def _blurred(v, sigma, box, order: int):
+    """
+    :func:`_integrated` of the Gaussian convolved with a rectangle *box*
+    wide, where *box* is above zero, as a slit's image is.
+    """
+    if np.all(box == 0):
+        return _integrated(v, sigma, order)
+    return (_integrated(v + box / 2, sigma, order + 1)
+            - _integrated(v - box / 2, sigma, order + 1)) / box
+
+
+def _intervals_onto_rows(bounds: np.ndarray, low: np.ndarray, high: np.ndarray,
+                         light: np.ndarray, sigma: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """
+    The light in each row between *bounds* of intervals from *low* to *high*,
+    each holding *light* spread evenly over it and blurred by a Gaussian of
+    *sigma* convolved with a rectangle *box* wide, by the exact integrals.
+    Only the rows the blur reaches from an interval are worked out.
+    """
+    order = np.argsort(bounds[:, 0])
+    row_low, row_high = bounds[order, 0], bounds[order, 1]
+    reach = _REACH_IN_SIGMA * sigma + box
+    first = np.searchsorted(row_high, low - reach, side="right")
+    last = np.searchsorted(row_low, high + reach, side="left")
+    count = np.maximum(last - first, 0)
+    interval = np.repeat(np.arange(low.size), count)
+    row = first[interval] + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    s, w = sigma[interval], box[interval]
+
+    def corner(x, b):
+        return _blurred(x - b, s, w, 2)
+
+    b_low, b_high = low[interval], high[interval]
+    share = (corner(row_high[row], b_low) - corner(row_high[row], b_high)
+             - corner(row_low[row], b_low) + corner(row_low[row], b_high)) / (b_high - b_low)
+    rows = np.zeros(len(bounds))
+    np.add.at(rows, order[row], light[interval] * np.maximum(share, 0.0))
+    return rows
 
 
 def _check_margin(margin: int, lit_only: bool) -> None:
@@ -109,9 +201,15 @@ def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
 def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
                        slit_width: u.Quantity, wavelengths: u.Quantity,
                        intensities: u.Quantity, widths: u.Quantity,
-                       column=None, lit_only: bool = True, margin: int = 0) -> u.Quantity:
+                       column=None, lit_only: bool = True, margin: int = 0, *,
+                       det=None, spectral_psf: Optional[str] = None) -> u.Quantity:
     """
     Photons per second in each row of one CCD from a list of emission lines.
+
+    With *spectral_psf*, each line is blurred by the instrument's spectral
+    response as it is laid onto the rows, which keeps a line narrower than a
+    row where it is; blurring the rows after, with
+    :func:`apply_spectral_psf`, moved it toward the middle of its row.
 
     Parameters
     ----------
@@ -142,7 +240,17 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     margin : int
         Rows to add past each end of the CCD, for :func:`apply_spectral_psf`:
         light just off the chip is blurred onto its edge rows.  Needs
-        ``lit_only=False``.
+        ``lit_only=False``.  Not needed with *spectral_psf*, where the light
+        of a line off the chip is blurred onto the edge rows as it is laid.
+    det : Detector_SWC, optional
+        The detector, for the spectral response in rows.  Needed with
+        *spectral_psf*.
+    spectral_psf : str, optional
+        ``"quadrature"`` or ``"convolution"``, as in the configuration: blur
+        the lines with the spectral response a synthesis through the same
+        slit gets from
+        :func:`~euvst_response.radiometric.apply_focusing_optics_psf`.
+        None, the default, lays the lines as emitted.
 
     Returns
     -------
@@ -151,6 +259,9 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         more past each end.
     """
     _check_margin(margin, lit_only)
+    if spectral_psf is not None and det is None:
+        raise ValueError("The spectral response is in detector rows: give det with "
+                         "spectral_psf.")
     wavelengths = np.atleast_1d(u.Quantity(wavelengths).to(u.Angstrom))
     intensities = np.atleast_1d(u.Quantity(intensities).to(u.erg / (u.s * u.cm**2 * u.sr)))
     widths = np.atleast_1d(u.Quantity(widths).to(u.Angstrom))
@@ -173,13 +284,27 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     rows = np.zeros(len(bounds))
     scale = np.sqrt(2.0) * widths.to_value(u.Angstrom)
     centre = wavelengths.to_value(u.Angstrom)
-    for i, weight in enumerate(total.value):
-        if weight == 0:
-            continue
-        # Fraction of the line between each pair of row boundaries.
-        low = erf((bounds[:, 0] - centre[i]) / scale[i])
-        high = erf((bounds[:, 1] - centre[i]) / scale[i])
-        rows += weight * 0.5 * (high - low)
+    if spectral_psf is None:
+        for i, weight in enumerate(total.value):
+            if weight == 0:
+                continue
+            # Fraction of the line between each pair of row boundaries.
+            low = erf((bounds[:, 0] - centre[i]) / scale[i])
+            high = erf((bounds[:, 1] - centre[i]) / scale[i])
+            rows += weight * 0.5 * (high - low)
+    else:
+        # The line, a Gaussian, blurred by the response: a Gaussian of the two
+        # widths in quadrature, convolved with the slit's image for
+        # "convolution", and shared between the rows by its exact integrals.
+        psf_sigma, box = _response(focal_plane, ccd, column, telescope, det, slit_width,
+                                   spectral_psf, centre)
+        sigma = np.hypot(widths.to_value(u.Angstrom), psf_sigma)
+        for i, weight in enumerate(total.value):
+            if weight == 0:
+                continue
+            share = (_blurred(bounds[:, 1] - centre[i], sigma[i], box[i], 1)
+                     - _blurred(bounds[:, 0] - centre[i], sigma[i], box[i], 1))
+            rows += weight * np.maximum(share, 0.0)
 
     if lit_only:
         first, last = focal_plane.lit_rows(ccd, column)
@@ -191,13 +316,18 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
 def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
                           slit_width: u.Quantity, wavelength: u.Quantity,
                           radiance: u.Quantity, column=None,
-                          lit_only: bool = True, margin: int = 0) -> u.Quantity:
+                          lit_only: bool = True, margin: int = 0, *,
+                          det=None, spectral_psf: Optional[str] = None) -> u.Quantity:
     """
     Photons per second in each row of one CCD from a continuous spectrum.
 
     Use this for a continuum, or for anything already sampled on a wavelength
     grid.  The grid has to be finer than a row, since the radiance is
-    integrated between the row boundaries by trapezium rule on it.
+    integrated between the row boundaries by trapezium rule on it: each
+    interval of the grid holds the light the rule gives it, spread evenly
+    over it.  With *spectral_psf* that light is blurred by the instrument's
+    spectral response as it is laid onto the rows, as
+    :func:`photons_from_lines` blurs a line.
 
     Parameters
     ----------
@@ -215,6 +345,9 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         more past each end.
     """
     _check_margin(margin, lit_only)
+    if spectral_psf is not None and det is None:
+        raise ValueError("The spectral response is in detector rows: give det with "
+                         "spectral_psf.")
     wavelength = u.Quantity(wavelength).to(u.Angstrom)
     radiance = u.Quantity(radiance).to(u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom))
     if wavelength.size != radiance.size:
@@ -232,10 +365,17 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     density = (radiance * solid_angle * area / energy).to(1 / (u.s * u.Angstrom)).value
 
     grid = wavelength.to_value(u.Angstrom)
-    cumulative = np.concatenate([[0.0], np.cumsum(np.diff(grid) * (density[1:] + density[:-1]) / 2)])
     bounds = _row_bounds(focal_plane, ccd, column, margin)
-    rows = (np.interp(bounds[:, 1], grid, cumulative, left=cumulative[0], right=cumulative[-1])
-            - np.interp(bounds[:, 0], grid, cumulative, left=cumulative[0], right=cumulative[-1]))
+    if spectral_psf is None:
+        cumulative = np.concatenate([[0.0], np.cumsum(np.diff(grid) * (density[1:] + density[:-1]) / 2)])
+        rows = (np.interp(bounds[:, 1], grid, cumulative, left=cumulative[0], right=cumulative[-1])
+                - np.interp(bounds[:, 0], grid, cumulative, left=cumulative[0], right=cumulative[-1]))
+    else:
+        low, high = grid[:-1], grid[1:]
+        sigma, box = _response(focal_plane, ccd, column, telescope, det, slit_width,
+                               spectral_psf, (low + high) / 2)
+        rows = _intervals_onto_rows(bounds, low, high, np.diff(grid) * (density[1:] + density[:-1]) / 2,
+                                    sigma, box)
 
     if lit_only:
         first, last = focal_plane.lit_rows(ccd, column)
@@ -284,7 +424,19 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     and pass the same margin here: the result is then the chip's own rows.
     The kernel is normalised, so any flux that stays within the rows is
     conserved.
+
+    .. deprecated:: 0.12.0
+        Blurring the rows once the light is on them moves a line narrower
+        than a row toward the middle of its row, by up to a few km/s. Give
+        *spectral_psf* and *det* to :func:`photons_from_lines` or
+        :func:`photons_from_spectrum` instead, which blur the light as it is
+        laid onto the rows.
     """
+    warnings.warn(
+        "apply_spectral_psf is deprecated and will be removed in a future release: blurring "
+        "the rows once the light is on them moves a line narrower than a row toward the "
+        "middle of its row. Give spectral_psf and det to photons_from_lines or "
+        "photons_from_spectrum instead.", FutureWarning, stacklevel=2)
     margin = int(margin)
     if spectral_psf == "quadrature":
         sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))

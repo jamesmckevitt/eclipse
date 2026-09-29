@@ -41,6 +41,10 @@ from euvst_response.radiometric import (
 from euvst_response.readout import FocalPlane_SWC, ReadoutSequence, expose
 from euvst_response.utils import _fwhm_to_sigma
 
+# apply_spectral_psf is deprecated; its own behaviour is still tested here,
+# and the warning it gives has its own test.
+pytestmark = pytest.mark.filterwarnings("ignore:apply_spectral_psf is deprecated")
+
 H_ERG_S = 6.62607015e-27
 C_CM_S = 2.99792458e10
 HC_ERG_CM = H_ERG_S * C_CM_S
@@ -512,3 +516,93 @@ def test_a_pixel_no_light_reached_keeps_its_own_rows_wavelength():
     lit = mean[1000:fp.n_rows].to_value(u.Angstrom)
     assert lit.min() >= wavelength[1000].to_value(u.Angstrom) - 1e-9
     assert lit.max() <= wavelength[1009].to_value(u.Angstrom) + 1e-9
+
+
+# ----------------------------------------------------------------------
+# The spectral response, applied as the light is laid onto the rows
+# ----------------------------------------------------------------------
+def _centroid(rows):
+    index = np.arange(rows.size)
+    return (index * rows).sum() / rows.sum()
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+@pytest.mark.parametrize("offset", [-0.4, -0.2, 0.0, 0.3])
+def test_a_narrow_line_keeps_its_place_within_its_row(offset, spectral_psf):
+    """Blurred after it was on the rows, a line 0.2 rows wide was drawn toward the middle of its row."""
+    fp, telescope, det = FocalPlane_SWC(), Telescope_EUVST(), Detector_SWC()
+    slit = SLIT_WIDTH * u.arcsec
+    wavelength = fp.wavelength(1500 + offset, "left")
+    width = 0.2 * (fp.wavelength(1501, "left") - fp.wavelength(1500, "left"))
+    line = (u.Quantity([wavelength]), [1.0] * u.erg / (u.s * u.cm**2 * u.sr), u.Quantity([width]))
+    rows = photons_from_lines(fp, "left", telescope, slit, *line, lit_only=False, det=det,
+                              spectral_psf=spectral_psf).value
+    assert _centroid(rows) == pytest.approx(1500 + offset, abs=1e-4)
+    if offset != 0.0 and spectral_psf == "quadrature":
+        on_rows = photons_from_lines(fp, "left", telescope, slit, *line, lit_only=False)
+        after = apply_spectral_psf(on_rows, telescope, det, slit).value
+        assert abs(_centroid(after) - (1500 + offset)) > 0.02
+
+
+def test_a_line_blurred_as_it_is_laid_keeps_its_flux():
+    fp, det = FocalPlane_SWC(), Detector_SWC()
+    wavelength = fp.wavelength(1200.3, "left").to_value(u.Angstrom)
+    rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
+                              [wavelength] * u.Angstrom, [5.0e4] * u.erg / (u.s * u.cm**2 * u.sr),
+                              [0.01] * u.Angstrom, lit_only=False, det=det,
+                              spectral_psf="quadrature")
+    assert rows.value.sum() == pytest.approx(expected_photons(5.0e4, wavelength), rel=1e-9)
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+def test_a_line_laid_as_a_spectrum_gives_the_rows_it_gives_as_a_line(spectral_psf):
+    """Two ways to the same rows: the line's exact integrals, and a finely sampled spectrum's."""
+    fp, telescope, det = FocalPlane_SWC(), Telescope_EUVST(), Detector_SWC()
+    slit, centre, sigma = SLIT_WIDTH * u.arcsec, 195.119, 0.004
+    grid = centre + np.linspace(-0.2, 0.2, 40001)
+    radiance = 1.0 / (np.sqrt(2 * np.pi) * sigma) * np.exp(-0.5 * ((grid - centre) / sigma) ** 2)
+    as_line = photons_from_lines(fp, "left", telescope, slit, [centre] * u.Angstrom,
+                                 [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [sigma] * u.Angstrom,
+                                 lit_only=False, det=det, spectral_psf=spectral_psf).value
+    as_spectrum = photons_from_spectrum(fp, "left", telescope, slit, grid * u.Angstrom,
+                                        radiance * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom),
+                                        lit_only=False, det=det,
+                                        spectral_psf=spectral_psf).value
+    # The effective area and the photon energy are taken at each sample's
+    # wavelength in the spectrum and at the line's centre for the line.
+    np.testing.assert_allclose(as_spectrum, as_line, rtol=2e-3, atol=1e-6 * as_line.max())
+    assert _centroid(as_spectrum) == pytest.approx(_centroid(as_line), abs=1e-4)
+
+
+def test_the_edge_rows_get_the_light_from_just_off_the_chip_without_a_margin():
+    """Blurred as it is laid, a line in the gap reaches the last rows by itself."""
+    fp, telescope, det = FocalPlane_SWC(), Telescope_EUVST(), Detector_SWC()
+    slit = SLIT_WIDTH * u.arcsec
+    line = ([fp.wavelength(fp.n_rows + 1, "left").to_value(u.Angstrom)] * u.Angstrom,
+            [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.001] * u.Angstrom)
+    laid = photons_from_lines(fp, "left", telescope, slit, *line, lit_only=False, det=det,
+                              spectral_psf="quadrature").value
+    reach = spectral_psf_reach(telescope, det, slit)
+    with_margin = photons_from_lines(fp, "left", telescope, slit, *line, lit_only=False,
+                                     margin=reach)
+    before = apply_spectral_psf(with_margin, telescope, det, slit, margin=reach).value
+    assert laid.size == fp.n_rows and laid[-1] > 0.05 * laid.max()
+    # The same light as the margin gave, to the ordering of blur and rows.
+    assert laid[-4:].sum() == pytest.approx(before[-4:].sum(), rel=0.05)
+
+
+def test_the_spectral_response_needs_the_detector_and_a_known_mode():
+    fp, telescope = FocalPlane_SWC(), Telescope_EUVST()
+    line = ([195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [0.02] * u.Angstrom)
+    with pytest.raises(ValueError, match="give det with spectral_psf"):
+        photons_from_lines(fp, "left", telescope, SLIT_WIDTH * u.arcsec, *line,
+                           spectral_psf="quadrature")
+    with pytest.raises(ValueError, match="'quadrature' or 'convolution'"):
+        photons_from_lines(fp, "left", telescope, SLIT_WIDTH * u.arcsec, *line,
+                           det=Detector_SWC(), spectral_psf="gaussian")
+
+
+def test_blurring_the_rows_after_says_it_is_deprecated():
+    with pytest.warns(FutureWarning, match="apply_spectral_psf is deprecated"):
+        apply_spectral_psf(np.ones(40) / u.s, Telescope_EUVST(), Detector_SWC(),
+                           SLIT_WIDTH * u.arcsec)
