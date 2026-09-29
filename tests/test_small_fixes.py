@@ -86,6 +86,28 @@ def test_debug_opens_in_the_frame_of_the_function_that_failed(monkeypatch):
     assert isinstance(seen["exception"], ValueError)
 
 
+def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypatch):
+    """Raised in a function the decorated one called, the session opened with the caller's locals."""
+    from euvst_response.config import check_pinhole_lists
+
+    seen = {}
+
+    def record(message, locals_dict=None, globals_dict=None, traceback=None):
+        seen.update(locals_dict)
+
+    monkeypatch.setattr(utils, "DEBUG_MODE", True)
+    monkeypatch.setattr(utils, "debug_break", record)
+
+    @utils.debug_on_error
+    def run():
+        config = {"instrument": "SWC"}
+        check_pinhole_lists([5 * u.um], [], [])
+
+    with pytest.raises(ValueError):
+        run()
+    assert "config" not in seen and seen["sizes"] == [5 * u.um]
+
+
 def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path):
     """An environment inside some other repository is not a checkout of ECLIPSE."""
     project = tmp_path / "project"
@@ -112,6 +134,9 @@ def _atmosphere(tmp_path, name="box.h5", **overrides):
     (lambda f: f.__delitem__("electron_density"), "needs a mass_density or an electron_density"),
     (lambda f: (f.__delitem__("time"), f.create_dataset("time", data=[10.0]),
                 f["time"].attrs.__setitem__("unit", "s")), "time must have 0 dimensions"),
+    (lambda f: f["temperature"].attrs.__delitem__("unit"), "'temperature' in .* has no 'unit'"),
+    (lambda f: f["temperature"].attrs.__setitem__("unit", "m"),
+     "must be in a unit convertible to K, got m"),
 ])
 def test_info_refuses_a_file_that_cannot_be_read_rather_than_describing_it(tmp_path, change, message):
     path = _atmosphere(tmp_path)
@@ -187,6 +212,16 @@ def test_an_exposure_a_rounding_error_past_the_series_is_inside_it_and_one_furth
     assert series.coverage(0.3702 * u.s, end * (1 + 4e-16) * u.s) == [(3, 1.0)]
     with pytest.raises(ValueError, match="outside the series, starting 0.0001 s before it"):
         series.coverage(-1e-4 * u.s, 0.1 * u.s)
+
+
+def test_a_series_of_times_far_from_zero_allows_rounding_and_no_more():
+    """Scaled by the times themselves, the allowance was a second for a series at 1e9 s."""
+    series = object.__new__(AtmosphereSeries)
+    series.times = (1e9 + np.array([0.0, 0.5, 1.0])) * u.s
+    end = series.valid_until()[-1].to_value(u.s)
+    assert series.coverage((1e9 + 1.0) * u.s, np.nextafter(end, np.inf) * u.s) == [(2, 1.0)]
+    with pytest.raises(ValueError, match="outside the series, ending 0.25 s after it"):
+        series.coverage((1e9 + 1.0) * u.s, (end + 0.25) * u.s)
 
 
 def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():

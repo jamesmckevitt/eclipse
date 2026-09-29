@@ -281,9 +281,13 @@ class _Series:
             raise ValueError(f"An exposure must end after it starts, got {start} to {end}.")
         begins = self.times.to_value(u.s)
         ends = self.valid_until().to_value(u.s)
-        # A plan that fills the series exactly reaches its ends but for the
-        # rounding of adding up its exposures: a part in 1e9 of the series.
-        rounding = 1e-9 * max(abs(begins[0]), abs(ends[-1]), ends[-1] - begins[0])
+        # A plan that fills the series exactly reaches its ends but for
+        # rounding. Its times are a start plus a whole number of cadences plus
+        # an exposure, the series' end is its last time plus the last gap,
+        # and each of those few steps, and each change of unit, rounds by at
+        # most half a unit in the last place of the largest time; sixteen
+        # units bound them all.
+        rounding = 16 * np.spacing(max(abs(begins[0]), abs(ends[-1]), abs(t0), abs(t1)))
         early, late = begins[0] - t0, t1 - ends[-1]
         if early > rounding or late > rounding:
             where = (f"starting {early:.3g} s before it" if early > rounding

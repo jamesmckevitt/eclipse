@@ -545,10 +545,11 @@ def describe_atmosphere_file(path: str | Path) -> str:
     """
     What an atmosphere file holds, without loading any of its cubes.
 
-    Reads the attributes, the edges, the time and the cubes' names and
-    shapes, so it costs nothing on a file of many gigabytes. What it reads
-    is checked as reading the atmosphere would check it, so a file that
-    cannot be read is refused here too rather than described.
+    Reads the attributes, the edges, the time and the cubes' names, shapes
+    and units, so it costs nothing on a file of many gigabytes. What it reads
+    is checked as reading the atmosphere would check it, so a file whose
+    layout or units cannot be read is refused here too rather than
+    described; the values in the cubes are checked only when they are read.
     """
     path = Path(path)
     with h5py.File(path, "r") as f:
@@ -565,6 +566,10 @@ def describe_atmosphere_file(path: str | Path) -> str:
             if f[name].shape != shape:
                 raise ValueError(f"{name} in {path} has shape {f[name].shape} but "
                                  f"the edges bound (nz, ny, nx) = {shape} cells.")
+            unit = _dataset_unit(f, name)
+            if not unit.is_equivalent(UNITS[name]):
+                raise u.UnitConversionError(f"{name} in {path} must be in a unit convertible "
+                                            f"to {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
         if "mass_density" not in cubes and "electron_density" not in cubes:
@@ -631,24 +636,28 @@ def _read_dataset(f: h5py.Group, name: str,
                   units: Dict[str, u.Unit] = UNITS,
                   axis: int = -1) -> u.Quantity:
     """A dataset of a file or of a group in it, with its unit; *columns* reads only that slice of its x axis, *axis*."""
-    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
-    if name not in f:
-        raise ValueError(f"{where} has no '{name}' dataset.")
+    unit = _dataset_unit(f, name, units)
     dataset = f[name]
-    unit = _text_attribute(dataset.attrs, "unit")
-    if unit is None:
-        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
-                         f"Every dataset needs one, for instance "
-                         f"'{units[name]}'.")
-    if isinstance(unit, bytes):
-        unit = unit.decode()
     if columns is None:
         values = dataset[()]
     else:
         index = [slice(None)] * dataset.ndim
         index[axis] = columns
         values = dataset[tuple(index)]
-    return u.Quantity(values, u.Unit(unit))
+    return u.Quantity(values, unit)
+
+
+def _dataset_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS) -> u.Unit:
+    """The unit of a dataset of a file or of a group in it, from its 'unit' attribute, without reading it."""
+    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
+    if name not in f:
+        raise ValueError(f"{where} has no '{name}' dataset.")
+    unit = _text_attribute(f[name].attrs, "unit")
+    if unit is None:
+        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
+                         f"Every dataset needs one, for instance "
+                         f"'{units[name]}'.")
+    return u.Unit(unit)
 
 
 # ----------------------------------------------------------------------

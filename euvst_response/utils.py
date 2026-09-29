@@ -144,12 +144,19 @@ def debug_on_error(func):
         except Exception as e:
             if DEBUG_MODE:
                 print(f"\n=== EXCEPTION IN {func.__name__}: {type(e).__name__}: {e} ===")
-                # The session opens in the decorated function's own frame,
-                # the second of the traceback, the first being this
-                # wrapper's, with the exception as `exception`; pdb, without
-                # IPython, opens where it was raised.
-                caller = e.__traceback__.tb_next or e.__traceback__
-                frame = caller.tb_frame
+                # The session opens with the exception as `exception`, in the
+                # frame nearest where it was raised that is ECLIPSE's own: the
+                # decorated function's, the second of the traceback after
+                # this wrapper's, or that of a function it called. Deeper, in
+                # numpy or astropy, the locals say little about the run. pdb,
+                # without IPython, opens where it was raised and can go up.
+                package = __name__.split(".")[0]
+                frame = (e.__traceback__.tb_next or e.__traceback__).tb_frame
+                entry = e.__traceback__.tb_next
+                while entry is not None:
+                    if entry.tb_frame.f_globals.get("__name__", "").split(".")[0] == package:
+                        frame = entry.tb_frame
+                    entry = entry.tb_next
                 debug_break(f"Exception in {func.__name__}: {e}",
                             {**frame.f_locals, "exception": e}, frame.f_globals,
                             traceback=e.__traceback__)
