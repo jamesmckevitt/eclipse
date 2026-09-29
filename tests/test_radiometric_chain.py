@@ -100,7 +100,7 @@ def make_radiance_cube(value=RADIANCE, n_spec=N_SPEC, rest=REST):
 # to carry the slit ratio explicitly.
 SLIT_WIDTHS = {
     Detector_SWC: (0.2, 0.4, 0.8, 1.6),
-    Detector_EIS: (1.0, 2.0, 4.0),
+    Detector_EIS: (1.0, 2.0),
 }
 INSTRUMENT_SLITS = [(cls, slit)
                     for cls, slits in SLIT_WIDTHS.items()

@@ -14,21 +14,21 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists
-from .data_processing import (load_atmosphere, rebin_atmosphere, create_uniform_intensity_cube,
-                              pad_spectral_axis, rebin_spectra)
+from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
+from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
+                              create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import monte_carlo
-from .radiometric import spectral_psf_margin
+from .radiometric import spectral_optics_fwhm, spectral_psf_margin
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
     _parse_section, _params_to_key, _extract_config_params, _SECTION_LIST_FIELDS,
-    rebin_slit_offchip, check_config_keys,
+    rebin_slit_offchip, check_config_keys, load_yaml_config,
 )
 import dataclasses
 import numpy as np
@@ -542,8 +542,7 @@ def main() -> None:
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {args.config}")
 
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_yaml_config(config_path.read_text())
 
     # An empty file parses to None, which would otherwise fail later with an
     # AttributeError rather than saying the config is empty.
@@ -573,13 +572,21 @@ def main() -> None:
             "built from the top-level value, so one written here would be "
             "read and then ignored."
         )
-    instrument = config.get("instrument", "SWC").upper()
+    instrument = config.get("instrument", "SWC")
+    if not isinstance(instrument, str):
+        raise ValueError(f"'instrument' must be SWC or EIS, got {instrument!r}.")
+    instrument = instrument.upper()
 
     # Before anything is loaded, so that a config written against an older
     # layout fails here rather than after the atmosphere load.
     _validate_config_keys(config, instrument)
 
     n_iter = config.get("n_iter", 25)
+    # Not left to the run: 0 wrote empty results and said it had finished,
+    # and '1e3', a string to PyYAML, failed after the ground truth was fitted.
+    if isinstance(n_iter, bool) or not isinstance(n_iter, int) or n_iter < 1:
+        raise ValueError(f"'n_iter' must be a whole number of iterations, 1 or more, got "
+                         f"{n_iter!r}.")
     ncpu = config.get("ncpu", -1)
     # joblib and reproject both take it, and agree only on these. 0, which
     # means every CPU to the synthesis's n_workers, failed at the first fit.
@@ -609,6 +616,12 @@ def main() -> None:
     if uniform_intensity_mode and "synthesis_file" in config:
         warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
                       UserWarning, stacklevel=2)
+    # The line of a uniform intensity; anything else observes the spectra it is given.
+    for key in ("rest_wavelength", "thermal_width"):
+        if key in config and not uniform_intensity_mode:
+            warnings.warn(f"'{key}' is ignored: it describes the line of a 'uniform_intensity', "
+                          f"and this run observes the spectra it is given.",
+                          UserWarning, stacklevel=2)
     atmosphere_series_mode = "atmosphere_series" in config
     synthesis_series_mode = "synthesis_series" in config
     raster_mode = atmosphere_series_mode or synthesis_series_mode
@@ -655,6 +668,17 @@ def main() -> None:
             )
         uniform_rest_wavelength = parse_yaml_input(config.get("rest_wavelength", "195.119 AA"))
         uniform_thermal_width = parse_yaml_input(config.get("thermal_width", "20 km/s"))
+        # Each a positive amount of its own kind: a negative width, or one of
+        # zero, gave a line the fit made nonsense of, saved as a result.
+        for key, value, kind, example in (
+                ("uniform_intensity", uniform_intensity, u.erg / (u.s * u.cm**2 * u.sr),
+                 "5000 erg / (s cm2 sr)"),
+                ("rest_wavelength", uniform_rest_wavelength, u.AA, "195.119 AA"),
+                ("thermal_width", uniform_thermal_width, u.km / u.s, "20 km/s")):
+            if not (isinstance(value, u.Quantity) and value.unit.is_equivalent(kind)
+                    and np.isfinite(value.value) and value.value > 0):
+                raise ValueError(f"'{key}' must be a positive {kind.physical_type}, such as "
+                                 f"'{example}', got {config.get(key)!r}.")
         print("UNIFORM INTENSITY MODE")
         print(f"  Intensity: {uniform_intensity}")
         print(f"  Rest wavelength: {uniform_rest_wavelength}")
@@ -775,8 +799,12 @@ def main() -> None:
     if fit_signals != "both":
         skipped = "photon" if fit_signals == "dn" else "dn"
         print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
-    # ensure_list wraps scalars in a list; values are plain ints (no units)
-    offchip_bin_slits = [int(v) for v in offchip_bin_slits]
+    # ensure_list wraps scalars in a list; values are plain ints (no units),
+    # which int() would have made of a fraction or a numeric string.
+    if not offchip_bin_slits or any(isinstance(v, bool) or not isinstance(v, int) or v < 1
+                                    for v in offchip_bin_slits):
+        raise ValueError(f"'offchip_bin_slit' must be whole numbers of rows, 1 or more, got "
+                         f"{config.get('offchip_bin_slit')!r}.")
     offchip_bin_slits = deduplicate_list(offchip_bin_slits, "offchip_bin_slit")
     if any(b > 1 for b in offchip_bin_slits):
         print(f"Off-chip slit binning values: {offchip_bin_slits} "
@@ -1014,14 +1042,15 @@ def main() -> None:
             total_combinations *= len(v)
         print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
 
-    product_iter = itertools_product(*dim_values) if dim_names else [()]
+    def _combinations():
+        """The sweep's combinations, afresh each time, one at a time rather than all at once."""
+        return itertools_product(*dim_values) if dim_names else iter([()])
 
-    for combination_idx, combo_values in enumerate(product_iter, start=1):
+    def _combination(combo_values):
+        """One combination: its sweep values, and its configuration objects, which check them."""
         combo = dict(zip(dim_names, combo_values)) if dim_names else {}
-
-        # Extract offchip_bin_slit from combo if present
-        offchip_bin_slit = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
-        raster_repeat = combo.pop("raster.repeat", 0)
+        offchip = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
+        repeat = combo.pop("raster.repeat", 0)
 
         # Merge sweep values with fixed values for this combination
         all_sim = {
@@ -1041,28 +1070,84 @@ def main() -> None:
             **{k[len("filter."):]: v for k, v in combo.items() if k.startswith("filter.")},
         }
 
-        # Extract core simulation params
-        slit_width = all_sim["slit_width"]
-        expos = all_sim["expos"]
-        vis_sl = all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2))
-        psf = all_sim.get("psf", False)
-        psf_boundary = all_sim.get("psf_boundary", "replicate")
-        spectral_psf = all_sim.get("spectral_psf", "quadrature")
-        noise = all_sim.get("noise", True)
-        enable_pinholes = all_sim.get("enable_pinholes", False)
-
         # Build config objects
         if instrument == "SWC":
-            filter_obj = AluminiumFilter(**all_fil) if all_fil else AluminiumFilter()
+            fil = AluminiumFilter(**all_fil) if all_fil else AluminiumFilter()
             tel_kwargs = {k: v for k, v in all_tel.items() if k != "filter"}
-            tel_kwargs["filter"] = filter_obj
-            TEL = Telescope_EUVST(**tel_kwargs)
-            DET = Detector_SWC(**all_det) if all_det else Detector_SWC()
+            tel_kwargs["filter"] = fil
+            tel = Telescope_EUVST(**tel_kwargs)
+            det = Detector_SWC(**all_det) if all_det else Detector_SWC()
         else:
-            filter_obj = None
+            fil = None
             tel_kwargs = {k: v for k, v in all_tel.items() if k != "filter"}
-            TEL = Telescope_EIS(**tel_kwargs) if tel_kwargs else Telescope_EIS()
-            DET = Detector_EIS(**all_det) if all_det else Detector_EIS()
+            tel = Telescope_EIS(**tel_kwargs) if tel_kwargs else Telescope_EIS()
+            det = Detector_EIS(**all_det) if all_det else Detector_EIS()
+
+        enable = all_sim.get("enable_pinholes", False)
+        sim = Simulation(
+            expos=all_sim["expos"],
+            n_iter=n_iter,
+            slit_width=all_sim["slit_width"],
+            ncpu=ncpu,
+            instrument=instrument,
+            vis_sl=all_sim.get("vis_sl", 0.0 * u.photon / (u.s * u.cm**2)),
+            psf=all_sim.get("psf", False),
+            psf_boundary=all_sim.get("psf_boundary", "replicate"),
+            spectral_psf=all_sim.get("spectral_psf", "quadrature"),
+            noise=all_sim.get("noise", True),
+            enable_pinholes=enable,
+            pinhole_sizes=pinhole_sizes if enable else [],
+            pinhole_positions=pinhole_positions if enable else [],
+            pinhole_positions_spectral=pinhole_positions_spectral if enable else [],
+        )
+        # The optics' spectral FWHM comes from the telescope and the detector
+        # together, and was worked out only once the combination's scene was
+        # laid onto the detector: every run needs it when psf_params is for a
+        # given slit, and the PSF convolved with the slit always does.
+        if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
+            spectral_optics_fwhm(tel, det)
+        return combo, offchip, repeat, fil, tel, det, sim
+
+    # Every combination is checked before the first is run, so that a value
+    # that cannot be run does not end the sweep part-way, and lose the
+    # combinations run before it, which are saved only at the end.
+    for combo_values in _combinations():
+        _, _, _, _, tel, _, _ = _combination(combo_values)
+    # The throughput tables are read now too, where one that was missing or
+    # had a slip in it was found only when the first photons were counted.
+    # They cannot be swept, so every combination has the last one's.
+    if instrument == "SWC":
+        for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
+                      tel.filter.oxide_table, tel.filter.c_table):
+            _load_throughput_table(table)
+
+    def _check_offchip_bins(fov_along_slit):
+        """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""
+        for combo_values in _combinations():
+            _, n_bin, _, _, _, det, _ = _combination(combo_values)
+            n_slit = _whole_pixels(fov_along_slit, det.plate_scale_angle)
+            if n_bin > n_slit:
+                raise ValueError(
+                    f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
+                    f"slit, so there would be nothing left; bin at most {n_slit}.")
+
+    # The off-chip binning is checked against the scene once it is first
+    # rebinned; a uniform intensity is made with the rows it bins.
+    offchip_checked = uniform_intensity_mode
+
+    for combination_idx, combo_values in enumerate(_combinations(), start=1):
+        (combo, offchip_bin_slit, raster_repeat, filter_obj, TEL, DET,
+         SIM) = _combination(combo_values)
+
+        # Extract core simulation params
+        slit_width = SIM.slit_width
+        expos = SIM.expos
+        vis_sl = SIM.vis_sl
+        psf = SIM.psf
+        psf_boundary = SIM.psf_boundary
+        spectral_psf = SIM.spectral_psf
+        noise = SIM.noise
+        enable_pinholes = SIM.enable_pinholes
 
         # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
         # so cube_reb_cache is keyed by the sampling alone to avoid redundant rebin calls
@@ -1146,6 +1231,12 @@ def main() -> None:
                         meta=raster_meta if synthesis_series_mode else file_meta)
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
+                if not offchip_checked:
+                    # The scene is as long along the slit for every
+                    # combination, so the rows each one's plate scale gives
+                    # it are known now, before any combination has run.
+                    _check_offchip_bins(cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
+                    offchip_checked = True
 
         cube_reb = cube_reb_cache[cube_reb_key]
 
@@ -1214,25 +1305,6 @@ def main() -> None:
                                              summed=summed_input, meta=file_meta, tel=TEL)
                 observed_cache[psf_key] = observed
             cube_obs = observed_cache[psf_key]
-
-        # Build Simulation object
-        SIM = Simulation(
-            expos=expos,
-            n_iter=n_iter,
-            slit_width=slit_width,
-            ncpu=ncpu,
-            instrument=instrument,
-            vis_sl=vis_sl,
-            psf=psf,
-            psf_boundary=psf_boundary,
-            spectral_psf=spectral_psf,
-            noise=noise,
-            enable_pinholes=enable_pinholes,
-            pinhole_sizes=pinhole_sizes if enable_pinholes else [],
-            pinhole_positions=pinhole_positions if enable_pinholes else [],
-            pinhole_positions_spectral=(pinhole_positions_spectral
-                                        if enable_pinholes else []),
-        )
 
         # Progress output
         print(f"\n--- Combination {combination_idx}/{total_combinations} ---")

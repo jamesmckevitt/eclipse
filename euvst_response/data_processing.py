@@ -399,8 +399,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     # In the units wcslib keeps them in, metres and degrees, as a
     # reprojection's WCS has always come back.
     wcs_tgt.wcs.set()
+    # The scene's extent along the slit, from which the rows it covers at
+    # any plate scale follow, as main checks off-chip binning against.
     return NDCube(np.ascontiguousarray(np.moveaxis(data, 0, 1)), wcs=wcs_tgt,
-                  unit=new_cube_spec.unit, meta=new_cube_spec.meta)
+                  unit=new_cube_spec.unit,
+                  meta={**(new_cube_spec.meta or {}), "fov_along_slit": fov_y.to(u.arcsec)})
 
 
 def _through_the_optics(tel, sim) -> bool:
