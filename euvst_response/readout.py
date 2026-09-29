@@ -534,9 +534,12 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
     Returns
     -------
     np.ndarray
-        Photons per pixel, shaped ``(n_rows + parallel_overscan_rows, n_columns)``.
-        Feed this to :func:`euvst_response.frame.detect`, which takes a frame's
-        photons to electrons with the dark current time of each row.
+        The mean photons per pixel, shaped
+        ``(n_rows + parallel_overscan_rows, n_columns)``. For a frame, draw the
+        photons recorded from it, as a Poisson draw of each pixel, and give
+        them to :func:`euvst_response.frame.detect` with each row's wavelength
+        and :func:`dark_current_time`, which takes them to electrons; or give
+        it these means with ``noise=False`` for the frame's mean.
     """
     rate = np.asarray(rate, dtype=float)
     signal = smear_photons(rate, sequence)
