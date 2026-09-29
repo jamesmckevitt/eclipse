@@ -10,8 +10,6 @@ import astropy.units as u
 import astropy.constants as const
 from tqdm import tqdm
 import psutil
-import dask.array as da
-from dask.diagnostics import ProgressBar
 from mendeleev import element
 import dill
 from ndcube import NDCube
@@ -984,39 +982,31 @@ def compute_dem(
     if integration_axis not in axis_map:
         raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
 
-    integration_axis_idx = axis_map[integration_axis]
-
-    # Output shape depends on which axis we integrate over
-    if integration_axis == "x":
-        output_shape = (logT_cube.shape[0], logT_cube.shape[1], nT)  # (nz, ny, nT)
-    elif integration_axis == "y":
-        output_shape = (logT_cube.shape[0], logT_cube.shape[2], nT)  # (nz, nx, nT)
-    else:  # "z"
-        output_shape = (logT_cube.shape[1], logT_cube.shape[2], nT)  # (ny, nx, nT)
-    
     dlogT, logT_edges = _temperature_bins(logT_grid)
 
     ne = 10.0 ** logN_cube.astype(np.float64)
     dh = along_line_of_sight(voxel_dh_cm, integration_axis)
-    w2 = ne**2 * dh  # weights for EM
-    w3 = ne**3 * dh  # weights for EM*n_e
+    w2 = np.broadcast_to(ne**2 * dh, logT_cube.shape)  # weights for EM
+    w3 = np.broadcast_to(ne**3 * dh, logT_cube.shape)  # weights for EM*n_e
 
-    dem = np.zeros(output_shape)
-    avg_ne = np.zeros_like(dem)
+    # Each cell is shared between the two temperature bins about it, as in
+    # build_em_tv, so that the DEM is the emission measure it spreads over
+    # velocity, and each bin's density that of the plasma it holds.
+    lower, share, inside = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
+    pixel, (n_rows, n_cols) = _image_pixels(logT_cube.shape, integration_axis)
+    em = np.zeros(n_rows * n_cols * nT)   # cm^-5
+    em_n = np.zeros_like(em)              # cm^-5 * n_e
+    for step, of_T in ((0, 1.0 - share), (1, share)):
+        in_bin = (pixel * nT + np.minimum(lower + step, nT - 1)).ravel()
+        of_T = np.where(inside, of_T, 0.0)
+        np.add.at(em, in_bin, (w2 * of_T).ravel())
+        np.add.at(em_n, in_bin, (w3 * of_T).ravel())
+    em, em_n = em.reshape(n_rows, n_cols, nT), em_n.reshape(n_rows, n_cols, nT)
 
-    for idx in tqdm(range(nT), desc="DEM bins", unit="bin", leave=False):
-        lo, hi = logT_edges[idx], logT_edges[idx + 1]
-        mask = (logT_cube >= lo) & (logT_cube < hi)  # (nz,ny,nx)
-
-        # Integrate along the specified axis
-        em = np.sum(w2 * mask, axis=integration_axis_idx)    # cm^-5
-        em_n = np.sum(w3 * mask, axis=integration_axis_idx)  # cm^-5 * n_e
-
-        dem[..., idx] = em / dlogT
-        # Zero where no plasma is at this temperature, rather than whatever
-        # memory the division left there, which reached the saved G diagnostic.
-        avg_ne[..., idx] = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
-
+    dem = em / dlogT
+    # Zero where no plasma is at a temperature, rather than whatever memory
+    # the division left there, which reached the saved G diagnostic.
+    avg_ne = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
     return dem, avg_ne
 
 
@@ -1029,6 +1019,45 @@ def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
         [logT_grid[-1] + dlogT/2]
     ])
     return dlogT, logT_edges
+
+
+def _neighbouring_bins(values: np.ndarray, centres: np.ndarray,
+                       edges: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Each value's shares of the two bins about it: the bin whose centre is at
+    or below it, the share the next bin up takes, and whether it is within
+    the bins' edges at all.
+
+    The share is in proportion to how far the value is from the one centre
+    towards the next, so that the two centres, weighted by their shares,
+    average to the value itself: a flow of 2.4 km/s on a 5 km/s grid is 0.52
+    of the 0 km/s bin and 0.48 of the 5 km/s one, where it went wholly to the
+    0 km/s bin. A value between the first or last centre and that bin's outer
+    edge is that bin's alone, as before, so the grid reaches as far as it
+    did; one beyond the edges is no bin's, and its share is zero.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    inside = (values >= edges[0]) & (values < edges[-1])
+    n = centres.size
+    lower = np.clip(np.searchsorted(centres, values, side="right") - 1, 0, max(n - 2, 0))
+    if n > 1:
+        share = np.clip((values - centres[lower]) / (centres[lower + 1] - centres[lower]),
+                        0.0, 1.0)
+    else:
+        share = np.zeros(values.shape)
+    return lower, np.where(inside, share, 0.0), inside
+
+
+def _image_pixels(shape: Tuple[int, int, int], integration_axis: str) -> Tuple[np.ndarray, Tuple[int, int]]:
+    """
+    For a (z, y, x) cube seen along *integration_axis*, the image pixel each
+    cell is seen in, as row times the number of columns plus column, and the
+    image's (rows, columns), in the order compute_dem and build_em_tv give.
+    """
+    z, y, x = np.indices(shape, sparse=True)
+    rows, columns = {"x": (z, y), "y": (z, x), "z": (y, x)}[integration_axis]
+    n_rows, n_columns = rows.size, columns.size
+    return np.broadcast_to(rows * n_columns + columns, shape), (n_rows, n_columns)
 
 
 def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
@@ -1220,6 +1249,13 @@ def build_em_tv(
     """
     Construct the 4-D emission-measure cube EM(row, column, T, v) [cm^-5].
 
+    Each cell's emission measure is shared between the two temperature bins
+    and the two velocity bins about it, in proportion to how near it is to
+    each (:func:`_neighbouring_bins`), so that its mean velocity over the bins
+    is the cell's and its contribution function is interpolated in
+    temperature. A value beyond the outermost bin centre, within that bin,
+    goes to it alone.
+
     Parameters
     ----------
     logT_cube : np.ndarray
@@ -1251,29 +1287,29 @@ def build_em_tv(
     if integration_axis not in axis_map:
         raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
 
-    integration_axis_idx = axis_map[integration_axis]
-    
-    # Create temperature bin edges from centers
-    dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
-    logT_edges = np.concatenate([
-        [logT_grid[0] - dlogT/2],
-        logT_grid[:-1] + dlogT/2,
-        [logT_grid[-1] + dlogT/2]
-    ])
-    
-    # Compute velocity bin edges from centers
-    v_edges = velocity_centers_to_edges(vel_grid.value)
-    
-    mask_T = (logT_cube[..., None] >= logT_edges[:-1]) & \
-             (logT_cube[..., None] <  logT_edges[1:])
-    mask_V = (vel_cube[..., None] >= v_edges[:-1]) & \
-             (vel_cube[..., None] <  v_edges[1:])
+    _, logT_edges = _temperature_bins(logT_grid)
+    v_centres = (vel_grid.to_value(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
+                 else np.asarray(vel_grid, dtype=float))
+    v_edges = velocity_centers_to_edges(v_centres)
+
+    # Each cell's emission measure is shared between the two temperature bins
+    # and the two velocity bins about it, in proportion to how near it is to
+    # each: put wholly in the nearest, a uniform 2.4 km/s flow on the default
+    # 5 km/s grid was synthesised at rest and a 2.6 km/s one at 5 km/s, and a
+    # cell's contribution function was that of the nearest temperature bin.
+    # Shared, its mean velocity over the bins is the cell's, its line's width
+    # grows by the spread of the two bins' velocities, at most a quarter of a
+    # bin squared in variance, and the contribution function is interpolated
+    # between the two temperatures. Past the outermost centres, within the
+    # outermost bins, a cell goes to that bin alone, as before.
+    lower_T, share_T, in_T = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
+    lower_v, share_v, in_v = _neighbouring_bins(vel_cube, v_centres, v_edges)
 
     # Plasma faster than the grid reaches emits beyond the synthesised
     # wavelengths, so its emission is not in the spectra, though the DEM keeps
     # it. Said, since the default grid misses the fastest flows of a flare.
-    in_temperature = ne_sq_dh * mask_T.any(axis=-1)
-    beyond = in_temperature[~mask_V.any(axis=-1)].sum()
+    in_temperature = ne_sq_dh * in_T
+    beyond = in_temperature[~in_v].sum()
     if beyond > 0:
         warnings.warn(
             f"{100 * beyond / in_temperature.sum():.3g} per cent of the emission measure is "
@@ -1282,24 +1318,17 @@ def build_em_tv(
             f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
             f"it.", UserWarning, stacklevel=2)
 
-    # Build the 4-D emission-measure cube EM(spatial,T,v) by summing over the integration axis
-    ne_sq_dh_d = da.from_array(ne_sq_dh, chunks='auto')
-    mask_T_d   = da.from_array(mask_T,   chunks='auto')
-    mask_V_d   = da.from_array(mask_V,   chunks='auto')
-    
-    # Sum along the specified integration axis. The cube subscripts are
-    # i=z, j=y, k=x, so the surviving pair is always (row, column).
-    if integration_axis == "x":
-        em_tv_d = da.einsum("ijk,ijkl,ijkm->ijlm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
-    elif integration_axis == "y":
-        em_tv_d = da.einsum("ijk,ijkl,ijkm->iklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
-    else:  # "z"
-        em_tv_d = da.einsum("ijk,ijkl,ijkm->jklm", ne_sq_dh_d, mask_T_d, mask_V_d, optimize=True)
-        
-    with ProgressBar():
-        em_tv = em_tv_d.compute()
-
-    return em_tv
+    # Summed along the line of sight into each image pixel's bins.
+    nT, nv = len(logT_grid), len(v_centres)
+    pixel, (n_rows, n_cols) = _image_pixels(logT_cube.shape, integration_axis)
+    em = np.where(in_T & in_v, ne_sq_dh, 0.0)
+    em_tv = np.zeros(n_rows * n_cols * nT * nv)
+    for step_T, of_T in ((0, 1.0 - share_T), (1, share_T)):
+        in_bin_T = pixel * nT + np.minimum(lower_T + step_T, nT - 1)
+        for step_v, of_v in ((0, 1.0 - share_v), (1, share_v)):
+            in_bin = in_bin_T * nv + np.minimum(lower_v + step_v, nv - 1)
+            np.add.at(em_tv, in_bin.ravel(), (em * of_T * of_v).ravel())
+    return em_tv.reshape(n_rows, n_cols, nT, nv)
 
 
 def synthesise_spectra(

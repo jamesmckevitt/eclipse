@@ -258,7 +258,7 @@ synthesise-spectra --help
 
 **Velocity Grid:**
 
-- `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`)
+- `--vel-res`: Velocity resolution with units (default: `"5.0 km/s"`). Each cell's emission is shared between the two velocity bins about its flow, and the two temperature bins about its temperature, so its mean velocity over the bins is its flow's at any resolution. A flow beyond the outermost bin centre, within half a bin of it, goes to that bin.
 - `--vel-lim`: Half-range of the velocity grid, applied as +/- this value, with units (default: `"300.0 km/s"`). Plasma faster than this limit is left out of the spectra, with a warning saying how much of the emission measure it is.
 
 **Integration and Viewing:**
