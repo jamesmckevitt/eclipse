@@ -337,7 +337,24 @@ def _fractions(values: list, name: str) -> list:
 
 @dataclass
 class AluminiumFilter:
-    """Multi-layer EUV filter (Al + Al2O3 + C) in front of SWC detector."""
+    """
+    EUVST-SW's filter: layers of aluminium, aluminium oxide and carbon on a mesh.
+
+    Each layer's transmission comes from a table for a layer ``table_thickness``
+    thick, raised to the power of its own thickness over that one.
+
+    Parameters
+    ----------
+    al_thickness, oxide_thickness, c_thickness : u.Quantity
+        The thickness of each layer. Default 1485, 95 and 0 angstrom.
+    mesh_throughput : float
+        The fraction of light the supporting mesh lets through. Default 0.8.
+    al_table, oxide_table, c_table : path
+        Tables of each layer's transmission, two columns: the wavelength in nm
+        and the transmission. Default the packaged tables.
+    table_thickness : u.Quantity
+        The thickness the tables are for. Default 1000 angstrom.
+    """
     al_thickness: u.Quantity = 1485 * u.angstrom
     oxide_thickness: u.Quantity = 95 * u.angstrom
     c_thickness: u.Quantity = 0 * u.angstrom
@@ -354,7 +371,20 @@ class AluminiumFilter:
         _check_tables(self, ("al_table", "oxide_table", "c_table"), "filter")
 
     def total_throughput(self, wl0: u.Quantity) -> u.Quantity:
-        """Calculate throughput at a given central wavelength (wl0, astropy Quantity), or at each of an array of them, as a dimensionless Quantity."""
+        """
+        The filter's EUV transmission, mesh included.
+
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            A wavelength, or an array of them.
+
+        Returns
+        -------
+        u.Quantity
+            The transmission, dimensionless: one value, or one per wavelength.
+            It is NaN outside the tables' wavelengths.
+        """
         wl_nm = wl0.to_value(u.nm)
         wl_al, tr_al = _load_throughput_table(self.al_table)
         wl_ox, tr_ox = _load_throughput_table(self.oxide_table)
@@ -365,7 +395,11 @@ class AluminiumFilter:
         return t_al * t_ox * t_c * self.mesh_throughput
 
     def visible_light_throughput(self) -> float:
-        """Calculate visible light throughput reduction due to aluminum filter (For every 170 Angstrom of aluminum, throughput is reduced by factor of 10)."""
+        """
+        The filter's transmission for visible light, mesh included.
+
+        It falls by a factor of 10 for every 170 angstrom of aluminium.
+        """
         thickness_aa = self.al_thickness.to(u.angstrom).value
         layers = thickness_aa / 170.0
         return 10.0 ** (-layers) * self.mesh_throughput
@@ -376,7 +410,42 @@ class AluminiumFilter:
 # -----------------------------------------------------------------------------
 @dataclass
 class Detector_SWC:
-    """Solar-C/EUVST SWC detector configuration."""
+    """
+    EUVST-SW's detector.
+
+    The dark current is worked out from the CCD's temperature when the
+    detector is made, and is held as ``dark_current``.
+
+    Parameters
+    ----------
+    ccd_temperature : u.Quantity
+        The CCD's temperature. Default -60 Celsius.
+    qe_vis, qe_euv : float
+        The quantum efficiency for visible stray light and for EUV. Default
+        1.0 and 0.76.
+    read_noise_rms : u.Quantity
+        The read noise. Default 10 electron per pixel.
+    gain_e_per_dn : u.Quantity
+        Electrons per DN. Default 2.78.
+    max_dn : u.Quantity
+        The digitiser's maximum, where DN are clipped. Default 65535 DN per
+        pixel.
+    full_well : u.Quantity
+        The CCD's full well, for comparison only: nothing is clipped at it.
+        Default 150000 electron per pixel. Keyword only.
+    pix_size : u.Quantity
+        The size of a pixel. Default 13.5 um.
+    wvl_res : u.Quantity
+        The wavelength step from one pixel to the next. Default 16.9 mA.
+    plate_scale_angle : u.Quantity
+        The angle on the sky of one pixel along the slit. Default 0.159
+        arcsec.
+    material : str
+        The detector's material. Only ``"silicon"`` is modelled.
+    filter_distance : u.Quantity
+        The distance from the filter to the detector, for the pinholes'
+        diffraction. Default 250 mm.
+    """
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
     qe_euv: float = 0.76
@@ -406,24 +475,48 @@ class Detector_SWC:
 
     @property
     def si_fano(self) -> float:
-        """Get Fano factor for the detector material."""
+        """The Fano factor of the detector's material, which sets the spread in electrons per photon."""
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
     @staticmethod
     def calculate_dark_current(temp: u.Quantity,
                                dark_current_293k: u.Quantity | None = None) -> u.Quantity:
-        """Calculate dark current for SWC (NIMO) CCD, from its rate at 293 K, the default if not given."""
+        """
+        The dark current of EUVST-SW's CCD at a temperature.
+
+        Parameters
+        ----------
+        temp : u.Quantity
+            The CCD's temperature. Below 198 K the dark current is taken as it
+            is at 198 K, and above 300 K the temperature is refused.
+        dark_current_293k : u.Quantity, optional
+            The dark current at 293 K. Default 20000 electron per pixel per
+            second.
+
+        Returns
+        -------
+        u.Quantity
+            The dark current, in electron per pixel per second.
+        """
         rate = Detector_SWC._dark_current_293k if dark_current_293k is None else dark_current_293k
         return calculate_dark_current(temp, rate, ccd_type="NIMO")
 
     @property
     def plate_scale_length(self) -> u.Quantity:
+        """The length on the Sun, seen from 1 AU, of one pixel along the slit."""
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
 
 @dataclass
 class Detector_EIS:
-    """Hinode/EIS detector configuration for comparison."""
+    """
+    Hinode/EIS's detector.
+
+    It takes the same settings as `Detector_SWC`, except ``full_well`` and
+    ``filter_distance``, with EIS's values: a quantum efficiency of 0.64 for
+    EUV and 0.65 for visible light, a read noise of 5 electron per pixel, 6.3
+    electron per DN, 22.3 mA per pixel and 1 arcsec per pixel along the slit.
+    """
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_euv: float = 0.64  # EIS SW Note 2
     qe_vis: float = 0.65  # MSSL engineering test report
@@ -439,7 +532,7 @@ class Detector_EIS:
 
     @property
     def si_fano(self) -> float:
-        """Get Fano factor for the detector material."""
+        """The Fano factor of the detector's material, which sets the spread in electrons per photon."""
         return DETECTOR_MATERIALS[self.material]["fano_factor"]
 
     def __post_init__(self):
@@ -449,19 +542,63 @@ class Detector_EIS:
 
     @property
     def plate_scale_length(self) -> u.Quantity:
+        """The length on the Sun, seen from 1 AU, of one pixel along the slit."""
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
     @staticmethod
     def calculate_dark_current(temp: u.Quantity,
                                dark_current_293k: u.Quantity | None = None) -> u.Quantity:
-        """Calculate dark current for EIS (AIMO) CCD, from its rate at 293 K, the default if not given."""
+        """
+        The dark current of EIS's CCD at a temperature.
+
+        Parameters
+        ----------
+        temp : u.Quantity
+            The CCD's temperature. Below 198 K the dark current is taken as it
+            is at 198 K, and above 300 K the temperature is refused.
+        dark_current_293k : u.Quantity, optional
+            The dark current at 293 K. Default 250 electron per pixel per
+            second.
+
+        Returns
+        -------
+        u.Quantity
+            The dark current, in electron per pixel per second.
+        """
         rate = Detector_EIS._dark_current_293k if dark_current_293k is None else dark_current_293k
         return calculate_dark_current(temp, rate, ccd_type="AIMO")
 
 
 @dataclass
 class Telescope_EUVST:
-    """Solar-C/EUVST telescope configuration."""
+    """
+    EUVST's telescope, with EUVST-SW's grating and filter.
+
+    Parameters
+    ----------
+    D_ap : u.Quantity
+        The aperture's diameter. Half of its area feeds the SW channel.
+        Default 0.28 m.
+    microroughness_sigma : u.Quantity
+        The RMS roughness of the primary mirror. Default 0.3 nm.
+    filter : AluminiumFilter
+        The filter. Default `AluminiumFilter()`.
+    psf_type : str
+        The shape of the PSF. Only ``"gaussian"`` is modelled.
+    psf_params : list of u.Quantity
+        The PSF's FWHMs in pixels, along the slit and in wavelength. Default
+        2.66 and 2.54 pixels.
+    psf_slit_width : u.Quantity or None
+        The slit the FWHM in wavelength was measured with. The FWHM for other
+        slits is worked out from it. Default 0.2 arcsec.
+    psf_across_slit : u.Quantity or None
+        The FWHM of the telescope's blur across the slit, which brings in
+        light from either side of it. Default None, for no blur. Keyword only.
+    pm_table, grating_table : path
+        Tables of the primary mirror's reflectance and the grating's
+        efficiency, two columns: the wavelength in nm and the value. Default
+        the packaged tables.
+    """
     D_ap: u.Quantity = 0.28 * u.m
     microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
@@ -493,22 +630,23 @@ class Telescope_EUVST:
 
     @property
     def collecting_area(self) -> u.Quantity:
+        """The area of the aperture that feeds the SW channel: half of it."""
         return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
 
     def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
-        Calculate wavelength-dependent primary mirror efficiency.
+        The primary mirror's reflectance, from its table, without its roughness.
 
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength, or an array of them.
+            A wavelength, or an array of them.
 
         Returns
         -------
         float or np.ndarray
-            Primary mirror efficiency (dimensionless), one per wavelength
-            for an array.
+            The reflectance: one value, or one per wavelength. It is NaN
+            outside the table's wavelengths.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_pm, eff_pm = _load_throughput_table(self.pm_table)
@@ -516,18 +654,18 @@ class Telescope_EUVST:
 
     def grating_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
-        Calculate wavelength-dependent grating efficiency.
+        The grating's efficiency, from its table.
 
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength, or an array of them.
+            A wavelength, or an array of them.
 
         Returns
         -------
         float or np.ndarray
-            Grating efficiency (dimensionless), one per wavelength for an
-            array.
+            The efficiency: one value, or one per wavelength. It is NaN outside
+            the table's wavelengths.
         """
         wl_nm = wl0.to_value(u.nm)
         wl_grat, eff_grat = _load_throughput_table(self.grating_table)
@@ -535,24 +673,20 @@ class Telescope_EUVST:
 
     def microroughness_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
-        Calculate the efficiency reduction due to primary mirror microroughness.
-        
-        Uses the Debye-Waller factor for specular reflectance:
-        
-            efficiency = exp(-(4*pi*sigma/lambda)^2)
-        
-        where sigma is the RMS microroughness and lambda is the wavelength.
-        
+        The fraction of light the primary mirror's roughness leaves in the image.
+
+        This is ``exp(-(4 pi sigma / lambda)**2)``, for an RMS roughness sigma,
+        ``microroughness_sigma``, at a wavelength lambda.
+
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength, or an array of them.
+            A wavelength, or an array of them.
 
         Returns
         -------
         float or np.ndarray
-            Microroughness efficiency factor (dimensionless), one per
-            wavelength for an array.
+            The fraction: one value, or one per wavelength.
         """
         # Convert both wavelength and sigma to the same units (nm for convenience)
         wl_nm = wl0.to(u.nm)
@@ -566,18 +700,17 @@ class Telescope_EUVST:
 
     def throughput(self, wl0: u.Quantity) -> u.Quantity:
         """
-        Calculate total telescope throughput including wavelength-dependent efficiencies.
+        The throughput of the mirror, with its roughness, the grating and the filter.
 
         Parameters
         ----------
         wl0 : u.Quantity
-            Wavelength, or an array of them.
+            A wavelength, or an array of them.
 
         Returns
         -------
         u.Quantity
-            Total telescope throughput, dimensionless: one value, or one per
-            wavelength for an array.
+            The throughput, dimensionless: one value, or one per wavelength.
         """
         # Get wavelength-dependent efficiencies
         pm_eff_wl = self.primary_mirror_efficiency(wl0)
@@ -590,41 +723,55 @@ class Telescope_EUVST:
         return pm_eff_with_roughness * grat_eff_wl * self.filter.total_throughput(wl0)
 
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
+        """
+        The collecting area times the throughput: the effective area before the detector.
+
+        Multiplied by the detector's quantum efficiency, ``qe_euv``, this is
+        the instrument's effective area.
+
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            A wavelength, or an array of them.
+
+        Returns
+        -------
+        u.Quantity
+            The area: one value, or one per wavelength.
+        """
         return self.collecting_area * self.throughput(wl0)
 
 
 @dataclass
 class Telescope_EIS:
     """
-    Hinode/EIS telescope configuration for comparison.
+    Hinode/EIS's telescope.
 
-    The effective area is read from the instrument's calibration tables, so it
-    varies with wavelength and, for the in-flight calibrations, with the
-    observation date. Both matter: across the short-wavelength channel alone
-    the area spans a factor of 25, and by 2012 the long-wavelength channel had
-    lost most of its sensitivity. See ``eis_calibration`` for the four
-    supported calibrations and their sources.
+    Its effective area comes from EIS's own calibration tables, so it varies
+    with wavelength and, for the in-flight calibrations, with the date of the
+    observation.
 
     Parameters
     ----------
+    psf_type : str
+        The shape of the PSF. Only ``"gaussian"`` is modelled.
+    psf_params : list of u.Quantity
+        The PSF's FWHMs in pixels, along the slit and in wavelength. Default 3
+        and 3 pixels.
+    psf_slit_width : u.Quantity or None
+        The slit the FWHM in wavelength was measured with. Default None, which
+        gives every slit the same FWHM.
+    psf_across_slit : u.Quantity or None
+        The FWHM of the telescope's blur across the slit. Default None, for no
+        blur. Keyword only.
     calibration : str
-        ``'ground'`` (default), ``'dz2013'``, ``'warren2014'`` or ``'dz2025'``.
-        The default is the pre-flight measurement, which has no epoch and so
-        is well defined without a date. ``'dz2025'`` is the current
-        recommendation for modelling a real observation.
+        ``"ground"`` (default), ``"dz2013"``, ``"warren2014"`` or ``"dz2025"``.
+        ``"ground"`` is the pre-flight calibration, which needs no date.
+        ``"dz2025"`` is the one to use for a real observation.
     date : str, optional
-        Observation date, e.g. ``'2012-06-03'``. Required by every calibration
-        except ``'ground'``, which ignores it. Also accepts a ``datetime`` or
-        an ``astropy.time.Time``, since YAML parses an unquoted date into a
-        ``datetime.date``.
-    Notes
-    -----
-    The tabulated effective areas include the CCD quantum efficiency the EIS
-    calibration is quoted against, ``eis_calibration.QE_IN_TABLES``, and
-    ECLIPSE applies a detector quantum efficiency separately as a binomial
-    draw in ``to_electrons``. ``ea_and_throughput`` therefore divides the
-    table value back out, so that the QE actually applied is the configurable
-    ``Detector_EIS.qe_euv`` and it is counted exactly once.
+        The date of the observation, such as ``"2012-06-03"``, which every
+        calibration but ``"ground"`` needs. A ``datetime`` or an
+        ``astropy.time.Time`` also works.
 
     Examples
     --------
@@ -676,12 +823,20 @@ class Telescope_EIS:
 
     def effective_area(self, wl0: u.Quantity) -> u.Quantity:
         """
-        Effective area at one or more wavelengths, including the detector QE.
+        EIS's effective area, including its detector's quantum efficiency.
 
-        This is the quantity the EIS calibration tables and the EIS
-        radiometric formula are written in terms of. Use it to compare against
-        published effective-area curves; use ``ea_and_throughput`` to feed
-        ECLIPSE's radiometric chain.
+        This is the effective area as EIS's calibrations publish it. It
+        refuses wavelengths outside EIS's two bands.
+
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            A wavelength, or an array of them.
+
+        Returns
+        -------
+        u.Quantity
+            The area: one value, or one per wavelength.
         """
         wl_aa = u.Quantity(wl0).to_value(u.AA)
         area = eis_calibration.effective_area(
@@ -701,6 +856,22 @@ class Telescope_EIS:
         return area[0] if np.ndim(wl_aa) == 0 else area
 
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
+        """
+        EIS's effective area without its detector's quantum efficiency.
+
+        ECLIPSE applies the quantum efficiency, ``Detector_EIS.qe_euv``, in
+        the detector, so this is the area the rest of the simulation uses.
+
+        Parameters
+        ----------
+        wl0 : u.Quantity
+            A wavelength, or an array of them.
+
+        Returns
+        -------
+        u.Quantity
+            The area: one value, or one per wavelength.
+        """
         # The tabulated areas include the QE the EIS calibration is quoted
         # against, which ECLIPSE applies separately, so it is divided back out
         # here. This is deliberately the table constant and not a configurable
@@ -715,9 +886,46 @@ class Telescope_EIS:
 @dataclass
 class Simulation:
     """
-    Simulation configuration and parameters.
-    
-    The expos parameter is a single exposure time for this simulation.
+    The settings of one simulation: its exposure, slit, PSF and noise.
+
+    Unlike the configuration file, each setting takes one value here.
+
+    Parameters
+    ----------
+    expos : u.Quantity
+        The exposure time. Default 1 s.
+    n_iter : int
+        How many Monte Carlo iterations to run. Default 10.
+    slit_width : u.Quantity
+        The slit: 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS.
+        Default 0.2 arcsec.
+    ncpu : int
+        How many CPU cores to use; -1 for all of them. Default -1.
+    instrument : str
+        ``"SWC"`` (default) or ``"EIS"``.
+    vis_sl : u.Quantity
+        Visible stray light, in photons per second per cm2: before the filter
+        for SWC, and at the CCD for EIS. Default 0.
+    psf : bool
+        Whether to blur the spectra with the PSF. Default False.
+    psf_boundary : str
+        What the PSF brings in from beyond the edges of the atmosphere:
+        ``"replicate"`` (default) or ``"zero"``.
+    spectral_psf : str
+        How the slit is added to the optics' blur: ``"quadrature"`` (default)
+        or ``"convolution"``.
+    noise : bool
+        With False, every random draw in the detector is replaced by its mean.
+        Default True.
+    enable_pinholes : bool
+        Whether to model pinholes in the filter (SWC only). Default False.
+    pinhole_sizes : list of u.Quantity
+        The pinholes' diameters.
+    pinhole_positions : list of float
+        Where each pinhole is along the slit, as a fraction from 0 to 1.
+    pinhole_positions_spectral : list of float
+        Where each pinhole is along the spectral axis, as a fraction from 0 to
+        1. Default empty, for the middle.
     """
     expos: u.Quantity = 1.0 * u.s  # Single exposure time
     n_iter: int = 10

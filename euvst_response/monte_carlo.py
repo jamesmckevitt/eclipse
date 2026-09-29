@@ -52,42 +52,44 @@ def simulate_once(
     dark_current_inverse_transform: bool = False,
 ) -> Tuple[NDCube, ...]:
     """
-    Run a single Monte Carlo simulation of the instrument response.
-    
+    Simulate one observation of a cube of spectra, with its noise, without fitting it.
+
+    The spectra go through each step of the instrument in turn: the
+    exposure, the telescope, the pixels, the PSF, the pinholes, the arrival
+    of photons, the detector, the stray light and the digitiser.
+
     Parameters
     ----------
     I_cube : NDCube
-        Input intensity cube
+        The spectral radiance on the detector's pixels, per second, such as
+        `create_uniform_intensity_cube` makes, with the line's rest
+        wavelength as ``meta["rest_wav"]``.
     t_exp : u.Quantity
-        Exposure time
+        The exposure time.
     det : Detector_SWC or Detector_EIS
-        Detector configuration
+        The detector.
     tel : Telescope_EUVST or Telescope_EIS
-        Telescope configuration
+        The telescope.
     sim : Simulation
-        Simulation configuration
+        The simulation's settings.
     uniform_mode : bool, optional
-        If True the input cube is uniform along the slit, so the PSF is
-        convolved in the spectral direction only.  See
-        :func:`~euvst_response.radiometric.apply_focusing_optics_psf`.
-        Default False.
+        The cube is the same all along the slit, so the PSF blurs it in
+        wavelength only. Default False.
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform sampling for photon shot noise and the quantum
-        efficiency, and one Fano draw for every pixel, so that common random
-        numbers survive a change in photon flux, in every iteration.
-        Default False.
+        Draw the photons by inverse-transform sampling, for common random
+        numbers between runs that differ in photon flux. Default False.
     dark_current_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for dark-current shot noise, so
-        that common random numbers survive a change in dark-current level.
-        Default False.
-        
+        Draw the dark current by inverse-transform sampling, for common random
+        numbers between runs that differ in dark current. Default False.
+
     Returns
     -------
     tuple of NDCube
-        Signal cubes at each step of the radiometric pipeline:
-        (intensity_exp, photons_total, photons_throughput, photons_pixels, 
-         photons_focused, photon_arrivals, electrons, electrons_stray, 
-         electrons_pinholes, dn)
+        The cube after each step: the radiance over the exposure, the photons,
+        the photons collected by the telescope, the photons per pixel, those
+        after the PSF, the photons that arrive, the electrons, the electrons
+        with the stray light, those with the pinholes' visible light, and the
+        DN.
     """
     # Apply exposure time
     intensity_exp = apply_exposure(I_cube, t_exp)
@@ -178,58 +180,63 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 photon_shot_inverse_transform: bool = False,
                 dark_current_inverse_transform: bool = False) -> Tuple[NDCube, dict | None, NDCube, dict | None]:
     """
-    Run Monte Carlo simulations and fit results.
-    
+    Simulate an observation many times, each with new noise, and fit every one.
+
+    This is what `eclipse` runs for each combination of settings. Under MPI
+    the iterations are shared between the ranks, and the results collected
+    on the first.
+
     Parameters
     ----------
     I_cube : NDCube
-        Input intensity cube
+        The spectral radiance on the detector's pixels, per second, as for
+        `simulate_once`.
     t_exp : u.Quantity
-        Exposure time
+        The exposure time.
     det : Detector_SWC or Detector_EIS
-        Detector configuration
+        The detector.
     tel : Telescope_EUVST or Telescope_EIS
-        Telescope configuration
+        The telescope.
     sim : Simulation
-        Simulation configuration
-    n_iter : int
-        Number of Monte Carlo iterations
+        The simulation's settings.
+    n_iter : int, optional
+        How many iterations to run. Default 5.
     fit_config : FitConfig, optional
-        Multi-component Gaussian fit configuration.
-    offchip_bin_slit : int
-        Number of slit pixels to sum (off-chip, ground-based binning).
-        Each pixel is read out independently so all noise sources are
-        present per pixel before summation.  Default 1 (no binning).
-    fit_signals : str
-        Which signals to fit: ``"both"`` (default), ``"dn"``, or
-        ``"photon"``.  Fitting is the most expensive step, so
-        selecting only the signal of interest roughly halves runtime.
+        How to fit. Default one Gaussian.
+    offchip_bin_slit : int, optional
+        How many pixels along the slit to add together after read-out, each
+        with its own noise. Default 1.
+    fit_signals : str, optional
+        Which signals to fit: ``"both"`` (default), ``"dn"`` or ``"photon"``.
+        Fitting only one takes about half the time.
     uniform_mode : bool, optional
-        If True the input cube is taken to be uniform-intensity mode: one scan
-        position and ``offchip_bin_slit`` identical slit pixels, which
-        *offchip_bin_slit* then sums back down to a single spatial pixel.  All
-        MC simulations are run first and the resulting spectra are stacked so
-        that fitting is parallelised over the n_iter iterations rather than
-        over the spatial dimension.  Default: False.
+        The cube is a single line of known intensity, as
+        `create_uniform_intensity_cube` makes it, with ``offchip_bin_slit``
+        pixels along the slit. Default False.
     photon_shot_inverse_transform : bool, optional
-        Use inverse-transform sampling for photon shot noise and the quantum
-        efficiency, and one Fano draw for every pixel, so that common random
-        numbers survive a change in photon flux, in every iteration.
-        Default False.
+        Draw the photons by inverse-transform sampling, for common random
+        numbers between runs that differ in photon flux. Default False.
     dark_current_inverse_transform : bool, optional
-        Use inverse-transform Poisson sampling for dark-current shot noise, so
-        that common random numbers survive a change in dark-current level.
-        Default False.
-        
+        Draw the dark current by inverse-transform sampling, for common random
+        numbers between runs that differ in dark current. Default False.
+
     Returns
     -------
-    tuple
-        (first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results)
-        - first_dn_signal: First iteration DN signal (NDCube)
-        - dn_fit_results: Dict of fit statistics from
-          :func:`~euvst_response.fitting.summarise_fits`, or None if skipped
-        - first_photon_signal: First iteration photon signal (NDCube)  
-        - photon_fit_results: The same for the photon signal, or None if skipped
+    first_dn_signal : NDCube
+        The first iteration's signal, in DN.
+    dn_fit_results : dict or None
+        The fits to the DN signal, or None if they were not fitted. For each
+        fitted component, by name, under ``"components"``, it holds the
+        intensity, velocity and width, each as ``"first"``, ``"mean"`` and
+        ``"std"`` maps. ``"primary_component"`` names the primary component,
+        and ``"failed_fits"`` counts the failed fits in each pixel.
+    first_photon_signal : NDCube
+        The first iteration's photons arriving at the detector.
+    photon_fit_results : dict or None
+        The fits to the photons, as for the DN, or None.
+
+    Under MPI, only the first rank gets these; every other rank gets four
+    Nones.
     """
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")

@@ -40,7 +40,9 @@ nav:
       - Time series: time-series.md
       - Instruments: instruments.md
   - 3. Analysing the results: analysis.md
-  - Python: python.md
+  - Python:
+      - Using ECLIPSE from Python: python.md
+      - API reference: api.md
   - Reference:
       - Files: files.md
       - Naming spectral lines: line-names.md
@@ -74,7 +76,12 @@ markdown_extensions:
 
 plugins:
   - search
+  # Notebooks only. Otherwise the plugin reads every Markdown page to see
+  # whether it is a notebook, through pandoc where pandoc is installed, as it
+  # is on Read the Docs, and pandoc stalls on the API page's ::: lines. Only
+  # the ignore list is checked before a page is read.
   - mkdocs-jupyter:
+      ignore: ["*.md"]
       include_source: true
   # Pages that were merged into others, so that links to them still land.
   - redirects:
@@ -84,5 +91,12 @@ plugins:
       handlers:
         python:
           options:
+            docstring_style: numpy
             show_root_heading: true
+            show_root_full_path: false
             show_source: false
+            show_signature_annotations: false
+            separate_signature: true
+            members_order: source
+            heading_level: 3
+            filters: ["!^_"]

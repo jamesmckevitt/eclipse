@@ -22,27 +22,28 @@ from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_vel
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
-    Load synthetic atmosphere cube from a synthesis file, or from a pickle as older versions wrote.
-    
-    Creates a summed cube from all line cubes in the synthesis results.
-    All line cubes are put onto the wavelength grid of the metadata_line,
-    keeping their flux, before summing, as :func:`sum_line_cubes` does.
-    
+    Read one spectral window of a synthesis file as a single cube, with its blends added in.
+
+    Every line in the file that falls in the window of *metadata_line* is
+    added onto that line's wavelengths, each keeping its brightness. This is
+    what `eclipse` observes for ``reference_line``. A synthesis pickle from
+    ECLIPSE 0.11.0 and earlier is read too. Reading a pickle runs whatever
+    code it holds, so only read pickles you trust.
+
     Parameters
     ----------
     pkl_file : str
-        Path to the synthesis file, or to a synthesis pickle.
+        The synthesis file, or a synthesis pickle.
     metadata_line : str, optional
-        Name of the line to use for metadata and wavelength grid reference. 
-        If None, uses the first line.
-        
+        The line whose window to read. Default the file's first line.
+
     Returns
     -------
-    tuple
-        (summed_cube, dynamic_mode_info) where:
-        - summed_cube: NDCube with summed line intensities
-        - dynamic_mode_info: dict with dynamic mode metadata, ``{"enabled": False}``
-          for a synthesis of one snapshot
+    summed_cube : NDCube
+        The spectra of the window, indexed [y, x, wavelength].
+    dynamic_mode_info : dict
+        How the file was made in the deprecated dynamic mode, or
+        ``{"enabled": False}`` for a synthesis of one snapshot.
     """
     from .atmosphere import _is_pickle
     from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
@@ -634,52 +635,43 @@ def create_uniform_intensity_cube(
     tel=None,
 ) -> NDCube:
     """
-    Create an ``n_slit_pixels`` x 1 pixel NDCube containing a Gaussian emission line.
+    Make a cube holding one Gaussian line of known total intensity, on the detector's pixels.
 
-    The cube is built directly at the detector's spectral resolution and
-    assigned a helioprojective WCS consistent with the output of
-    ``rebin_atmosphere``, so it can be fed straight into ``monte_carlo``.
-    Each wavelength pixel holds the line integrated across that pixel, so
-    the cube holds exactly the part of the line on its wavelength grid
-    however narrow the line is.  With the default ``n_sigma_extent`` that is
-    ``total_intensity`` to a part in 1e15.
+    This is the cube `eclipse` observes for a single line of known intensity,
+    ready for `monte_carlo` or `simulate_once`. Each wavelength pixel holds
+    the line integrated over that pixel, so the cube holds all of the line
+    that falls within its wavelengths, however narrow the line is. The tails
+    beyond ``n_sigma_extent`` are left out.
 
     Parameters
     ----------
     total_intensity : u.Quantity
-        Spectrally-integrated line intensity, e.g. in ``erg / (s cm2 sr)``.
+        The line's total intensity, such as ``5000 * u.erg / (u.s * u.cm**2 * u.sr)``.
     rest_wavelength : u.Quantity
-        Rest wavelength of the line, e.g. ``195.119 * u.AA``.
+        The line's rest wavelength, such as ``195.119 * u.AA``.
     thermal_width : u.Quantity
-        Thermal / non-thermal line width expressed as a velocity
-        (1-sigma Gaussian width), e.g. ``20 * u.km / u.s``.
+        The line's width, as a 1-sigma velocity, such as ``20 * u.km / u.s``.
     det : Detector_SWC or Detector_EIS
-        Detector configuration (provides ``wvl_res``, ``plate_scale_angle``).
+        The detector, whose pixels the cube is on.
     sim : Simulation
-        Simulation configuration (provides ``slit_width``).
+        The simulation, with the slit.
     n_sigma_extent : float, optional
-        Number of sigma either side of line centre to include in the
-        wavelength grid (default: 8).  Measured on the width the line will have
-        once the spectral PSF has been applied, if *tel* is given.  The part
-        of the line beyond the grid is left out of the cube.
+        How many sigma of the line to hold either side of its centre. Default
+        8.
     n_slit_pixels : int, optional
-        Number of (uniform) slit pixels to generate.  Set to the
-        ``offchip_bin_slit`` value so that subsequent ``rebin_slit_offchip``
-        sums ``n_slit_pixels`` independent noise realisations into a single
-        binned pixel (default: 1).
+        How many pixels along the slit, all the same. Set it to the off-chip
+        binning, so that each binned pixel adds that many with their own noise.
+        Default 1.
     tel : Telescope_EUVST or Telescope_EIS, optional
-        Telescope configuration.  When given, the grid is widened to hold the
-        line after spectral PSF broadening, adding the PSF width to the thermal
-        width in quadrature.  Without this a narrow line gets a grid only a
-        couple of pixels wide, and convolving it with a PSF wider than the line
-        pushes flux off the ends of the grid.  Default None, which sizes the
-        grid on the thermal width alone.
+        The telescope. When given, the wavelengths reach far enough to hold
+        the line after the spectral PSF has blurred it. Give it if the PSF will
+        be on. Default None.
 
     Returns
     -------
     NDCube
-        Shape ``(n_slit_pixels, 1, n_lambda)`` with unit ``erg / (s cm2 sr cm)`` and a
-        helioprojective + wavelength WCS.
+        The cube, shaped (``n_slit_pixels``, 1, wavelength), in
+        erg / (s cm2 sr cm).
     """
     if n_slit_pixels < 1:
         raise ValueError(f"n_slit_pixels must be >= 1, got {n_slit_pixels}")

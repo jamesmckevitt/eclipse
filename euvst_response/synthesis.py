@@ -104,21 +104,22 @@ def create_atmosphere_ndcube(
     voxel_dz: u.Quantity,
 ) -> NDCube:
     """
-    Create an NDCube for atmospheric data with proper heliocentric coordinates.
+    Give a cube of a simulation's cells coordinates on the Sun, from the cells' sizes.
+
+    x and y are centred on zero, and z starts from zero.
 
     Parameters
     ----------
     data : np.ndarray or u.Quantity
-        3D data array with shape (nz, ny, nx), so that ``data[k]`` is a
-        horizontal slice indexed ``[y, x]``.
+        The cube, shaped (nz, ny, nx), so that ``data[k]`` is a horizontal
+        slice indexed ``[y, x]``.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
-        Voxel sizes in Mm.
+        The size of a cell along each axis.
 
     Returns
     -------
     NDCube
-        Cube with proper WCS coordinates.
-        X,Y centered at origin, Z starting at 0.
+        The cube, with its coordinates in Mm.
     """
     nz, ny, nx = data.shape
 
@@ -742,86 +743,64 @@ def compute_goft_fiasco(
     temperature_chunk: int | None = None,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
-    Compute G(T,N) contribution functions using fiasco.
+    Compute each line's contribution function, G(T, n_e), from CHIANTI through fiasco.
 
-    For each line specification (e.g. "Fe12_195.1190"), creates a fiasco Ion,
-    computes the contribution function over a (T, n_e) grid, and extracts the
-    line at the requested wavelength to the digits the name gives, observed or
-    theoretical, the observed one where both are. If no line is there, the
-    nearest line CHIANTI has observed is taken, with a warning, rather than
-    the nearest theoretical wavelength, many of which are weak transitions a
-    few mA from strong lines. Of several transitions CHIANTI lists at one
-    wavelength, the brightest is taken. The line is placed at CHIANTI's
-    wavelength, ``wl0``, not the name's.
-
-    The CHIANTI contribution function is::
-
-        G_ij = Ab(X) * f_{X,k} * (N_j / N) * A_ij * dE_ij / n_e
-
-    with units of erg cm^3 s^-1.  fiasco's ``contribution_function`` does
-    **not** include the n_H / n_e ratio.  However, this function explicitly
-    multiplies G by the proton-to-electron ratio so that the result is
-    consistent with the n_e^2 * dh emission measure used downstream.
+    Each line is matched to a transition in CHIANTI as the docs page on
+    naming spectral lines describes, and placed at CHIANTI's wavelength,
+    ``wl0``, not the name's. G includes the ratio of protons to electrons, so
+    that it multiplies an emission measure of n_e^2 dh. With two or more ions
+    and more than one worker, the ions are computed in separate processes,
+    so a script calling this needs an ``if __name__ == "__main__":`` guard.
 
     Parameters
     ----------
-    line_names : List[str]
-        Line identifiers, e.g. ``["Fe12_195.1190", "Fe09_171.073"]``.
-    abundance : str
-        CHIANTI abundance dataset name passed to ``fiasco.Ion``.
-    logT_min, logT_max : float
-        Bounds of the log10(T / K) grid.
-    nT : int
-        Number of temperature grid points.
-    logN_min, logN_max : float
-        Bounds of the log10(n_e / cm^-3) grid.
-    nN : int
-        Number of density grid points.
-    precision : type
-        Output array dtype (``np.float32`` or ``np.float64``).
-    n_workers : int
-        Number of parallel processes for multi-ion runs.  Each worker
-        spawns a separate process (to avoid HDF5 fork-safety issues) and
-        imports fiasco independently, so there is a startup cost per
-        worker.  Only useful when computing lines from 2+ distinct ions.
-        Defaults to 0, which uses the number of CPUs this process may run
-        on, as a SLURM job step gives it, rather than the whole node's.
-    hdf5_dbase_root : str or `~pathlib.Path`, optional
-        CHIANTI HDF5 database to use.  Defaults to fiasco's own, which comes
-        from ``~/.fiasco/fiascorc``.  Pass this to run against a database
-        other than the user's default: because each worker is spawned rather
-        than forked, it re-imports fiasco and re-reads that file, so setting
-        ``fiasco.defaults`` in the parent process has no effect on the
-        workers.  Each worker reports back the root its ``Ion`` was built
-        with, and that is checked against the request, so a root that fails
-        to reach a worker raises rather than letting that worker fall back to
-        the fiascorc default.  Note this confirms the argument arrived, not
-        that fiasco read the file correctly once pointed at it.
+    line_names : list of str
+        The lines, such as ``["Fe12_195.1190", "Fe09_171.073"]``.
+    abundance : str, optional
+        The CHIANTI abundance set. Default ``"sun_coronal_2021_chianti"``.
+    logT_min, logT_max : float, optional
+        The range of log10(T / K).
+    nT : int, optional
+        How many temperatures, evenly spaced in log10(T), across that range.
+    logN_min, logN_max : float, optional
+        The range of log10(n_e / cm-3).
+    nN : int, optional
+        How many densities, evenly spaced in log10(n_e), across that range.
+    precision : type, optional
+        ``np.float32`` or ``np.float64`` (default).
+    n_workers : int, optional
+        How many processes to compute the ions with, one ion each at a time,
+        so never more than there are ions. Default 0, which uses every CPU
+        this process may use, as SLURM allocates them, up to that limit.
+    hdf5_dbase_root : str or Path, optional
+        The CHIANTI database to read. Default fiasco's own, set in
+        ``~/.fiasco/fiascorc``.
     temperature_chunk : int, optional
-        Number of temperatures to pass to fiasco at a time.  fiasco solves
-        the level populations for all the temperatures it is given together,
-        so its memory grows with their number, and for an ion with many
-        levels the whole grid can need several GB.  The chunks of an ion are
-        computed one after another, so this lowers the peak memory to that
-        of one chunk (per worker), at the cost of fiasco reading the ion's
-        atomic data again for each chunk.  The result is the same.  Defaults
-        to None, which passes the whole grid at once.
+        Give fiasco this many temperatures at a time, rather than the whole
+        grid, to use less memory. The result is the same. Default None, for
+        the whole grid.
 
     Returns
     -------
-    goft_dict : Dict[str, dict]
-        Dictionary keyed by line name, each entry holding:
-            ``'wl0'``  -- rest wavelength (Quantity, cm)
-            ``'g_tn'`` -- 2-D array G(logN, logT) shape ``(nN, nT)``
-            ``'atom'`` -- atomic number
-            ``'ion'``  -- ionisation stage
-            ``'hdf5_dbase_root'`` -- CHIANTI database these came from,
-            resolved to the fiascorc default when none was requested
+    goft_dict : dict
+        For each line, by name: ``wl0``, its wavelength in CHIANTI; ``g_tn``,
+        G on the grid of densities and temperatures, shaped (nN, nT), in
+        erg cm3 / s; ``atom`` and ``ion``, its atomic number and ionisation
+        stage; and ``hdf5_dbase_root``, the database it came from.
     logT_grid : np.ndarray
-        1-D array of log10(T / K) values.
+        The temperatures, as log10(T / K).
     logN_grid : np.ndarray
-        1-D array of log10(n_e / cm^-3) values.
+        The densities, as log10(n_e / cm-3).
     """
+    # fiasco's contribution_function, G = Ab(X) f_{X,k} (N_j / N) A_ij dE_ij
+    # / n_e, leaves out n_H / n_e, which is multiplied in here. Each worker is
+    # spawned rather than forked, to keep HDF5 safe, so it imports fiasco and
+    # reads fiascorc afresh: setting fiasco.defaults in the parent does not
+    # reach it, which is why the database is passed down, and each worker
+    # reports the root its Ion was built with, checked against the request.
+    # fiasco solves the level populations for every temperature it is given
+    # at once, so its memory grows with them; chunks of an ion are computed
+    # one after another, at the cost of reading its atomic data again.
     if temperature_chunk is not None and temperature_chunk < 1:
         raise ValueError(
             f"temperature_chunk must be a positive number of temperatures, "
@@ -1156,23 +1135,31 @@ def interpolate_g_on_dem(
     precision: type = np.float32,
 ) -> None:
     """
-    For every spectral line, interpolate G(T,N) onto the DEM grid.
-    
+    Take each line's contribution function at the density of each pixel and temperature.
+
+    G is interpolated linearly from the grid `compute_goft_fiasco` computed
+    it on, and is zero outside it. The result is added to each line's entry
+    in *goft* as ``g``, shaped (rows, columns, temperatures), ready for
+    `synthesise_spectra`.
+
     Parameters
     ----------
-    goft : Dict[str, dict]
-        Dictionary of line data, modified in place.
+    goft : dict
+        The lines, as `compute_goft_fiasco` gives them, changed in place.
     avg_ne : np.ndarray
-        Emission-measure weighted electron density (n_rows, n_cols, nT), in
-        the spatial layout compute_dem produces.
+        The electron density in each pixel at each temperature, in cm-3,
+        shaped (rows, columns, temperatures). Where the cells along the line
+        of sight have different densities, give their mean weighted by
+        emission measure, as ECLIPSE's own synthesis does. For a DEM, give
+        the one density you choose.
     logT_grid : np.ndarray
-        Temperature grid for DEM (nT,).
+        The temperatures to take G at, as log10(T / K).
     logN_grid : np.ndarray
-        Density grid for GOFT interpolation.
+        The densities G was computed on, from `compute_goft_fiasco`.
     logT_goft : np.ndarray
-        Temperature grid for GOFT interpolation.
-    precision : type
-        Output precision for interpolated G values.
+        The temperatures G was computed on, from `compute_goft_fiasco`.
+    precision : type, optional
+        ``np.float32`` (default) or ``np.float64``.
     """
     nT, n_rows, n_cols = len(logT_grid), *avg_ne.shape[:2]
 
@@ -1338,21 +1325,26 @@ def synthesise_spectra(
     logT_grid: np.ndarray,
 ) -> None:
     """
-    Convolve EM(T,v) with thermal Gaussians plus Doppler shift to obtain the
-    specific intensity cube I(row, column, lambda) for every line.
+    Synthesise each line's spectrum in every pixel from the emission measure by temperature and velocity.
+
+    Each temperature and velocity bin gives the line a Gaussian of that
+    temperature's thermal width, Doppler shifted by that velocity, with the
+    emission measure times G. The spectra are added to each line's entry in
+    *goft* as ``si``, in erg / (s cm2 sr cm), on the wavelengths ``wl_grid``:
+    the velocity grid converted with ``lambda_0 (1 + v / c)``.
 
     Parameters
     ----------
-    goft : Dict[str, dict]
-        Dictionary of line data, modified in place with 'si' and 'wl_grid'.
+    goft : dict
+        The lines, with ``g`` from `interpolate_g_on_dem`, changed in place.
     em_tv : np.ndarray
-        4D emission measure cube (n_rows, n_cols, nT, nv), in the spatial
-        layout build_em_tv produces.
+        The emission measure in each bin, in cm-5, shaped (rows, columns,
+        temperatures, velocities).
     vel_grid : u.Quantity or np.ndarray
-        Velocity grid centers for wavelength calculation, in any unit of
-        velocity; a plain array is taken to be in cm/s, as build_em_tv's is.
+        The velocities of the bins' centres, evenly spaced and increasing. A
+        plain array is taken to be in cm/s.
     logT_grid : np.ndarray
-        Temperature bin centers.
+        The temperatures of the bins' centres, as log10(T / K).
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
@@ -1516,29 +1508,31 @@ def create_line_cube(
     integration_axis: str = "z",
 ) -> NDCube:
     """
-    Create an NDCube for a single spectral line using spatial coordinates from existing cube.
-    
+    Make one line's synthesised spectra into an NDCube, with the image's coordinates.
+
     Parameters
     ----------
     line_name : str
-        Name of the spectral line.
+        The line's name.
     line_data : dict
-        Dictionary containing line data with 'si', 'wl_grid', 'wl0'.
+        The line's entry from `compute_goft_fiasco`, after
+        `synthesise_spectra` has added its spectra, ``si``, and their
+        wavelengths, ``wl_grid``.
     spatial_cube : NDCube
-        Reference cube for spatial coordinates.
+        A cube of the atmosphere, such as `create_atmosphere_ndcube` makes,
+        whose coordinates the image takes.
     intensity_unit : u.Unit
-        Unit for the intensity data.
-    integration_axis : str
-        Axis along which integration was performed ("x", "y", or "z").
+        The unit of the spectra.
+    integration_axis : str, optional
+        The axis the synthesis looked along: ``"x"``, ``"y"`` or ``"z"``
+        (default).
 
     Returns
     -------
     NDCube
-        Cube with proper WCS and metadata, indexed ``[row, column, wavelength]``
-        like an image: the first axis is the vertical direction of the scene
-        and the second the horizontal.  Summing over the last axis gives an
-        array that plots the right way up, and slicing out the celestial WCS
-        gives one a SunPy map accepts directly.
+        The spectra, indexed ``[row, column, wavelength]`` like an image, so
+        that summing over wavelength gives an array that plots the right way
+        up.
     """
     # An axis whose cells differ in size has no one CDELT. Only the line of
     # sight may be such an axis, and that is the one integrated out here.

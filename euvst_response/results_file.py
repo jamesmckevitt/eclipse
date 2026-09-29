@@ -1008,24 +1008,24 @@ def _load_pickle(path: Path) -> dict:
 def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = None,
                            overwrite: bool = False) -> Path:
     """
-    Rewrite a results pickle, as older versions wrote them, as a results file.
+    Rewrite a results pickle from ECLIPSE 0.11.0 and earlier as a results file.
 
-    What the pickle holds is kept, and the file written is read back before
-    it is returned. A configuration object from a version older than one of
-    its settings gets today's default for it, with a warning, and a pickle
-    that holds no results, such as a synthesis pickle, is refused. Reading a
-    pickle runs whatever code it holds, so only convert files you trust.
+    Everything the pickle holds is kept, and the file written is read back to
+    check it. A setting that did not exist when the pickle was made gets
+    today's default, with a warning. A pickle that holds no results, such as
+    a synthesis pickle, is refused. Reading a pickle runs whatever code it
+    holds, so only convert files you trust.
 
     Parameters
     ----------
     pickle_path : str or Path
         The pickle.
     path : str or Path, optional
-        The results file to write. None writes it beside the pickle, with
-        the same name ending in ``.h5``. A pickle's suffix is replaced with
-        ``.h5``, as :func:`save_results` does.
+        The results file to write. Default None, which writes it beside the
+        pickle, with the same name ending in ``.h5``.
     overwrite : bool, optional
-        Replace a file already at *path*, which is otherwise refused.
+        Replace a file already at *path*, which is otherwise refused. Default
+        False.
 
     Returns
     -------

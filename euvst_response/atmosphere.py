@@ -131,13 +131,23 @@ def _check_edges(edges, name: str) -> u.Quantity:
 
 def edges_from_centres(centres: u.Quantity) -> u.Quantity:
     """
-    Cell edges for cells whose centres are *centres*.
+    The edges of cells, from their centres.
 
     Each edge is placed halfway between two centres, and the outer edges as
     far beyond the end cells as their inner edges are within them. On an
-    even grid that gives every cell the grid spacing; on a stretched grid
-    it is one reasonable choice, so a code that knows its edges should give
-    those instead.
+    even grid that gives every cell the grid's spacing. On an uneven grid it
+    is one reasonable choice, so if your code knows its edges, give those
+    instead.
+
+    Parameters
+    ----------
+    centres : u.Quantity
+        The cells' centres along one axis, two or more.
+
+    Returns
+    -------
+    u.Quantity
+        The edges, one more than the centres.
     """
     centres = np.atleast_1d(centres)
     if centres.size < 2:
@@ -276,9 +286,14 @@ class Atmosphere:
         Parameters
         ----------
         mass_per_electron_amu : float
-            Mass of the plasma per free electron, in atomic mass units; see
-            :func:`mass_per_electron`. Ignored when the atmosphere already
+            The mass of the plasma per free electron, in atomic mass units,
+            about 1.16 for coronal abundances. Not used when the atmosphere
             has an electron density.
+
+        Returns
+        -------
+        u.Quantity
+            The electron density in every cell, in cm-3.
         """
         if self.electron_density is not None:
             return self.electron_density
@@ -292,10 +307,9 @@ class Atmosphere:
         """
         The part of the box within the given ranges.
 
-        Each range is ``(low, high)`` in the coordinates of the file. A cell
-        is kept when any part of it lies inside the range, which is what
-        NDCube's own cropping keeps on an even grid; a bound that falls on a
-        cell boundary does not keep the cell beyond it.
+        Each range is ``(low, high)``, with units, in the atmosphere's own
+        coordinates. A cell is kept if any part of it is inside the range. A
+        bound that falls on a cell's edge does not keep the cell beyond it.
         """
         item = [slice(None)] * 3
         edges = {}
@@ -329,11 +343,9 @@ class Atmosphere:
 
     def downsampled(self, factor: int) -> "Atmosphere":
         """
-        Every *factor*-th cell along each axis, each standing for the block it starts.
+        Every *factor*-th cell along each axis, each made as big as the cells it replaces.
 
-        The kept cell keeps its value and takes the boundaries of the block
-        of *factor* cells it stands for, so the box keeps its extent and the
-        column its depth.
+        The box keeps its size. *factor* must divide every dimension.
         """
         require_downsample_divides(self.shape, factor)
         if factor == 1:
@@ -353,14 +365,14 @@ class Atmosphere:
 
     def to_ndcube(self, quantity: u.Quantity) -> NDCube:
         """
-        *quantity*, a cube of this atmosphere's shape, with its coordinates as a WCS.
+        A cube of this atmosphere's shape as an NDCube, with the atmosphere's coordinates.
 
-        The WCS is linear. An axis whose cells are not all the same size gets
-        the mean size and is named in the cube's ``meta["nonuniform_axes"]``,
-        so that nothing downstream mistakes its coordinates for exact. Only
-        the line of sight may be such an axis: it is integrated out with the
-        true size of every cell, and its coordinates are never used.
+        The coordinates are linear. An axis whose cells are not all the same
+        size gets their mean size, and is named in the cube's
+        ``meta["nonuniform_axes"]``.
         """
+        # Only the line of sight may be uneven: it is integrated out with the
+        # true size of every cell, and its coordinates are never used.
         if quantity.shape != self.shape:
             raise ValueError(f"Expected a cube of shape {self.shape}, got "
                              f"{quantity.shape}.")
@@ -481,16 +493,25 @@ def _is_pickle(path: Path) -> bool:
 def write_atmosphere(atmosphere: Atmosphere, path: str | Path,
                      compression: Optional[str] = None) -> Path:
     """
-    Write *atmosphere* as an ECLIPSE atmosphere file.
+    Write an atmosphere file.
+
+    The file is written beside its name and then moved into place, so a run
+    stopped part way leaves any file already there as it was.
 
     Parameters
     ----------
     atmosphere : Atmosphere
+        The atmosphere to write.
     path : str or Path
-        The file to write; an existing file is replaced.
+        The file to write. An existing file is replaced.
     compression : str, optional
-        An h5py compression filter such as ``"gzip"`` for the cubes. None
-        writes them uncompressed, which reads fastest.
+        An HDF5 compression filter for the cubes, such as ``"gzip"``. Default
+        None, uncompressed, which reads fastest.
+
+    Returns
+    -------
+    Path
+        The file written.
     """
     path = Path(path)
     with _replacing(path) as partial, h5py.File(partial, "w") as f:
@@ -518,19 +539,25 @@ def read_atmosphere(path: str | Path,
                     velocities: Optional[Sequence[str]] = None,
                     columns: Optional[slice] = None) -> Atmosphere:
     """
-    Read an ECLIPSE atmosphere file.
+    Read an atmosphere file.
 
     Parameters
     ----------
     path : str or Path
+        The file.
     velocities : sequence of str, optional
-        Which velocity components to read, e.g. ``("z",)`` for a view along
-        z. None reads every component the file has. A component asked for
-        that the file lacks raises.
+        Which velocity components to read, such as ``("z",)`` for a view
+        along z. Default None, for every component the file has. Asking for
+        one the file doesn't have is an error.
     columns : slice, optional
-        Which cells along x to read, as a slice of the x index. Only those
-        columns of every cube are read from the file, so a few columns of a
-        large box cost a few columns. None reads them all.
+        Which cells along x to read, as a slice of their index. Only those
+        columns are read from the file, so reading a few columns of a large
+        box is quick. Default None, for all of them.
+
+    Returns
+    -------
+    Atmosphere
+        The atmosphere.
     """
     path = Path(path)
     wanted = AXES if velocities is None else tuple(_check_axis(axis) for axis in velocities)
@@ -595,13 +622,23 @@ def read_edges(path: str | Path) -> Dict[str, u.Quantity]:
 
 def describe_atmosphere_file(path: str | Path) -> str:
     """
-    What an atmosphere file holds, without loading any of its cubes.
+    What an atmosphere file holds, without reading its cubes.
 
-    Reads the attributes, the edges, the time and the cubes' names, shapes
-    and units, so it costs nothing on a file of many gigabytes. What it reads
-    is checked as reading the atmosphere would check it, so a file whose
-    layout or units cannot be read is refused here too rather than
-    described; the values in the cubes are checked only when they are read.
+    This is what ``eclipse-atmosphere info`` prints. It reads only the
+    attributes, the edges, the time and the cubes' names, shapes and units,
+    so it is quick however large the file. A file whose layout or units
+    can't be read is refused. The values in the cubes are checked only when
+    they are read.
+
+    Parameters
+    ----------
+    path : str or Path
+        The file.
+
+    Returns
+    -------
+    str
+        A few lines describing the file.
     """
     path = Path(path)
     with _open_to_read(path) as f:

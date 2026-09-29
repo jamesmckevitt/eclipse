@@ -17,23 +17,23 @@ from typing import List, Tuple
 def airy_disk_pattern(r: np.ndarray, wavelength: u.Quantity, pinhole_diameter: u.Quantity, 
                      distance: u.Quantity) -> np.ndarray:
     """
-    Calculate the Airy disk diffraction pattern for a circular pinhole.
-    
+    The Airy pattern of light through a circular pinhole, on a screen some distance behind it.
+
     Parameters
     ----------
     r : np.ndarray
-        Radial distances from optical axis (in detector plane) in meters
+        Distances from the pattern's centre on the screen, in metres.
     wavelength : u.Quantity
-        Wavelength of light
+        The light's wavelength.
     pinhole_diameter : u.Quantity
-        Diameter of the pinhole
+        The pinhole's diameter.
     distance : u.Quantity
-        Distance from pinhole to detector
-        
+        The distance from the pinhole to the screen.
+
     Returns
     -------
     np.ndarray
-        Normalized intensity pattern (peak = 1.0)
+        The pattern's brightness at each distance, 1 at the centre.
     """
     # Calculate the exact sine of the diffraction angle
     # sin(theta) = r / sqrt(r^2 + distance^2)
@@ -195,33 +195,30 @@ def apply_euv_pinhole_diffraction(
     tel
 ) -> NDCube:
     """
-    Apply EUV pinhole diffraction effects to photon counts.
-    
-    This adds EUV light that bypasses the aluminum filter through pinholes
-    and creates diffraction patterns. This should be applied after the 
-    focusing optics PSF (primary mirror + grating) since the filter is 
-    positioned after these optical elements.
-    
-    This function correctly handles the physics by:
-    1. Subtracting the filtered EUV signal in pinhole regions 
-    2. Adding the unattenuated EUV signal through pinholes
-    
+    Add the EUV light that passes through pinholes in the filter without its attenuation.
+
+    Where a pinhole is, the filtered light is replaced by the unattenuated
+    light through the pinhole, spread in its diffraction pattern. The filter
+    is behind the mirror and the grating, so this comes after the PSF. It
+    does nothing unless ``sim.enable_pinholes`` is set and there are
+    pinholes.
+
     Parameters
     ----------
     photon_counts : NDCube
-        EUV photon counts per pixel (shape: n_slit, n_scan, n_spectral)
-        These should already have filter throughput applied.
+        The EUV photons in each pixel, after the filter and the PSF.
     det : Detector_SWC
-        Detector configuration
+        EUVST-SW's detector, whose ``filter_distance`` sets the diffraction.
     sim : Simulation
-        Simulation configuration containing pinhole parameters
+        The simulation, with the pinholes.
     tel : Telescope_EUVST
-        Telescope configuration (needed to calculate filter throughput)
-        
+        The telescope, whose filter's transmission is taken out where the
+        pinholes are.
+
     Returns
     -------
     NDCube
-        Modified photon counts with EUV pinhole contributions added
+        The photons in each pixel, with the pinholes' light.
     """
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return photon_counts  # No pinholes enabled

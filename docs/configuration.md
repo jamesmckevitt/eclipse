@@ -97,7 +97,7 @@ For visible light, the filter's transmission is 10^(-t / 170 angstrom) for a thi
 | `constrain_positive_intensity` | Whether to keep every component's amplitude at zero or above | `False` |
 | `backend` | The optimiser: `scipy` or `mpfit` | `scipy` |
 | `max_iter` | How many iterations the optimiser may take on one spectrum | `1000` |
-| `bessel_correction` | Whether the standard deviations divide by n - 1 rather than n | `False` |
+| `bessel_correction` | Whether the standard deviations over the iterations use n - 1 in place of n (Bessel's correction) | `False` |
 | `save_iterations` | Whether to keep every iteration's fit in the results | `False` |
 
 ## Pinholes
