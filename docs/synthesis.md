@@ -199,6 +199,7 @@ synthesise-spectra --help
 **Input and output:**
 
 - `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in the deprecated modes on [Older versions](older-versions.md))
+- `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
 - `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
 
 **Lines and abundances:**
