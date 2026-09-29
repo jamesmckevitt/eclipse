@@ -296,7 +296,12 @@ class _Series:
                 f"An exposure from {t0:.10g} to {t1:.10g} s lies outside the series, {where}; "
                 f"the series runs from {begins[0]:.10g} to {ends[-1]:.10g} s (the last "
                 f"snapshot, at {begins[-1]:.10g} s, stands for as long as the gap before it).")
-        t0, t1 = max(t0, begins[0]), min(t1, ends[-1])
+        inside = max(t0, begins[0]), min(t1, ends[-1])
+        if inside[1] <= inside[0]:
+            raise ValueError(
+                f"An exposure from {t0:.10g} to {t1:.10g} s lies outside the series, which "
+                f"runs from {begins[0]:.10g} to {ends[-1]:.10g} s.")
+        t0, t1 = inside
         overlap = np.clip(np.minimum(ends, t1) - np.maximum(begins, t0), 0.0, None)
         fractions = overlap / (t1 - t0)
         return [(int(k), float(f)) for k, f in enumerate(fractions) if f > 0.0]
@@ -490,6 +495,11 @@ class _SlitRaster:
                 f"{edges[-1]:.4g} Mm.")
         overlap = np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low), 0.0, None)
         inside = np.flatnonzero(overlap > tolerance)
+        if inside.size == 0:
+            raise ValueError(
+                f"A slit {width:.4g} Mm wide at x = {position.to_value(u.Mm):.4g} Mm covers no "
+                f"cell of the {self._extent}, which spans x = {edges[0]:.4g} to "
+                f"{edges[-1]:.4g} Mm.")
         first, last = int(inside[0]), int(inside[-1]) + 1
         return first, last, overlap[first:last] / overlap[first:last].sum()
 

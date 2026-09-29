@@ -224,6 +224,15 @@ def test_a_series_of_times_far_from_zero_allows_rounding_and_no_more():
         series.coverage((1e9 + 1.0) * u.s, (end + 0.25) * u.s)
 
 
+def test_an_exposure_that_starts_where_the_series_ends_is_refused():
+    """Allowed as rounding and cut to the series, it had no length, and its fractions were 0 / 0."""
+    series = object.__new__(AtmosphereSeries)
+    series.times = np.array([0.0, 0.5, 1.0]) * u.s
+    end = series.valid_until()[-1].to_value(u.s)
+    with pytest.raises(ValueError, match="lies outside the series, which runs from 0 to 1.5 s"):
+        series.coverage(end * u.s, np.nextafter(end, np.inf) * u.s)
+
+
 def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
     from euvst_response.raster import RasterSynthesiser
     from euvst_response.utils import angle_to_distance
