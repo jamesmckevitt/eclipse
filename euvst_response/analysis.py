@@ -481,9 +481,9 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
                   FutureWarning, stacklevel=2)
     if "dem_data" not in results:
         raise KeyError(
-            "DEM data not found in results. This appears to be from an older "
-            "simulation that didn't include DEM data. Please re-run the simulation "
-            "with the updated package to include DEM data in the results."
+            "DEM data is not in the results, as no released version wrote it there. It is "
+            "in the synthesis file: read it with "
+            "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
         )
     
     return results["dem_data"]

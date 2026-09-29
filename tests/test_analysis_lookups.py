@@ -59,3 +59,11 @@ def test_the_fits_as_fit_cube_gauss_returns_them_give_velocities_and_widths():
     assert u.allclose(velocity_from_fit(fits[np.newaxis], rest, n_jobs=1),
                       10 * u.km / u.s, rtol=1e-9)
     assert u.allclose(width_from_fit(fits[np.newaxis]), 0.03 * u.AA, rtol=1e-12)
+
+
+def test_the_dem_helper_says_it_is_deprecated_and_where_the_dem_is():
+    from euvst_response.analysis import get_dem_data_from_results
+
+    with pytest.warns(FutureWarning, match="get_dem_data_from_results is deprecated"):
+        with pytest.raises(KeyError, match="read_synthesis_products"):
+            get_dem_data_from_results({})
