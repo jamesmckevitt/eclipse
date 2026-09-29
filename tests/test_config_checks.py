@@ -100,6 +100,16 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
         _load_throughput_table(tmp_path / "word.dat")
 
 
+@pytest.mark.parametrize("row", ["17.2 10.3", "17.2 -0.1", "17.2 nan", "17.2 inf", "0 0.103",
+                                 "-17.2 0.103", "nan 0.103"])
+def test_a_table_row_out_of_range_is_refused(tmp_path, row):
+    """A reflectance in per cent gave a hundred times the signal; a nan, none at all."""
+    (tmp_path / "range.dat").write_text(f"# reflectance\n17.0 0.097\n{row}\n17.4 0.110\n")
+    with pytest.raises(ValueError, match=rf"line 3: '{row}' needs a wavelength above zero, "
+                                         rf"in nm, and a throughput from 0 to 1"):
+        _load_throughput_table(tmp_path / "range.dat")
+
+
 def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as_a_header(
         tmp_path):
     """It may be the first line of data with a slip in it; the packaged tables' headers are words."""
@@ -261,7 +271,15 @@ def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
     Atmosphere(temperature=temperature, electron_density=0 * density, **edges)
 
 
-def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(monkeypatch):
+@pytest.mark.parametrize("name, message", [
+    ("FeXII_195.119", "Cannot parse line name 'FeXII_195.119'"),
+    ("Xx12_195.119", "'Xx12_195.119': Xx is not an element"),
+    ("Fe0_195.119", "Fe has ionisation stages 1 to 27, got 0"),
+    ("Fe28_195.119", "Fe has ionisation stages 1 to 27, got 28"),
+    ("Fe12_0", "'Fe12_0': the wavelength must be above zero"),
+])
+def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(monkeypatch, name,
+                                                                             message):
     from euvst_response import synthesis
 
     def never(*args, **kwargs):
@@ -269,9 +287,17 @@ def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(mon
 
     monkeypatch.setattr(synthesis, "read_atmosphere", never)
     monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", "box.h5",
-                                      "--lines", "FeXII_195.119"])
-    with pytest.raises(ValueError, match="Cannot parse line name 'FeXII_195.119'"):
+                                      "--lines", "Fe12_195.119", name])
+    with pytest.raises(ValueError, match=message):
         synthesis.main()
+
+
+def test_a_line_name_is_read_as_its_element_stage_and_wavelength():
+    from euvst_response.synthesis import _parse_line_name
+
+    assert _parse_line_name("Fe12_195.1190") == ("Fe", 12, 195.119)
+    assert _parse_line_name("H1_1215.67") == ("H", 1, 1215.67)
+    assert _parse_line_name("Fe27_1.78") == ("Fe", 27, 1.78)
 
 
 def test_a_gaussian_named_in_capitals_and_a_blur_across_the_slit_are_accepted():

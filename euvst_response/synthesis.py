@@ -691,6 +691,35 @@ def _compute_single_ion(args):
 # as Fe12_195.1190.
 _LINE_NAME = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
 
+
+def _parse_line_name(name: str) -> Tuple[str, int, float]:
+    """
+    The element, ionisation stage and wavelength in Angstrom of a line name
+    such as ``Fe12_195.1190``.
+
+    The element must be one, the stage one it has, from 1, neutral, to its
+    atomic number plus one, and the wavelength above zero: an element or
+    stage that is not was found only when its ion was made, after the
+    atmosphere had been read, and a wavelength of zero matched whichever
+    transition was shortest.
+    """
+    match = _LINE_NAME.match(name)
+    if not match:
+        raise ValueError(f"Cannot parse line name '{name}'. Expected format like "
+                         f"'Fe12_195.1190'.")
+    elem, stage, wavelength = match.group(1), int(match.group(2)), float(match.group(3))
+    try:
+        atomic_number = element(elem).atomic_number
+    except ValueError:
+        raise ValueError(f"Line name '{name}': {elem} is not an element.") from None
+    if not 1 <= stage <= atomic_number + 1:
+        raise ValueError(f"Line name '{name}': {elem} has ionisation stages 1 to "
+                         f"{atomic_number + 1}, got {stage}.")
+    if not wavelength > 0:
+        raise ValueError(f"Line name '{name}': the wavelength must be above zero, in "
+                         f"Angstrom.")
+    return elem, stage, wavelength
+
 # The grids G(T, n_e) is worked out on unless given others: log10 T from 4 to 9
 # every 0.05, and log10 n_e from 7 to 13 every 0.3. density_grid carries the
 # density grid on, on the same points, as far as an atmosphere needs.
@@ -806,19 +835,10 @@ def compute_goft_fiasco(
     densities_cm3 = 10.0 ** logN_grid
 
     # ---- parse line names and group by ion for efficiency ----
-    line_pattern = _LINE_NAME
     ion_lines: Dict[Tuple[str, int], List[Tuple[str, float]]] = {}
 
     for name in line_names:
-        m = line_pattern.match(name)
-        if not m:
-            raise ValueError(
-                f"Cannot parse line name '{name}'. "
-                f"Expected format like 'Fe12_195.1190'."
-            )
-        elem = m.group(1)
-        stage = int(m.group(2))
-        wl = float(m.group(3))
+        elem, stage, wl = _parse_line_name(name)
         ion_lines.setdefault((elem, stage), []).append((name, wl))
 
     # Build worker arguments (all picklable plain types / numpy arrays)
@@ -1978,9 +1998,7 @@ def main(args=None) -> None:
     # Checked now, where a name that could not be read was found only once
     # the atmosphere had been read, which can take minutes and gigabytes.
     for name in args.lines:
-        if not _LINE_NAME.match(name):
-            raise ValueError(f"Cannot parse line name '{name}'. Expected format like "
-                             f"'Fe12_195.1190'.")
+        _parse_line_name(name)
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
     # Checked now, before the atmosphere is read or anything computed.

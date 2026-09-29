@@ -224,7 +224,14 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
             except ValueError:
                 row = []
             if len(row) >= 2:
-                data.append(row[:2])
+                # A throughput in per cent, or a nan, reached the effective
+                # area and made its every value meaningless.
+                wavelength, throughput = row[:2]
+                if not (np.isfinite(wavelength) and wavelength > 0
+                        and np.isfinite(throughput) and 0 <= throughput <= 1):
+                    raise ValueError(f"{path}, line {number}: {text!r} needs a wavelength "
+                                     f"above zero, in nm, and a throughput from 0 to 1.")
+                data.append([wavelength, throughput])
             elif data:
                 raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
                                  f"throughput, and the table's data had begun.")

@@ -1022,7 +1022,9 @@ def main() -> None:
             total_combinations *= len(v)
         print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
 
-    combinations = list(itertools_product(*dim_values)) if dim_names else [()]
+    def _combinations():
+        """The sweep's combinations, afresh each time, one at a time rather than all at once."""
+        return itertools_product(*dim_values) if dim_names else iter([()])
 
     def _combination(combo_values):
         """One combination: its sweep values, and its configuration objects, which check them."""
@@ -1089,12 +1091,12 @@ def main() -> None:
     # Every combination is checked before the first is run, so that a value
     # that cannot be run does not end the sweep part-way, and lose the
     # combinations run before it, which are saved only at the end.
-    for combo_values in combinations:
+    for combo_values in _combinations():
         _combination(combo_values)
 
-    def _check_offchip_bins(combinations, fov_along_slit):
+    def _check_offchip_bins(fov_along_slit):
         """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""
-        for combo_values in combinations:
+        for combo_values in _combinations():
             _, n_bin, _, _, _, det, _ = _combination(combo_values)
             n_slit = _whole_pixels(fov_along_slit, det.plate_scale_angle)
             if n_bin > n_slit:
@@ -1106,7 +1108,7 @@ def main() -> None:
     # rebinned; a uniform intensity is made with the rows it bins.
     offchip_checked = uniform_intensity_mode
 
-    for combination_idx, combo_values in enumerate(combinations, start=1):
+    for combination_idx, combo_values in enumerate(_combinations(), start=1):
         (combo, offchip_bin_slit, raster_repeat, filter_obj, TEL, DET,
          SIM) = _combination(combo_values)
 
@@ -1206,8 +1208,7 @@ def main() -> None:
                     # The scene is as long along the slit for every
                     # combination, so the rows each one's plate scale gives
                     # it are known now, before any combination has run.
-                    _check_offchip_bins(combinations,
-                                        cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
+                    _check_offchip_bins(cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
                     offchip_checked = True
 
         cube_reb = cube_reb_cache[cube_reb_key]
