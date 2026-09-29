@@ -362,11 +362,26 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
     with pytest.warns(FutureWarning, match="results pickle"):
         assert load_results(moved)["instrument"] == "EIS"
 
+    # Another from an older version goes beside it, rather than over it.
+    with open(stale, "wb") as f:
+        dill.dump({"instrument": "EIS", "second": True}, f)
+    _run(tmp_path, monkeypatch, "uniform", **config)
+    with pytest.warns(FutureWarning, match="results pickle"):
+        assert "second" not in load_results(moved)
+    with pytest.warns(FutureWarning, match="results pickle"):
+        assert load_results(stale.parent / "uniform.pkl.old.1")["second"]
+
     # One that cannot be moved aside is left, said so, and the run still succeeds.
-    moved.unlink()
-    moved.mkdir()
     with open(stale, "wb") as f:
         dill.dump({"instrument": "EIS"}, f)
+    real_replace = os.replace
+
+    def refuse_pickles(source, target):
+        if str(source).endswith(".pkl"):
+            raise PermissionError("Operation not permitted")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", refuse_pickles)
     capsys.readouterr()
     _run(tmp_path, monkeypatch, "uniform", **config)
     assert stale.is_file() and "Could not move" in capsys.readouterr().out

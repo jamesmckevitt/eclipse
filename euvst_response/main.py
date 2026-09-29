@@ -18,6 +18,7 @@ from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
+from .atmosphere import _is_pickle
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
@@ -705,6 +706,11 @@ def main() -> None:
         synthesis_is_hdf5 = is_synthesis_file(synthesis_file)
         if synthesis_is_hdf5:
             reference_line = _reference_line(config, synthesis_file)
+        elif not _is_pickle(Path(synthesis_file)):
+            raise ValueError(
+                f"{synthesis_file} is neither a synthesis file, which is HDF5, nor a synthesis "
+                f"pickle as older versions of ECLIPSE wrote. A synthesis from another code is "
+                f"written as a synthesis file with euvst_response.write_synthesis.")
         else:
             warnings.warn(
                 f"{synthesis_file} is a synthesis pickle, as older versions of ECLIPSE "
@@ -1428,9 +1434,16 @@ def main() -> None:
         # than read in place of these results.
         stale = output_file.with_suffix(".pkl")
         if stale.is_file():
+            # Beside any moved aside before, rather than over it, which may be
+            # the only copy of still older results.
+            aside = stale.with_name(stale.name + ".old")
+            number = 0
+            while aside.exists():
+                number += 1
+                aside = stale.with_name(f"{stale.name}.old.{number}")
             try:
-                os.replace(stale, stale.with_name(stale.name + ".old"))
-                print(f"Moved {stale}, from an older version, to {stale.name}.old")
+                os.replace(stale, aside)
+                print(f"Moved {stale}, from an older version, to {aside.name}")
             except OSError as error:
                 print(f"Could not move {stale}, from an older version, aside ({error}); "
                       f"the results are {output_file}, not it")

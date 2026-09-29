@@ -41,8 +41,10 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     tuple
         (summed_cube, dynamic_mode_info) where:
         - summed_cube: NDCube with summed line intensities
-        - dynamic_mode_info: dict with dynamic mode metadata (or None if static)
+        - dynamic_mode_info: dict with dynamic mode metadata, ``{"enabled": False}``
+          for a synthesis of one snapshot
     """
+    from .atmosphere import _is_pickle
     from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
                                  synthesis_line_names)
 
@@ -60,6 +62,10 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
         return (synthesis.summed_cube(metadata_line, meta={"dynamic_mode": dynamic_mode_info}),
                 dynamic_mode_info)
 
+    if not _is_pickle(Path(pkl_file)):
+        raise ValueError(
+            f"{pkl_file} is neither a synthesis file, which is HDF5, nor a synthesis pickle "
+            f"as older versions of ECLIPSE wrote.")
     with open(pkl_file, "rb") as f:
         tmp = dill.load(f)
     
