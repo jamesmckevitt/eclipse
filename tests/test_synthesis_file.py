@@ -704,3 +704,26 @@ def test_an_instrument_run_names_a_line_the_file_lacks(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="is not in"):
         _run(tmp_path, monkeypatch, "missing", synthesis_file=str(tmp_path / "file.h5"),
              reference_line="Fe10_184.5370")
+
+
+@pytest.mark.parametrize("reader, kind", [
+    ("atmosphere:read_atmosphere", "atmosphere"),
+    ("atmosphere:describe_atmosphere_file", "atmosphere"),
+    ("atmosphere:read_time", "atmosphere"),
+    ("atmosphere:read_edges", "atmosphere"),
+    ("synthesis_file:synthesis_line_names", "synthesis"),
+    ("synthesis_file:read_synthesis", "synthesis"),
+    ("synthesis_file:read_synthesis_layout", "synthesis"),
+    ("synthesis_file:read_synthesis_products", "synthesis"),
+])
+def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind):
+    """h5py said only that the file signature was not found."""
+    import importlib
+
+    module, name = reader.split(":")
+    read = getattr(importlib.import_module(f"euvst_response.{module}"), name)
+    path = tmp_path / "notes.txt"
+    path.write_text("temperature, density\n")
+    with pytest.raises(ValueError, match=f"notes.txt is not an HDF5 file, so it is not an "
+                                         f"ECLIPSE {kind} file"):
+        read(path)

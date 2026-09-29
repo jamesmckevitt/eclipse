@@ -60,7 +60,8 @@ import astropy.units as u
 import h5py
 import numpy as np
 
-from .atmosphere import _check_format, _read_dataset, _text_attribute, _write_dataset
+from .atmosphere import (_check_format, _open_to_read, _read_dataset, _text_attribute,
+                         _write_dataset)
 from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
@@ -418,7 +419,7 @@ def is_synthesis_file(path: str | Path) -> bool:
 def synthesis_line_names(path: str | Path) -> list:
     """The names of the lines in a synthesis file, in its order, without reading their spectra."""
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
         return list(f["lines"]) if "lines" in f else []
@@ -491,7 +492,7 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
         whole image.
     """
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
         edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
@@ -538,7 +539,7 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
     checks its files with it before reading any spectra.
     """
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
         layout = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
@@ -645,7 +646,7 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
         often the largest part of the file. None reads everything.
     """
     path = Path(path)
-    with h5py.File(path, "r") as f:
+    with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
         if "synthesis" not in f:
