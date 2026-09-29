@@ -721,9 +721,10 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
     and helium, which give almost all the electrons, are, above about
     log T 5.2, so the electron density there is within about 1 per cent even
     where the metals are not. Cooler cells get an electron density higher
-    than they have, but they emit few of the lines ECLIPSE synthesises. It is about 1.16 for coronal abundances, against 1.29 for a
-    neutral gas, so an atmosphere read with the neutral value has about 20
-    per cent too little emission measure.
+    than they have, but they emit few of the lines ECLIPSE synthesises. It
+    is about 1.16 for coronal abundances, against 1.29 for a neutral gas, so
+    an atmosphere read with the neutral value has about 20 per cent too
+    little emission measure.
 
     Parameters
     ----------
