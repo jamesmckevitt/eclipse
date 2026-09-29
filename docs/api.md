@@ -32,6 +32,8 @@ Everything on this page is imported from `euvst_response`, such as `from euvst_r
 
 ::: euvst_response.load_atmosphere
 
+::: euvst_response.main
+
 ## The steps of the simulation
 
 These are the steps `simulate_once` takes, in order.

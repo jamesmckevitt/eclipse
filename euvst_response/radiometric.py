@@ -471,12 +471,12 @@ def apply_focusing_optics_psf(
     NDCube
         The blurred cube, with the same coordinates, unit and metadata.
     """
-    # Blurring along the slit is not harmless for a uniform scene: the
-    # convolution treats everything outside the array as dark, and so takes
-    # light off the ends of the slit that the scene does have. Zero fill is
-    # wrong for a raster too, since the Sun carries on past the field of view;
-    # with the default SWC PSF, seven rows wide, it costs the end row about a
-    # third of the kernel's weight, the next row 8 per cent, the one after 1.
+    # A uniform scene is blurred in wavelength only: along the slit the blur
+    # changes nothing with "replicate", and with "zero" it takes light off the
+    # ends of the slit that the scene does have. Zero fill is wrong for a
+    # raster too, since the Sun carries on past the field of view; with the
+    # default SWC PSF, seven rows wide, it costs the end row about a third of
+    # the kernel's weight, the next row 8 per cent, the one after 1.
     if boundary not in ("replicate", "zero"):
         raise ValueError(
             f"boundary must be 'replicate' or 'zero', got {boundary!r}."

@@ -483,7 +483,13 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
 
 @debug_on_error
 def main() -> None:
-    """Main function for running instrument response simulations."""
+    """
+    Run `eclipse`, as the command line does, with its arguments from ``sys.argv``.
+
+    This is the ``eclipse`` command. It reads the configuration file named by
+    ``--config``, runs every combination of its settings, and writes the
+    results to ``run/result/<config name>.h5``.
+    """
 
     # Suppress noisy astropy WCS warnings
     for msg in [

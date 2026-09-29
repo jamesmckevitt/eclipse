@@ -56,6 +56,8 @@ def load_instrument_response_results(filepath: str | Path,
         The results file, ``run/result/<config name>.h5``. A results pickle
         from ECLIPSE 0.11.0 and earlier is read too, with a warning, and a
         ``.pkl`` name that no longer exists reads the ``.h5`` beside it.
+        Reading a pickle runs whatever code it holds, so only read pickles
+        you trust.
     allow_wrong_velocity_sign : bool, optional
         Read, with a warning instead of an error, results made from a
         synthesis that an ECLIPSE from before the Doppler sign was corrected
@@ -237,7 +239,9 @@ def analyse_fit_statistics(
         ``v_err``: the true velocity minus the mean. ``failed_fits`` and
         ``n_iterations``: the number of fits that failed, and of iterations.
         The width is the Gaussian's sigma, and the intensity the fitted
-        line's counts.
+        line's counts. Files from before the components were kept by name
+        give only ``v_first``, ``v_mean``, ``v_std``, ``v_true``, ``v_err``,
+        ``w_first``, ``w_mean`` and ``w_std``.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
     ground_truth = combination_results["ground_truth"]
@@ -708,7 +712,9 @@ def create_sunpy_maps_from_combo(
         ``velocity_std``, ``line_width_std`` and ``intensity_std``: the
         standard deviations. ``velocity_true`` and ``velocity_err``: the true
         velocity, and the true velocity minus the mean. ``failed_fits``: the
-        number of fits that failed in each pixel.
+        number of fits that failed in each pixel. Files from before the
+        components were kept by name have no intensity maps and no
+        ``failed_fits``.
     """
     
     date_obs = _resolve_date_obs(combination_results, date_obs)

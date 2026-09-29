@@ -27,7 +27,8 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     Every line in the file that falls in the window of *metadata_line* is
     added onto that line's wavelengths, each keeping its brightness. This is
     what `eclipse` observes for ``reference_line``. A synthesis pickle from
-    ECLIPSE 0.11.0 and earlier is read too.
+    ECLIPSE 0.11.0 and earlier is read too. Reading a pickle runs whatever
+    code it holds, so only read pickles you trust.
 
     Parameters
     ----------
@@ -638,8 +639,9 @@ def create_uniform_intensity_cube(
 
     This is the cube `eclipse` observes for a single line of known intensity,
     ready for `monte_carlo` or `simulate_once`. Each wavelength pixel holds
-    the line integrated over that pixel, so the cube holds all of the line on
-    its wavelengths, however narrow the line is.
+    the line integrated over that pixel, so the cube holds all of the line
+    that falls within its wavelengths, however narrow the line is. The tails
+    beyond ``n_sigma_extent`` are left out.
 
     Parameters
     ----------
