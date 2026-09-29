@@ -23,7 +23,7 @@ The results are written to `run/result/<config name>.h5`, named after the config
 
 The configuration file is YAML. Most settings go in four sections, `simulation`, `detector`, `telescope` and `filter`, and any field of the matching class in `config.py` can be set there. **A setting given as a list of more than one value is swept**: ECLIPSE runs every combination of the swept values. A list of one value is just that value.
 
-The one exception is `telescope.psf_params`, which is a list itself, so it is always one value, never a sweep.
+There are two exceptions: `telescope.psf_params`, which is a list itself, and `telescope.psf_slit_width`, the slit it was measured with. Each always takes one value, never a sweep.
 
 The top level of the file holds the settings that are not about the instrument's hardware: which instrument to simulate (see [Instruments](instruments.md)), what to observe, and how many Monte Carlo iterations to run. The [configuration reference](configuration.md) lists every setting, with its default.
 

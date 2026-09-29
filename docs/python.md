@@ -59,7 +59,7 @@ plt.show()
 
 ![The throughput of the primary mirror, its roughness, the grating and the filter, from 170 to 214 Angstrom](images/python-throughput.png)
 
-To try another filter, give the telescope one, such as `Telescope_EUVST(filter=AluminiumFilter(al_thickness=1200 * u.AA))`.
+To try another filter, give the telescope one, such as `Telescope_EUVST(filter=AluminiumFilter(al_thickness=1200 * u.AA))`, with `AluminiumFilter` imported from `euvst_response`.
 
 ### The spectral PSF
 

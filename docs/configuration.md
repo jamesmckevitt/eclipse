@@ -64,7 +64,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `microroughness_sigma` | The RMS roughness of the primary mirror | `0.3 nm` | - |
 | `psf_type` | The shape of the PSF; only `gaussian` is modelled | `gaussian` | `gaussian` |
 | `psf_params` | The PSF's FWHMs in pixels, along the slit and in wavelength. This is one value, not a sweep. | `[2.66 pix, 2.54 pix]` | `[3 pix, 3 pix]` |
-| `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. | `0.2 arcsec` | none |
+| `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
 | `psf_across_slit` | The FWHM of the telescope's blur across the slit, which brings in light from either side of it. Without it there is none. | none | none |
 | `pm_table` | A table of the primary mirror's reflectance | packaged | - |
 | `grating_table` | A table of the grating's efficiency | packaged | - |
@@ -102,4 +102,4 @@ For visible light, the filter's transmission is 10^(-t / 170 angstrom) for a thi
 
 ## Pinholes
 
-`pinhole_sizes`, `pinhole_positions` and `pinhole_positions_spectral` have one entry per pinhole, so they must be the same length, and `simulation.enable_pinholes` switches them on. They model defects in SWC's filter, which let through visible light and unattenuated EUV. They are for filter engineering rather than for science runs.
+`pinhole_sizes` and `pinhole_positions` have one entry per pinhole, so they must be the same length. `pinhole_positions_spectral` can be left out, which puts every pinhole in the middle of the spectral window; if given, it needs an entry per pinhole too. `simulation.enable_pinholes` switches the pinholes on. They model defects in SWC's filter, which let through visible light and unattenuated EUV. They are for filter engineering rather than for science runs.
