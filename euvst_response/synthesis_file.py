@@ -60,8 +60,8 @@ import astropy.units as u
 import h5py
 import numpy as np
 
-from .atmosphere import (_check_format, _open_to_read, _read_dataset, _text_attribute,
-                         _write_dataset)
+from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
+                         _text_attribute, _write_dataset)
 from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
 
 __all__ = [
@@ -446,8 +446,7 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
         None writes them uncompressed, which reads fastest.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "w") as f:
+    with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FORMAT_NAME
         f.attrs["version"] = FORMAT_VERSION
         f.attrs["source"] = synthesis.source
@@ -838,6 +837,11 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
 
     from .data_processing import check_old_line_cubes
 
+    # Written over the pickle, the synthesis file would take its place, and
+    # the only copy of the older version's synthesis with it.
+    if Path(path).expanduser().resolve() == Path(pickle_path).expanduser().resolve():
+        raise ValueError(f"{path} is the pickle being converted; give the synthesis file "
+                         f"another name, such as {Path(pickle_path).with_suffix('.h5').name}.")
     with open(pickle_path, "rb") as f:
         saved = dill.load(f)
     if "line_cubes" not in saved or not saved["line_cubes"]:

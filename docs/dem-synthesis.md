@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
 **Line names.** The same `<Element><Stage>_<Wavelength>` convention as the MHD route - see [naming spectral lines](synthesis.md#naming-spectral-lines).
 
-**Scene size.** `create_line_cube` needs at least two pixels along each spatial axis, so a single DEM profile still has to be laid out on a 2x2 or larger scene.
+**Scene size.** A scene can be as small as one pixel, `nx, ny = 1, 1`, for a single DEM profile.
 
 **Abundance.** The `abundance` argument sets the FIP treatment. For FIP work, synthesise once per abundance set (for example `sun_coronal_2021_chianti` and `sun_photospheric_2021_asplund`); the ratio between them is the FIP enhancement you are trying to recover.
 

@@ -84,7 +84,6 @@ import json
 import math
 import os
 import re
-import secrets
 import sys
 import warnings
 from collections.abc import Mapping
@@ -99,7 +98,7 @@ from astropy.utils.masked import Masked
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from .atmosphere import _check_format
+from .atmosphere import _check_format, _is_pickle, _new_partial
 
 __all__ = ["FORMAT_NAME", "FORMAT_VERSION", "save_results", "load_results",
            "convert_results_pickle", "is_results_file"]
@@ -890,26 +889,6 @@ def save_results(path: str | Path, payload: dict, *, compression: str | None = "
     return path
 
 
-def _new_partial(path: Path) -> Path:
-    """
-    An empty file beside *path* to write it in, of a name no other save has.
-
-    Made as any file is, so that the umask and the directory's default
-    permissions apply to it and so to *path*, as colleagues sharing a
-    project directory expect.
-    """
-    while True:
-        suffix = f".{secrets.token_hex(4)}.part"
-        # Within the 255 bytes most filesystems allow a name, however long *path*'s is.
-        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
-        partial = path.with_name(stem + suffix)
-        try:
-            os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
-        except FileExistsError:
-            continue
-        return partial
-
-
 # The names an HDF5 file goes by, which a pickle given one is not read as:
 # a reader takes such a file to be safe to open.
 _HDF5_SUFFIXES = (".h5", ".hdf5", ".hdf", ".he5")
@@ -1012,12 +991,6 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
         raise ValueError(f"{path} is not a results file this ECLIPSE can read: it holds a "
                          f"{type(results).__name__}, not a mapping.")
     return results
-
-
-def _is_pickle(path: Path) -> bool:
-    """Whether *path* starts as the pickles ECLIPSE wrote do, with dill's protocol marker."""
-    with open(path, "rb") as handle:
-        return handle.read(1) == b"\x80"
 
 
 def _load_pickle(path: Path) -> dict:

@@ -7,6 +7,7 @@ resampling from a grid that is not evenly spaced, and that an instrument
 run observes a synthesis file exactly as it observed the pickles of older
 versions holding the same line cubes.
 """
+import os
 import sys
 import warnings
 
@@ -727,3 +728,75 @@ def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind
     with pytest.raises(ValueError, match=f"notes.txt is not an HDF5 file, so it is not an "
                                          f"ECLIPSE {kind} file"):
         read(path)
+
+
+def test_a_write_cut_short_leaves_the_synthesis_file_that_was_there(tmp_path, monkeypatch):
+    """As when a job is killed or the disk fills while the synthesis is written."""
+    import euvst_response.synthesis_file as synthesis_file
+
+    path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
+    before = path.read_bytes()
+
+    def disk_full(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(synthesis_file, "_write_dataset", disk_full)
+    with pytest.raises(OSError, match="No space left"):
+        write_synthesis(_synthesis(), path)
+    assert path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["spectra.h5"]
+
+
+def test_a_write_cut_short_leaves_the_atmosphere_file_that_was_there(tmp_path, monkeypatch):
+    import euvst_response.atmosphere as atmosphere_module
+
+    box = Atmosphere(temperature=np.full((2, 2, 2), 1e6) * u.K,
+                     electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
+                     x_edges=np.arange(3) * u.Mm, y_edges=np.arange(3) * u.Mm,
+                     z_edges=np.arange(3) * u.Mm)
+    path = write_atmosphere(box, tmp_path / "box.h5")
+    before = path.read_bytes()
+
+    def killed(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(atmosphere_module, "_write_dataset", killed)
+    with pytest.raises(KeyboardInterrupt):
+        write_atmosphere(box, path)
+    assert path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["box.h5"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes over read-only files")
+def test_a_read_only_file_is_not_written_over(tmp_path):
+    path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
+    path.chmod(0o444)
+    try:
+        with pytest.raises(PermissionError, match="spectra.h5 is read-only"):
+            write_synthesis(_synthesis(), path)
+    finally:
+        path.chmod(0o644)
+
+
+def test_a_file_that_is_neither_a_synthesis_file_nor_a_pickle_is_called_neither(
+        tmp_path, monkeypatch):
+    """It was called an ECLIPSE synthesis pickle, then failed to unpickle."""
+    from euvst_response.data_processing import load_atmosphere
+
+    (tmp_path / "spectra.fits").write_bytes(b"SIMPLE  =                    T")
+    with pytest.raises(ValueError, match="neither a synthesis file, which is HDF5, nor a"):
+        _run(tmp_path, monkeypatch, "fits", reference_line=LINE,
+             synthesis_file=str(tmp_path / "spectra.fits"))
+    with pytest.raises(ValueError, match="neither a synthesis file, which is HDF5, nor a"):
+        load_atmosphere(tmp_path / "spectra.fits", LINE)
+
+
+def test_a_pickle_is_not_converted_over_itself(tmp_path):
+    """Written over the pickle, the synthesis file took its place, and the pickle was gone."""
+    pickle_path = tmp_path / "synthesis.pkl"
+    with open(pickle_path, "wb") as f:
+        dill.dump({"line_cubes": _line_cubes()}, f)
+    before = pickle_path.read_bytes()
+    with pytest.raises(ValueError, match="is the pickle being converted.*synthesis.h5"):
+        convert_synthesis_pickle(pickle_path, tmp_path / "." / "synthesis.pkl")
+    assert pickle_path.read_bytes() == before
