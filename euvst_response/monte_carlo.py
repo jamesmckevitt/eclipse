@@ -234,6 +234,9 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         The first iteration's photons arriving at the detector.
     photon_fit_results : dict or None
         The fits to the photons, as for the DN, or None.
+
+    Under MPI, only the first rank gets these; every other rank gets four
+    Nones.
     """
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")

@@ -717,9 +717,10 @@ def create_sunpy_maps_from_combo(
         ``velocity_std``, ``line_width_std`` and ``intensity_std``: the
         standard deviations. ``velocity_true`` and ``velocity_err``: the true
         velocity, and the true velocity minus the mean. ``failed_fits``: the
-        number of fits that failed in each pixel. Files from before the
-        components were kept by name have no intensity maps and no
-        ``failed_fits``.
+        number of fits that failed in each pixel. ``exposure_time``: the
+        shortest exposure to reach ``precision_requirement``, when
+        ``exposure_time_results`` is given. Files from before the components
+        were kept by name have no intensity maps and no ``failed_fits``.
     """
     
     date_obs = _resolve_date_obs(combination_results, date_obs)

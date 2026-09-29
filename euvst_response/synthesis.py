@@ -748,9 +748,9 @@ def compute_goft_fiasco(
     Each line is matched to a transition in CHIANTI as the docs page on
     naming spectral lines describes, and placed at CHIANTI's wavelength,
     ``wl0``, not the name's. G includes the ratio of protons to electrons, so
-    that it multiplies an emission measure of n_e^2 dh. The ions are computed
-    in separate worker processes, so a script calling this needs an
-    ``if __name__ == "__main__":`` guard.
+    that it multiplies an emission measure of n_e^2 dh. With two or more ions
+    and more than one worker, the ions are computed in separate processes,
+    so a script calling this needs an ``if __name__ == "__main__":`` guard.
 
     Parameters
     ----------
@@ -769,9 +769,9 @@ def compute_goft_fiasco(
     precision : type, optional
         ``np.float32`` or ``np.float64`` (default).
     n_workers : int, optional
-        How many processes to compute the ions with, one ion each at a time.
-        Default 0, which uses every CPU this process may use, as SLURM
-        allocates them.
+        How many processes to compute the ions with, one ion each at a time,
+        so never more than there are ions. Default 0, which uses every CPU
+        this process may use, as SLURM allocates them, up to that limit.
     hdf5_dbase_root : str or Path, optional
         The CHIANTI database to read. Default fiasco's own, set in
         ``~/.fiasco/fiascorc``.

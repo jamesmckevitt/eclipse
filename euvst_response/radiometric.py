@@ -818,10 +818,11 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
     """
     Add the electrons freed by visible stray light, the same in every pixel.
 
-    ``sim.vis_sl`` photons per second per cm2 reach the filter, which lets
-    through `AluminiumFilter.visible_light_throughput` of them. Each photon
-    that arrives is caught with a chance of ``det.qe_vis``, and frees one
-    electron.
+    ``sim.vis_sl`` photons per second per cm2 arrive. If the telescope has a
+    filter, as EUVST's does, they arrive at the filter, which lets through
+    `AluminiumFilter.visible_light_throughput` of them; otherwise they are
+    the light at the CCD. Each photon that reaches the detector is caught
+    with a chance of ``det.qe_vis``, and frees one electron.
 
     Parameters
     ----------
