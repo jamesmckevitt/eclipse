@@ -440,9 +440,11 @@ def apply_cube_cropping(
         point1.append(None)
         point2.append(None)
     
-    temp_cube = temp_cube.crop(point1, point2)
-    rho_cube = rho_cube.crop(point1, point2)
-    vel_cube = vel_cube.crop(point1, point2)
+    # A crop that keeps one cell along an axis keeps the axis, which the
+    # synthesis needs all three of.
+    temp_cube = temp_cube.crop(point1, point2, keepdims=True)
+    rho_cube = rho_cube.crop(point1, point2, keepdims=True)
+    vel_cube = vel_cube.crop(point1, point2, keepdims=True)
     
     return temp_cube, rho_cube, vel_cube
 
@@ -1944,9 +1946,17 @@ def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str
 
 def resolve_mass_per_electron(args) -> Tuple[float, str]:
     """The mass per free electron to use, in atomic mass units, and where it came from."""
-    if args.mass_per_electron is not None:
+    given = getattr(args, "mass_per_electron", None)
+    # A script that sets the option's old name on its arguments still gets it.
+    if given is None and getattr(args, "mean_mol_wt", None) is not None:
+        warnings.warn(
+            "mean_mol_wt is the old name of mass_per_electron, the mass of the plasma per "
+            "free electron in atomic mass units; it is used, but set mass_per_electron "
+            "instead.", FutureWarning, stacklevel=2)
+        given = args.mean_mol_wt
+    if given is not None:
         try:
-            value = require_mass_per_electron(args.mass_per_electron)
+            value = require_mass_per_electron(given)
         except ValueError as error:
             raise ValueError(f"--mass-per-electron: {error}") from None
         return value, "given on the command line"
@@ -2041,6 +2051,14 @@ def main(args=None) -> None:
         # Validate dynamic mode requirements
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
+        # The snapshots are laid across x, which the slit steps across in a
+        # view along z or y. Seen along x, x is the line of sight, and every
+        # pixel would add up cells from all the snapshots.
+        if integration_axis == "x":
+            raise ValueError(
+                "Dynamic mode lays its snapshots across x, which is the line of sight "
+                "of a view along x, so every pixel would add up all of them. View along "
+                "z or y.")
 
         base_dir = Path(args.data_dir)
         # Voxel sizes of the MURaM files. load_cube scales these itself when

@@ -114,6 +114,18 @@ def _quantity(value, name: str, ndim: Optional[int] = None) -> u.Quantity:
     return value
 
 
+def _check_edges(edges, name: str) -> u.Quantity:
+    """Refuse cell edges that do not bound at least one cell in ascending order."""
+    edges = _quantity(edges, name, ndim=1)
+    if edges.size < 2:
+        raise ValueError(f"{name} must bound at least 1 cell, so have "
+                         f"at least 2 values, got {edges.size}.")
+    if np.any(np.diff(edges.value) <= 0):
+        raise ValueError(f"{name} must increase; ECLIPSE's cubes are "
+                         f"(z, y, x) with every axis ascending.")
+    return edges
+
+
 def edges_from_centres(centres: u.Quantity) -> u.Quantity:
     """
     Cell edges for cells whose centres are *centres*.
@@ -179,14 +191,7 @@ class Atmosphere:
         if self.temperature is None:
             raise ValueError("An atmosphere needs a temperature.")
         for axis in AXES:
-            name = EDGES[axis]
-            edges = _quantity(getattr(self, name), name, ndim=1)
-            if edges.size < 2:
-                raise ValueError(f"{name} must bound at least 1 cell, so have "
-                                 f"at least 2 values, got {edges.size}.")
-            if np.any(np.diff(edges.value) <= 0):
-                raise ValueError(f"{name} must increase; ECLIPSE's cubes are "
-                                 f"(z, y, x) with every axis ascending.")
+            _check_edges(getattr(self, EDGES[axis]), EDGES[axis])
         shape = tuple(getattr(self, EDGES[axis]).size - 1 for axis in ("z", "y", "x"))
         for name in CUBES:
             cube = getattr(self, name)
@@ -505,9 +510,7 @@ def read_atmosphere(path: str | Path,
             name = f"velocity_{axis}"
             if name in f:
                 fields[name] = _read_dataset(f, name, columns)
-        source = f.attrs.get("source", "")
-        if isinstance(source, bytes):
-            source = source.decode()
+        source = _text_attribute(f.attrs, "source", "")
     return Atmosphere(source=str(source), **fields)
 
 
@@ -542,26 +545,57 @@ def describe_atmosphere_file(path: str | Path) -> str:
     """
     What an atmosphere file holds, without loading any of its cubes.
 
-    Reads the attributes, the edges, the time and the cubes' names and
-    shapes, so it costs nothing on a file of many gigabytes.
+    Reads the attributes, the edges, the time and the cubes' names, shapes
+    and units, so it costs nothing on a file of many gigabytes. What it reads
+    is checked as reading the atmosphere would check it, so a file whose
+    layout or units cannot be read is refused here too rather than
+    described; the values in the cubes are checked only when they are read.
     """
     path = Path(path)
     with h5py.File(path, "r") as f:
         _check_format(f, path)
         edges = {axis: _read_dataset(f, EDGES[axis]) for axis in AXES}
+        try:
+            for axis in AXES:
+                _check_edges(edges[axis], EDGES[axis])
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from None
         shape = tuple(edges[axis].size - 1 for axis in ("z", "y", "x"))
         cubes = [name for name in CUBES if name in f]
         for name in cubes:
             if f[name].shape != shape:
                 raise ValueError(f"{name} in {path} has shape {f[name].shape} but "
                                  f"the edges bound (nz, ny, nx) = {shape} cells.")
+            unit = _dataset_unit(f, name)
+            if not unit.is_equivalent(UNITS[name]):
+                raise u.UnitConversionError(f"{name} in {path} must be in a unit convertible "
+                                            f"to {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
+        if "mass_density" not in cubes and "electron_density" not in cubes:
+            raise ValueError(f"{path} has no density: an atmosphere needs a "
+                             f"mass_density or an electron_density.")
         time = _read_dataset(f, "time") if "time" in f else None
-        source = f.attrs.get("source", "")
-        if isinstance(source, bytes):
-            source = source.decode()
+        if time is not None:
+            try:
+                time = _quantity(time, "time", ndim=0)
+            except ValueError as error:
+                raise ValueError(f"{path}: {error}") from None
+        source = _text_attribute(f.attrs, "source", "")
     return _describe(edges, cubes, time, str(source))
+
+
+def _text_attribute(attrs, name: str, default=None):
+    """
+    A text attribute as a string: stored as a string, as bytes, or, as IDL
+    and some other writers store it, as an array of one of either.
+    """
+    value = attrs.get(name, default)
+    if isinstance(value, np.ndarray) and value.size == 1:
+        value = value.reshape(()).item()
+    if isinstance(value, bytes):
+        value = value.decode()
+    return value
 
 
 def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
@@ -574,9 +608,7 @@ def _check_format(f: h5py.File, path: Path, kind: str = "atmosphere",
     *documented* says whether the docs give the layout, as they do for a
     file someone may write themselves.
     """
-    name = f.attrs.get("format")
-    if isinstance(name, bytes):
-        name = name.decode()
+    name = _text_attribute(f.attrs, "format")
     if name != format_name:
         layout = (f" See ECLIPSE's documentation of the {kind} file for the layout."
                   if documented else "")
@@ -604,24 +636,28 @@ def _read_dataset(f: h5py.Group, name: str,
                   units: Dict[str, u.Unit] = UNITS,
                   axis: int = -1) -> u.Quantity:
     """A dataset of a file or of a group in it, with its unit; *columns* reads only that slice of its x axis, *axis*."""
-    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
-    if name not in f:
-        raise ValueError(f"{where} has no '{name}' dataset.")
+    unit = _dataset_unit(f, name, units)
     dataset = f[name]
-    unit = dataset.attrs.get("unit")
-    if unit is None:
-        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
-                         f"Every dataset needs one, for instance "
-                         f"'{units[name]}'.")
-    if isinstance(unit, bytes):
-        unit = unit.decode()
     if columns is None:
         values = dataset[()]
     else:
         index = [slice(None)] * dataset.ndim
         index[axis] = columns
         values = dataset[tuple(index)]
-    return u.Quantity(values, u.Unit(unit))
+    return u.Quantity(values, unit)
+
+
+def _dataset_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS) -> u.Unit:
+    """The unit of a dataset of a file or of a group in it, from its 'unit' attribute, without reading it."""
+    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
+    if name not in f:
+        raise ValueError(f"{where} has no '{name}' dataset.")
+    unit = _text_attribute(f[name].attrs, "unit")
+    if unit is None:
+        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
+                         f"Every dataset needs one, for instance "
+                         f"'{units[name]}'.")
+    return u.Unit(unit)
 
 
 # ----------------------------------------------------------------------

@@ -4,6 +4,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 
 from __future__ import annotations
 import contextlib
+import functools
 import difflib
 import dataclasses
 import subprocess
@@ -81,9 +82,13 @@ def set_debug_mode(enabled: bool):
     DEBUG_MODE = enabled
 
 
-def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None):
+def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None,
+                traceback=None):
     """
     Break into IPython debugger if debug mode is enabled.
+
+    Without IPython, *traceback*, when given, is opened in pdb after the
+    fact, at the frame that raised; otherwise pdb stops here.
     
     Usage:
         debug_break("Check values here", locals(), globals())
@@ -100,11 +105,12 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
         from IPython import embed
         
         # Prepare namespace for IPython
+        # The module's names first, so that a local of the same name wins.
         user_ns = {}
-        if locals_dict:
-            user_ns.update(locals_dict)
         if globals_dict:
             user_ns.update(globals_dict)
+        if locals_dict:
+            user_ns.update(locals_dict)
             
         print("Starting IPython session...")
         print("Available variables:", list(user_ns.keys()) if user_ns else "None provided")
@@ -116,7 +122,10 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
     except ImportError:
         print("IPython not available. Using standard Python debugger...")
         import pdb
-        pdb.set_trace()
+        if traceback is not None:
+            pdb.post_mortem(traceback)
+        else:
+            pdb.set_trace()
 
 
 def debug_on_error(func):
@@ -128,16 +137,29 @@ def debug_on_error(func):
         def my_function():
             # your code here
     """
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception as e:
             if DEBUG_MODE:
-                print(f"\n=== EXCEPTION IN {func.__name__}: {e} ===")
-                # Get the frame where the exception occurred
-                import sys
-                frame = sys.exc_info()[2].tb_frame
-                debug_break(f"Exception in {func.__name__}: {e}", frame.f_locals, frame.f_globals)
+                print(f"\n=== EXCEPTION IN {func.__name__}: {type(e).__name__}: {e} ===")
+                # The session opens with the exception as `exception`, in the
+                # frame nearest where it was raised that is ECLIPSE's own: the
+                # decorated function's, the second of the traceback after
+                # this wrapper's, or that of a function it called. Deeper, in
+                # numpy or astropy, the locals say little about the run. pdb,
+                # without IPython, opens where it was raised and can go up.
+                package = __name__.split(".")[0]
+                frame = (e.__traceback__.tb_next or e.__traceback__).tb_frame
+                entry = e.__traceback__.tb_next
+                while entry is not None:
+                    if entry.tb_frame.f_globals.get("__name__", "").split(".")[0] == package:
+                        frame = entry.tb_frame
+                    entry = entry.tb_next
+                debug_break(f"Exception in {func.__name__}: {e}",
+                            {**frame.f_locals, "exception": e}, frame.f_globals,
+                            traceback=e.__traceback__)
             raise
     return wrapper
 
@@ -337,10 +359,25 @@ def load_maps(path: str | Path) -> dict:
 
 
 def get_git_commit_id() -> str:
-    """Get the last git commit ID from the package's git repository."""
+    """
+    Get the last git commit ID from the package's git repository.
+
+    Only a git checkout of ECLIPSE itself, with the package at its top, has
+    one. A package installed into an environment that happens to sit inside
+    some other repository, such as a project's .venv, is not part of it, and
+    that repository's commit says nothing about ECLIPSE.
+    """
     try:
         from importlib.resources import files
         pkg_path = Path(str(files("euvst_response"))).parent
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, cwd=pkg_path, timeout=5,
+        )
+        if top.returncode != 0:
+            return "unknown (not a git repository)"
+        if Path(top.stdout.strip()).resolve() != pkg_path.resolve():
+            return "unknown (not installed from a git checkout of ECLIPSE)"
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,
