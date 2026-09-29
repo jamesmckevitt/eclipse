@@ -1,90 +1,73 @@
 # Quick start
 
-## Command line interface
+ECLIPSE works in two steps. First `synthesise-spectra` turns a model of the solar atmosphere into the spectra it emits. Then `eclipse` passes those spectra through the instrument, adds noise, and fits the lines as you would fit real data.
 
-After installation, you can run ECLIPSE from the command line:
+## From the command line
 
 ```bash
-# Run synthesis script (convert 3D MHD data to synthetic spectra), from an
-# atmosphere file written from the simulation
+# Make the spectrum of Fe XII 195.119 Angstrom from an atmosphere file
 synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 
-# Run instrument response simulation
+# Pass it through the instrument
 eclipse --config ./run/input/config.yaml
-
-# Help can be accessed with
-synthesise-spectra --help
-eclipse --help
 ```
 
-That is the two-stage pipeline: `synthesise-spectra` builds the atmosphere's spectra, `eclipse` puts them through the instrument. See [From an MHD simulation](synthesis.md), which also describes the atmosphere file, and [Simulating the instrument](instrument-response.md) for the full set of options.
+An atmosphere file holds a simulation's temperature, density and velocity. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write one from your simulation's output. `synthesise-spectra` writes the spectra to `./run/input/synthesised_spectra.h5`.
 
-There is no default configuration file, so write `config.yaml` yourself between those two commands. A minimal one that reads what the synthesis just wrote:
+`eclipse` reads its settings from a configuration file. There is no default one, so write `config.yaml` yourself before running it:
 
 ```yaml
-instrument: SWC
+instrument: SWC                                      # EUVST's short wavelength channel
 synthesis_file: ./run/input/synthesised_spectra.h5
-reference_line: Fe12_195.1190
-n_iter: 100
+reference_line: Fe12_195.1190                        # observe the window around this line
+n_iter: 100                                          # repeat each exposure 100 times, each with new noise
 
 simulation:
-  expos: [10 s, 40 s]
+  expos: [10 s, 40 s]                                # exposure times
 ```
 
-Starting from an observed DEM instead of an MHD cube? See [From a DEM](dem-synthesis.md). Only want the precision on a line of known brightness, with no atmosphere at all? See [From a single intensity](uniform-intensity.md), which skips `synthesise-spectra` entirely.
+Both commands list their options with `--help`, and [Simulating a single snapshot](instrument-response.md) describes every setting in the configuration file.
 
-## Python API
+You don't need an MHD simulation. You can start from an observed DEM instead ([From a DEM](dem-synthesis.md)). If you only want to know how precisely a line of a given brightness can be measured, start from a single intensity ([From a single intensity](uniform-intensity.md)), which skips `synthesise-spectra` altogether.
 
-You can also use ECLIPSE as a Python library:
+## From Python
+
+Everything is also available as a Python package, `euvst_response`. For example, the effective area at Fe XII 195.119 Angstrom:
 
 ```python
 import astropy.units as u
-import euvst_response
-from euvst_response import AluminiumFilter, Detector_SWC, Telescope_EUVST
+from euvst_response import Detector_SWC, Telescope_EUVST
 
 telescope = Telescope_EUVST()
 detector = Detector_SWC()
+wavelength = 195.119 * u.AA
 
-print(f"Telescope collecting area: {telescope.collecting_area:.4f}")
-print(f"Detector QE (EUV): {detector.qe_euv:.2f}")
+# Collecting area, times the throughput of the mirror, grating and filter, times the detector's quantum efficiency
+effective_area = telescope.ea_and_throughput(wavelength) * detector.qe_euv
+print(effective_area.to(u.cm**2))
 
-# Calculate effective area at Fe XII 195.119 Angstrom
-fe12_wl = 195.119 * u.AA
-effective_area = telescope.collecting_area * telescope.throughput(fe12_wl) * detector.qe_euv
-
-# Get breakdown of throughput by component
-pm_eff = telescope.primary_mirror_efficiency(fe12_wl)
-grating_eff = telescope.grating_efficiency(fe12_wl)
-micro_eff = telescope.microroughness_efficiency(fe12_wl)
-filter_eff = telescope.filter.total_throughput(fe12_wl)
+# Each part on its own
+mirror = telescope.primary_mirror_efficiency(wavelength)
+roughness = telescope.microroughness_efficiency(wavelength)
+grating = telescope.grating_efficiency(wavelength)
+filter_throughput = telescope.filter.total_throughput(wavelength)
 ```
 
-## Working with results
+## Looking at the results
 
-For analysing simulation results, see the [worked example](worked-example.ipynb), which demonstrates how to:
-
-- Load simulation results
-- Explore parameter combinations
-- Create SunPy maps for visualization
-
-The analysis functions are available directly from the package:
+`eclipse` writes its results to `run/result/<config name>.h5`, so here `run/result/config.h5`. To load them:
 
 ```python
 import astropy.units as u
-from euvst_response import (
-    load_instrument_response_results,
-    get_results_for_combination,
-    analyse_fit_statistics,
-    create_sunpy_maps_from_combo,
-    summary_table
-)
+from euvst_response import load_instrument_response_results, get_results_for_combination, summary_table
 
-# Load results
 results = load_instrument_response_results("run/result/config.h5")
 
-# Print a summary table (auto-discovers all parameters and shows git commit)
+# One row for each combination of settings in the run, and the version of ECLIPSE that made it
 summary_table(results)
 
-# Retrieve a specific combination using full section.attribute names
-combo = get_results_for_combination(results, **{"simulation.expos": 40*u.s})
+# The results for the 40 s exposures. Settings are named by their section and key in the configuration file.
+combo = get_results_for_combination(results, **{"simulation.expos": 40 * u.s})
 ```
+
+The [worked example](worked-example.ipynb) goes the whole way, from an MHD snapshot to a map of the measured intensity.
