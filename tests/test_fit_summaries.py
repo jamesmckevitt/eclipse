@@ -544,7 +544,11 @@ def test_every_velocity_and_width_map_holds_its_own_quantity():
     assert ratio == pytest.approx(0.036 / 0.031, rel=1e-9)
 
     maps = create_sunpy_maps_from_combo(combination, date_obs=WHEN)
-    for key, name in (("v_first", "velocity_from_fit"), ("v_mean", "velocity_mean"),
-                      ("v_true", "velocity_true"), ("v_err", "velocity_err"),
-                      ("w_first", "line_width_from_fit"), ("w_mean", "line_width_mean")):
+    pairs = (("v_first", "velocity_from_fit"), ("v_mean", "velocity_mean"),
+             ("v_std", "velocity_std"), ("v_true", "velocity_true"), ("v_err", "velocity_err"),
+             ("w_first", "line_width_from_fit"), ("w_mean", "line_width_mean"),
+             ("w_std", "line_width_std"))
+    # Each map's values differ from every other's, so a map given another's is caught.
+    assert len({tuple(np.ravel(analysis[key].value)) for key, _ in pairs}) == len(pairs)
+    for key, name in pairs:
         assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name
