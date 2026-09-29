@@ -472,3 +472,27 @@ def test_eis_and_swc_differ_only_by_their_numbers():
 
     expected = etendue(eis, sim_eis) / etendue(swc, sim_swc)
     assert n_eis / n_swc == pytest.approx(expected, rel=1e-10)
+
+
+def test_an_iteration_raises_no_warnings_about_the_cube_having_no_observer():
+    """
+    A cube with helioprojective and wavelength axes has no observer, and
+    astropy warns each time its wavelengths are made into SpectralCoord
+    objects. Called from Python, rather than through eclipse, which filters
+    the warnings, each Monte Carlo iteration printed two of them.
+    """
+    import warnings
+
+    from euvst_response import Telescope_EUVST, create_uniform_intensity_cube, simulate_once
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(slit_width=0.2 * u.arcsec, expos=1 * u.s, psf=True)
+    cube = create_uniform_intensity_cube(5000 * u.erg / (u.s * u.cm**2 * u.sr),
+                                         195.119 * u.AA, 20 * u.km / u.s, det, sim, tel=tel)
+    np.random.seed(20260929)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        simulate_once(cube, sim.expos, det, tel, sim, uniform_mode=True)
+    about_the_observer = [str(w.message) for w in caught
+                          if "ICRS" in str(w.message) or "observer" in str(w.message)]
+    assert about_the_observer == []

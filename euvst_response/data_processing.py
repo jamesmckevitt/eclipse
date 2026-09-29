@@ -138,7 +138,7 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
     cube's WCS, unit and metadata, plus the names of the lines it holds.
     """
     ref_cube = line_cubes[reference_line]
-    ref_wavelengths = ref_cube.axis_world_coords(-1)[0]
+    ref_wavelengths = ref_cube.axis_world_coords_values(-1)[0]
     line_names = list(line_cubes.keys())
 
     # Get spatial dimensions from reference cube
@@ -149,7 +149,7 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
 
     for line_name, cube in tqdm(line_cubes.items(), desc="Summing line cubes", unit="line", leave=False):
         # Get wavelength grid for this cube
-        cube_wavelengths = cube.axis_world_coords(-1)[0]
+        cube_wavelengths = cube.axis_world_coords_values(-1)[0]
 
         # Check spatial dimensions match
         ny_cube, nx_cube, _ = cube.data.shape
@@ -200,7 +200,7 @@ def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu
         A new NDCube with the spectral axis resampled.
     """
     # Get the world coordinates of the spectral axis
-    spectral_world = ndcube.axis_world_coords(spectral_axis)[0]
+    spectral_world = ndcube.axis_world_coords_values(spectral_axis)[0]
 
     # Move spectral axis to last for easier iteration
     data = np.moveaxis(ndcube.data, spectral_axis, -1)
@@ -513,7 +513,7 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
         return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det,
                                                                 ncpu=sim.ncpu)
 
-    data, grid = _spectra_on_the_detector(cube_sim.data, cube_sim.axis_world_coords(2)[0],
+    data, grid = _spectra_on_the_detector(cube_sim.data, cube_sim.axis_world_coords_values(2)[0],
                                           det, sim, tel)
     wcs = cube_sim.wcs.deepcopy()
     unit = wcs.wcs.cunit[0]
