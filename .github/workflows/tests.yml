@@ -53,7 +53,8 @@ jobs:
   # The tests that check ECLIPSE against CHIANTI itself need fiasco's database,
   # which the job above does not build, so they are skipped there. Here it is
   # built, once per fiasco version, and kept in the cache; building it downloads
-  # the 1.1 GB CHIANTI release and takes a while, so a cache hit is the usual case.
+  # the CHIANTI release, some 600 MB, and takes about ten minutes, so a cache hit
+  # is the usual case.
   chianti:
     runs-on: ubuntu-latest
     steps:
