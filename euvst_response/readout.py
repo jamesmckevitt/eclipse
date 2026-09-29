@@ -312,8 +312,9 @@ class ReadoutSequence:
         Row transfers used to clear the image area before the exposure.  The
         default clears a whole CCD.  A frame here always starts from an empty
         chip, so fewer rows leave out the charge a partial clear leaves
-        behind, which :func:`smear_photons` and :func:`dark_current_time`
-        warn of.
+        behind, which :func:`dark_current_time` warns of, and
+        :func:`smear_photons` too without a shutter, with which there is no
+        smear to leave out.
     windows : list of tuple of int
         Inclusive row ranges that are read out.  An empty list reads every row,
         which is the slowest case.
