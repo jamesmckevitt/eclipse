@@ -7,6 +7,7 @@ resampling from a grid that is not evenly spaced, and that an instrument
 run observes a synthesis file exactly as it observed the pickles of older
 versions holding the same line cubes.
 """
+import os
 import sys
 import warnings
 
@@ -766,6 +767,7 @@ def test_a_write_cut_short_leaves_the_atmosphere_file_that_was_there(tmp_path, m
     assert [p.name for p in tmp_path.iterdir()] == ["box.h5"]
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes over read-only files")
 def test_a_read_only_file_is_not_written_over(tmp_path):
     path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
     path.chmod(0o444)
