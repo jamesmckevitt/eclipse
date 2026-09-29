@@ -1,8 +1,8 @@
 # Simulating a time series
 
-A slit spectrograph sees one strip of the Sun at a time, so in a raster each exposure sees a different strip at a later time, and in a sit-and-stare it sees the same strip over and over. ECLIPSE can observe a time series of [atmosphere files](synthesis.md#atmosphere-files) in the same way: for each exposure it synthesises only the columns under the slit, from the snapshots that overlap the exposure in time. A series of spectra already synthesised, by ECLIPSE or [another code](other-codes.md), can be observed too; see [From synthesis files](#from-synthesis-files).
+A slit spectrograph sees one strip of the Sun at a time. In a raster, each exposure sees the next strip along, a little later than the one before. In a sit-and-stare, it sees the same strip again and again. ECLIPSE can observe a time series of [atmosphere files](synthesis.md#atmosphere-files) in the same way. For each exposure it synthesises only the columns under the slit, from the snapshots that overlap the exposure in time. A series of spectra already synthesised, by ECLIPSE or [another code](other-codes.md), can be observed too; see [From synthesis files](#from-synthesis-files).
 
-This happens in the instrument run rather than in `synthesise-spectra`, because what the slit sees depends on the slit width and the exposure time. The configuration names the files, says how to synthesise them, and gives the observing plan:
+What the slit sees depends on the slit width and the exposure time, so this all happens in the `eclipse` run rather than in `synthesise-spectra`. The configuration names the files, says how to synthesise them, and gives the observing plan:
 
 ```yaml
 instrument: SWC
@@ -28,9 +28,9 @@ The rest of the configuration is as for [a single snapshot](instrument-response.
 
 ## The files
 
-`atmosphere_series` is a glob pattern or a list of atmosphere files. Each file needs a `time` and a `velocity_z`, as the view is from above, and all of them must be on the same grid. The files are read a few columns at a time, so a long series of large files needs little memory.
+`atmosphere_series` is a glob pattern or a list of atmosphere files. Each file needs a `time`, and a `velocity_z` since the view is from above. All of them must be on the same grid. The files are read a few columns at a time, so even a long series of large files needs little memory.
 
-Each snapshot stands for the atmosphere from its own time until the next snapshot's, and the last one for as long again as the gap before it. An exposure outside that range is refused.
+Each snapshot stands for the atmosphere from its own time until the next snapshot's. The last one lasts as long as the gap before it. An exposure outside that time range is refused.
 
 ## The synthesis
 
@@ -38,21 +38,21 @@ The `synthesis:` section takes these settings, which mean what they do in `synth
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `lines` | The lines to synthesise, named as on the [synthesis page](synthesis.md#naming-spectral-lines) | required |
+| `lines` | The lines to synthesise, named as in [Naming spectral lines](line-names.md) | required |
 | `abundance` | The CHIANTI abundance set | `sun_coronal_2021_chianti` |
 | `vel_res`, `vel_lim` | The velocity grid's spacing and half range | `5 km/s`, `300 km/s` |
 | `crop_y`, `crop_z` | Ranges to keep along y and z, as `[low, high]` with units | the whole box |
 | `precision` | `float32` or `float64` | `float64` |
-| `mass_per_electron` | Atomic mass units per free electron, for files with only a mass density | calculated from the abundances |
+| `mass_per_electron` | Atomic mass units per free electron, for files with only a mass density | worked out from the abundances |
 | `hdf5_dbase_root` | The CHIANTI database for fiasco | fiasco's default |
-| `n_workers` | Workers for the contribution functions | every CPU |
-| `goft_temperature_chunk` | Temperatures to compute the contribution functions for at a time, to use less memory | the whole grid |
+| `n_workers` | Processes computing the contribution functions, one ion each at a time | one per CPU, but no more than one per ion |
+| `goft_temperature_chunk` | How many temperatures to compute the contribution functions for at once; fewer uses less memory | the whole grid |
 
-`reference_line` picks the line whose wavelength grid the others are summed onto, as for a synthesis file, and defaults to the first line.
+`reference_line` chooses the spectral window to observe, as for a single snapshot. It defaults to the first of `lines`.
 
 ## From synthesis files
 
-A series can also be given as [synthesis files](other-codes.md#the-synthesis-file), one per snapshot, with `synthesis_series` in place of `atmosphere_series`. They can come from ECLIPSE's own synthesis or from another code. The slit then reads the columns under it rather than synthesising them, so there is no `synthesis:` section:
+A series can also be given as [synthesis files](files.md#synthesis-files), one per snapshot, with `synthesis_series` in place of `atmosphere_series`. They can come from ECLIPSE's own synthesis or from another code. The slit then reads the columns under it rather than synthesising them, so there is no `synthesis:` section:
 
 ```yaml
 instrument: SWC
@@ -69,9 +69,9 @@ simulation:
   psf: True
 ```
 
-Each file needs a `time`, and all of them must share one image and hold the same lines on the same wavelengths. ECLIPSE's synthesis writes the time of the atmosphere file into the synthesis file. `reference_line` works as it does for a [single snapshot](instrument-response.md), defaulting to the files' only line. The observing plan and what each exposure sees are the same as for atmosphere files.
+Each file needs a `time`. All of them must be seen from the same side, on the same grid of pixels, and hold the same lines on the same wavelengths within the window observed. Lines outside that window are not read. ECLIPSE's own synthesis copies the atmosphere file's time into the synthesis file. `reference_line` works as it does for a [single snapshot](instrument-response.md), and defaults to the files' only line. The observing plan, and what each exposure sees, are the same as for atmosphere files.
 
-Synthesising every snapshot with `synthesise-spectra` and observing the files with the same `reference_line` gives the same result as observing the atmosphere files, but synthesises every column of every snapshot rather than only those under the slit.
+Synthesising every snapshot with `synthesise-spectra`, then observing the synthesis files with the same `reference_line`, gives the same result as observing the atmosphere files. It just takes longer, since it synthesises every column of every snapshot rather than only those under the slit.
 
 ## The observing plan
 
@@ -82,21 +82,21 @@ Synthesising every snapshot with `synthesise-spectra` and observing the files wi
 | `step` | The angle between neighbouring slit positions | the slit width |
 | `repeats` | How many rasters follow one another | `1` |
 | `cadence` | The time between the starts of consecutive exposures | the exposure time |
-| `centre` | The heliocentric x, as a length, the raster is centred on | the middle of the box, or of the image |
+| `centre` | The heliocentric x, as a length, that the raster is centred on | the middle of the box, or of the image |
 | `direction` | The way the slit steps: `increasing` x or `decreasing` x | `increasing` |
 
-Exposure *i* starts at `start + i * cadence` and lasts the exposure time. The slit steps towards increasing x, or towards decreasing x with `direction: decreasing`, and then the next raster begins.
+Exposure *i* starts at `start + i * cadence` and lasts the exposure time. The slit steps across in the chosen direction, and then the next raster begins.
 
-With `repeats` above 1, each raster is a separate result: `raster.repeat` is added as a sweep dimension, so a raster is picked out like any swept parameter, for example `get_results_for_combination(results, **{"raster.repeat": 2, ...})`.
+With `repeats` above 1, each raster is kept as a separate result, and is picked out like any setting the run swept through, for example `get_results_for_combination(results, **{"raster.repeat": 2, ...})`.
 
 ## What each exposure sees
 
-An exposure averages the columns under the slit, weighted by how much of the slit each covers. When it spans more than one snapshot, it averages their spectra, weighted by the time each covers; the atmosphere itself is never interpolated between snapshots.
+An exposure averages the columns under the slit, weighted by how much of the slit each one covers. When an exposure spans more than one snapshot, it averages their spectra, weighted by how long each one lasts within the exposure. The atmosphere itself is never interpolated between snapshots.
 
-Each column of each snapshot is synthesised, or read, once and then reused, so sweeping the exposure time or slit width costs little after the first combination.
+Each column of each snapshot is synthesised, or read, only once and then reused, so sweeping the exposure time or slit width costs little after the first combination.
 
-The cube for each combination has one column per exposure, at the slit positions. The results file records the plan, the synthesis settings of atmosphere files, the files and their times, and each combination's cube, under `raster`. Synthesis files whose wavelengths are not evenly spaced give no cube there, since a WCS can't describe them.
+The cube for each combination has one column per exposure, at the slit positions. The results file keeps the plan, the synthesis settings for atmosphere files, the files and their times, and each combination's cube, under `raster`. If the synthesis files' wavelengths are not evenly spaced, there is no cube, because its coordinates can't describe them.
 
 ## From the old dynamic mode
 
-Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated and will be removed in a future release; see the note at the end of the [synthesis page](synthesis.md). To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [MURaM example](synthesis.md#worked-example-a-muram-flare), and give the files as `atmosphere_series`.
+Dynamic mode in `synthesise-spectra` (`--slit-rest-time`) is deprecated. [Older versions](older-versions.md#dynamic-mode) says how to move a dynamic-mode run over to a time series of atmosphere files.

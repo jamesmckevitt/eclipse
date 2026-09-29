@@ -5,11 +5,11 @@ search:
 
 # Pixels and the PSF
 
-How the instrument run lays a synthesis onto the detector's pixels, and where the PSF comes in.
+How `eclipse` lays a synthesis onto the detector's pixels, and where the PSF comes in.
 
-Each detector pixel holds the mean of the scene over its footprint: along the slit over the plate scale, across it over the slit width, and along the dispersion over the pixel's wavelengths, with each cell of the synthesis taken to be uniform. With `psf: True` the scene is blurred by the PSF on the synthesis's own grids before the pixels average it, so a line narrower than a pixel keeps its place within the pixel. Light the blur moves to another wavelength keeps the photon count of its own wavelength. The ground truth is the scene without the PSF.
+Each detector pixel holds the mean of the scene over the area it covers: along the slit over the plate scale, across it over the slit width, and in wavelength over the pixel's range of wavelengths. Each cell of the synthesis is taken to be uniform. With `psf: True`, the scene is blurred by the PSF on the synthesis's own grids before the pixels average it, so a line narrower than a pixel keeps its place within the pixel. Light that the blur moves to another wavelength is counted in photons at the wavelength it came from. The ground truth is the scene without the PSF.
 
-The PSF along the slit and along the dispersion is measured at the detector, after the slit. The telescope also blurs the image it forms on the slit, which brings in light from beside the slit, but that blur across the slit is not in `psf_params`. `telescope.psf_across_slit` gives it, as a FWHM, and leaves it out when not set (the default):
+The PSF along the slit and in wavelength is measured at the detector, after the slit. The telescope also blurs the image it forms on the slit, which brings in light from either side of the slit, but that blur across the slit is not in `psf_params`. `telescope.psf_across_slit` sets it, as a FWHM. Without it, which is the default, there is no blur across the slit:
 
 ```yaml
 telescope:

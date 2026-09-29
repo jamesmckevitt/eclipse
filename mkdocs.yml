@@ -26,17 +26,25 @@ theme:
 
 nav:
   - Home: index.md
-  - Quick start: quickstart.md
-  - Synthesising an atmosphere:
-      - From an MHD simulation: synthesis.md
-      - From a DEM: dem-synthesis.md
-      - From a VDEM: vdem-synthesis.md
-      - From a single intensity: uniform-intensity.md
-  - Simulating the instrument:
-      - Single snapshot: instrument-response.md
-      - Time series: time-series.md
-      - From another code: other-codes.md
+  - Getting started: quickstart.md
   - Worked example: worked-example.ipynb
+  - 1. Synthesising the spectra:
+      - From an MHD simulation: synthesis.md
+      - From a DEM or VDEM: dem-synthesis.md
+      - Spectra from another code: other-codes.md
+  - 2. Simulating the instrument:
+      - Running a simulation: instrument-response.md
+      - Configuration reference: configuration.md
+      - Fitting blended lines: fitting.md
+      - A single line of known intensity: uniform-intensity.md
+      - Time series: time-series.md
+      - Instruments: instruments.md
+  - 3. Analysing the results: analysis.md
+  - Python: python.md
+  - Reference:
+      - Files: files.md
+      - Naming spectral lines: line-names.md
+      - Older versions: older-versions.md
   - Acknowledgements: acknowledgements.md
 
 # docs/internal/ holds pages for the instrument team, reached only by a link.
@@ -68,6 +76,10 @@ plugins:
   - search
   - mkdocs-jupyter:
       include_source: true
+  # Pages that were merged into others, so that links to them still land.
+  - redirects:
+      redirect_maps:
+        vdem-synthesis.md: dem-synthesis.md#with-velocities-a-vdem
   - mkdocstrings:
       handlers:
         python:

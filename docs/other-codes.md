@@ -1,25 +1,8 @@
-# From another code
+# Spectra from another code
 
-To simulate the instrument response to spectra that another code has synthesised, write them as a synthesis file first. These can then be observed as a [single snapshot](instrument-response.md) or as a [time series](time-series.md#from-synthesis-files).
+If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](instrument-response.md), or, with one file per snapshot, as a [time series](time-series.md#from-synthesis-files).
 
-## The synthesis file
-
-The file is laid out much like an [atmosphere file](synthesis.md#atmosphere-files). The root has a `format` attribute of `eclipse-synthesis`, a `version` of `1`, and optionally a `source` saying where the spectra came from. Each dataset has a `unit` attribute that astropy can read.
-
-| Dataset | Shape | What it holds |
-| --- | --- | --- |
-| `x_edges` | `(nx + 1,)` | The pixel boundaries across the slit, evenly spaced |
-| `y_edges` | `(ny + 1,)` | The pixel boundaries along the slit, evenly spaced |
-| `time` | scalar | The time of the snapshot, which only a time series needs |
-| `lines/<name>/intensity` | `(ny, nx, n_wavelength)` | The spectral radiance at each pixel and wavelength |
-| `lines/<name>/wavelength` | `(n_wavelength,)` | The wavelengths, increasing |
-| `lines/<name>/rest_wavelength` | scalar | The wavelength the line's Doppler shifts are measured from |
-
-Each group under `lines` holds a line, named as `reference_line` names it in the instrument configuration. It can equally hold a whole spectral window with its blends, as most codes give it, and the blends are fitted with a `fitting` block as on the [single snapshot](instrument-response.md) page. ECLIPSE's own synthesis writes a group for each line, with its `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the axis it looked along, and a `synthesis` group of what it worked out on the way, all of which a file from another code can leave out.
-
-The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons (e.g. `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` and `ph / (s cm2 sr nm)`). The wavelengths don't have to be evenly spaced, so a grid that is denser in the line cores can be input. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
-
-x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`. If your code gives pixel centres, `edges_from_centres` places the edges halfway between them.
+A synthesis file holds the spectral radiance at each pixel and wavelength, for each line or spectral window, with its wavelengths, the rest wavelength that Doppler shifts are measured from, and the edges of the pixels. [Files](files.md#synthesis-files) gives the layout in full.
 
 ## Writing one
 
@@ -42,6 +25,12 @@ synthesis = Synthesis(
 write_synthesis(synthesis, "my_code.h5")
 ```
 
+The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons. The wavelengths don't have to be evenly spaced, so you can use a grid that is finer in the line cores. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
+
+x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`.
+
+A line can also be a whole spectral window with its blends, as most codes give it. The blends are then fitted as in [Fitting blended lines](fitting.md).
+
 ## Worked example: FoMo
 
 [FoMo](https://github.com/TomVeeDee/FoMo) ([Van Doorsselaere et al. 2016](https://doi.org/10.3389/fspas.2016.00004)) synthesises optically thin lines from an MHD simulation, from any viewing angle.
@@ -58,7 +47,7 @@ Object.render(0, M_PI);  // the viewing angles l and b: down from above, for a b
 
 A window of 600000 m/s reaches 300 km/s on both sides of the line, and 121 wavelengths put the points 5 km/s apart.
 
-Then format the synthesis into a format ECLIPSE will accept:
+Then write it as a synthesis file:
 
 ```python
 import gzip
@@ -119,7 +108,7 @@ synthesis = fomo_synthesis("fomo-output.txt", x_pixel=128, y_pixel=128, lambda_p
 write_synthesis(synthesis, "fomo.h5")
 ```
 
-FoMo writes text unless told otherwise, and binary with `setwriteoutbinary()`, as in its own example; `read_fomo` reads either, zipped or not. The file then goes into the instrument configuration as `synthesis_file: ./fomo.h5`.
+FoMo writes text by default, or binary with `setwriteoutbinary()`, as its own example does. `read_fomo` reads either, compressed with gzip or not. The file then goes into the instrument configuration as `synthesis_file: ./fomo.h5`.
 
 ## Worked example: PINTofALE
 
@@ -176,8 +165,9 @@ for line in np.flatnonzero(poa["flx"] > 0):
     profile = (0.5 * np.diff(erf(z), axis=0) * share).sum(axis=1) / np.diff(edges)
     spectrum += radiance[line] * profile
 
-# The line to measure, at the wavelength PINTofALE has it, to all its digits:
-# the line is placed there, so a rounded one would read as a Doppler shift.
+# The rest wavelength of the line to measure, exactly as PINTofALE has it. The
+# line is placed at that wavelength, so a rounded value would show up as a
+# Doppler shift.
 measured = np.argmin(np.abs(rest - 195.119 * u.AA))
 
 # A DEM has no structure on the sky, so the spectrum is laid over a patch
