@@ -341,6 +341,13 @@ def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
     with pytest.raises(ValueError, match="integration_axis must be one of"):
         _synthesis(integration_axis="w")
 
+    # A view from the other side keeps its sign; one named with the side the
+    # axis alone gives is recorded as the axis alone.
+    path = write_synthesis(_synthesis(integration_axis="-x"), tmp_path / "from_minus_x.h5")
+    assert read_synthesis(path).integration_axis == "-x"
+    assert list(load_synthesis(path)["line_cubes"][LINE].wcs.wcs.ctype) == ["WAVE", "SOLY", "SOLZ"]
+    assert _synthesis(integration_axis="+x").integration_axis == "x"
+
 
 def test_each_line_keeps_its_atom_and_ion(tmp_path):
     cubes = _line_cubes()

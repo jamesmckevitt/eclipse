@@ -27,8 +27,8 @@ from euvst_response.analysis import load_instrument_response_results
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.data_processing import load_atmosphere
 from euvst_response.results_file import save_results
-from euvst_response.synthesis_file import load_synthesis
-from euvst_response.utils import VELOCITY_CONVENTION
+from euvst_response.synthesis_file import load_synthesis, read_synthesis
+from euvst_response.utils import VELOCITY_CONVENTION, view_axis_and_side
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -95,7 +95,7 @@ def _synthesise(tmp_path, monkeypatch, axis, extra=()):
     argv = [
         "synthesise-spectra",
         "--output-dir", str(tmp_path / "out"),
-        "--output-name", f"{axis}.h5",
+        "--output-name", f"view{axis}.h5",
         "--lines", LINE,
         "--mean-mol-wt", str(MEAN_MOL_WT),
         "--integration-axis", axis,
@@ -108,11 +108,11 @@ def _synthesise(tmp_path, monkeypatch, axis, extra=()):
                  "--voxel-dx", "0.1 Mm", "--voxel-dy", "0.15 Mm",
                  "--voxel-dz", "0.05 Mm"]
     else:
-        argv += ["--atmosphere", str(_atmosphere_file(tmp_path, axis))]
+        argv += ["--atmosphere", str(_atmosphere_file(tmp_path, axis[-1]))]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
-    return tmp_path / "out" / f"{axis}.h5"
+    return tmp_path / "out" / f"view{axis}.h5"
 
 
 def _load(path):
@@ -187,6 +187,98 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
     assert saved["dynamic_mode"]["enabled"]
     assert _doppler_velocity(saved["line_cubes"][LINE]) == pytest.approx(
         -FLOW.value, abs=0.1)
+
+
+# For each axis, where a flow along it is put in the files' own (nx, nz, ny)
+# layout, so that it fills the image columns of lowest coordinate, and the
+# view from the other side.
+HALF_ALONG_COLUMNS = {"x": np.s_[:, :, :SHAPE[2] // 2], "y": np.s_[:SHAPE[0] // 2],
+                      "z": np.s_[:SHAPE[0] // 2]}
+OTHER_SIDE = {"x": "-x", "y": "+y", "z": "-z"}
+
+
+@pytest.mark.parametrize("axis", ["x", "y", "z"])
+def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
+        tmp_path, monkeypatch, axis):
+    """Walking round the box mirrors the image, and turns an approaching flow into a receding one.
+
+    The flow fills the half of the box whose image columns have the lowest
+    coordinate, so it is on the left of the view the axis names and on the
+    right of the view from the other side.
+    """
+    velocity = np.zeros(SHAPE)
+    velocity[HALF_ALONG_COLUMNS[axis]] = FLOW.to_value(u.cm / u.s)
+    _write_muram_files(tmp_path / "atmosphere", {axis: velocity})
+
+    named = _load(_synthesise(tmp_path, monkeypatch, axis))
+    other = _load(_synthesise(tmp_path, monkeypatch, OTHER_SIDE[axis]))
+    named_cube, other_cube = named["line_cubes"][LINE], other["line_cubes"][LINE]
+
+    # Seen from the side the axis names, the flow is on the left and moves as
+    # OBSERVER_SIDE says; from the other side, on the right, the other way.
+    towards = -synthesis.OBSERVER_SIDE[axis] * FLOW.value
+    half = named_cube.data.shape[1] // 2
+    assert _doppler_velocity(named_cube)[:, :half] == pytest.approx(towards, abs=0.1)
+    assert _doppler_velocity(named_cube)[:, half:] == pytest.approx(0.0, abs=0.1)
+    assert _doppler_velocity(other_cube)[:, -half:] == pytest.approx(-towards, abs=0.1)
+    assert _doppler_velocity(other_cube)[:, :-half] == pytest.approx(0.0, abs=0.1)
+
+    # The whole of each spectrum is mirrored about the rest wavelength, the
+    # velocity grid being centred on zero, and so is the emission measure.
+    assert other_cube.data == pytest.approx(named_cube.data[:, ::-1, ::-1], rel=1e-9)
+    assert other["em_tv"] == pytest.approx(named["em_tv"][:, ::-1, :, ::-1], rel=1e-9)
+    assert other["dem_map"] == pytest.approx(named["dem_map"][:, ::-1], rel=1e-9)
+
+    # The columns run along the box's coordinate with its sign changed, so
+    # they still increase to the observer's right; the rows are unchanged.
+    def columns(cube):
+        return cube.wcs.low_level_wcs.pixel_to_world_values(
+            0, np.arange(cube.data.shape[1]), 0)[1]
+    assert columns(other_cube) == pytest.approx(-columns(named_cube)[::-1])
+    assert np.all(np.diff(columns(other_cube)) > 0)
+    assert list(other_cube.wcs.wcs.ctype) == list(named_cube.wcs.wcs.ctype)
+
+    assert other["config"]["integration_axis"] == OTHER_SIDE[axis]
+    assert other["config"]["observer_side"] == -synthesis.OBSERVER_SIDE[axis]
+    assert read_synthesis(tmp_path / "out" / f"view{OTHER_SIDE[axis]}.h5").integration_axis \
+        == OTHER_SIDE[axis]
+
+
+@pytest.mark.parametrize("signed, plain", [("+x", "x"), ("-y", "y"), ("+z", "z")])
+def test_a_view_named_with_the_side_it_already_has_is_the_same_view(
+        tmp_path, monkeypatch, signed, plain):
+    _write_muram_files(tmp_path / "atmosphere",
+                       {plain: np.full(SHAPE, FLOW.to_value(u.cm / u.s))})
+
+    with_sign = _load(_synthesise(tmp_path, monkeypatch, signed))
+    without = _load(_synthesise(tmp_path, monkeypatch, plain))
+
+    assert np.array_equal(with_sign["line_cubes"][LINE].data, without["line_cubes"][LINE].data)
+    assert with_sign["config"]["integration_axis"] == plain
+    assert with_sign["line_cubes"][LINE].meta["integration_axis"] == plain
+
+
+@pytest.mark.parametrize("words", [["--integration-axis", "-x"], ["--integration-axis=-x"]])
+def test_the_view_from_minus_x_can_be_given_with_or_without_an_equals_sign(words):
+    args = synthesis.parse_arguments(["--lines", LINE, *words, "--output-name", "a.h5"])
+    assert args.integration_axis == "-x"
+    assert args.output_name == "a.h5"
+
+
+@pytest.mark.parametrize("view", ["w", "-w", "xx", "x-", "", None])
+def test_a_view_that_names_no_axis_and_side_is_refused(view):
+    with pytest.raises(ValueError, match="A view is 'x', 'y' or 'z'"):
+        view_axis_and_side(view)
+
+
+def test_dynamic_mode_looks_only_from_the_side_the_axis_names(tmp_path, monkeypatch):
+    for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
+        _write_muram_files(tmp_path / "atmosphere", {}, suffix=suffix, time=time)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        with pytest.raises(ValueError, match="looks only from the side"):
+            _synthesise(tmp_path, monkeypatch, "-z", DYNAMIC)
 
 
 @pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])

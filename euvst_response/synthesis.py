@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import argparse
 import warnings
@@ -15,7 +16,8 @@ import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
-                    velocity_centers_to_edges, velocity_grid, VELOCITY_CONVENTION)
+                    velocity_centers_to_edges, velocity_grid, view_axis_and_side, view_name,
+                    OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
@@ -940,13 +942,15 @@ def compute_dem(
     logT_grid : np.ndarray
         1D array of temperature bin centers for DEM calculation.
     integration_axis : str
-        Axis along which to integrate ("x", "y", or "z").
+        The view: the axis to integrate along, ``"x"``, ``"y"`` or ``"z"``,
+        optionally with a sign for the side of the box to look from, such as
+        ``"-x"``; see `line_of_sight_velocity`.
 
     Returns
     -------
     dem_map : np.ndarray
         DEM array [cm^-5 per dex]. The two remaining spatial axes come out in
-        image order (row, column). Shape depends on integration_axis:
+        image order (row, column). Shape depends on the axis:
         - "x": (nz, ny, nT)
         - "y": (nz, nx, nT)
         - "z": (ny, nx, nT)
@@ -954,17 +958,12 @@ def compute_dem(
         Mean electron density per T-bin [cm^-3]. Same shape as dem_map.
     """
     nT = len(logT_grid)
-
-    # The cubes are (z, y, x), so integrating along a physical axis means
-    # summing over the numpy axis it lives on.
-    axis_map = {"x": 2, "y": 1, "z": 0}
-    if integration_axis not in axis_map:
-        raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
+    axis, _ = view_axis_and_side(integration_axis)
 
     dlogT, logT_edges = _temperature_bins(logT_grid)
 
     ne = 10.0 ** logN_cube.astype(np.float64)
-    dh = along_line_of_sight(voxel_dh_cm, integration_axis)
+    dh = along_line_of_sight(voxel_dh_cm, axis)
     w2 = np.broadcast_to(ne**2 * dh, logT_cube.shape)  # weights for EM
     w3 = np.broadcast_to(ne**3 * dh, logT_cube.shape)  # weights for EM*n_e
 
@@ -1032,10 +1031,18 @@ def _image_pixels(shape: Tuple[int, int, int], integration_axis: str) -> Tuple[n
     For a (z, y, x) cube seen along *integration_axis*, the image pixel each
     cell is seen in, as row times the number of columns plus column, and the
     image's (rows, columns), in the order compute_dem and build_em_tv give.
+
+    Seen from the side of the box opposite the one :data:`OBSERVER_SIDE`
+    gives, the image is mirrored left to right, as walking round to the
+    other side of the box mirrors it, so that it is the right way round for
+    that observer too.
     """
+    axis, side = view_axis_and_side(integration_axis)
     z, y, x = np.indices(shape, sparse=True)
-    rows, columns = {"x": (z, y), "y": (z, x), "z": (y, x)}[integration_axis]
+    rows, columns = {"x": (z, y), "y": (z, x), "z": (y, x)}[axis]
     n_rows, n_columns = rows.size, columns.size
+    if side != OBSERVER_SIDE[axis]:
+        columns = n_columns - 1 - columns
     return np.broadcast_to(rows * n_columns + columns, shape), (n_rows, n_columns)
 
 
@@ -1185,13 +1192,16 @@ def interpolate_g_on_dem(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# Which side of the box the observer is on, for each integration axis: +1 on
-# the side of increasing coordinate, -1 on the other.  It is the side from
-# which the line cube, with its rows and columns as create_line_cube lays them
-# out, is seen the right way round, so the column axis crossed with the row
-# axis points at the observer: above the box (+z) for the top-down view, and
-# at +x and at -y for the two side views.
-OBSERVER_SIDE = {"x": +1, "y": -1, "z": +1}
+# A view looks along one axis of the box, from one side of it. Named by its
+# axis alone, it is from the side OBSERVER_SIDE (from utils) gives: +1 on the
+# side of increasing coordinate, -1 on the other. That is the side from which
+# the line cube, with its rows and columns as create_line_cube lays them out,
+# is seen the right way round, so the column axis crossed with the row axis
+# points at the observer: above the box (+z) for the top-down view, and at +x
+# and at -y for the two side views. Named with a sign, such as "-x", it is
+# from that side; from the other side the image is mirrored left to right
+# (_image_pixels), so that it is the right way round for that observer too.
+SIGNED_VIEWS = ("+x", "-x", "+y", "-y", "+z", "-z")
 
 
 def line_of_sight_velocity(velocity, integration_axis: str):
@@ -1210,19 +1220,17 @@ def line_of_sight_velocity(velocity, integration_axis: str):
         Velocity along the integration axis, positive towards increasing
         coordinate.
     integration_axis : str
-        ``"x"``, ``"y"`` or ``"z"``.  The observer is on the side given by
-        :data:`OBSERVER_SIDE`.
+        The view: ``"x"``, ``"y"`` or ``"z"``, whose observer is on the side
+        given by :data:`OBSERVER_SIDE`, or an axis with a sign for the side,
+        such as ``"-x"`` for the view from -x.
 
     Returns
     -------
     np.ndarray or u.Quantity
         Velocity away from the observer, in the same units.
     """
-    if integration_axis not in OBSERVER_SIDE:
-        raise ValueError(
-            f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}"
-        )
-    return -OBSERVER_SIDE[integration_axis] * velocity
+    _, side = view_axis_and_side(integration_axis)
+    return -side * velocity
 
 
 def build_em_tv(
@@ -1256,23 +1264,21 @@ def build_em_tv(
     ne_sq_dh : np.ndarray
         n_e^2 * dh for each voxel.
     integration_axis : str
-        Axis along which to integrate ("x", "y", or "z").
+        The view: the axis to integrate along, ``"x"``, ``"y"`` or ``"z"``,
+        optionally with a sign for the side of the box to look from, such as
+        ``"-x"``; see `line_of_sight_velocity`.
 
     Returns
     -------
     em_tv : np.ndarray
         4D emission measure cube. The two remaining spatial axes come out in
-        image order (row, column). Shape depends on integration_axis:
+        image order (row, column). Shape depends on the axis:
         - "x": (nz, ny, nT, nv)
         - "y": (nz, nx, nT, nv)
         - "z": (ny, nx, nT, nv)
     """
-    print(f"  Building 4-D emission-measure cube along {integration_axis}-axis...")
-
-    # The cubes are (z, y, x); see compute_dem.
-    axis_map = {"x": 2, "y": 1, "z": 0}
-    if integration_axis not in axis_map:
-        raise ValueError(f"integration_axis must be 'x', 'y', or 'z', got {integration_axis}")
+    axis, _ = view_axis_and_side(integration_axis)
+    print(f"  Building 4-D emission-measure cube along {axis}-axis...")
 
     _, logT_edges = _temperature_bins(logT_grid)
     v_centres = (vel_grid.to_value(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
@@ -1425,7 +1431,8 @@ def synthesise_cubes(
     vel_grid : u.Quantity
         Velocity bin centres, evenly spaced.
     integration_axis : str
-        ``"x"``, ``"y"`` or ``"z"``.
+        The view: ``"x"``, ``"y"`` or ``"z"``, optionally with a sign for the side of
+        the box to look from, such as ``"-x"``; see `line_of_sight_velocity`.
     precision : type
         np.float32 or np.float64.
 
@@ -1461,7 +1468,7 @@ def synthesise_cubes(
     interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
 
     ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
-                * along_line_of_sight(dh_cm, integration_axis))
+                * along_line_of_sight(dh_cm, view_axis_and_side(integration_axis)[0]))
     em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
@@ -1524,8 +1531,13 @@ def create_line_cube(
     intensity_unit : u.Unit
         The unit of the spectra.
     integration_axis : str, optional
-        The axis the synthesis looked along: ``"x"``, ``"y"`` or ``"z"``
-        (default).
+        The view the synthesis had: the axis it looked along, ``"x"``,
+        ``"y"`` or ``"z"`` (default), optionally with a sign for the side of
+        the box it looked from, such as ``"-x"``; see
+        `line_of_sight_velocity`. From the side opposite the one
+        :data:`OBSERVER_SIDE` gives, the image is mirrored left to right, so
+        its column coordinate is the box's coordinate with its sign changed,
+        which increases to that observer's right.
 
     Returns
     -------
@@ -1534,16 +1546,18 @@ def create_line_cube(
         that summing over wavelength gives an array that plots the right way
         up.
     """
+    view = view_name(integration_axis)
+    los_axis, side = view_axis_and_side(view)
     # An axis whose cells differ in size has no one CDELT. Only the line of
     # sight may be such an axis, and that is the one integrated out here.
     nonuniform = (spatial_cube.meta or {}).get("nonuniform_axes", [])
     stretched = [axis for axis in AXES
-                 if axis != integration_axis and axis in nonuniform]
+                 if axis != los_axis and axis in nonuniform]
     if stretched:
         raise ValueError(
             f"The {', '.join(stretched)} axis of the atmosphere is not evenly "
             f"spaced, so it cannot be an image axis of a view along "
-            f"{integration_axis}. Only the line of sight may be stretched.")
+            f"{los_axis}. Only the line of sight may be stretched.")
 
     # The simulation cubes are (z, y, x), so integrating one axis out leaves
     # 'si' already in (row, column, wavelength) order for every view.
@@ -1562,7 +1576,7 @@ def create_line_cube(
 
     # Get spatial coordinate information from the reference cube,
     # whose array axes are (z, y, x)
-    if integration_axis == "x":
+    if los_axis == "x":
         # Integration along X -> data shape (nz, ny, n_lambda): rows are Z, columns are Y
         nz, ny, nl = cube_data.shape
         y_coords = spatial_cube.axis_world_coords(1)[0]  # Y coordinates
@@ -1582,7 +1596,7 @@ def create_line_cube(
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
-    elif integration_axis == "y":
+    elif los_axis == "y":
         # Integration along Y -> data shape (nz, nx, n_lambda): rows are Z, columns are X
         nz, nx, nl = cube_data.shape
         x_coords = spatial_cube.axis_world_coords(2)[0]  # X coordinates
@@ -1602,7 +1616,7 @@ def create_line_cube(
             z_coords[0].to(u.Mm).value  # Z starts where original cube starts
         ]
 
-    else:  # integration_axis == "z"
+    else:  # los_axis == "z"
         # Integration along Z -> data shape (ny, nx, n_lambda): rows are Y, columns are X
         ny, nx, nl = cube_data.shape
         x_coords = spatial_cube.axis_world_coords(2)[0]  # X coordinates
@@ -1622,6 +1636,12 @@ def create_line_cube(
             _world_at(y_coords.to(u.Mm), spatial_crpix[2]),
         ]
 
+    # Seen from the other side, the image is mirrored left to right
+    # (_image_pixels), so its columns run along the box's coordinate with its
+    # sign changed. They are centred, so the middle column keeps its place.
+    if side != OBSERVER_SIDE[los_axis]:
+        spatial_crval[1] = -spatial_crval[1]
+
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = spatial_axes
     wcs.wcs.cunit = spatial_units
@@ -1638,7 +1658,7 @@ def create_line_cube(
             "rest_wav": line_data["wl0"],
             "atom": line_data["atom"],
             "ion": line_data["ion"],
-            "integration_axis": integration_axis,
+            "integration_axis": view,
             "velocity_convention": VELOCITY_CONVENTION,
             "spatial_reference": spatial_cube.meta if hasattr(spatial_cube, 'meta') else None
         }
@@ -1734,8 +1754,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "is the same.")
 
     # Integration direction
-    parser.add_argument("--integration-axis", choices=["x", "y", "z"], default="z",
-                       help="Axis along which to integrate (x, y, or z)")
+    parser.add_argument("--integration-axis", choices=["x", "y", "z", *SIGNED_VIEWS],
+                       default="z",
+                       help="The axis to look along, x, y or z, from +x, -y or above; or the "
+                            "axis with a sign for the side to look from, such as -x")
     
     # Cropping parameters (in Heliocentric coordinates)
     parser.add_argument("--crop-x", nargs=2, type=str, default=None,
@@ -1837,7 +1859,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_arguments(argv=None):
     """Parse command line arguments for spectrum synthesis."""
-    return build_parser().parse_args(argv)
+    words = list(sys.argv[1:] if argv is None else argv)
+    # argparse takes a word that starts with a dash, such as the -x of
+    # "--integration-axis -x", for an option, and stops. Joined into
+    # "--integration-axis=-x", it is read as the value.
+    joined, i = [], 0
+    while i < len(words):
+        if (words[i] == "--integration-axis" and i + 1 < len(words)
+                and words[i + 1] in SIGNED_VIEWS):
+            joined.append(f"--integration-axis={words[i + 1]}")
+            i += 2
+        else:
+            joined.append(words[i])
+            i += 1
+    return build_parser().parse_args(joined)
 
 
 def check_atmosphere_options(args) -> None:
@@ -2043,7 +2078,10 @@ def main(args=None) -> None:
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    integration_axis = args.integration_axis.lower()
+    # The view: the axis looked along, which the atmosphere is read and
+    # summed along, and the side of the box it is seen from.
+    view = view_name(args.integration_axis.lower())
+    integration_axis, observer_side = view_axis_and_side(view)
     check_atmosphere_options(args)
     # A name ending in .pkl still gets the pickle older versions wrote, so
     # that scripts written for them keep working until it is removed.
@@ -2083,6 +2121,11 @@ def main(args=None) -> None:
                 "Dynamic mode lays its snapshots across x, which is the line of sight "
                 "of a view along x, so every pixel would add up all of them. View along "
                 "z or y.")
+        if view != integration_axis:
+            raise ValueError(
+                f"Dynamic mode, which is deprecated, looks only from the side of the box "
+                f"that --integration-axis {integration_axis} names. To look from "
+                f"{view}, synthesise from an atmosphere file with --atmosphere.")
 
         base_dir = Path(args.data_dir)
         # Voxel sizes of the MURaM files. load_cube scales these itself when
@@ -2212,7 +2255,7 @@ def main(args=None) -> None:
         else:
             print("STATIC MODE - Synthesis from MURaM files (deprecated)")
             print(f"  Data directory: {args.data_dir}")
-        print(f"  Integration axis: {integration_axis}")
+        print(f"  Integration axis: {view}")
         print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
         if downsample:
@@ -2281,7 +2324,7 @@ def main(args=None) -> None:
 
     # The velocity files hold the velocity along each axis; the Doppler shift
     # needs the velocity away from the observer.
-    vel_data = line_of_sight_velocity(vel_cube.data, integration_axis)
+    vel_data = line_of_sight_velocity(vel_cube.data, view)
 
     # ---------------- Compute contribution functions (fiasco) ---------
     # At the densities this atmosphere has, and no others.
@@ -2319,14 +2362,14 @@ def main(args=None) -> None:
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
     goft, dem_map, em_tv = synthesise_cubes(
         temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
-        vel_grid, integration_axis, precision)
+        vel_grid, view, precision)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
     line_cubes = {}
     for name, info in goft.items():
         line_cubes[name] = create_line_cube(
-            name, info, reference_cube, intensity_unit, integration_axis
+            name, info, reference_cube, intensity_unit, view
         )
     
     print(f"Built {len(line_cubes)} line cubes")
@@ -2366,9 +2409,9 @@ def main(args=None) -> None:
             "lines": args.lines,
             "abundance": args.abundance,
             "hdf5_dbase_root": goft_dbase_root,
-            "integration_axis": integration_axis,
+            "integration_axis": view,
             "velocity_convention": VELOCITY_CONVENTION,
-            "observer_side": OBSERVER_SIDE[integration_axis],
+            "observer_side": observer_side,
             "crop_params": {
                 "crop_x": args.crop_x,
                 "crop_y": args.crop_y,
