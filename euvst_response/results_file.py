@@ -494,6 +494,18 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     stored, unchecked.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
+    # A setting added since the file was made is not in it, and gets today's
+    # default; said, as a setting the run had no say in. One with no default
+    # fails the construction below, and is said there.
+    missing = sorted(field.name for field in dataclasses.fields(cls)
+                     if field.init and field.name not in stored
+                     and (field.default is not dataclasses.MISSING
+                          or field.default_factory is not dataclasses.MISSING))
+    if missing:
+        reading.notes[f"The {cls.__name__} in the results file has no {', '.join(missing)}, "
+                      f"which ECLIPSE added after it was made; "
+                      f"{'it gets' if len(missing) == 1 else 'they get'} today's "
+                      f"default{'' if len(missing) == 1 else 's'}."] = None
     gone = sorted(set(stored) - known)
     if gone:
         reading.notes[f"The {cls.__name__} in the results file has {', '.join(gone)}, which "

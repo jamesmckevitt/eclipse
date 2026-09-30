@@ -670,6 +670,17 @@ def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path
     assert restored.slit_width == 0.3 * u.arcsec and restored.pinhole_positions_spectral == []
 
 
+def test_a_setting_added_since_the_file_was_made_is_said_to_take_todays_default(tmp_path):
+    """A file from an earlier version lacks the settings added since; they are defaulted, and said."""
+    encoded = results_file._jsonable(Detector_SWC(row_transfer_time=20 * u.us))
+    del encoded["fields"]["shutter"], encoded["fields"]["row_transfer_time"]
+    with pytest.warns(UserWarning, match="Detector_SWC in the results file has no "
+                                         "row_transfer_time, shutter, which ECLIPSE added after "
+                                         "it was made; they get today's defaults"):
+        restored = load_results(_with_attribute(tmp_path, "detector", encoded))["detector"]
+    assert restored.shutter is True and restored.row_transfer_time == 15 * u.us
+
+
 def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):
     """A detector's dark current, as the run used it, whatever this version works out."""
     detector = Detector_SWC()

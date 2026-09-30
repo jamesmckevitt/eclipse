@@ -55,6 +55,15 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `plate_scale_angle` | The angle on the sky of one pixel along the slit | `0.159 arcsec / pix` | `1 arcsec / pix` |
 | `material` | The detector's material; only `silicon` is modelled | `silicon` | `silicon` |
 | `filter_distance` | The distance from the filter to the detector, for the pinholes' diffraction | `250 mm` | - |
+| `shutter` | Whether frames are taken with the mechanical shutter, which keeps the CCDs dark while a frame is cleared and read. A run models frames taken with it, so `false` is refused. | `true` | - |
+| `n_rows` | The pixels of each CCD along the dispersion | `2048` | - |
+| `n_columns` | The pixels of each CCD along the slit | `2048` | - |
+| `ccd_gap` | The space between the two CCDs' imaging areas | `1 mm` | - |
+| `row_transfer_time` | The time to move every row of a CCD one step towards its serial register | `15 us` | - |
+| `pixel_period` | The time to move one pixel along the serial register and digitise it | `500 ns` | - |
+| `serial_prescan` | The samples each output digitises before the image pixels of a row it reads | `50` | - |
+| `serial_overscan` | The samples each output digitises after them | `20` | - |
+| `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
 
 ## telescope
 
