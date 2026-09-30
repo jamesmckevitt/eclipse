@@ -447,7 +447,7 @@ def test_an_old_pickle_converts_with_everything_it_held(tmp_path):
     wrong_sign.meta.pop("velocity_convention")
     with open(tmp_path / "wrong.pkl", "wb") as f:
         dill.dump({"line_cubes": {LINE: wrong_sign}}, f)
-    with pytest.raises(ValueError, match="wrong sign"):
+    with pytest.raises(ValueError, match="opposite signs"):
         convert_synthesis_pickle(tmp_path / "wrong.pkl", tmp_path / "wrong.h5")
 
 

@@ -967,8 +967,8 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
 
         # Scale the pattern by its ABSOLUTE normalisation rather than by its
         # sum over the detector array.  Dividing by the array sum forces every
-        # transmitted photon onto the detector, which is badly wrong for small
-        # pinholes: a 1 micron hole at 250 mm puts its first Airy minimum
+        # transmitted photon onto the detector, which small pinholes do not do:
+        # a 1 micron hole at 250 mm puts its first Airy minimum
         # 183 mm out, so nearly all of its light misses a detector tens of mm
         # across and must be lost, not redistributed.  vis_pattern peaks at
         # 1.0, so multiplying by the peak per-pixel fraction gives the correct

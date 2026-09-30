@@ -60,9 +60,9 @@ def load_instrument_response_results(filepath: str | Path,
         you trust.
     allow_wrong_velocity_sign : bool, optional
         Read, with a warning instead of an error, results made from a
-        synthesis that an ECLIPSE from before the Doppler sign was corrected
-        wrote for a view along x or z. Every velocity in them has the wrong
-        sign. Default False.
+        synthesis that an older ECLIPSE wrote for a view along x or z, under
+        the older velocity convention. Their velocities are opposite in sign
+        to this version's. Default False.
 
     Returns
     -------
@@ -75,18 +75,20 @@ def load_instrument_response_results(filepath: str | Path,
     if not isinstance(data, dict):
         raise ValueError(f"{filepath} does not hold the results of an instrument simulation.")
 
-    # Refuse results made from synthesis files written before the Doppler
-    # sign was fixed, for the views whose sign it changed.  Uniform intensity
-    # runs have no synthesis file and no velocities, so they are unaffected.
+    # Refuse results made from synthesis files written under the older
+    # velocity convention, for the views whose sign it changed.  Uniform
+    # intensity runs have no synthesis file and no velocities, so they are
+    # unaffected.
     cube_sim = data.get("cube_sim")
     if cube_sim is not None and has_wrong_velocity_sign(cube_sim.meta):
         axis = (cube_sim.meta or {}).get("integration_axis", "z")
         message = (
             f"{filepath} was made from a synthesis file written by an older "
-            "ECLIPSE, which used the simulation velocity along the line of "
-            "sight without turning it into a velocity away from the observer. "
-            f"For this view along {axis}, every velocity in it has the wrong "
-            "sign: flows towards the observer are redshifted."
+            "ECLIPSE, which took the line-of-sight velocity straight from the "
+            "simulation's velocity component. ECLIPSE now uses the velocity "
+            f"away from the observer. For this view along {axis}, the two "
+            "conventions have opposite signs, so the velocities in it are "
+            "opposite in sign to this version's."
         )
         if not allow_wrong_velocity_sign:
             raise ValueError(
@@ -104,7 +106,7 @@ def load_instrument_response_results(filepath: str | Path,
     try:
         combinations = data["results"]["all_combinations"]
         for param_key, combination_results in tqdm(combinations.items(), desc="Reconstructing results", leave=False):
-            # Refuse files written before the cube axis order was fixed (issue
+            # Refuse files written before the cube axis order changed (issue
             # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
             # WCS; the maps made from one here would come out transposed.
             wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype

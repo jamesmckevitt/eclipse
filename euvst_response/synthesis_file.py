@@ -856,7 +856,7 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
 
     Everything the pickle holds is kept: its line cubes as the spectra, and
     the rest as the synthesis products. A pickle made before the axis order
-    or the Doppler sign was corrected is refused, as `eclipse` refuses it.
+    or the velocity convention changed is refused, as `eclipse` refuses it.
     Reading a pickle runs whatever code it holds, so only convert pickles you
     trust.
 

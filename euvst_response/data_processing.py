@@ -101,7 +101,7 @@ def check_old_line_cubes(line_cubes: dict, path) -> None:
     """Refuse line cubes that older versions of ECLIPSE wrote in a form it no longer reads right."""
     for cube in line_cubes.values():
         meta = cube.meta or {}
-        # Refuse files written before the cube axis order was fixed (issue
+        # Refuse files written before the cube axis order changed (issue
         # #12). Those store data as (x, y, wavelength); everything downstream
         # now expects (y, x, wavelength), so an old file would come out
         # transposed. The WCS axis order tells the two apart.
@@ -114,18 +114,17 @@ def check_old_line_cubes(line_cubes: dict, path) -> None:
                 "Re-run the synthesis with this version to regenerate the file."
             )
 
-        # Refuse files written before the Doppler sign was fixed. Those used
-        # the simulation velocity along the line of sight as it was, which for
-        # views along x and z gives every velocity the wrong sign.
+        # Refuse files written under the older velocity convention, for the
+        # views along x and z, where it is opposite in sign to today's.
         if has_wrong_velocity_sign(meta):
             axis = meta.get("integration_axis", "z")
             raise ValueError(
-                f"{path} was written by an older ECLIPSE that used the "
-                "simulation velocity along the line of sight without turning it "
-                "into a velocity away from the observer. For this view along "
-                f"{axis}, every Doppler shift in it has the wrong sign: flows "
-                "towards the observer are redshifted. Re-run the synthesis with "
-                "this version to regenerate the file."
+                f"{path} was written by an older ECLIPSE, which took the "
+                "line-of-sight velocity straight from the simulation's velocity "
+                "component. ECLIPSE now uses the velocity away from the observer. "
+                f"For this view along {axis}, the two conventions have opposite "
+                "signs. Re-run the synthesis with this version to regenerate "
+                "the file."
             )
 
 

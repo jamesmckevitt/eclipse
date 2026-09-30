@@ -5,7 +5,7 @@ with the line centred on one of them, and each pixel then stood for that value
 times the pixel width. That adds up to the line's intensity only when the line
 is more than about half a pixel wide (sigma). Several science case lines are
 narrower at their formation temperature: Fe IX 171.07 has a sigma of 0.35 SWC
-pixels and came out 19 per cent too bright, Fe VIII 185.21 at 0.30 pixels 35
+pixels and came out 19 per cent above its intensity, Fe VIII 185.21 at 0.30 pixels 35
 per cent.
 
 The expected photon count below is the radiometric equation written out from

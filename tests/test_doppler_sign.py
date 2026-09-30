@@ -3,9 +3,9 @@
 Simulation velocities are positive towards increasing coordinate, so an upflow
 has a positive vz. Seen from above, it moves towards the observer and is
 blueshifted. ECLIPSE 0.8.0 and earlier used the velocity along the integration
-axis directly as the line-of-sight velocity. For views along z and x that gave
-every velocity the wrong sign, so upflows seen from above came out redshifted;
-for views along y, whose observer is at -y, it happened to be right.
+axis directly as the line-of-sight velocity. For views along z and x that is
+opposite in sign to the velocity away from the observer; for views along y,
+whose observer is at -y, the two agree.
 
 These run the real synthesis on small uniform atmospheres, with a flat
 contribution function standing in for fiasco, and measure where each line
@@ -190,9 +190,9 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])
-def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wrong(
+def test_synthesis_files_from_before_the_change_are_refused_where_their_sign_differs(
         tmp_path, monkeypatch, axis, refused):
-    """Views along y kept their sign, so older ones are still right and still load."""
+    """Views along y kept their sign, so older ones still agree and still load."""
     _write_muram_files(tmp_path / "atmosphere", {})
     path = _synthesise(tmp_path, monkeypatch, axis)
     saved = _load(path)
@@ -205,7 +205,7 @@ def test_synthesis_files_from_before_the_fix_are_refused_where_their_sign_is_wro
     with open(old, "wb") as f:
         dill.dump({"line_cubes": saved["line_cubes"]}, f)
     if refused:
-        with pytest.raises(ValueError, match=f"view along {axis}.*wrong sign"):
+        with pytest.raises(ValueError, match=f"view along {axis}.*opposite signs"):
             load_atmosphere(str(old))
     else:
         load_atmosphere(str(old))
@@ -234,9 +234,9 @@ def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta
         # The pickle's own warning is not the one looked for here.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
-            with pytest.raises(ValueError, match="wrong sign"):
+            with pytest.raises(ValueError, match="opposite signs"):
                 load_instrument_response_results(path)
-            with pytest.warns(UserWarning, match="wrong sign"):
+            with pytest.warns(UserWarning, match="opposite signs"):
                 load_instrument_response_results(path, allow_wrong_velocity_sign=True)
 
 
