@@ -25,6 +25,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
+from euvst_response.config import Detector_SWC
 from euvst_response.readout import (
     MEASURED_SLIT_IMAGE_TILT,
     FocalPlane_SWC,
@@ -507,3 +508,53 @@ def test_a_range_that_only_reaches_the_edge_of_the_ccd_is_not_on_it(low, high):
     """Reaching row 0's outer edge from below gave the window (-1, -1)."""
     with pytest.raises(ValueError, match="is on either CCD"):
         windows_from_wavelengths(_RowsAreWavelengths(), [(low * u.AA, high * u.AA)])
+
+
+# ---------------------------------------------------------------------------
+# The camera's settings come from its configuration
+# ---------------------------------------------------------------------------
+def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
+    """The format, the pixels and the timing are set once, in Detector_SWC."""
+    det = Detector_SWC(n_rows=100, n_columns=40, ccd_gap=2.0 * u.mm,
+                       pix_size=(10.0 * u.um).cgs / u.pixel,
+                       plate_scale_angle=0.2 * u.arcsec / u.pixel,
+                       row_transfer_time=20.0 * u.us, pixel_period=1.0 * u.us,
+                       serial_prescan=0, serial_overscan=3, parallel_overscan_rows=5)
+
+    fp = FocalPlane_SWC.from_detector(det, lit_band=(180.0 * u.Angstrom, 190.0 * u.Angstrom))
+    assert (fp.n_rows, fp.n_columns) == (100, 40)
+    assert fp.pixel_size.to_value(u.um) == pytest.approx(10.0)
+    assert fp.gap == 2.0 * u.mm
+    assert fp.plate_scale.to_value(u.arcsec) == pytest.approx(0.2)
+    assert fp.lit_band == (180.0 * u.Angstrom, 190.0 * u.Angstrom)
+
+    sequence = ReadoutSequence.from_detector(det, windows=[(0, 9)])
+    assert sequence.shutter is True
+    assert sequence.row_transfer_time == 20.0 * u.us
+    assert sequence.pixel_period == 1.0 * u.us
+    assert (sequence.serial_prescan, sequence.serial_image_pixels,
+            sequence.serial_overscan) == (0, 20, 3)
+    assert sequence.parallel_overscan_rows == 5
+    assert sequence.dump_rows == 100
+    assert sequence.windows == [(0, 9)]
+    assert sequence.line_read_time == 23.0 * u.us
+
+    # The observation's own choices override the camera's.
+    other = ReadoutSequence.from_detector(det, shutter=False, dump_rows=10)
+    assert other.shutter is False and other.dump_rows == 10 and other.windows == []
+
+
+def test_the_defaults_are_those_of_the_default_camera():
+    """Made on their own, the two classes describe the camera as Detector_SWC does by default."""
+    det = Detector_SWC()
+    fp, from_det = FocalPlane_SWC(), FocalPlane_SWC.from_detector(det)
+    for name in ("n_rows", "n_columns", "pixel_size", "gap", "plate_scale"):
+        assert np.all(getattr(fp, name) == getattr(from_det, name)), name
+    sequence, from_det = ReadoutSequence(), ReadoutSequence.from_detector(det)
+    for name in ("shutter", "row_transfer_time", "pixel_period", "serial_prescan",
+                 "serial_image_pixels", "serial_overscan", "parallel_overscan_rows",
+                 "dump_rows", "windows"):
+        assert np.all(getattr(sequence, name) == getattr(from_det, name)), name
+    # The numbers the documents give, so that a change to either class shows.
+    assert sequence.line_read_time.to_value(u.us) == pytest.approx(547.0)
+    assert fp.pixel_size.to_value(u.um) == pytest.approx(13.5)

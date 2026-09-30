@@ -36,6 +36,12 @@ def _run(tmp_path, monkeypatch, config, text=None):
     (lambda: Detector_SWC(qe_euv=76), "detector.qe_euv is a fraction"),
     (lambda: Detector_SWC(gain_e_per_dn=0 * u.electron / u.DN), "gain_e_per_dn must be more than zero"),
     (lambda: Detector_SWC(ccd_temperature=-60 * u.K), "above absolute zero.*-60 C"),
+    (lambda: Detector_SWC(row_transfer_time=15), "detector.row_transfer_time needs a unit, of time"),
+    (lambda: Detector_SWC(pixel_period=0 * u.ns), "detector.pixel_period must be more than zero"),
+    (lambda: Detector_SWC(shutter="no"), "detector.shutter must be true or false"),
+    (lambda: Detector_SWC(serial_prescan=-1), "detector.serial_prescan must be a whole number, 0 or"),
+    (lambda: Detector_SWC(n_rows=2.5), "detector.n_rows must be a whole number, 1 or more"),
+    (lambda: Detector_SWC(n_columns=True), "detector.n_columns must be a whole number"),
     (lambda: Detector_EIS(material="silicn"), "detector.material must be one of"),
     (lambda: AluminiumFilter(mesh_throughput=80), "filter.mesh_throughput is a fraction"),
     (lambda: AluminiumFilter(al_thickness=-5 * u.AA), "al_thickness cannot be negative"),
@@ -173,6 +179,23 @@ def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
     """A result's parameters leave the tables out, so a sweep would give both tables one key."""
     with pytest.raises(ValueError, match="'telescope.pm_table' names one table"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "telescope": {"pm_table": ["a.dat", "b.dat"]}})
+
+
+@pytest.mark.parametrize("shutter", [False, [True, False]], ids=["off", "swept"])
+def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
+        tmp_path, monkeypatch, shutter):
+    """A run models the window with the shutter closed while it is read; the smear of the band is the read-out model's."""
+    with pytest.raises(ValueError, match="detector.shutter must be true for an instrument run"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"shutter": shutter}})
+
+
+def test_the_cameras_read_out_settings_are_taken_from_the_configuration(tmp_path, monkeypatch):
+    """They describe the camera for the read-out model; a run checks and records them."""
+    _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {
+        "shutter": True, "n_rows": 1024, "ccd_gap": "2 mm", "row_transfer_time": "20 us",
+        "pixel_period": "1 us", "serial_prescan": 0, "parallel_overscan_rows": 0}})
+    with pytest.raises(ValueError, match="detector.n_rows must be a whole number"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"n_rows": 0}})
 
 
 def test_a_yaml_merge_key_is_read_as_yaml_reads_it():

@@ -41,6 +41,8 @@ import numpy as np
 from scipy.optimize import brentq
 from scipy.signal import fftconvolve
 
+from .config import Detector_SWC
+
 # Wavelength in Angstrom as a function of position along the dispersion, in mm
 # from the centre of the focal plane (the middle of the gap), positive toward
 # longer wavelength.  Fitted to the positions RSC-2022021C gives for the two
@@ -69,6 +71,10 @@ TILT_REFERENCE_ANGLE = 140.0 * u.arcsec
 class FocalPlane_SWC:
     """
     Geometry of the SW focal plane, and the wavelength each row records.
+
+    The CCDs' format, pixel size, gap and plate scale are the camera's, and
+    default to those of :class:`euvst_response.config.Detector_SWC`;
+    :meth:`from_detector` takes them from a configured one.
 
     Parameters
     ----------
@@ -103,15 +109,27 @@ class FocalPlane_SWC:
         calibration.
     """
 
-    n_rows: int = 2048
-    n_columns: int = 2048
-    pixel_size: u.Quantity = 13.5 * u.micron
-    gap: u.Quantity = 1.0 * u.mm
+    n_rows: int = Detector_SWC.n_rows
+    n_columns: int = Detector_SWC.n_columns
+    pixel_size: u.Quantity = (Detector_SWC.pix_size * u.pixel).to(u.micron)
+    gap: u.Quantity = Detector_SWC.ccd_gap
     dispersion: Tuple[float, ...] = DISPERSION_COEFFICIENTS
     wavelength_offset: u.Quantity = 0.0 * u.Angstrom
     lit_band: Tuple[u.Quantity, u.Quantity] = (170.0 * u.Angstrom, 212.3 * u.Angstrom)
-    plate_scale: u.Quantity = 0.159 * u.arcsec
+    plate_scale: u.Quantity = (Detector_SWC.plate_scale_angle * u.pixel).to(u.arcsec)
     slit_image_tilt: Tuple[float, float] = (0.0, 0.0)
+
+    @classmethod
+    def from_detector(cls, det: Detector_SWC, **settings) -> "FocalPlane_SWC":
+        """
+        The focal plane of the camera *det* describes: its CCDs' format, pixel
+        size, gap and plate scale, with the rest as the defaults or as
+        *settings* gives them.
+        """
+        camera = dict(n_rows=det.n_rows, n_columns=det.n_columns,
+                      pixel_size=(det.pix_size * u.pixel).to(u.micron), gap=det.ccd_gap,
+                      plate_scale=(det.plate_scale_angle * u.pixel).to(u.arcsec))
+        return cls(**{**camera, **settings})
 
     def __post_init__(self):
         if self.n_rows < 1 or self.n_columns < 1:
@@ -287,6 +305,11 @@ class ReadoutSequence:
     on both, so one row timeline covers the pair
     (SOLC-EUVST-MSSL-RS-0002 v2.0 SolC-FPGA-RS-033).
 
+    The shutter, the timing and the register layout are the camera's, and
+    default to those of :class:`euvst_response.config.Detector_SWC`;
+    :meth:`from_detector` takes them from a configured one.  The windows and
+    the clear belong to an observation, and are given here.
+
     Parameters
     ----------
     shutter : bool
@@ -301,9 +324,9 @@ class ReadoutSequence:
         Time to move one pixel along the serial register and digitise it.
     serial_prescan, serial_image_pixels, serial_overscan : int
         Samples read per output for each row that goes through the register.
-        The register is split, so each half carries 1024 image pixels, with the
-        prescan at the outer end and the overscan at the middle.  Both scans are
-        configurable in flight between 0 and 200.
+        The register is split, so each half carries half the columns, 1024
+        image pixels, with the prescan at the outer end and the overscan at
+        the middle.  Both scans are configurable in flight between 0 and 200.
     parallel_overscan_rows : int
         Rows clocked and read after the last image row.  Without a shutter these
         hold pure smear, since their charge crosses the whole illuminated image
@@ -320,15 +343,42 @@ class ReadoutSequence:
         which is the slowest case.
     """
 
-    shutter: bool = True
-    row_transfer_time: u.Quantity = 15.0 * u.us
-    pixel_period: u.Quantity = 500.0 * u.ns
-    serial_prescan: int = 50
-    serial_image_pixels: int = 1024
-    serial_overscan: int = 20
-    parallel_overscan_rows: int = 20
-    dump_rows: int = 2048
+    shutter: bool = Detector_SWC.shutter
+    row_transfer_time: u.Quantity = Detector_SWC.row_transfer_time
+    pixel_period: u.Quantity = Detector_SWC.pixel_period
+    serial_prescan: int = Detector_SWC.serial_prescan
+    serial_image_pixels: int = Detector_SWC.n_columns // 2
+    serial_overscan: int = Detector_SWC.serial_overscan
+    parallel_overscan_rows: int = Detector_SWC.parallel_overscan_rows
+    dump_rows: int = Detector_SWC.n_rows
     windows: List[Tuple[int, int]] = field(default_factory=list)
+
+    @classmethod
+    def from_detector(cls, det: Detector_SWC, *, windows: Sequence[Tuple[int, int]] = (),
+                      dump_rows: int | None = None, shutter: bool | None = None,
+                      ) -> "ReadoutSequence":
+        """
+        The read-out of the camera *det* describes, for one observation.
+
+        Parameters
+        ----------
+        det : Detector_SWC
+            The camera, whose shutter, timing and register layout are used.
+        windows : sequence of tuple of int, optional
+            The row ranges read out, as for the constructor.  Default every row.
+        dump_rows : int, optional
+            The row transfers of the clear.  Default a whole CCD.
+        shutter : bool, optional
+            Whether the frame is taken with the shutter.  Default as the
+            camera is configured.
+        """
+        return cls(shutter=det.shutter if shutter is None else shutter,
+                   row_transfer_time=det.row_transfer_time, pixel_period=det.pixel_period,
+                   serial_prescan=det.serial_prescan, serial_image_pixels=det.n_columns // 2,
+                   serial_overscan=det.serial_overscan,
+                   parallel_overscan_rows=det.parallel_overscan_rows,
+                   dump_rows=det.n_rows if dump_rows is None else dump_rows,
+                   windows=list(windows))
 
     def __post_init__(self):
         for first, last in self.windows:

@@ -13,11 +13,15 @@ There is no configuration key for it, only a Python API, because the read-out de
 
 The two CCDs sit side by side along the dispersion, with their serial registers on the outer edges. So a row is one wavelength, the columns of a row run along the slit, and charge is moved along the dispersion. Rows are counted from the register: row 0 is the outermost row of each CCD, and row 2047 is at the edge where the two meet.
 
+The camera itself, its CCDs' format and pixels, its shutter and its read-out timing, is described by `Detector_SWC` in `euvst_response.config`, which the `detector` section of a configuration file sets. The two classes below take those settings from a detector with `from_detector`, and use its defaults when made on their own.
+
 ```python
 import astropy.units as u
+from euvst_response.config import Detector_SWC
 from euvst_response.readout import FocalPlane_SWC
 
-fp = FocalPlane_SWC()
+det = Detector_SWC()
+fp = FocalPlane_SWC.from_detector(det)          # the same as FocalPlane_SWC() for the default camera
 
 fp.wavelength(0, "left")                        # 163.55 A, the outermost row
 fp.row_of_wavelength(195.119 * u.Angstrom)      # ('left', 1861.7)
@@ -48,7 +52,7 @@ tilted.row_of_wavelength(195.119 * u.Angstrom, column=1904)   # ('left', 1863.3)
 from euvst_response.readout import ReadoutSequence, windows_from_wavelengths
 
 windows = windows_from_wavelengths(fp, [(194.9 * u.Angstrom, 195.3 * u.Angstrom)])
-sequence = ReadoutSequence(shutter=False, windows=windows)
+sequence = ReadoutSequence.from_detector(det, windows=windows, shutter=False)
 
 sequence.line_read_time       # 547 us, the register read of one row
 sequence.readout_duration(2048)
@@ -56,12 +60,17 @@ sequence.readout_duration(2048)
 
 A frame is cleared, exposed, then read row by row. Rows inside a window are read through the serial register. The rest are dumped through the dump drain, which only takes the time of a row transfer.
 
-- `shutter`: `True` keeps the chip dark outside the exposure, which is what ECLIPSE assumes everywhere else. `False` is the case this module is for.
+The shutter, the timing and the register layout are the camera's, so they come from the detector:
+
+- `shutter`: `True` keeps the chip dark outside the exposure, which is what an instrument run assumes; a configuration file with `shutter: false` is refused. `False` is the case this module is for, so `from_detector` takes it as an argument too.
 - `row_transfer_time`: 15 us by default, and can be changed in flight.
-- `pixel_period`, `serial_prescan`, `serial_image_pixels`, `serial_overscan`: the register read, 50 + 1024 + 20 samples per output at 500 ns. Both scans can be set between 0 and 200 in flight.
+- `pixel_period`, `serial_prescan`, `serial_overscan`: the register read, 50 + 1024 + 20 samples per output at 500 ns. The 1024 image pixels are half the detector's columns, one half of the register per output. Both scans can be set between 0 and 200 in flight.
 - `parallel_overscan_rows`: rows moved and read after the last image row. Without a shutter they hold only smear, since their charge crosses the whole lit area on the way out, so they measure it directly.
-- `dump_rows`: the row transfers that clear the image area before the exposure. The default clears a whole CCD. Here a frame always starts from an empty chip, so with fewer transfers the charge that a partial clear would leave behind is missing, and ECLIPSE warns about it.
+
+The windows and the clear belong to an observation, and are given to `from_detector`:
+
 - `windows`: the ranges of rows to read, including both ends. An empty list reads every row.
+- `dump_rows`: the row transfers that clear the image area before the exposure. The default clears a whole CCD. Here a frame always starts from an empty chip, so with fewer transfers the charge that a partial clear would leave behind is missing, and ECLIPSE warns about it.
 
 !!! warning "One row timeline covers both CCDs"
 

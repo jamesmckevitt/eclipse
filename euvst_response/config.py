@@ -117,7 +117,8 @@ def _check_detector(det, section: str = "detector") -> None:
     """The checks both detectors share: kinds, ranges, a temperature above absolute zero and a known material."""
     _check_settings(det, section,
                     positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size", "wvl_res",
-                              "plate_scale_angle", "filter_distance"),
+                              "plate_scale_angle", "filter_distance", "ccd_gap",
+                              "row_transfer_time", "pixel_period"),
                     non_negative=("read_noise_rms", "_dark_current_293k"),
                     fractions=("qe_euv", "qe_vis"))
     if det.ccd_temperature.to_value(u.K, equivalencies=u.temperature()) <= 0:
@@ -445,6 +446,33 @@ class Detector_SWC:
     filter_distance : u.Quantity
         The distance from the filter to the detector, for the pinholes'
         diffraction. Default 250 mm.
+    shutter : bool
+        Whether a frame is taken with the mechanical shutter, which keeps the
+        CCDs dark while the frame is cleared and read. Default True. An
+        instrument run models frames taken with it, and refuses False; the
+        read-out model, :mod:`euvst_response.readout`, takes either. Keyword
+        only, as are the settings below, which describe the SW camera's CCDs
+        and how they are read out.
+    n_rows, n_columns : int
+        The pixels of each CCD along the dispersion and along the slit.
+        Default 2048 by 2048 (SOLC-EUVST-MSSL-SP-0001 v1.4).
+    ccd_gap : u.Quantity
+        The space between the two CCDs' imaging areas, along the dispersion.
+        Default 1 mm.
+    row_transfer_time : u.Quantity
+        The time to move every row one step towards the serial register.
+        Default 15 us, the value in the SWC modes table and in the read-out
+        times of SOLC-EUVST-MSSL-RP-0007 v1.2 Table 5-11. It can be changed
+        in flight.
+    pixel_period : u.Quantity
+        The time to move one pixel along the serial register and digitise
+        it. Default 500 ns (SOLC-EUVST-MSSL-RS-0002 v2.0).
+    serial_prescan, serial_overscan : int
+        The samples each output digitises before and after the image pixels
+        of a row it reads. Default 50 and 20. Each can be set in flight,
+        between 0 and 200.
+    parallel_overscan_rows : int
+        The rows clocked and read after the last image row. Default 20.
     """
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
@@ -467,9 +495,26 @@ class Detector_SWC:
     plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
     material: str = "silicon"
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
+    # The camera's CCDs and their read-out, which euvst_response.readout models.
+    # An instrument run only checks and records them.
+    shutter: bool = field(default=True, kw_only=True)
+    n_rows: int = field(default=2048, kw_only=True)
+    n_columns: int = field(default=2048, kw_only=True)
+    ccd_gap: u.Quantity = field(default=1.0 * u.mm, kw_only=True)
+    row_transfer_time: u.Quantity = field(default=15.0 * u.us, kw_only=True)
+    pixel_period: u.Quantity = field(default=500.0 * u.ns, kw_only=True)
+    serial_prescan: int = field(default=50, kw_only=True)
+    serial_overscan: int = field(default=20, kw_only=True)
+    parallel_overscan_rows: int = field(default=20, kw_only=True)
 
     def __post_init__(self):
         _check_detector(self)
+        for name, least in (("n_rows", 1), ("n_columns", 1), ("serial_prescan", 0),
+                            ("serial_overscan", 0), ("parallel_overscan_rows", 0)):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < least:
+                raise ValueError(f"detector.{name} must be a whole number, {least} or more, "
+                                 f"got {value!r}.")
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
                                                         self._dark_current_293k)
 

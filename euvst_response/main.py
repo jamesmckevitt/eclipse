@@ -736,6 +736,17 @@ def main() -> None:
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
+    # A run models frames taken with the shutter closed outside the exposure.
+    # Without one, light falls on the CCDs while a frame is cleared and read,
+    # and every line in the band smears into the window; the run synthesises
+    # only the window, so it cannot model that. Refused here rather than
+    # taken and ignored.
+    if "shutter" in det_sweep or det_fixed.get("shutter", True) is False:
+        raise ValueError(
+            "detector.shutter must be true for an instrument run, which models frames taken "
+            "with the shutter closed outside the exposure. Frames taken without it are "
+            "modelled by euvst_response.readout, which takes the detector's settings.")
+
     # The wavelength grids are cached by slit width and detector sampling, and
     # are sized for the spectral PSF of the slit, which also depends on the
     # slit psf_params was measured with. That is one fact about the
