@@ -176,7 +176,7 @@ class TestTelescope:
 # eis_ea over eis_ltds's correction (dz2013), eis_ea_nrl (warren2014) and
 # interpol_eis_ea with the bundled smooth fit (dz2025). Between the tables'
 # nodes, where each routine's own interpolation decides the value: a linear
-# one in place of eis_ltds's splines put dz2013 over twice too bright near
+# one in place of eis_ltds's splines gives dz2013 more than twice SolarSoft's value near
 # 168 A. IDL works in single precision, and its spline solves, and dz2013's
 # ratio of two splines, gather up to 2.2e-6 of rounding at these points,
 # which the tolerance allows for; the interpolations it tells apart differ

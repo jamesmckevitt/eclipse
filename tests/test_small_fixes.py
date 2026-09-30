@@ -1,8 +1,8 @@
-"""Small things that went wrong around the edges.
+"""Small changes around the edges.
 
 The command line hid what kind of error stopped a run, printed a syntax
 warning from its logo and pointed to a folder that is not there; --debug
-opened on the wrong frame; the git commit recorded could be the user's own
+opened on a frame outside ECLIPSE; the git commit recorded could be the user's own
 project's; atmosphere info described files it could not read, and files
 written the IDL way were refused; a script's old option name was ignored;
 the science-case tool wrote configurations the run refuses, and shared

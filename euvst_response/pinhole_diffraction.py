@@ -317,7 +317,7 @@ def apply_euv_pinhole_diffraction(
             # reaches each pixel, and does not have to add up to all of it.
             pinhole_signal = unfiltered_signal * area_ratio * euv_pattern_normalized
             
-            # Calculate what we incorrectly have from filter in pinhole regions
+            # The filtered light already counted in the pinhole regions
             # (filtered signal weighted by diffraction pattern and area ratio)
             overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
             
@@ -325,7 +325,7 @@ def apply_euv_pinhole_diffraction(
             # This simplifies to: filtered_signal * area_ratio * pattern * (1/filter_throughput - 1)
             # Physical meaning: 
             # - unfiltered * area_ratio * pattern = total light through pinhole
-            # - filtered * area_ratio * pattern = incorrectly counted filtered light
+            # - filtered * area_ratio * pattern = filtered light already counted there
             # - difference = net additional light from pinhole
             correction = (pinhole_signal - overcounted_filtered)
             

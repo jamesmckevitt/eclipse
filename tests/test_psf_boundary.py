@@ -43,7 +43,7 @@ SIM = Simulation()
 
 
 def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
-    """The clearest statement of the bug: this field has no edges to speak of.
+    """The clearest case: this field has no edges to speak of.
 
     Every row along the slit is identical, so blurring along the slit cannot
     change anything. Under zero fill the outer rows lose flux anyway.
