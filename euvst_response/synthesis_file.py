@@ -14,10 +14,13 @@ Root attributes:
 - ``format``: ``"eclipse-synthesis"``
 - ``version``: ``1``
 - ``source``: free text naming the code and the model, optional
-- ``integration_axis``: ``"x"``, ``"y"`` or ``"z"``, the axis of the
-  simulation the image was seen along, optional. It names the image axes
-  of the cubes made from the file, as ECLIPSE's own synthesis records it;
-  a file without it is taken as seen along z.
+- ``integration_axis``: the view, optional: ``"x"``, ``"y"`` or ``"z"``,
+  the axis of the simulation the image was seen along, from +x, -y or
+  above, or ``"-x"``, ``"+y"`` or ``"-z"`` for the view from the other
+  side. It names the image axes of the cubes made from the file, as
+  ECLIPSE's own synthesis records it; a file without it is taken as seen
+  along z. From the other side the image is mirrored left to right, so
+  ``x_edges`` are the simulation's coordinates with their sign changed.
 
 Datasets, each with a ``unit`` attribute astropy can parse, and groups:
 
@@ -62,7 +65,8 @@ import numpy as np
 
 from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
                          _text_attribute, _write_dataset)
-from .utils import _bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid
+from .utils import (_bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid,
+                    view_axis_and_side, view_name)
 
 __all__ = [
     "FORMAT_NAME",
@@ -100,8 +104,8 @@ UNITS = {"intensity": u.erg / (u.s * u.cm**2 * u.sr * u.AA), "wavelength": u.AA,
          "rest_wavelength": u.AA, "x_edges": u.Mm, "y_edges": u.Mm, "time": u.s}
 # What says which ion emits a line, as ECLIPSE's line cubes carry it.
 IDENTITY = ("atom", "ion")
-# The image axes of a view along each axis of a simulation, as ECLIPSE's line
-# cubes name them.
+# The image axes of a view along each axis of a simulation, from either side,
+# as ECLIPSE's line cubes name them.
 _VIEW_CTYPES = {"z": ("SOLX", "SOLY"), "x": ("SOLY", "SOLZ"), "y": ("SOLX", "SOLZ")}
 
 
@@ -254,9 +258,10 @@ class Synthesis:
         The time of the snapshot, which a time series of synthesis files
         needs to place it.
     integration_axis : str, optional
-        ``"x"``, ``"y"`` or ``"z"``, the axis of the simulation the image was
-        seen along, which names the image axes of the cubes made from it.
-        None takes it as seen along z.
+        The view: ``"x"``, ``"y"`` or ``"z"``, the axis of the simulation the
+        image was seen along, which names the image axes of the cubes made
+        from it, or the axis with a sign for the side of the box it was seen
+        from, such as ``"-x"``. None takes it as seen along z.
     """
 
     lines: Mapping[str, SpectralLine]
@@ -269,9 +274,15 @@ class Synthesis:
     def __post_init__(self):
         if self.time is not None:
             _checked(self.time, "time", ndim=0, kinds=("time",))
-        if self.integration_axis is not None and self.integration_axis not in _VIEW_CTYPES:
-            raise ValueError(f"integration_axis must be one of {tuple(_VIEW_CTYPES)} or None, "
-                             f"got {self.integration_axis!r}.")
+        if self.integration_axis is not None:
+            try:
+                view = view_name(self.integration_axis)
+            except ValueError:
+                raise ValueError(f"integration_axis must be one of 'x', 'y', 'z', '+x', '-x', "
+                                 f"'+y', '-y', '+z', '-z' or None, got "
+                                 f"{self.integration_axis!r}.") from None
+            # Recorded under one name, so that "+x" and "x" are the same view.
+            object.__setattr__(self, "integration_axis", view)
         for axis in AXES:
             name = EDGES[axis]
             edges = _checked(getattr(self, name), name, ndim=1, kinds=("length", "angle"))
@@ -389,7 +400,8 @@ class Synthesis:
         ny, nx = self.shape
         n_wavelength = line.wavelength.size
         wcs = WCS(naxis=3)
-        wcs.wcs.ctype = ["WAVE", *_VIEW_CTYPES[self.integration_axis or "z"]]
+        axis, _ = view_axis_and_side(self.integration_axis or "z")
+        wcs.wcs.ctype = ["WAVE", *_VIEW_CTYPES[axis]]
         wcs.wcs.cunit = ["cm", "Mm", "Mm"]
         wcs.wcs.crpix = [(n_wavelength + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]
         middle = 0.5 * (line.wavelength[0] + line.wavelength[-1])

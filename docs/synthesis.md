@@ -217,10 +217,13 @@ synthesise-spectra --help
 
 **Viewing direction:**
 
-- `--integration-axis`: The axis to look along: `x`, `y`, or `z` (default: `z`)
+- `--integration-axis`: The axis to look along, and the side of the box to look from (default: `z`)
     - `z`: The view from above (+z), looking down through the height
     - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
     - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+    - `-x`, `+y`, `-z`: The same views from the other side of the box, so from -x, from +y and from below. `+x`, `-y` and `+z` are the same as `x`, `y` and `z`.
+
+Looking from the other side of the box changes two things. The velocities change sign, since a flow that moves towards one observer moves away from the other. And the image is mirrored left to right, as it would be if you walked round to the other side of the box. The total brightness along each line of sight doesn't change, since the synthesis adds up the emission along it, whichever end it starts from. In the synthesis file, the image's x then runs along the box's coordinate with its sign changed, so that it still increases to the right.
 
 **Cropping, in the file's coordinates, with units:**
 
@@ -241,7 +244,7 @@ synthesise-spectra --help
 - Use `--precision float32` to use less memory, at some cost in accuracy
 - Crop to the region you need, to save time
 - Watch the memory: a full-resolution synthesis of a large box can need tens of GB
-- Side views (`--integration-axis x` or `y`) need the atmosphere file to hold the velocity along that axis
+- Side views (`--integration-axis x`, `-x`, `y` or `+y`) need the atmosphere file to hold the velocity along that axis
 
 ## The output
 

@@ -28,6 +28,48 @@ DEBUG_MODE = False
 # velocity away from the observer, and for views along y it is the same.
 VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
 
+# Which side of the box the observer is on when a view names only its axis:
+# +1 on the side of increasing coordinate, -1 on the other.  Above the box
+# (+z) for the view from above, and at +x and at -y for the two side views.
+OBSERVER_SIDE = {"x": +1, "y": -1, "z": +1}
+
+
+def view_axis_and_side(view: str) -> tuple[str, int]:
+    """
+    The axis a view looks along, and the side of the box its observer is on.
+
+    Parameters
+    ----------
+    view : str
+        ``"x"``, ``"y"`` or ``"z"``, from the side :data:`OBSERVER_SIDE`
+        gives, or an axis with a sign for the side, such as ``"-x"`` for the
+        view from -x.
+
+    Returns
+    -------
+    axis : str
+        ``"x"``, ``"y"`` or ``"z"``.
+    side : int
+        +1 if the observer is on the side of increasing coordinate, -1 if on
+        the other.
+    """
+    if isinstance(view, str) and view in OBSERVER_SIDE:
+        return view, OBSERVER_SIDE[view]
+    if isinstance(view, str) and len(view) == 2 and view[0] in "+-" and view[1] in OBSERVER_SIDE:
+        return view[1], +1 if view[0] == "+" else -1
+    raise ValueError(f"A view is 'x', 'y' or 'z', or one of them with + or - for the side "
+                     f"of the box to look from, such as '-x'; got {view!r}.")
+
+
+def view_name(view: str) -> str:
+    """
+    The name a view is recorded under: only its axis from the side that alone
+    means, as files written before the other sides could be chosen name it,
+    and the axis with its sign from the other side.
+    """
+    axis, side = view_axis_and_side(view)
+    return axis if side == OBSERVER_SIDE[axis] else ("+" if side > 0 else "-") + axis
+
 
 def has_wrong_velocity_sign(meta) -> bool:
     """

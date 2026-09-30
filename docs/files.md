@@ -79,7 +79,7 @@ A synthesis file is laid out much like an atmosphere file. Its root has a `forma
 
 Each group under `lines` holds one line, under the name that `reference_line` uses for it in the instrument configuration. A group can also hold a whole spectral window with its blends, as most codes give it. The blends are then fitted with a `fitting` block, as in [Fitting blended lines](fitting.md).
 
-Files that ECLIPSE writes itself hold more: each line's `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the direction it looked along, and a `synthesis` group of intermediate results. A file from another code can leave all of these out.
+Files that ECLIPSE writes itself hold more: each line's `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the view, which is the axis it looked along, with a sign such as `-x` if it looked from the other side of the box, and a `synthesis` group of intermediate results. A file from another code can leave all of these out.
 
 The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons, for example `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` or `ph / (s cm2 sr nm)`. The wavelengths don't have to be evenly spaced, so you can use a grid that is finer in the line cores. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
 
