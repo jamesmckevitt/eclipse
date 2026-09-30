@@ -65,8 +65,6 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `serial_overscan` | The samples each output digitises after them | `20` | - |
 | `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
 
-The settings from `shutter` down describe the SW camera's CCDs and how they are read out. A run doesn't use them, since it models a single window and the shutter is closed while it is read, but it checks them and records them with its results, so that the camera a result was made for is on record.
-
 ## telescope
 
 | Key | What it sets | SWC | EIS |
