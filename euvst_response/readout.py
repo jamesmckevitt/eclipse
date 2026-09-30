@@ -124,12 +124,18 @@ class FocalPlane_SWC:
         """
         The focal plane of the camera *det* describes: its CCDs' format, pixel
         size, gap and plate scale, with the rest as the defaults or as
-        *settings* gives them.
+        *settings* gives them.  The camera's own settings are refused here,
+        so that they are set in one place, on the detector.
         """
         camera = dict(n_rows=det.n_rows, n_columns=det.n_columns,
                       pixel_size=(det.pix_size * u.pixel).to(u.micron), gap=det.ccd_gap,
                       plate_scale=(det.plate_scale_angle * u.pixel).to(u.arcsec))
-        return cls(**{**camera, **settings})
+        taken = sorted(set(settings) & set(camera))
+        if taken:
+            raise ValueError(f"{', '.join(taken)} come from the detector; set them there, as "
+                             f"Detector_SWC.n_rows, n_columns, pix_size, ccd_gap and "
+                             f"plate_scale_angle.")
+        return cls(**camera, **settings)
 
     def __post_init__(self):
         if self.n_rows < 1 or self.n_columns < 1:

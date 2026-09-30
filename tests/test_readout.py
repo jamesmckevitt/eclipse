@@ -522,6 +522,9 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
                        serial_prescan=0, serial_overscan=3, parallel_overscan_rows=5)
 
     fp = FocalPlane_SWC.from_detector(det, lit_band=(180.0 * u.Angstrom, 190.0 * u.Angstrom))
+    # The camera's own settings are the detector's, and cannot be given here.
+    with pytest.raises(ValueError, match="gap, n_rows come from the detector"):
+        FocalPlane_SWC.from_detector(det, n_rows=50, gap=3.0 * u.mm)
     assert (fp.n_rows, fp.n_columns) == (100, 40)
     assert fp.pixel_size.to_value(u.um) == pytest.approx(10.0)
     assert fp.gap == 2.0 * u.mm
