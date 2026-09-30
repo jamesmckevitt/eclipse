@@ -543,6 +543,13 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
     other = ReadoutSequence.from_detector(det, shutter=False, dump_rows=10)
     assert other.shutter is False and other.dump_rows == 10 and other.windows == []
 
+    # An odd number of columns gives one output a pixel more, and a row takes
+    # as long as that output.
+    odd = ReadoutSequence.from_detector(Detector_SWC(n_columns=41, serial_prescan=0,
+                                                     serial_overscan=0))
+    assert odd.serial_image_pixels == 21
+    assert odd.line_read_time == 21 * Detector_SWC.pixel_period
+
 
 def test_the_defaults_are_those_of_the_default_camera():
     """Made on their own, the two classes describe the camera as Detector_SWC does by default."""

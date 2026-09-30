@@ -509,12 +509,17 @@ class Detector_SWC:
 
     def __post_init__(self):
         _check_detector(self)
-        for name, least in (("n_rows", 1), ("n_columns", 1), ("serial_prescan", 0),
-                            ("serial_overscan", 0), ("parallel_overscan_rows", 0)):
+        # The scans are what the FEE can be set to (SOLC-EUVST-MSSL-RS-0002 v2.0).
+        for name, least, most in (("n_rows", 1, None), ("n_columns", 1, None),
+                                  ("serial_prescan", 0, 200), ("serial_overscan", 0, 200),
+                                  ("parallel_overscan_rows", 0, None)):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < least:
                 raise ValueError(f"detector.{name} must be a whole number, {least} or more, "
                                  f"got {value!r}.")
+            if most is not None and value > most:
+                raise ValueError(f"detector.{name} can be set between {least} and {most}, "
+                                 f"got {value}.")
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
                                                         self._dark_current_293k)
 

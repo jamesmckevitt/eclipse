@@ -327,6 +327,8 @@ class ReadoutSequence:
         The register is split, so each half carries half the columns, 1024
         image pixels, with the prescan at the outer end and the overscan at
         the middle.  Both scans are configurable in flight between 0 and 200.
+        A row takes as long as the output with more pixels, so an odd number
+        of columns counts the larger half.
     parallel_overscan_rows : int
         Rows clocked and read after the last image row.  Without a shutter these
         hold pure smear, since their charge crosses the whole illuminated image
@@ -347,7 +349,7 @@ class ReadoutSequence:
     row_transfer_time: u.Quantity = Detector_SWC.row_transfer_time
     pixel_period: u.Quantity = Detector_SWC.pixel_period
     serial_prescan: int = Detector_SWC.serial_prescan
-    serial_image_pixels: int = Detector_SWC.n_columns // 2
+    serial_image_pixels: int = (Detector_SWC.n_columns + 1) // 2
     serial_overscan: int = Detector_SWC.serial_overscan
     parallel_overscan_rows: int = Detector_SWC.parallel_overscan_rows
     dump_rows: int = Detector_SWC.n_rows
@@ -374,7 +376,8 @@ class ReadoutSequence:
         """
         return cls(shutter=det.shutter if shutter is None else shutter,
                    row_transfer_time=det.row_transfer_time, pixel_period=det.pixel_period,
-                   serial_prescan=det.serial_prescan, serial_image_pixels=det.n_columns // 2,
+                   serial_prescan=det.serial_prescan,
+                   serial_image_pixels=(det.n_columns + 1) // 2,
                    serial_overscan=det.serial_overscan,
                    parallel_overscan_rows=det.parallel_overscan_rows,
                    dump_rows=det.n_rows if dump_rows is None else dump_rows,

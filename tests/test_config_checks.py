@@ -40,6 +40,7 @@ def _run(tmp_path, monkeypatch, config, text=None):
     (lambda: Detector_SWC(pixel_period=0 * u.ns), "detector.pixel_period must be more than zero"),
     (lambda: Detector_SWC(shutter="no"), "detector.shutter must be true or false"),
     (lambda: Detector_SWC(serial_prescan=-1), "detector.serial_prescan must be a whole number, 0 or"),
+    (lambda: Detector_SWC(serial_overscan=201), "detector.serial_overscan can be set between 0 and 200"),
     (lambda: Detector_SWC(n_rows=2.5), "detector.n_rows must be a whole number, 1 or more"),
     (lambda: Detector_SWC(n_columns=True), "detector.n_columns must be a whole number"),
     (lambda: Detector_EIS(material="silicn"), "detector.material must be one of"),
