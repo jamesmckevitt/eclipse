@@ -11,13 +11,12 @@ import astropy.units as u
 import astropy.constants as const
 from tqdm import tqdm
 import psutil
-from mendeleev import element
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import (angle_to_distance, require_uniform_grid, require_downsample_divides,
-                    velocity_centers_to_edges, velocity_grid, view_axis_and_side, view_name,
-                    OBSERVER_SIDE, VELOCITY_CONVENTION)
+from .utils import (angle_to_distance, element_data, require_uniform_grid,
+                    require_downsample_divides, velocity_centers_to_edges, velocity_grid,
+                    view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
@@ -712,7 +711,7 @@ def _parse_line_name(name: str) -> Tuple[str, int, float]:
                          f"'Fe12_195.1190'.")
     elem, stage, wavelength = match.group(1), int(match.group(2)), float(match.group(3))
     try:
-        atomic_number = element(elem).atomic_number
+        atomic_number, _ = element_data(elem)
     except ValueError:
         raise ValueError(f"Line name '{name}': {elem} is not an element.") from None
     if not 1 <= stage <= atomic_number + 1:
@@ -1371,8 +1370,8 @@ def synthesise_spectra(
         data["wl_grid"] = (vel_grid * data["wl0"] / const.c + data["wl0"]).cgs
         wl_grid = data["wl_grid"].cgs.value  # (n_lambda,)
 
-        atom = element(int(data["atom"]))
-        atom_weight_g = (atom.atomic_weight * u.u).cgs.value
+        _, atomic_weight = element_data(int(data["atom"]))
+        atom_weight_g = (atomic_weight * u.u).cgs.value
 
         # Thermal width per T-bin: sigma_T (nT,)
         sigma_T = wl0 * np.sqrt(kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s

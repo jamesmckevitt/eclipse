@@ -17,6 +17,7 @@ import astropy.constants as const
 import joblib
 from scipy import sparse
 from tqdm import tqdm
+from mendeleev import element
 
 
 # Global debug flag - can be set by command line or configuration
@@ -205,6 +206,24 @@ def debug_on_error(func):
                             traceback=e.__traceback__)
             raise
     return wrapper
+
+
+@functools.lru_cache(maxsize=None)
+def element_data(symbol_or_number: str | int) -> tuple[int, float]:
+    """
+    The atomic number and the atomic weight, in atomic mass units, of an element.
+
+    The element is given by its symbol, such as ``"Fe"``, or its atomic
+    number. Each lookup reads mendeleev's database, which takes a fraction of
+    a second, so each element is looked up once and remembered.
+
+    Raises
+    ------
+    ValueError
+        If there is no such element.
+    """
+    atom = element(symbol_or_number)
+    return atom.atomic_number, atom.atomic_weight
 
 
 def wl_to_vel(wl: u.Quantity, wl0: u.Quantity) -> u.Quantity:
