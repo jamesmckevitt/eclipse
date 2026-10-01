@@ -7,6 +7,7 @@ run keeps what it saved, and what comes back from the file is compared with
 it entry by entry.
 """
 import dataclasses
+import gc
 import importlib
 import os
 import sys
@@ -394,6 +395,15 @@ def test_a_config_the_results_file_cannot_hold_is_refused_before_the_run(tmp_pat
     loop.append(loop)
     main_module = importlib.import_module("euvst_response.main")
     monkeypatch.setattr(main_module, "monte_carlo", lambda *args, **kwargs: pytest.fail("ran"))
-    with pytest.raises(ValueError, match="cannot be saved with the results: a value holds itself"):
-        _run(tmp_path, monkeypatch, "loop", uniform_intensity="5000 erg / (s cm2 sr)",
-             reference_line=loop)
+    # The loop is found by recursing until Python runs out of stack. Garbage
+    # collected there, from earlier tests, cannot run its finalisers, which
+    # pytest then reports as unraisable; so none is left to collect.
+    gc.collect()
+    gc.disable()
+    try:
+        with pytest.raises(ValueError,
+                           match="cannot be saved with the results: a value holds itself"):
+            _run(tmp_path, monkeypatch, "loop", uniform_intensity="5000 erg / (s cm2 sr)",
+                 reference_line=loop)
+    finally:
+        gc.enable()
