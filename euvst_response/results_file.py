@@ -377,9 +377,11 @@ def _init_fields(value) -> dict:
     Its other fields, worked out in __post_init__ such as a detector's dark
     current from its temperature, are written beside them as ``derived`` and
     given back as the run had them. An object from an older version's pickle
-    can lack a field added since, which then takes today's default, and one
-    from another version can have a setting this version's lacks, which is
-    written too, so that reading it says it is left out.
+    can lack a field added since, which then takes today's default, or, for
+    the fields in ``_EARLIER_VALUES`` such as FitConfig's ``weighted``, the
+    value runs had before it existed. One from another version can have a
+    setting this version's lacks, which is written too, so that reading it
+    says it is left out.
     """
     fields, missing, earlier = {}, [], []
     # What the object itself holds, so that a field it lacks is not taken
@@ -1077,8 +1079,10 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
 
     Everything the pickle holds is kept, and the file written is read back to
     check it. A setting that did not exist when the pickle was made gets
-    today's default, with a warning. A pickle that holds no results, such as
-    a synthesis pickle, is refused. Reading a pickle runs whatever code it
+    today's default, with a warning, except where runs then had another
+    value: the fits were unweighted, so the file records ``fit_weighted``
+    False, and a FitConfig in it ``weighted`` False. A pickle that holds no
+    results, such as a synthesis pickle, is refused. Reading a pickle runs whatever code it
     holds, so only convert files you trust.
 
     Parameters
