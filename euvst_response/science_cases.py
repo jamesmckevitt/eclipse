@@ -20,10 +20,9 @@ import astropy.constants as const
 import astropy.units as u
 import numpy as np
 import yaml
-from mendeleev import element
 
 from .config import Telescope_EUVST, _load_throughput_table
-from .utils import load_yaml_config
+from .utils import element_data, load_yaml_config
 
 # What every configuration gets unless the base settings say otherwise: the
 # settings the cases were run with for the NASA PDR analysis.
@@ -107,15 +106,9 @@ def line_id(line: dict) -> str:
     return f"{symbol.lower()}{_ROMAN[numeral]:02d}_{wavelength:.3f}".replace(".", "")
 
 
-@lru_cache(maxsize=None)
-def _atomic_weight(symbol: str) -> float:
-    """Atomic weight in atomic mass units.  mendeleev's lookup is slow, so once per element."""
-    return element(symbol).atomic_weight
-
-
 def thermal_width(line: dict) -> u.Quantity:
     """The 1-sigma thermal velocity, sqrt(k T / m), at the line's T_max."""
-    mass = _atomic_weight(line["ion"].split()[0]) * const.u
+    mass = element_data(line["ion"].split()[0])[1] * const.u
     temperature = 10.0 ** float(line["log_t_max"]) * u.K
     return np.sqrt(const.k_B * temperature / mass).to(u.km / u.s)
 

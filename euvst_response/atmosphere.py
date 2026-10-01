@@ -52,10 +52,9 @@ import astropy.units as u
 import h5py
 import numpy as np
 from astropy.wcs import WCS
-from mendeleev import element
 from ndcube import NDCube
 
-from .utils import require_downsample_divides, require_uniform_grid
+from .utils import element_data, require_downsample_divides, require_uniform_grid
 
 __all__ = [
     "FORMAT_NAME",
@@ -783,9 +782,9 @@ def mass_per_electron_from_abundances(abundances: Dict[str, float]) -> float:
     mass = 0.0
     electrons = 0.0
     for symbol, per_hydrogen in abundances.items():
-        atom = element(symbol)
-        mass += per_hydrogen * atom.atomic_weight
-        electrons += per_hydrogen * atom.atomic_number
+        atomic_number, atomic_weight = element_data(symbol)
+        mass += per_hydrogen * atomic_weight
+        electrons += per_hydrogen * atomic_number
     return mass / electrons
 
 
