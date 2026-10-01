@@ -94,6 +94,7 @@ def _payload():
                                          tie_center=0, tie_width=0)],
                 primary_component=0, max_iter=500),
             "fit_signals": "both",
+            "fit_weighted": True,
         },
     }
 
@@ -690,6 +691,30 @@ def test_a_fit_from_before_weighting_existed_reads_back_as_unweighted(tmp_path):
                                          "runs then had"):
         restored = load_results(_with_attribute(tmp_path, "fit", encoded))["fit"]
     assert restored.weighted is False
+
+
+def test_results_from_before_weighting_existed_are_said_to_be_unweighted(tmp_path):
+    """With no fitting block there is no FitConfig to say so, so the results do."""
+    payload = _payload()
+    del payload["results"]["fit_weighted"]
+    payload["results"]["fit_config"] = None
+    path = save_results(tmp_path / "out.h5", payload)
+    with pytest.warns(UserWarning, match="made before ECLIPSE weighted its fits"):
+        assert load_results(path)["results"]["fit_weighted"] is False
+
+
+def test_a_pickle_from_before_weighting_existed_is_said_to_be_unweighted(tmp_path):
+    """Its FitConfig lacks the setting, and would otherwise read the class's default."""
+    import dill
+
+    fit_config = FitConfig()
+    del fit_config.__dict__["weighted"]
+    path = tmp_path / "old.pkl"
+    with open(path, "wb") as handle:
+        dill.dump({"results": {"all_combinations": {}, "fit_config": fit_config}}, handle)
+    with pytest.warns(UserWarning, match="made before ECLIPSE weighted its fits"):
+        results = load_results(path)["results"]
+    assert results["fit_weighted"] is False and results["fit_config"].weighted is False
 
 
 def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):

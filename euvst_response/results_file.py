@@ -989,7 +989,11 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
             f"euvst_response.convert_results_pickle, or re-run the simulation. Reading a "
             f"pickle runs whatever code it holds, so only read files you trust.{later}",
             FutureWarning, stacklevel=_stacklevel)
-        return _load_pickle(path)
+        payload = _load_pickle(path)
+        if _from_before_weighting(payload):
+            warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning,
+                          stacklevel=_stacklevel)
+        return payload
 
     # A file damaged or made by hand can fail anywhere in the reading; the
     # reader is told which file, as a file that cannot be read if the
@@ -1024,7 +1028,34 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
     if not isinstance(results, dict):
         raise ValueError(f"{path} is not a results file this ECLIPSE can read: it holds a "
                          f"{type(results).__name__}, not a mapping.")
+    if _from_before_weighting(results):
+        warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning, stacklevel=_stacklevel)
     return results
+
+
+_BEFORE_WEIGHTING = ("The results in {path} were made before ECLIPSE weighted its fits by "
+                     "each pixel's uncertainty, so their fits are unweighted; fit_weighted is "
+                     "set to False.")
+
+
+def _from_before_weighting(payload) -> bool:
+    """
+    Whether the results were made before the fits could be weighted.
+
+    Their fits were unweighted, so their ``fit_weighted`` is set to False.
+    So is the ``weighted`` of a pickled FitConfig, which, lacking it, would
+    otherwise read the class's default.
+    """
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, dict) or "all_combinations" not in results:
+        return False
+    if "fit_weighted" in results:
+        return False
+    results["fit_weighted"] = False
+    own = getattr(results.get("fit_config"), "__dict__", None)
+    if own is not None and "weighted" not in own:
+        object.__setattr__(results["fit_config"], "weighted", False)
+    return True
 
 
 def _load_pickle(path: Path) -> dict:
