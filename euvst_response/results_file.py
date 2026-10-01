@@ -1082,8 +1082,8 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     today's default, with a warning, except where runs then had another
     value: the fits were unweighted, so the file records ``fit_weighted``
     False, and a FitConfig in it ``weighted`` False. A pickle that holds no
-    results, such as a synthesis pickle, is refused. Reading a pickle runs whatever code it
-    holds, so only convert files you trust.
+    results, such as a synthesis pickle, is refused. Reading a pickle runs
+    whatever code it holds, so only convert files you trust.
 
     Parameters
     ----------
