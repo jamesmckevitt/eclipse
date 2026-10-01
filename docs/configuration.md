@@ -108,6 +108,7 @@ For visible light, the filter's transmission is 10^(-t / 170 angstrom) for a thi
 | `max_iter` | How many iterations the optimiser may take on one spectrum | `1000` |
 | `bessel_correction` | Whether the standard deviations over the iterations use n - 1 in place of n (Bessel's correction) | `False` |
 | `save_iterations` | Whether to keep every iteration's fit in the results | `False` |
+| `weighted` | Whether to weight each pixel of the DN spectra by its uncertainty; see [Fitting blended lines](fitting.md#weighting) | `True` |
 
 ## Pinholes
 

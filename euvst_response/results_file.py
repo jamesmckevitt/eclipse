@@ -364,6 +364,13 @@ def _jsonable(value):
     raise TypeError(f"Values of type {type(value).__name__} cannot be written to a results file.")
 
 
+# Settings that runs made before they existed did not have at today's
+# default: an object or file from then that lacks one gets the value those
+# runs had, not the default. Fits were unweighted before
+# FitConfig.weighted.
+_EARLIER_VALUES = {"FitConfig": {"weighted": False}}
+
+
 def _init_fields(value) -> dict:
     """The arguments a configuration object was made with, as far as it has them.
 
@@ -374,10 +381,11 @@ def _init_fields(value) -> dict:
     from another version can have a setting this version's lacks, which is
     written too, so that reading it says it is left out.
     """
-    fields, missing = {}, []
+    fields, missing, earlier = {}, [], []
     # What the object itself holds, so that a field it lacks is not taken
     # silently from the class's default.
     own = getattr(value, "__dict__", None)
+    before = _EARLIER_VALUES.get(type(value).__name__, {})
     for field in dataclasses.fields(value):
         if not field.init:
             continue
@@ -385,8 +393,14 @@ def _init_fields(value) -> dict:
             fields[field.name] = getattr(value, field.name)
         elif field.name in own:
             fields[field.name] = own[field.name]
+        elif field.name in before:
+            fields[field.name] = before[field.name]
+            earlier.append(field.name)
         else:
             missing.append(field.name)
+    for name in earlier:
+        _warn(f"This {type(value).__name__} has no {name}, which ECLIPSE added after it "
+              f"was made; it gets {before[name]!r}, as runs then had.")
     if own is not None:
         names = {field.name for field in dataclasses.fields(value)}
         fields.update({key: item for key, item in own.items() if key not in names
@@ -494,6 +508,14 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     stored, unchecked.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
+    # A setting whose default has changed since it was added gets the value
+    # runs had before it existed.
+    before = {name: item for name, item in _EARLIER_VALUES.get(cls.__name__, {}).items()
+              if name not in stored}
+    for name, item in before.items():
+        reading.notes[f"The {cls.__name__} in the results file has no {name}, which ECLIPSE "
+                      f"added after it was made; it gets {item!r}, as runs then had."] = None
+    stored = {**stored, **before}
     # A setting added since the file was made is not in it, and gets today's
     # default; said, as a setting the run had no say in. One with no default
     # fails the construction below, and is said there.

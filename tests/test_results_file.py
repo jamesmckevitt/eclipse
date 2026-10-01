@@ -681,6 +681,17 @@ def test_a_setting_added_since_the_file_was_made_is_said_to_take_todays_default(
     assert restored.shutter is True and restored.row_transfer_time == 15 * u.us
 
 
+def test_a_fit_from_before_weighting_existed_reads_back_as_unweighted(tmp_path):
+    """Its fits were unweighted, so it is not given today's default, which weights them."""
+    encoded = results_file._jsonable(FitConfig())
+    del encoded["fields"]["weighted"]
+    with pytest.warns(UserWarning, match="FitConfig in the results file has no weighted, which "
+                                         "ECLIPSE added after it was made; it gets False, as "
+                                         "runs then had"):
+        restored = load_results(_with_attribute(tmp_path, "fit", encoded))["fit"]
+    assert restored.weighted is False
+
+
 def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):
     """A detector's dark current, as the run used it, whatever this version works out."""
     detector = Detector_SWC()

@@ -23,7 +23,7 @@ from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_p
                              synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
-from .monte_carlo import monte_carlo
+from .monte_carlo import expected_dn_uncertainty, monte_carlo
 from .radiometric import spectral_optics_fwhm, spectral_psf_margin
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
@@ -131,7 +131,7 @@ _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
-                 "bessel_correction", "save_iterations"}
+                 "bessel_correction", "save_iterations", "weighted"}
 _FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
                            "amplitude_greater_than", "name"}
 
@@ -478,6 +478,7 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
         max_iter=fitting_cfg.get("max_iter", FitConfig.max_iter),
         bessel_correction=fitting_cfg.get("bessel_correction", False),
         save_iterations=fitting_cfg.get("save_iterations", False),
+        weighted=fitting_cfg.get("weighted", True),
     )
 
 
@@ -823,6 +824,24 @@ def main() -> None:
     if fit_signals != "both":
         skipped = "photon" if fit_signals == "dn" else "dn"
         print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
+    # The DN fits are weighted by each pixel's uncertainty unless the fitting
+    # block says not, and the ground truth with them. With only the photons
+    # fitted, which are not weighted, the ground truth is not either.
+    weighted_fits = (fit_config is None or fit_config.weighted) and fit_signals != "photon"
+    print("DN fits weighted by each pixel's uncertainty" if weighted_fits
+          else "Fits unweighted")
+
+    def _fit_ground_truth(cube_binned, offchip_bin_slit, uncertainty=None):
+        """The fit to the spectra with no noise, saying where it failed."""
+        print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
+        truth = ground_truth_summary(cube_binned, fit_config, n_jobs=ncpu,
+                                     uncertainty=uncertainty)
+        truth_failed = truth["failed"]
+        if truth_failed.any():
+            print(f"  Ground truth fit failed in {np.count_nonzero(truth_failed)} "
+                  f"of {truth_failed.size} pixels; their true velocity and "
+                  f"width are NaN")
+        return truth
     # ensure_list wraps scalars in a list; values are plain ints (no units),
     # which int() would have made of a fraction or a numeric string.
     if not offchip_bin_slits or any(isinstance(v, bool) or not isinstance(v, int) or v < 1
@@ -1268,13 +1287,11 @@ def main() -> None:
             # Apply off-chip binning
             cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
 
-            print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
-            ground_truth = ground_truth_summary(cube_reb_binned, fit_config, n_jobs=ncpu)
-            truth_failed = ground_truth["failed"]
-            if truth_failed.any():
-                print(f"  Ground truth fit failed in {np.count_nonzero(truth_failed)} "
-                      f"of {truth_failed.size} pixels; their true velocity and "
-                      f"width are NaN")
+            # Weighted, the ground truth's fit takes the uncertainties the DN
+            # would have, which change with the exposure and the instrument,
+            # so it is fitted for each combination below.
+            ground_truth = (None if weighted_fits
+                            else _fit_ground_truth(cube_reb_binned, offchip_bin_slit))
             rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
             # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
             # multiple binning factors at fixed slit width all retain their cubes
@@ -1347,6 +1364,19 @@ def main() -> None:
             print(f"  Pinhole sizes: {pinhole_sizes}")
             print(f"  Pinhole positions: {pinhole_positions}")
 
+        if weighted_fits:
+            # The ground truth is weighted by the uncertainty the DN would
+            # have with no noise, so that it is the same fit as the measured
+            # spectra's, of the same line.
+            expected = expected_dn_uncertainty(cube_obs, expos, DET, TEL, SIM, offchip_bin_slit,
+                                               uniform_mode=uniform_intensity_mode)
+            if expected.shape != cube_reb_binned.data.shape:
+                raise RuntimeError(
+                    f"The detector's pixels, shaped {expected.shape}, do not match the "
+                    f"spectra the ground truth is fitted to, shaped "
+                    f"{cube_reb_binned.data.shape}.")
+            ground_truth = _fit_ground_truth(cube_reb_binned, offchip_bin_slit, expected)
+
         # Run Monte Carlo
         first_dn_signal, dn_fit_stats, first_photon_signal, photon_fit_stats = monte_carlo(
             cube_obs, expos, DET, TEL, SIM,
@@ -1414,6 +1444,9 @@ def main() -> None:
             },
             "fit_config": fit_config,
             "fit_signals": fit_signals,
+            # Whether the DN fits, and the ground truth, were weighted. Results
+            # made before this was recorded were not.
+            "fit_weighted": weighted_fits,
         }
 
         # Save
