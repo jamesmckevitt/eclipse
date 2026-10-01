@@ -342,6 +342,35 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     return [peak, centre, sigma, back]
 
 
+def _single_fit_scales(wv: np.ndarray, prof: np.ndarray) -> tuple[float, float, float]:
+    """
+    The wavelength offset, wavelength step and signal scale a single Gaussian is fitted in.
+
+    In the cgs units the spectra come in, a line's peak can be 1e13 and its
+    centre 2e-6 cm, thousands of widths from zero. In those numbers the
+    optimiser's tests for having converged are set by the largest of them,
+    and a change in the last bits of the data could move a fitted velocity
+    by half a km/s. So the fit is done with the wavelengths measured from the
+    middle of the window in pixels, and the signal over its largest value,
+    and the result converted back. The model is the same, so the fit is the
+    same, in better conditioned numbers.
+    """
+    offset = 0.5 * (float(np.min(wv)) + float(np.max(wv)))
+    step = float(np.median(np.abs(np.diff(wv)))) if len(wv) > 1 else 0.0
+    if not (np.isfinite(step) and step > 0):
+        step = 1.0
+    peak = float(np.max(np.abs(prof)))
+    scale = peak if np.isfinite(peak) and peak > 0 else 1.0
+    return offset, step, scale
+
+
+def _single_fit_back(params, offset: float, step: float, scale: float) -> np.ndarray:
+    """Parameters fitted in the units of :func:`_single_fit_scales`, in the spectrum's own."""
+    params = np.asarray(params, dtype=float)
+    return np.array([params[0] * scale, params[1] * step + offset,
+                     params[2] * step, params[3] * scale])
+
+
 def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
                    max_iter: int = FitConfig.max_iter,
                    pixel: float | None = None) -> tuple[np.ndarray, bool]:
@@ -354,23 +383,27 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
     Returns the parameters and whether the fit succeeded; see
     :func:`_mpfit_succeeded`.
     """
-    p0 = np.asarray(_guess_params(wv, prof), dtype=float)
+    offset, step, scale = _single_fit_scales(wv, prof)
+    x = (np.asarray(wv, dtype=float) - offset) / step
+    y = np.asarray(prof, dtype=float) / scale
+    p0 = np.asarray(_guess_params(x, y), dtype=float)
     parinfo = [
         {"value": p0[0]},
         {"value": p0[1]},
         {"value": p0[2], "limited": [1, 0], "limits": [1e-30, 0.0]},
         {"value": p0[3]},
     ]
-    functkw = {"x": wv, "y": prof, "n_components": 1, "pixel": pixel}
+    functkw = {"x": x, "y": y, "n_components": 1,
+               "pixel": None if pixel is None else pixel / step}
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
                        functkw=functkw, quiet=True, maxiter=max_iter)
         if result.status > 0:
-            params = np.asarray(result.params, dtype=float)
+            params = _single_fit_back(result.params, offset, step, scale)
             return params, _mpfit_succeeded(result.status, params)
     except Exception:
         pass
-    return p0, False
+    return _single_fit_back(p0, offset, step, scale), False
 
 
 def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
@@ -397,17 +430,22 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
     Returns the parameters and whether the fit succeeded.  A failed fit,
     including one that runs out of iterations, returns the initial guess.
     """
-    p0 = _guess_params(wv, prof)
+    offset, step, scale = _single_fit_scales(wv, prof)
+    x = (np.asarray(wv, dtype=float) - offset) / step
+    y = np.asarray(prof, dtype=float) / scale
+    p0 = _guess_params(x, y)
     model = gaussian if pixel is None else (
-        lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1, pixel=pixel))
+        lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1,
+                                                pixel=pixel / step))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(model, wv, prof, p0=p0,
+            popt, _ = curve_fit(model, x, y, p0=p0,
                                 maxfev=max_iter * (len(p0) + 1))
-            return popt, bool(np.all(np.isfinite(popt)))
+            params = _single_fit_back(popt, offset, step, scale)
+            return params, bool(np.all(np.isfinite(params)))
         except:
-            return np.array(p0), False
+            return _single_fit_back(p0, offset, step, scale), False
 
 
 # ---------------------------------------------------------------------------
