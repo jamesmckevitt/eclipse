@@ -356,17 +356,16 @@ def test_each_element_is_read_from_mendeleev_once(monkeypatch):
         return real_element(symbol_or_number)
 
     monkeypatch.setattr(utils, "element", counting_element)
-    utils.element_data.cache_clear()
-    try:
-        for _ in range(3):
-            _parse_line_name("Fe12_195.1190")
-            _parse_line_name("Fe9_171.073")
-        assert utils.element_data("Fe") == (26, real_element("Fe").atomic_weight)
-        assert looked_up == ["Fe"]
-        with pytest.raises(ValueError, match="Xx is not an element"):
-            _parse_line_name("Xx1_100.0")
-    finally:
-        utils.element_data.cache_clear()
+    monkeypatch.setattr(utils, "_ELEMENTS", {})
+    for _ in range(3):
+        _parse_line_name("Fe12_195.1190")
+        _parse_line_name("Fe9_171.073")
+    iron = (26, real_element("Fe").atomic_weight)
+    assert utils.element_data("Fe") == iron
+    assert utils.element_data(26) == iron
+    assert looked_up == ["Fe"]
+    with pytest.raises(ValueError, match="Xx is not an element"):
+        _parse_line_name("Xx1_100.0")
 
 
 def test_a_gaussian_named_in_capitals_and_a_blur_across_the_slit_are_accepted():

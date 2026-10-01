@@ -208,22 +208,31 @@ def debug_on_error(func):
     return wrapper
 
 
-@functools.lru_cache(maxsize=None)
+# The elements element_data has looked up, under their symbols, their atomic
+# numbers and whatever else they were asked for by.
+_ELEMENTS: dict = {}
+
+
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:
     """
     The atomic number and the atomic weight, in atomic mass units, of an element.
 
     The element is given by its symbol, such as ``"Fe"``, or its atomic
     number. Each lookup reads mendeleev's database, which takes a fraction of
-    a second, so each element is looked up once and remembered.
+    a second, so each element is looked up once and remembered, under its
+    symbol and its atomic number both.
 
     Raises
     ------
     ValueError
         If there is no such element.
     """
-    atom = element(symbol_or_number)
-    return atom.atomic_number, atom.atomic_weight
+    if symbol_or_number not in _ELEMENTS:
+        atom = element(symbol_or_number)
+        data = (atom.atomic_number, atom.atomic_weight)
+        for key in (atom.symbol, atom.atomic_number, symbol_or_number):
+            _ELEMENTS[key] = data
+    return _ELEMENTS[symbol_or_number]
 
 
 def wl_to_vel(wl: u.Quantity, wl0: u.Quantity) -> u.Quantity:
