@@ -15,7 +15,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import fit_cube_gauss
+from euvst_response.fitting import FitConfig, fit_cube_gauss
 
 C_KM_S = 299792.458
 REST = 192.028 * u.AA
@@ -87,14 +87,17 @@ def _cube(crval, crpix, cdelt, spectrum):
                   unit=u.erg / (u.s * u.sr * u.cm**3), meta={"rest_wav": REST})
 
 
+@pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 @pytest.mark.parametrize("crval, crpix, cdelt, spectrum", SPECTRA, ids=["0.2 arcsec", "0.4 arcsec"])
 def test_a_change_in_the_last_bits_of_a_spectrum_does_not_move_its_fitted_velocity(
-        crval, crpix, cdelt, spectrum):
+        crval, crpix, cdelt, spectrum, backend):
     cube = _cube(crval, crpix, cdelt, spectrum)
+    fit_config = FitConfig(backend=backend)
     centres = []
     for factor in (1.0, 1.0 + 1e-14):
         data, _, failed = fit_cube_gauss(cube * factor if factor != 1.0 else cube, n_jobs=1,
-                                         return_failed=True, pixel_mean=True)
+                                         fit_config=fit_config, return_failed=True,
+                                         pixel_mean=True)
         assert not failed.any()
         centres.append(data[0, 0, 1])
     moved = C_KM_S * abs(centres[1] - centres[0]) / REST.to_value(u.cm)
