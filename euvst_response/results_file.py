@@ -1120,6 +1120,9 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     if not isinstance(results, dict) or "all_combinations" not in results:
         raise ValueError(f"{pickle_path} holds no results. A synthesis pickle converts with "
                          f"euvst_response.convert_synthesis_pickle.")
+    # Recorded in the file written, so that reading it does not say so again.
+    if _from_before_weighting(payload):
+        warnings.warn(_BEFORE_WEIGHTING.format(path=pickle_path), UserWarning, stacklevel=2)
     # Written under a name of its own and read back before it takes the
     # target's place, so that neither a file that cannot be read nor the loss
     # of one already there can come of it.

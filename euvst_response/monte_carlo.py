@@ -88,8 +88,12 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     """
     quiet = dataclasses.replace(sim, noise=False)
     electrons = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)[8]
-    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
-    dn = rebin_slit_offchip(electrons, offchip_bin_slit).data / gain
+    # Clipped at the digitiser's maximum in each pixel, before any are summed,
+    # as to_dn clips the measured DN; not rounded, as the mean is not.
+    dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
+    dn = np.minimum(dn, det.max_dn.value)
+    dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
+                            offchip_bin_slit).data
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
     return np.sqrt(dn_variance(dn, I_cube.meta["rest_wav"], t_exp, det, visible,
                                offchip_bin_slit))
