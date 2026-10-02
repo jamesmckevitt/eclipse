@@ -492,9 +492,9 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
 
     with open(tmp_path / "old.pkl", "rb") as f:
         saved = dill.load(f)
-    assert list(saved) == ["line_cubes", "dem_map", "em_tv", "logT_grid", "vel_grid",
-                           "logN_grid", "goft", "voxel_sizes", "dynamic_mode", "atmosphere",
-                           "config"]
+    assert list(saved) == ["line_cubes", "dem_map", "em_tv", "electron_density", "logT_grid",
+                           "vel_grid", "logN_grid", "goft", "voxel_sizes", "dynamic_mode",
+                           "atmosphere", "config"]
     # Contribution functions and all, as older versions kept them.
     assert {"si", "wl_grid"} <= set(saved["goft"][LINE])
     assert np.array_equal(saved["line_cubes"][LINE].data,
