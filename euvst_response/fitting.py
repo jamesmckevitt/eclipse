@@ -375,6 +375,35 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     return [peak, centre, sigma, back]
 
 
+def _single_fit_scales(wv: np.ndarray, prof: np.ndarray) -> tuple[float, float, float]:
+    """
+    The wavelength offset, wavelength step and signal scale a single Gaussian is fitted in.
+
+    In the cgs units the spectra come in, a line's peak can be 1e13 and its
+    centre 2e-6 cm, thousands of widths from zero. In those numbers the
+    optimiser's tests for having converged are set by the largest of them,
+    and a change in the last bits of the data could move a fitted velocity
+    by half a km/s. So the fit is done with the wavelengths measured from the
+    middle of the window in pixels, and the signal over its largest value,
+    and the result converted back. The model is the same, so the fit is the
+    same, in better conditioned numbers.
+    """
+    offset = 0.5 * (float(np.min(wv)) + float(np.max(wv)))
+    step = float(np.median(np.abs(np.diff(wv)))) if len(wv) > 1 else 0.0
+    if not (np.isfinite(step) and step > 0):
+        step = 1.0
+    peak = float(np.max(np.abs(prof)))
+    scale = peak if np.isfinite(peak) and peak > 0 else 1.0
+    return offset, step, scale
+
+
+def _single_fit_back(params, offset: float, step: float, scale: float) -> np.ndarray:
+    """Parameters fitted in the units of :func:`_single_fit_scales`, in the spectrum's own."""
+    params = np.asarray(params, dtype=float)
+    return np.array([params[0] * scale, params[1] * step + offset,
+                     params[2] * step, params[3] * scale])
+
+
 def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
                    max_iter: int = FitConfig.max_iter,
                    pixel: float | None = None,
@@ -393,7 +422,13 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
     Returns the parameters and whether the fit succeeded; see
     :func:`_mpfit_succeeded`.
     """
-    p0 = np.asarray(_guess_params(wv, prof), dtype=float)
+    offset, step, scale = _single_fit_scales(wv, prof)
+    if poisson:
+        # Counts stay counts: their likelihood is not that of a fraction of them.
+        scale = 1.0
+    x = (np.asarray(wv, dtype=float) - offset) / step
+    y = np.asarray(prof, dtype=float) / scale
+    p0 = np.asarray(_guess_params(x, y), dtype=float)
     parinfo = [
         {"value": p0[0]},
         {"value": p0[1]},
@@ -404,17 +439,19 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
         for index in (0, 3):
             p0[index] = max(p0[index], 0.0)
             parinfo[index] = {"value": p0[index], "limited": [1, 0], "limits": [0.0, 0.0]}
-    functkw = {"x": wv, "y": prof, "n_components": 1, "pixel": pixel, "err": sigma,
+    functkw = {"x": x, "y": y, "n_components": 1,
+               "pixel": None if pixel is None else pixel / step,
+               "err": None if sigma is None else np.asarray(sigma, dtype=float) / scale,
                "poisson": poisson}
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
                        functkw=functkw, quiet=True, maxiter=max_iter)
         if result.status > 0:
-            params = np.asarray(result.params, dtype=float)
+            params = _single_fit_back(result.params, offset, step, scale)
             return params, _mpfit_succeeded(result.status, params)
     except Exception:
         pass
-    return p0, False
+    return _single_fit_back(p0, offset, step, scale), False
 
 
 def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
@@ -427,23 +464,15 @@ def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
     return status > 0 and status != 5 and bool(np.all(np.isfinite(params)))
 
 
-def _fit_one_poisson(wv: np.ndarray, counts: np.ndarray, p0: list, max_iter: int,
-                     pixel: float | None) -> tuple[np.ndarray, bool]:
-    """The single-Gaussian fit of greatest Poisson likelihood; see :func:`_fit_one`."""
-    offset = 0.5 * (float(np.min(wv)) + float(np.max(wv)))
-    step = float(np.median(np.abs(np.diff(wv)))) if len(wv) > 1 else 0.0
-    if not (np.isfinite(step) and step > 0):
-        step = 1.0
-    x = (np.asarray(wv, dtype=float) - offset) / step
-    width = None if pixel is None else pixel / step
+def _fit_one_poisson(x: np.ndarray, counts: np.ndarray, p0, max_iter: int,
+                     width: float | None, offset: float, step: float) -> tuple[np.ndarray, bool]:
+    """
+    The single-Gaussian fit of greatest Poisson likelihood; see :func:`_fit_one`.
 
-    def to_pixels(params):
-        return np.array([params[0], (params[1] - offset) / step, params[2] / step, params[3]])
-
-    def from_pixels(params):
-        return np.array([params[0], params[1] * step + offset, params[2] * step, params[3]])
-
-    start = to_pixels(np.asarray(p0, dtype=float))
+    It works in the pixels of :func:`_single_fit_scales`, *x*, with the
+    pixels *width* wide, and the counts as they are.
+    """
+    start = np.array(p0, dtype=float)
     start[[0, 3]] = np.maximum(start[[0, 3]], 0.0)
     lower = np.array([0.0, -np.inf, -np.inf, 0.0])
 
@@ -454,9 +483,9 @@ def _fit_one_poisson(wv: np.ndarray, counts: np.ndarray, p0: list, max_iter: int
         result = least_squares(residuals, start, bounds=(lower, np.inf), method="trf",
                                x_scale="jac", max_nfev=max_iter)
     except Exception:
-        return from_pixels(start), False
+        return _single_fit_back(start, offset, step, 1.0), False
     succeeded = result.status > 0 and bool(np.all(np.isfinite(result.x)))
-    return from_pixels(result.x if succeeded else start), succeeded
+    return _single_fit_back(result.x if succeeded else start, offset, step, 1.0), succeeded
 
 
 def _fit_one(wv: np.ndarray, prof: np.ndarray,
@@ -477,26 +506,36 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
     likelihood (:func:`_poisson_residuals`). The peak and background are
     held at zero or above, so that the model is too, which needs least
     squares' trf method; it counts only its own residual calls, so there
-    *max_iter* is the cap as it is. Its finite differences step each
-    parameter by at least about 1e-8, which in cm is far wider than a line,
-    so this fit works in pixels from the middle of the window.
+    *max_iter* is the cap as it is. It works in pixels from the middle of
+    the window, as the other fits do, but with the counts as they are, not
+    over their largest, as their likelihood is that of the counts.
 
     Returns the parameters and whether the fit succeeded.  A failed fit,
     including one that runs out of iterations, returns the initial guess.
     """
-    p0 = _guess_params(wv, prof)
-    model = gaussian if pixel is None else (
-        lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1, pixel=pixel))
+    offset, step, scale = _single_fit_scales(wv, prof)
     if poisson:
-        return _fit_one_poisson(wv, prof, p0, max_iter, pixel)
+        # Counts stay counts: their likelihood is not that of a fraction of them.
+        scale = 1.0
+    x = (np.asarray(wv, dtype=float) - offset) / step
+    y = np.asarray(prof, dtype=float) / scale
+    p0 = _guess_params(x, y)
+    if poisson:
+        return _fit_one_poisson(x, y, p0, max_iter, None if pixel is None else pixel / step,
+                                offset, step)
+    model = gaussian if pixel is None else (
+        lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1,
+                                                pixel=pixel / step))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(model, wv, prof, p0=p0, sigma=sigma,
+            popt, _ = curve_fit(model, x, y, p0=p0,
+                                sigma=None if sigma is None else np.asarray(sigma) / scale,
                                 maxfev=max_iter * (len(p0) + 1))
-            return popt, bool(np.all(np.isfinite(popt)))
+            params = _single_fit_back(popt, offset, step, scale)
+            return params, bool(np.all(np.isfinite(params)))
         except:
-            return np.array(p0), False
+            return _single_fit_back(p0, offset, step, scale), False
 
 
 # ---------------------------------------------------------------------------
