@@ -45,6 +45,22 @@ def test_overlapping_windows_share_one_continuum_and_others_have_their_own():
     assert edges[-1] + steps[0] / 2 >= last[-1] + (last[-1] - last[-2]) / 2 - 1e-12
 
 
+def test_a_window_just_past_a_groups_last_bin_shares_no_wavelength_with_it():
+    """The group's bins of its finest spacing can run past its windows; a window there joins it."""
+    coarse = np.arange(0.0, 11.0, 1.0) * u.AA + 170 * u.AA       # bins 169.5 to 180.5
+    fine = np.arange(5.0, 6.05, 0.3) * u.AA + 170 * u.AA         # spacing 0.3 within it
+    beyond = np.arange(10.6, 11.6, 0.1) * u.AA + 170 * u.AA      # bins from 180.55
+    windows = continuum_windows([coarse, fine, beyond])
+    edges = []
+    for grid in windows.values():
+        values = grid.to_value(u.AA)
+        step = values[1] - values[0]
+        edges.append((values[0] - step / 2, values[-1] + step / 2))
+    edges.sort()
+    for (_, end), (start, _) in zip(edges, edges[1:]):
+        assert end <= start + 1e-9
+
+
 def test_the_continuum_takes_each_pixels_emission_measure_and_density():
     logN = np.array([8.0, 9.0, 10.0])
     free = np.array([[1.0, 2.0], [3.0, 4.0]])  # (nT, n_wavelength)
@@ -170,7 +186,9 @@ def test_the_continuum_is_fiascos_per_emission_measure_and_per_steradian():
     unit = "erg cm3 s-1 AA-1"
     expected_free = sum((element.free_free(wavelength) + element.free_bound(wavelength))
                         .to_value(unit) for element in elements)
-    expected_two = sum(element.two_photon(wavelength, 10 ** logN * u.cm**-3).to_value(unit)
+    # One density at a time, as fiasco 0.8 cannot take several.
+    expected_two = sum(np.concatenate([element.two_photon(wavelength, [10 ** n] * u.cm**-3)
+                                       .to_value(unit) for n in logN], axis=1)
                        for element in elements)
     scale = ratio / (4 * np.pi) * per_cm
     assert np.allclose(free, expected_free * scale[:, np.newaxis], rtol=1e-10)

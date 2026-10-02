@@ -77,20 +77,25 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         # to half a spacing after its last.
         windows.append((float(values[0] - spacing[0] / 2), float(values[-1] + spacing[-1] / 2),
                         float(np.min(spacing))))
+    def bins(low, high, step):
+        """How many bins of *step* reach from *low* to *high*."""
+        return int(np.ceil((high - low) / step * (1 - 1e-12)))
+
     windows.sort()
     groups: List[List[float]] = []
     for low, high, step in windows:
-        if groups and low <= groups[-1][1]:
-            group = groups[-1]
-            group[1] = max(group[1], high)
-            group[2] = min(group[2], step)
-        else:
-            groups.append([low, high, step])
+        # A group's bins can reach past its windows' last bin, so a window is
+        # grouped with it if it begins before the group's bins end.
+        if groups:
+            first, last, spacing = groups[-1]
+            if low < first + bins(first, last, spacing) * spacing:
+                groups[-1] = [first, max(last, high), min(spacing, step)]
+                continue
+        groups.append([low, high, step])
     grids = {}
     for low, high, step in groups:
         # Bins of this spacing from the group's first bin edge to past its last.
-        n = int(np.ceil((high - low) / step * (1 - 1e-12)))
-        grid = low + (np.arange(n) + 0.5) * step
+        grid = low + (np.arange(bins(low, high, step)) + 0.5) * step
         name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.3f}-{grid[-1] * 1e8:.3f}"
         grids[name] = grid * u.cm
     return grids
@@ -161,36 +166,66 @@ def _element_continuum(args):
             single_ion)
 
 
+def _beyond_the_rates(error: ValueError) -> bool:
+    """Whether fiasco stopped at a temperature beyond the rates CHIANTI tabulates."""
+    return "interpolation range" in str(error)
+
+
 def _two_photon(ion, wavelength, density, unit, single_ion: list, ion_kwargs: dict,
                 abundance: str) -> np.ndarray:
     """
     One ion's two-photon emission, shaped (nT, nN, n_wavelength), in *unit*.
 
-    fiasco works out the level populations with the recombination and
-    ionisation rates of each level, which CHIANTI tabulates only up to some
-    temperature for some ions. Above it, fiasco's single-ion model is used,
-    as it is for ions that have no such rates at all, and the ion and the
-    temperatures are added to *single_ion*.
+    fiasco is asked for one density at a time: given several, version 0.8
+    fails to arrange its result. It works out the level populations with
+    the recombination and ionisation rates of each level, which CHIANTI
+    tabulates only up to some temperature for some ions. Above it, fiasco's
+    single-ion model is used, as it is for ions that have no such rates at
+    all, and the ion and the temperatures are added to *single_ion*.
     """
-    try:
-        return ion.two_photon(wavelength, density).to_value(unit)
-    except ValueError:
-        pass
     import fiasco
 
-    rows, beyond = [], []
-    for temperature in ion.temperature:
-        one = fiasco.Ion(ion.ion_name, temperature[np.newaxis], abundance=abundance,
-                         **ion_kwargs)
+    def at(one_density, ions):
+        parts = []
+        for part, single in ions:
+            kwargs = {"use_two_ion_model": False} if single else {}
+            parts.append(part.two_photon(wavelength, one_density, **kwargs).to_value(unit)[:, 0])
+        return np.concatenate(parts)
+
+    ions = [(ion, False)]
+    columns = []
+    for one_density in density:
+        one_density = one_density[np.newaxis]
         try:
-            rows.append(one.two_photon(wavelength, density).to_value(unit)[0])
-        except ValueError:
-            rows.append(one.two_photon(wavelength, density, use_two_ion_model=False)
-                        .to_value(unit)[0])
-            beyond.append(temperature)
-    if beyond:
-        single_ion.append(f"{ion.ion_name} from log T {np.log10(min(beyond).to_value(u.K)):.2f}")
-    return np.stack(rows)
+            columns.append(at(one_density, ions))
+            continue
+        except ValueError as error:
+            if not _beyond_the_rates(error) or len(ions) > 1:
+                raise
+        # The first temperature the rates do not reach, found once.
+        first = None
+        for index, temperature in enumerate(ion.temperature):
+            one = fiasco.Ion(ion.ion_name, temperature[np.newaxis], abundance=abundance,
+                             **ion_kwargs)
+            try:
+                one.two_photon(wavelength, one_density)
+            except ValueError as error:
+                if not _beyond_the_rates(error):
+                    raise
+                first = index
+                break
+        if first is None:
+            raise RuntimeError(f"fiasco could not work out the two-photon emission of "
+                               f"{ion.ion_name} at its temperatures together, but could at "
+                               f"each on its own.")
+        below, above = ion.temperature[:first], ion.temperature[first:]
+        ions = ([(fiasco.Ion(ion.ion_name, below, abundance=abundance, **ion_kwargs), False)]
+                if below.size else [])
+        ions.append((fiasco.Ion(ion.ion_name, above, abundance=abundance, **ion_kwargs), True))
+        single_ion.append(f"{ion.ion_name} from log T "
+                          f"{np.log10(above[0].to_value(u.K)):.2f}")
+        columns.append(at(one_density, ions))
+    return np.stack(columns, axis=1)
 
 
 def compute_continuum_fiasco(
