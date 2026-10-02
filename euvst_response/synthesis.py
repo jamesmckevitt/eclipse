@@ -1404,6 +1404,8 @@ def synthesise_cubes(
     vel_grid: u.Quantity,
     integration_axis: str,
     precision: type,
+    *,
+    return_density: bool = False,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
     The spectra of every line from one set of cubes: a whole box or a strip of it.
@@ -1434,6 +1436,10 @@ def synthesise_cubes(
         the box to look from, such as ``"-x"``; see `line_of_sight_velocity`.
     precision : type
         np.float32 or np.float64.
+    return_density : bool, optional
+        Also return the electron density at each temperature of each pixel,
+        the mean of its cells weighted by their emission measure, which the
+        contribution functions are taken at. Keyword only. Default False.
 
     Returns
     -------
@@ -1445,6 +1451,9 @@ def synthesise_cubes(
         As :func:`compute_dem` returns it.
     em_tv : np.ndarray
         As :func:`build_em_tv` returns it.
+    electron_density : np.ndarray
+        Only with *return_density*: the density in cm^-3, shaped as
+        *dem_map*, zero where there is no plasma at a temperature.
     """
     logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
 
@@ -1471,6 +1480,8 @@ def synthesise_cubes(
     em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+    if return_density:
+        return lines, dem_map, em_tv, avg_ne_map
     return lines, dem_map, em_tv
 
 
@@ -2359,9 +2370,9 @@ def main(args=None) -> None:
 
     # ---------------- DEM, EM(T,v) and spectra -----------------
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
-    goft, dem_map, em_tv = synthesise_cubes(
+    goft, dem_map, em_tv, electron_density = synthesise_cubes(
         temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
-        vel_grid, view, precision)
+        vel_grid, view, precision, return_density=True)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
@@ -2383,6 +2394,10 @@ def main(args=None) -> None:
     products = {
         "dem_map": dem_map,
         "em_tv": em_tv,
+        # The electron density at each temperature of each pixel, the mean of
+        # its cells weighted by their emission measure, which the lines'
+        # contribution functions were taken at.
+        "electron_density": electron_density,
         "logT_grid": logT_grid,
         "vel_grid": vel_grid,
         "logN_grid": logN_grid,
