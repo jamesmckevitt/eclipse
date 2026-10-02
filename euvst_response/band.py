@@ -125,10 +125,11 @@ def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[n
         raise np.linalg.LinAlgError("the matrix is singular, with no unpopulated level to drop")
     reduced = matrix[np.ix_(keep, keep)].copy()
     reduced[-1, :] = 1.0
-    reduced_rhs = np.zeros(keep.size)
+    rhs = np.asarray(rhs, dtype=float)
+    reduced_rhs = np.zeros((keep.size,) + rhs.shape[1:])
     reduced_rhs[-1] = rhs[-1]
     solution = np.linalg.solve(reduced, reduced_rhs)
-    populations = np.zeros(matrix.shape[0])
+    populations = np.zeros((matrix.shape[0],) + rhs.shape[1:])
     populations[keep] = solution
     return populations, int(unfed.sum())
 
@@ -141,8 +142,8 @@ def _unfed_levels_dropped(dropped: Dict[int, int]):
     fiasco solves every temperature at once with numpy's solve; this stands
     in for it, solving each matrix as numpy would and falling back to
     :func:`_solve_dropping_unfed_levels` for one that is singular. *dropped*
-    collects how many levels were left out, by the index of the matrix. It
-    runs in a worker process, so it changes nothing outside it.
+    collects how many levels were left out, by the index of the matrix.
+    numpy's own solve is back once it ends.
     """
     from unittest import mock
 
@@ -157,7 +158,9 @@ def _unfed_levels_dropped(dropped: Dict[int, int]):
         stacked = a.ndim == 3
         solutions = []
         for k, matrix in enumerate(a if stacked else [a]):
-            rhs = b[k] if b.ndim == 2 else b
+            # One right-hand side for every matrix, as fiasco 0.6 gives it, or
+            # one for each, (n_temperature, n_levels, 1) as fiasco 0.8 gives it.
+            rhs = b[k] if stacked and b.ndim > 1 else b
             try:
                 solutions.append(original(matrix, rhs))
             except np.linalg.LinAlgError:
@@ -194,26 +197,43 @@ def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):
 
 def _ion_band_lines(args):
     """One ion's lines in the band, for a worker process; None if it has none there."""
-    (atom, stage, temperature_K, densities_cm3, band, abundance, dbase_root) = args
     import logging
 
+    # fiasco warns once a density for what it falls back on, which the run
+    # reports once instead.
+    fiasco_logger = logging.getLogger("fiasco")
+    previous = fiasco_logger.level
+    fiasco_logger.setLevel(logging.ERROR)
+    try:
+        return _band_lines_of_ion(*args)
+    finally:
+        fiasco_logger.setLevel(previous)
+
+
+def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundance, dbase_root):
+    """The work of `_ion_band_lines`."""
     import fiasco
     from fiasco.util.exceptions import MissingDatasetException
 
-    logging.getLogger("fiasco").setLevel(logging.ERROR)
     kwargs = {} if dbase_root is None else {"hdf5_dbase_root": dbase_root}
     try:
         ion = fiasco.Ion((atom, stage), temperature_K * u.K, abundance=abundance, **kwargs)
         transitions = ion.transitions
     except MissingDatasetException:
+        # CHIANTI has no levels or transitions for the ion, so no lines.
         return None
     bound = transitions.is_bound_bound
     wavelength = transitions.wavelength[bound].to_value(u.AA)
     observed = np.asarray(transitions.is_observed[bound])
     columns = np.flatnonzero((wavelength >= band[0]) & (wavelength <= band[1]))
-    fraction = np.nan_to_num(np.asarray(ion.ionization_fraction, dtype=float))
+    if columns.size == 0:
+        return None
+    try:
+        fraction = np.nan_to_num(np.asarray(ion.ionization_fraction, dtype=float))
+    except MissingDatasetException as error:
+        return {"skipped": f"{ion.ion_name} ({error})"}
     temperatures = np.flatnonzero(fraction > 0)
-    if columns.size == 0 or temperatures.size == 0:
+    if temperatures.size == 0:
         return None
 
     try:
@@ -391,9 +411,10 @@ def write_band_lines(lines: BandLines, path: str | Path) -> Path:
     Path
         The file written.
     """
+    from .atmosphere import _replacing
+
     path = Path(path).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "w") as f:
+    with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FORMAT_NAME
         f.attrs["version"] = FORMAT_VERSION
         f.attrs["band"] = np.asarray(lines.band, dtype=float)

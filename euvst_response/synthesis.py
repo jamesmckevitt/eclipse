@@ -4,7 +4,7 @@ import re
 import argparse
 import warnings
 from pathlib import Path
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Union
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 import astropy.units as u
@@ -1406,7 +1406,8 @@ def synthesise_cubes(
     precision: type,
     *,
     return_density: bool = False,
-) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
+) -> Union[Tuple[Dict[str, dict], np.ndarray, np.ndarray],
+           Tuple[Dict[str, dict], np.ndarray, np.ndarray, np.ndarray]]:
     """
     The spectra of every line from one set of cubes: a whole box or a strip of it.
 

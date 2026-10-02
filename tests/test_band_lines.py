@@ -5,6 +5,7 @@ named for a run. Their contribution functions are worked out in ECLIPSE's
 convention, on a synthesis's own grids, and the synthesis file now keeps the
 density at each temperature of each pixel, which they are taken at.
 """
+import logging
 import sys
 
 import astropy.constants as const
@@ -54,6 +55,12 @@ def test_the_fallback_solves_each_matrix_and_leaves_the_others_alone():
     assert dropped == {1: 1}
     assert np.allclose(solutions[0], np.linalg.solve(plain, rhs))
     assert np.allclose(solutions[1], [0.6, 0.4, 0.0])
+    # fiasco 0.8 gives each matrix its own right-hand side, as a column.
+    dropped = {}
+    with _unfed_levels_dropped(dropped):
+        columns = np.linalg.solve(np.stack([plain, unfed]), np.stack([rhs, rhs])[..., np.newaxis])
+    assert dropped == {1: 1} and columns.shape == (2, 3, 1)
+    assert np.allclose(columns[..., 0], solutions)
     # Outside it, numpy's own solve is back.
     with pytest.raises(np.linalg.LinAlgError):
         np.linalg.solve(np.zeros((2, 2)), np.ones(2))
@@ -130,7 +137,11 @@ def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys
         raise MissingDatasetException("no such data")
 
     monkeypatch.setattr(band_module, "_contribution_function", missing)
+    logger = logging.getLogger("fiasco")
+    monkeypatch.setattr(logger, "level", logging.INFO)
     band = band_contribution_functions((195.10, 195.13), np.linspace(5.8, 6.6, 9),
                                        np.array([9.0]), elements=["Fe"], n_workers=1)
     assert band.ions == []
+    # Worked out in this process, fiasco's warnings are back on after.
+    assert logger.level == logging.INFO
     assert "Fe 12 (no such data)" in capsys.readouterr().out
