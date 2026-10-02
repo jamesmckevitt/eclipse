@@ -124,7 +124,7 @@ class FitConfig:
     save_iterations: bool = False
     # Weight the DN fits by each pixel's uncertainty. Unweighted, a Gaussian
     # line's velocity scatters by 1.24 times the least its photons allow,
-    # as the flanks that fix its position count no more than its noisier
+    # as the wings that fix its position count no more than its noisier
     # peak. Fits made before this setting existed were unweighted.
     weighted: bool = True
 

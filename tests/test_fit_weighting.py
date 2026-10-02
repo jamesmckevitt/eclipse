@@ -1,7 +1,7 @@
 """The DN fits are weighted by each pixel's uncertainty, worked out from its own signal.
 
 Unweighted, every pixel of a spectrum counted the same, though the pixels at
-a line's peak are noisier than those on its flanks, which fix where the line
+a line's peak are noisier than those on its wings, which fix where the line
 is. A Gaussian line's velocity then scattered by 1.24 times the least its
 photons allow. eispac weights its fits by each pixel's uncertainty, and so do
 these now.

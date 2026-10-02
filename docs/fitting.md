@@ -46,23 +46,6 @@ Without `components`, a single Gaussian is fitted. A `components` list needs at 
 
 `save_iterations: true` keeps every iteration's fitted values in the results, as well as their statistics. The results are then about `n_iter` times larger.
 
-## Weighting
-
-The noise in a pixel grows with its signal, so the pixels at a line's peak are noisier than those on its flanks. It is the flanks that fix where the line is. So ECLIPSE weights each pixel of the DN spectra by one over its uncertainty squared, as eispac does for EIS data.
-
-Each pixel's uncertainty is worked out from its own signal, as an observer would. It adds together the noise of the EUV photons, the dark current, the visible stray light, the read noise and the rounding to whole DN. Each EUV photon frees many electrons at once, so its noise is that of one photon, not of all its electrons.
-
-In a test with Fe XII 195.12, weighted fits measured velocities 15 to 20% more precisely than unweighted ones, for lines of 1,000 photons or more. Below about 100 photons they can be up to 15% less precise, because a pixel whose signal happens to come out low is given too much weight. `weighted: false` turns weighting off:
-
-```yaml
-fitting:
-  weighted: false
-```
-
-The photon spectra are always fitted unweighted, since a pixel with no photons in it has no noise of its own to weight by.
-
-The ground truth is weighted too, by the uncertainty each pixel's DN would have with no noise. It is then the same fit of the same line as the measurements, so their difference from it is the noise's doing. Before `weighted` existed, every fit was unweighted, and results files from then read back with `weighted: false`.
-
 ## Which signals are fitted
 
 By default ECLIPSE fits two signals at every Monte Carlo iteration: the detector's output in DN, and the photons arriving at the detector. If you only need one, `fit_signals`, at the top level of the configuration file, saves time:
