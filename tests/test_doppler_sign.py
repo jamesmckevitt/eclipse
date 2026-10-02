@@ -307,7 +307,8 @@ def _write_results_file(path, meta):
     """A results file whose atmosphere cube carries *meta*; None means uniform intensity mode."""
     cube_sim = None if meta is None else NDCube(np.ones((2, 2, 3)),
                                                 wcs=WCS(naxis=3), meta=meta)
-    return save_results(path, {"results": {"all_combinations": {}}, "cube_sim": cube_sim})
+    return save_results(path, {"results": {"all_combinations": {}, "fit_weighted": True},
+                               "cube_sim": cube_sim})
 
 
 @pytest.mark.parametrize("meta", [

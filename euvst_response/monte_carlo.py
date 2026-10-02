@@ -3,15 +3,16 @@ Monte Carlo simulation functions for instrument response analysis.
 """
 
 from __future__ import annotations
+import dataclasses
 from typing import Tuple
 import numpy as np
 import astropy.units as u
 from ndcube import NDCube
 from tqdm import tqdm
 from .radiometric import (
-    apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput, 
+    apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput,
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
-    add_pinhole_visible_light
+    add_pinhole_visible_light, dn_variance
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
@@ -38,6 +39,64 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
         line = f"  {label} fits: none of {failed.size} failed"
     print(line)
     return results
+
+
+def _weighted(fit_config) -> bool:
+    """Whether the fits are weighted: by default, and unless the fitting block says not."""
+    return fit_config is None or fit_config.weighted
+
+
+def _visible_electrons(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                       offchip_bin_slit: int) -> np.ndarray:
+    """The mean electrons visible light adds to each pixel, summed as the DN are binned."""
+    nothing = NDCube(np.zeros(I_cube.data.shape), wcs=I_cube.wcs,
+                     unit=u.electron / u.pixel, meta=I_cube.meta)
+    visible = add_visible_stray_light(nothing, t_exp, det, sim, tel, noise=False)
+    visible = add_pinhole_visible_light(visible, t_exp, det, sim, tel, noise=False)
+    return rebin_slit_offchip(visible, offchip_bin_slit).data
+
+
+def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                            offchip_bin_slit: int = 1, uniform_mode: bool = False) -> np.ndarray:
+    """
+    The uncertainty each pixel's DN has on average: that of the signal it holds with no noise.
+
+    The measured spectra are weighted by uncertainties worked out from their
+    own signal (`dn_variance`). The ground truth, fitted to the spectra with
+    no noise, is weighted by these, so that it is the same fit of the same
+    line, and a measurement's difference from it is the noise's doing.
+
+    Parameters
+    ----------
+    I_cube : NDCube
+        The spectral radiance on the detector's pixels, per second, as the
+        Monte Carlo observes it.
+    t_exp : u.Quantity
+        The exposure time.
+    det, tel, sim
+        The detector, telescope and simulation settings.
+    offchip_bin_slit : int, optional
+        How many pixels along the slit are added together after read-out.
+        Default 1.
+    uniform_mode : bool, optional
+        As for `simulate_once`. Default False.
+
+    Returns
+    -------
+    np.ndarray
+        The uncertainty in DN, shaped as the binned DN.
+    """
+    quiet = dataclasses.replace(sim, noise=False)
+    electrons = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)[8]
+    # Clipped at the digitiser's maximum in each pixel, before any are summed,
+    # as to_dn clips the measured DN; not rounded, as the mean is not.
+    dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
+    dn = np.minimum(dn, det.max_dn.value)
+    dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
+                            offchip_bin_slit).data
+    visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
+    return np.sqrt(dn_variance(dn, I_cube.meta["rest_wav"], t_exp, det, visible,
+                               offchip_bin_slit))
 
 
 def simulate_once(
@@ -245,6 +304,19 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     do_photon = fit_signals in ("both", "photon")
     rest_wavelength = I_cube.meta["rest_wav"]
 
+    # Each DN spectrum is weighted by its pixels' uncertainties, worked out
+    # from their own signal, with the visible light's share of it known. The
+    # photons, with no read noise, would give a pixel with none no
+    # uncertainty; they are fitted by their Poisson likelihood instead.
+    visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
+               if do_dn and _weighted(fit_config) else None)
+
+    def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
+        if visible is None:
+            return None
+        return np.sqrt(dn_variance(dn_data, rest_wavelength, t_exp, det, visible,
+                                   offchip_bin_slit))
+
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
     if world_size > 1:
@@ -316,7 +388,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 print(f"  Fitting {len(dn_data_list)} DN MC spectra in parallel...")
                 dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
                     dn_batch, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, uncertainty=_dn_uncertainty(dn_stacked))
                 # Reshape from (n_iter, 1, ...) to (n_iter, 1, 1, ...)
                 dn_fit_results = _fit_results(
                     "DN", dn_fit_values[:, np.newaxis, :, :],
@@ -331,7 +403,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 print(f"  Fitting {len(photon_data_list)} photon MC spectra in parallel...")
                 photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
                     photon_batch, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, poisson=_weighted(fit_config))
                 photon_fit_results = _fit_results(
                     "Photon", photon_fit_values[:, np.newaxis, :, :],
                     photon_failed[:, np.newaxis, :], photon_fit_units,
@@ -367,14 +439,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
                 dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
                     dn_binned, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, uncertainty=_dn_uncertainty(dn_binned.data))
                 dn_fit_values_list.append((dn_fit_values, dn_failed))
 
             if do_photon:
                 photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
                 photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
                     photon_binned, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, poisson=_weighted(fit_config))
                 photon_fit_values_list.append((photon_fit_values, photon_failed))
 
         # --- MPI gather: collect fit arrays from all ranks on root -----------

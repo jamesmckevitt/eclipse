@@ -364,20 +364,30 @@ def _jsonable(value):
     raise TypeError(f"Values of type {type(value).__name__} cannot be written to a results file.")
 
 
+# Settings that runs made before they existed did not have at today's
+# default: an object or file from then that lacks one gets the value those
+# runs had, not the default. Fits were unweighted before
+# FitConfig.weighted.
+_EARLIER_VALUES = {"FitConfig": {"weighted": False}}
+
+
 def _init_fields(value) -> dict:
     """The arguments a configuration object was made with, as far as it has them.
 
     Its other fields, worked out in __post_init__ such as a detector's dark
     current from its temperature, are written beside them as ``derived`` and
     given back as the run had them. An object from an older version's pickle
-    can lack a field added since, which then takes today's default, and one
-    from another version can have a setting this version's lacks, which is
-    written too, so that reading it says it is left out.
+    can lack a field added since, which then takes today's default, or, for
+    the fields in ``_EARLIER_VALUES`` such as FitConfig's ``weighted``, the
+    value runs had before it existed. One from another version can have a
+    setting this version's lacks, which is written too, so that reading it
+    says it is left out.
     """
-    fields, missing = {}, []
+    fields, missing, earlier = {}, [], []
     # What the object itself holds, so that a field it lacks is not taken
     # silently from the class's default.
     own = getattr(value, "__dict__", None)
+    before = _EARLIER_VALUES.get(type(value).__name__, {})
     for field in dataclasses.fields(value):
         if not field.init:
             continue
@@ -385,8 +395,14 @@ def _init_fields(value) -> dict:
             fields[field.name] = getattr(value, field.name)
         elif field.name in own:
             fields[field.name] = own[field.name]
+        elif field.name in before:
+            fields[field.name] = before[field.name]
+            earlier.append(field.name)
         else:
             missing.append(field.name)
+    for name in earlier:
+        _warn(f"This {type(value).__name__} has no {name}, which ECLIPSE added after it "
+              f"was made; it gets {before[name]!r}, as runs then had.")
     if own is not None:
         names = {field.name for field in dataclasses.fields(value)}
         fields.update({key: item for key, item in own.items() if key not in names
@@ -494,6 +510,14 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     stored, unchecked.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
+    # A setting whose default has changed since it was added gets the value
+    # runs had before it existed.
+    before = {name: item for name, item in _EARLIER_VALUES.get(cls.__name__, {}).items()
+              if name not in stored}
+    for name, item in before.items():
+        reading.notes[f"The {cls.__name__} in the results file has no {name}, which ECLIPSE "
+                      f"added after it was made; it gets {item!r}, as runs then had."] = None
+    stored = {**stored, **before}
     # A setting added since the file was made is not in it, and gets today's
     # default; said, as a setting the run had no say in. One with no default
     # fails the construction below, and is said there.
@@ -967,7 +991,11 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
             f"euvst_response.convert_results_pickle, or re-run the simulation. Reading a "
             f"pickle runs whatever code it holds, so only read files you trust.{later}",
             FutureWarning, stacklevel=_stacklevel)
-        return _load_pickle(path)
+        payload = _load_pickle(path)
+        if _from_before_weighting(payload):
+            warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning,
+                          stacklevel=_stacklevel)
+        return payload
 
     # A file damaged or made by hand can fail anywhere in the reading; the
     # reader is told which file, as a file that cannot be read if the
@@ -1002,7 +1030,34 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
     if not isinstance(results, dict):
         raise ValueError(f"{path} is not a results file this ECLIPSE can read: it holds a "
                          f"{type(results).__name__}, not a mapping.")
+    if _from_before_weighting(results):
+        warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning, stacklevel=_stacklevel)
     return results
+
+
+_BEFORE_WEIGHTING = ("The results in {path} were made before ECLIPSE weighted its fits by "
+                     "each pixel's uncertainty, so their fits are unweighted; fit_weighted is "
+                     "set to False.")
+
+
+def _from_before_weighting(payload) -> bool:
+    """
+    Whether the results were made before the fits could be weighted.
+
+    Their fits were unweighted, so their ``fit_weighted`` is set to False.
+    So is the ``weighted`` of a pickled FitConfig, which, lacking it, would
+    otherwise read the class's default.
+    """
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, dict) or "all_combinations" not in results:
+        return False
+    if "fit_weighted" in results:
+        return False
+    results["fit_weighted"] = False
+    own = getattr(results.get("fit_config"), "__dict__", None)
+    if own is not None and "weighted" not in own:
+        object.__setattr__(results["fit_config"], "weighted", False)
+    return True
 
 
 def _load_pickle(path: Path) -> dict:
@@ -1024,9 +1079,11 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
 
     Everything the pickle holds is kept, and the file written is read back to
     check it. A setting that did not exist when the pickle was made gets
-    today's default, with a warning. A pickle that holds no results, such as
-    a synthesis pickle, is refused. Reading a pickle runs whatever code it
-    holds, so only convert files you trust.
+    today's default, with a warning, except where runs then had another
+    value: the fits were unweighted, so the file records ``fit_weighted``
+    False, and a FitConfig in it ``weighted`` False. A pickle that holds no
+    results, such as a synthesis pickle, is refused. Reading a pickle runs
+    whatever code it holds, so only convert files you trust.
 
     Parameters
     ----------
@@ -1067,6 +1124,9 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     if not isinstance(results, dict) or "all_combinations" not in results:
         raise ValueError(f"{pickle_path} holds no results. A synthesis pickle converts with "
                          f"euvst_response.convert_synthesis_pickle.")
+    # Recorded in the file written, so that reading it does not say so again.
+    if _from_before_weighting(payload):
+        warnings.warn(_BEFORE_WEIGHTING.format(path=pickle_path), UserWarning, stacklevel=2)
     # Written under a name of its own and read back before it takes the
     # target's place, so that neither a file that cannot be read nor the loss
     # of one already there can come of it.
