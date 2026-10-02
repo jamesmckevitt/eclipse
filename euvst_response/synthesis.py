@@ -2390,7 +2390,7 @@ def main(args=None) -> None:
     # an entry of its own: the windows are each line's velocity grid about
     # its wavelength in CHIANTI, as synthesise_spectra lays them out.
     continuum = None
-    if args.continuum:
+    if getattr(args, "continuum", False):
         windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
                                      for info in goft.values()])
         print(f"Computing the continuum over {len(windows)} window"
@@ -2455,7 +2455,7 @@ def main(args=None) -> None:
             "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
             "lines": args.lines,
             "abundance": args.abundance,
-            "continuum": bool(args.continuum),
+            "continuum": bool(getattr(args, "continuum", False)),
             "hdf5_dbase_root": goft_dbase_root,
             "integration_axis": view,
             "velocity_convention": VELOCITY_CONVENTION,

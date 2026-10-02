@@ -63,7 +63,7 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
     -------
     dict
         For each group, by its entry's name, such as
-        ``"continuum_194.925-195.375"``, its wavelengths in cm.
+        ``"continuum_194.9248-195.3757"``, its wavelengths in cm.
     """
     windows = []
     for grid in wavelengths:
@@ -97,7 +97,10 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
     for low, high, step in groups:
         # Bins of this spacing from the group's first bin edge to past its last.
         grid = low + (np.arange(bins(low, high, step)) + 0.5) * step
-        name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.3f}-{grid[-1] * 1e8:.3f}"
+        name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.4f}-{grid[-1] * 1e8:.4f}"
+        # Windows far narrower than any line's could round to one name.
+        if name in grids:
+            name = f"{name}_{sum(key.startswith(name) for key in grids) + 1}"
         grids[name] = grid * u.cm
     return grids
 
@@ -157,7 +160,12 @@ def _element_continuum(args):
             except MissingDatasetException:
                 left_out.append(f"{ion.ion_name} (two-photon)")
                 continue
-            share = (u.Quantity(ion.abundance).to_value(u.dimensionless_unscaled)
+            try:
+                abundance_of = u.Quantity(ion.abundance).to_value(u.dimensionless_unscaled)
+            except MissingDatasetException:
+                # An abundance set that leaves the element out has none of it.
+                continue
+            share = (abundance_of
                      * u.Quantity(ion.ionization_fraction).to_value(u.dimensionless_unscaled))
             two_photon += emission * share[:, np.newaxis, np.newaxis]
     finally:

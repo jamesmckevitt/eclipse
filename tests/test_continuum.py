@@ -61,6 +61,13 @@ def test_a_window_just_past_a_groups_last_bin_shares_no_wavelength_with_it():
         assert end <= start + 1e-9
 
 
+def test_windows_too_narrow_for_their_names_to_differ_each_keep_their_continuum():
+    first = np.array([100.00000, 100.00001]) * u.AA
+    second = np.array([100.00003, 100.00004]) * u.AA
+    windows = continuum_windows([first, second])
+    assert len(windows) == 2 and all(is_continuum(name) for name in windows)
+
+
 def test_the_continuum_takes_each_pixels_emission_measure_and_density():
     logN = np.array([8.0, 9.0, 10.0])
     free = np.array([[1.0, 2.0], [3.0, 4.0]])  # (nT, n_wavelength)
