@@ -196,3 +196,71 @@ def test_the_continuum_is_fiascos_per_emission_measure_and_per_steradian():
     assert np.allclose(two_photon, np.moveaxis(expected_two * scale[:, None, None], 1, 0),
                        rtol=1e-10)
     assert np.all(free > 0)
+
+
+def test_the_continuum_counts_plasma_moving_faster_than_the_velocity_grid(tmp_path, monkeypatch):
+    """It is not Doppler shifted, so the plasma em_tv leaves out still gives it."""
+    nz, ny, nx = 4, 3, 2
+    density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
+    atmosphere = Atmosphere(
+        temperature=np.full((nz, ny, nx), 1e6) * u.K,
+        mass_density=np.full((nz, ny, nx), density.value) * density.unit,
+        velocity_z=np.full((nz, ny, nx), 200.0) * u.km / u.s,
+        x_edges=np.arange(nx + 1) * 0.1 * u.Mm, y_edges=np.arange(ny + 1) * 0.1 * u.Mm,
+        z_edges=np.arange(nz + 1) * 0.1 * u.Mm)
+    path = write_atmosphere(atmosphere, tmp_path / "fast.h5")
+    monkeypatch.setattr(sys, "argv", [
+        "synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
+        "--output-name", "out.h5", "--mass-per-electron", "1.2", "--vel-lim", "100 km/s",
+        "--lines", "Fe12_195.1190", "--continuum"])
+    monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
+    monkeypatch.setattr(synthesis, "compute_continuum_fiasco", _flat_continuum)
+    with pytest.warns(UserWarning, match="faster"):
+        synthesis.main()
+    products = read_synthesis_products(tmp_path / "out.h5")
+    assert not products["em_tv"].any()
+    synthesis_read = read_synthesis(tmp_path / "out.h5")
+    (name,) = [name for name in synthesis_read.lines if is_continuum(name)]
+    # n_e^2 times the 0.4 Mm along the line of sight.
+    expected = (1e9) ** 2 * 0.4e8 * FLAT
+    assert np.allclose(synthesis_read.lines[name].radiance().to_value(synthesis_unit()),
+                       expected, rtol=1e-6)
+
+
+class _FakeIon:
+    """An ion whose two-photon emission fiasco's two-ion model gives only up to log T 6.25."""
+
+    limit = 10 ** 6.25
+
+    def __init__(self, name, temperature, abundance=None, **kwargs):
+        self.ion_name = name
+        self.temperature = u.Quantity(temperature, u.K)
+
+    def two_photon(self, wavelength, density, use_two_ion_model=True):
+        temperature = self.temperature.to_value(u.K)
+        if use_two_ion_model and np.any(temperature > self.limit):
+            raise ValueError("A value (6.3) in x_new is above the interpolation range's "
+                             "maximum value (6.25).")
+        model = 1.0 if use_two_ion_model else 2.0
+        values = (model * temperature[:, None, None] * density.to_value(u.cm**-3)[None, :, None]
+                  * np.ones(np.size(wavelength)))
+        return values * u.erg * u.cm**3 / (u.s * u.AA)
+
+
+def test_two_photon_beyond_the_rates_uses_the_single_ion_model_at_every_density(monkeypatch):
+    import fiasco
+
+    from euvst_response.continuum import _two_photon
+
+    monkeypatch.setattr(fiasco, "Ion", _FakeIon)
+    temperature = 10 ** np.array([6.0, 6.1, 6.2, 6.3, 6.4]) * u.K
+    density = np.array([1e8, 1e9, 1e10]) * u.cm**-3
+    wavelength = np.array([170.0, 200.0]) * u.AA
+    single_ion = []
+    emission = _two_photon(_FakeIon("C 5", temperature), wavelength, density,
+                           u.erg * u.cm**3 / (u.s * u.AA), single_ion, {}, "abundance")
+    assert emission.shape == (5, 3, 2)
+    expected = (temperature.value[:, None] * density.value[None, :])
+    expected[3:] *= 2.0
+    assert np.allclose(emission[..., 0], expected) and np.allclose(emission[..., 1], expected)
+    assert single_ion == ["C 5 from log T 6.30"]

@@ -77,6 +77,7 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         # to half a spacing after its last.
         windows.append((float(values[0] - spacing[0] / 2), float(values[-1] + spacing[-1] / 2),
                         float(np.min(spacing))))
+
     def bins(low, high, step):
         """How many bins of *step* reach from *low* to *high*."""
         return int(np.ceil((high - low) / step * (1 - 1e-12)))
@@ -348,8 +349,10 @@ def continuum_spectra(
     ----------
     emission_measure : np.ndarray
         The emission measure, n_e^2 dh, in each temperature bin of each
-        pixel, in cm^-5, shaped (rows, columns, nT): an ECLIPSE synthesis's
-        ``em_tv`` summed over velocity, or a DEM times its bins' widths.
+        pixel, in cm^-5, shaped (rows, columns, nT): a DEM times its bins'
+        widths. ECLIPSE's synthesis takes its own DEM, which, unlike
+        ``em_tv``, keeps the plasma moving faster than the velocity grid
+        reaches.
     electron_density : np.ndarray or float
         The electron density, in cm^-3, at each pixel and temperature,
         shaped as *emission_measure*, or one density for all. ECLIPSE's own

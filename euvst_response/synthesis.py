@@ -1483,10 +1483,12 @@ def synthesise_cubes(
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
 
-    # The continuum takes the emission measure in each temperature bin,
-    # whatever its velocity, and each pixel's density at that temperature.
+    # The continuum takes the emission measure in each temperature bin, from
+    # the DEM, which keeps the cells moving faster than the velocity grid
+    # reaches, as the continuum is not Doppler shifted, and each pixel's
+    # density at that temperature.
     if continuum:
-        emission_measure = em_tv.sum(axis=-1)
+        emission_measure = dem_map * _temperature_bins(logT_grid)[0]
         for name, table in continuum.items():
             grid = u.Quantity(table["wl_grid"]).to(u.cm)
             spectra = continuum_spectra(emission_measure, avg_ne_map, logN_grid,
@@ -2469,7 +2471,9 @@ def main(args=None) -> None:
     if write_pickle:
         # As older versions wrote it, contribution functions and all.
         with open(output_file, "wb") as f:
-            dill.dump({"line_cubes": line_cubes, **products, "goft": goft}, f)
+            dill.dump({"line_cubes": line_cubes, **products,
+                       "goft": {name: info for name, info in goft.items()
+                                if name not in (continuum or {})}}, f)
     else:
         # The snapshot's time goes with the spectra, so that syntheses of a
         # series of snapshots can be observed as a time series.
