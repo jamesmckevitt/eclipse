@@ -118,3 +118,19 @@ def test_a_line_of_the_band_has_the_contribution_function_the_synthesis_gives_it
     expected = goft["Fe12_195.1190"]["g_tn"][:, fe12.temperatures]
     assert np.allclose(fe12.g[line], expected, rtol=1e-10)
     assert fe12.mass == pytest.approx(55.845, rel=1e-3)
+
+
+@pytest.mark.chianti
+def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys):
+    from fiasco.util.exceptions import MissingDatasetException
+
+    from euvst_response import band as band_module
+
+    def missing(*args, **kwargs):
+        raise MissingDatasetException("no such data")
+
+    monkeypatch.setattr(band_module, "_contribution_function", missing)
+    band = band_contribution_functions((195.10, 195.13), np.linspace(5.8, 6.6, 9),
+                                       np.array([9.0]), elements=["Fe"], n_workers=1)
+    assert band.ions == []
+    assert "Fe 12 (no such data)" in capsys.readouterr().out

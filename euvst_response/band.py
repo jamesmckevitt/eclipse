@@ -214,43 +214,47 @@ def _ion_band_lines(args):
     if columns.size == 0 or temperatures.size == 0:
         return None
 
-    present = fiasco.Ion((atom, stage), temperature_K[temperatures] * u.K, abundance=abundance,
-                         **kwargs)
-    density = densities_cm3 * u.cm**-3
-    dropped: Dict[int, int] = {}
-    single_ion = None
     try:
-        g = _contribution_function(present, density, dropped)
-    except ValueError as error:
-        if not _beyond_the_rates(error):
-            raise
-        # CHIANTI's recombination and ionisation rates of each level stop
-        # short of the hottest temperatures for some ions: there, fiasco's
-        # single-ion model, as for ions that have no such rates at all.
-        first = None
-        for index, temperature in enumerate(present.temperature):
-            one = fiasco.Ion((atom, stage), temperature[np.newaxis], abundance=abundance,
+        present = fiasco.Ion((atom, stage), temperature_K[temperatures] * u.K, abundance=abundance,
                              **kwargs)
-            try:
-                _contribution_function(one, density[:1], {})
-            except ValueError as error:
-                if not _beyond_the_rates(error):
-                    raise
-                first = index
-                break
-        if first is None:
-            raise
-        parts = []
-        if first > 0:
-            below = fiasco.Ion((atom, stage), present.temperature[:first], abundance=abundance,
+        density = densities_cm3 * u.cm**-3
+        dropped: Dict[int, int] = {}
+        single_ion = None
+        try:
+            g = _contribution_function(present, density, dropped)
+        except ValueError as error:
+            if not _beyond_the_rates(error):
+                raise
+            # CHIANTI's recombination and ionisation rates of each level stop
+            # short of the hottest temperatures for some ions: there, fiasco's
+            # single-ion model, as for ions that have no such rates at all.
+            first = None
+            for index, temperature in enumerate(present.temperature):
+                one = fiasco.Ion((atom, stage), temperature[np.newaxis], abundance=abundance,
+                                 **kwargs)
+                try:
+                    _contribution_function(one, density[:1], {})
+                except ValueError as error:
+                    if not _beyond_the_rates(error):
+                        raise
+                    first = index
+                    break
+            if first is None:
+                raise
+            parts = []
+            if first > 0:
+                below = fiasco.Ion((atom, stage), present.temperature[:first], abundance=abundance,
+                                   **kwargs)
+                parts.append(_contribution_function(below, density, dropped))
+            above = fiasco.Ion((atom, stage), present.temperature[first:], abundance=abundance,
                                **kwargs)
-            parts.append(_contribution_function(below, density, dropped))
-        above = fiasco.Ion((atom, stage), present.temperature[first:], abundance=abundance,
-                           **kwargs)
-        parts.append(_contribution_function(above, density, dropped, use_two_ion_model=False))
-        g = np.concatenate(parts)
-        single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
-    g = g * present.proton_electron_ratio[:, np.newaxis, np.newaxis]
+            parts.append(_contribution_function(above, density, dropped, use_two_ion_model=False))
+            g = np.concatenate(parts)
+            single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
+        g = g * present.proton_electron_ratio[:, np.newaxis, np.newaxis]
+    except MissingDatasetException as error:
+        # Data the lines need that CHIANTI, or the abundance set, does not have.
+        return {"skipped": f"{ion.ion_name} ({error})"}
     # (temperature, density, transition) to (line, density, temperature), as
     # compute_goft_fiasco keeps G, with what fiasco cannot give taken as zero.
     g = np.nan_to_num(g.to_value(G_UNIT)[..., columns], nan=0.0, posinf=0.0, neginf=0.0)
@@ -334,9 +338,12 @@ def band_contribution_functions(
     else:
         results = [_ion_band_lines(job) for job in jobs]
 
-    ions, used, single_ion = [], None, []
+    ions, used, single_ion, skipped = [], None, [], []
     for result in results:
         if result is None:
+            continue
+        if "skipped" in result:
+            skipped.append(result["skipped"])
             continue
         used = result["hdf5_dbase_root"]
         if dbase_root is not None and used != dbase_root:
@@ -356,6 +363,9 @@ def band_contribution_functions(
               f"the hottest temperatures for {len(single_ion)} ions, whose level populations "
               f"there are worked out with fiasco's single-ion model, as for ions that have "
               f"no such rates: {', '.join(single_ion)}")
+    if skipped:
+        print(f"  Left out, for want of data in CHIANTI or the abundance set: "
+              f"{'; '.join(skipped)}")
     ions.sort(key=lambda ion: (ion.atom, ion.stage))
     return BandLines(band=(low, high), logT_grid=logT_grid, logN_grid=logN_grid,
                      abundance=abundance, hdf5_dbase_root=used or str(dbase_root),
