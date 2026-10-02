@@ -16,10 +16,12 @@ levels hold nothing in a steady state, so they are left out and the others
 solved exactly. An ion that still cannot be solved stops the run. For some
 ions, CHIANTI's recombination and ionisation rates of each level stop short
 of the hottest temperatures; there, fiasco's single-ion model is used, as
-it is for ions that have no such rates at all, and the run says so.
+it is for ions that have no such rates at all, and the run says so. An ion
+whose data, or abundance, CHIANTI does not have is left out, and the run
+names it.
 
-The result is written to a file, as it takes some minutes to work out and
-serves every frame on the same grids.
+The result is written to a file, as the whole SW band takes about two hours
+on 32 cores and serves every frame on the same grids.
 """
 
 from __future__ import annotations
@@ -333,7 +335,8 @@ def band_contribution_functions(
     if n_workers > 1 and len(jobs) > 1:
         import multiprocessing as mp
 
-        with mp.get_context("spawn").Pool(min(n_workers, len(jobs))) as pool:
+        # A new worker for each ion, so that each gives its memory back.
+        with mp.get_context("spawn").Pool(min(n_workers, len(jobs)), maxtasksperchild=1) as pool:
             results = pool.map(_ion_band_lines, jobs, chunksize=1)
     else:
         results = [_ion_band_lines(job) for job in jobs]
