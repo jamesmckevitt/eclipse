@@ -40,6 +40,23 @@ def test_a_level_nothing_populates_is_left_out_and_the_rest_solved_exactly():
     assert np.allclose(populations, [0.6, 0.4, 0.0])
 
 
+def test_a_level_nothing_leaves_but_something_feeds_is_kept():
+    # Level 1 decays to the ground at 3 and to level 2 at 1, and the ground is
+    # excited to level 1 at 2. Level 2 holds what reaches it, and level 3 is
+    # reached by nothing, which leaves the matrix singular.
+    matrix = np.array([[-2.0, 3.0, 0.0, 0.0],
+                       [2.0, -4.0, 0.0, 0.0],
+                       [0.0, 1.0, 0.0, 0.0],
+                       [1.0, 1.0, 1.0, 1.0]])
+    rhs = np.array([0.0, 0.0, 0.0, 1.0])
+    with pytest.raises(np.linalg.LinAlgError):
+        np.linalg.solve(matrix, rhs)
+    populations, dropped = _solve_dropping_unfed_levels(matrix, rhs)
+    assert dropped == 1
+    # In a steady state, everything ends in level 2.
+    assert np.allclose(populations, [0.0, 0.0, 1.0, 0.0])
+
+
 def test_a_matrix_with_no_unfed_level_is_not_solved_some_other_way():
     singular = np.array([[1.0, 1.0], [1.0, 1.0]])
     with pytest.raises(np.linalg.LinAlgError):
@@ -115,8 +132,9 @@ def test_a_synthesis_file_keeps_the_density_at_each_temperature(tmp_path, monkey
 def test_a_line_of_the_band_has_the_contribution_function_the_synthesis_gives_it():
     logT = np.linspace(5.8, 6.6, 9)
     logN = np.array([8.5, 9.5])
+    # In worker processes of their own, as a run works them out.
     band = band_contribution_functions((195.10, 195.13), logT, logN, elements=["Fe"],
-                                       n_workers=1)
+                                       n_workers=2)
     (fe12,) = [ion for ion in band.ions if ion.name == "Fe 12"]
     line = int(np.argmin(np.abs(fe12.wavelength - 195.119)))
     goft, _, _ = synthesis.compute_goft_fiasco(

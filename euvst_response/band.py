@@ -111,14 +111,22 @@ def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[n
     """
     Solve one ion's level populations with the levels nothing populates left out.
 
-    fiasco gives the rate matrix with its last row replaced by ones, for the
-    populations to add up to one. A level whose column is zero in every
-    other row gains nothing from any level, so in a steady state it holds
+    fiasco gives the rate matrix with the rate from level j into level i at
+    [i, j], each column adding up to zero, and its last row replaced by
+    ones, for the populations to add up to one. A level whose row holds no
+    rate from any other level gains nothing, so in a steady state it holds
     nothing. It is left out, the others solved exactly, and its population
     set to zero. The ground level is always kept.
     """
-    balance = matrix[:-1]
-    unfed = np.all(balance == 0, axis=0)
+    matrix = np.asarray(matrix, dtype=float)
+    # The last level's row, which the ones replaced, back from each column
+    # adding up to zero, with what the sums' rounding leaves taken as zero.
+    rebuilt = -matrix[:-1].sum(axis=0)
+    rounding = matrix.shape[0] * np.finfo(float).eps * np.abs(matrix[:-1]).sum(axis=0)
+    rebuilt[np.abs(rebuilt) <= rounding] = 0.0
+    inflow = np.vstack([matrix[:-1], rebuilt])
+    np.fill_diagonal(inflow, 0.0)
+    unfed = ~np.any(inflow != 0, axis=1)
     unfed[0] = False
     keep = np.flatnonzero(~unfed)
     if keep.size == matrix.shape[0]:
@@ -198,6 +206,10 @@ def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):
 def _ion_band_lines(args):
     """One ion's lines in the band, for a worker process; None if it has none there."""
     import logging
+
+    # fiasco makes its own logger when it is first imported, so it is
+    # imported before its logger is looked up.
+    import fiasco  # noqa: F401
 
     # fiasco warns once a density for what it falls back on, which the run
     # reports once instead.
