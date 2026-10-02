@@ -331,8 +331,9 @@ def band_contribution_functions(
         How many processes to work out the ions with, one ion each at a
         time. Default 0, which uses every CPU this process may use. The
         workers are spawned, so a script calling this needs an
-        ``if __name__ == "__main__":`` guard. The ions with the most levels
-        need about 3 GB each.
+        ``if __name__ == "__main__":`` guard. The whole SW band on 32
+        workers needs about 150 GB of memory in all, and up to 21 GB in one
+        worker; where there is less, give fewer workers.
     hdf5_dbase_root : str or Path, optional
         The CHIANTI database to read. Default fiasco's own.
     elements : sequence of str, optional
