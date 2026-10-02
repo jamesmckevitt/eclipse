@@ -263,6 +263,9 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
                     break
             if first is None:
                 raise
+            # The levels dropped are counted afresh, by the index of each
+            # temperature in the whole, without the attempt that stopped.
+            dropped.clear()
             parts = []
             if first > 0:
                 below = fiasco.Ion((atom, stage), present.temperature[:first], abundance=abundance,
@@ -270,7 +273,10 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
                 parts.append(_contribution_function(below, density, dropped))
             above = fiasco.Ion((atom, stage), present.temperature[first:], abundance=abundance,
                                **kwargs)
-            parts.append(_contribution_function(above, density, dropped, use_two_ion_model=False))
+            dropped_above: Dict[int, int] = {}
+            parts.append(_contribution_function(above, density, dropped_above,
+                                                use_two_ion_model=False))
+            dropped.update({first + k: n for k, n in dropped_above.items()})
             g = np.concatenate(parts)
             single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
         g = g * present.proton_electron_ratio[:, np.newaxis, np.newaxis]

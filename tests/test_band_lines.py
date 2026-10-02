@@ -155,3 +155,33 @@ def test_a_band_with_no_lines_still_names_its_database():
                                        np.array([9.0]), elements=["H"], n_workers=1)
     assert band.ions == []
     assert band.hdf5_dbase_root == str(fiasco.defaults["hdf5_dbase_root"])
+
+
+@pytest.mark.chianti
+def test_levels_dropped_on_both_sides_of_where_the_rates_stop_are_all_counted(monkeypatch,
+                                                                              capsys):
+    from euvst_response import band as band_module
+
+    logT = np.linspace(5.8, 6.6, 9)
+    end = 10 ** logT[4] * (1 - 1e-9)
+
+    def fake(ion, density, dropped, **kwargs):
+        temperature = ion.temperature.to_value(u.K)
+        two_ion = kwargs.get("use_two_ion_model", True)
+        if two_ion and temperature.max() >= end:
+            # A level left out before the rates run out, as a whole run would.
+            dropped[0] = 1
+            raise ValueError("A value in x_new is above the interpolation range.")
+        for k in range(temperature.size):
+            dropped[k] = 1
+        lines = int(np.sum(ion.transitions.is_bound_bound))
+        return np.zeros((temperature.size, len(density), lines)) * band_module.G_UNIT
+
+    monkeypatch.setattr(band_module, "_contribution_function", fake)
+    band = band_contribution_functions((195.10, 195.13), logT, np.array([9.0]),
+                                       elements=["Fe"], n_workers=1)
+    out = capsys.readouterr().out
+    (fe12,) = [ion for ion in band.ions if ion.name == "Fe 12"]
+    assert fe12.temperatures.size == 9
+    assert "Fe 12: levels nothing populates were left out at 9 temperatures" in out
+    assert "Fe 12 from log T 6.20" in out
