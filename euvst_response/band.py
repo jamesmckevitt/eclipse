@@ -390,9 +390,11 @@ def band_contribution_functions(
         print(f"  Left out, for want of data in CHIANTI or the abundance set: "
               f"{'; '.join(skipped)}")
     ions.sort(key=lambda ion: (ion.atom, ion.stage))
+    if used is None:
+        # No ion was worked out: the database that was asked.
+        used = str(fiasco.defaults["hdf5_dbase_root"] if dbase_root is None else dbase_root)
     return BandLines(band=(low, high), logT_grid=logT_grid, logN_grid=logN_grid,
-                     abundance=abundance, hdf5_dbase_root=used or str(dbase_root),
-                     ions=ions)
+                     abundance=abundance, hdf5_dbase_root=used, ions=ions)
 
 
 def write_band_lines(lines: BandLines, path: str | Path) -> Path:

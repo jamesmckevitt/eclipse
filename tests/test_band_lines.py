@@ -145,3 +145,13 @@ def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys
     # Worked out in this process, fiasco's warnings are back on after.
     assert logger.level == logging.INFO
     assert "Fe 12 (no such data)" in capsys.readouterr().out
+
+
+@pytest.mark.chianti
+def test_a_band_with_no_lines_still_names_its_database():
+    import fiasco
+
+    band = band_contribution_functions((100.0, 100.0001), np.linspace(5.8, 6.6, 9),
+                                       np.array([9.0]), elements=["H"], n_workers=1)
+    assert band.ions == []
+    assert band.hdf5_dbase_root == str(fiasco.defaults["hdf5_dbase_root"])
