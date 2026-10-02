@@ -64,6 +64,90 @@ def _binomial_inverse_transform(trials, probability: float) -> np.ndarray:
     return binom.ppf(u_draw, trials, probability).astype(np.int64)
 
 
+def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
+    """
+    The mean number of electrons a detected photon frees in the detector's silicon.
+
+    It is the photon's energy over the energy that makes each electron-hole
+    pair, which depends on the CCD's temperature.
+
+    Parameters
+    ----------
+    rest_wavelength : u.Quantity
+        The photons' wavelength: one value, or an array.
+    det : Detector_SWC or Detector_EIS
+        The detector, with its ``ccd_temperature``.
+
+    Returns
+    -------
+    np.ndarray
+        The electrons per photon, shaped as *rest_wavelength*.
+    """
+    if not hasattr(det, 'ccd_temperature'):
+        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
+    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+    photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
+    w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
+    return np.asarray(photon_energy_ev / w_T, dtype=float)
+
+
+def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, det,
+                visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1) -> np.ndarray:
+    """
+    The variance of each pixel's DN, worked out from the DN itself, as an observer would.
+
+    The pixel's signal is shared between its sources by their means: the
+    dark current and the visible light are known, and the rest is the EUV
+    line. Each source's variance follows from how `to_electrons`,
+    `add_visible_stray_light` and `to_dn` draw it:
+
+    - the EUV photons: each detected photon frees *m* electrons
+      (`electrons_per_photon`), with a Fano spread of ``si_fano * m``. With
+      the photons a Poisson count, their electrons vary by *m* + ``si_fano``
+      times their mean.
+    - the dark current and the visible light: one electron each, a Poisson
+      count, which varies by its mean.
+    - the read noise: ``read_noise_rms`` squared.
+    - the rounding to whole DN: 1/12 DN squared.
+
+    A signal at or below the dark current and visible light is taken to hold
+    no EUV electrons. Pixels summed after read-out, ``n_binned`` of them,
+    each bring their own dark current, read noise and rounding.
+
+    Parameters
+    ----------
+    dn : np.ndarray
+        The DN in each pixel, as `to_dn` gives them, or summed over
+        ``n_binned`` pixels along the slit.
+    rest_wavelength : u.Quantity
+        The line's rest wavelength, which sets the electrons per photon.
+    t_exp : u.Quantity
+        The exposure time, for the dark current.
+    det : Detector_SWC or Detector_EIS
+        The detector.
+    visible_electrons : np.ndarray or float, optional
+        The mean electrons from visible light in each pixel, as
+        `add_visible_stray_light` and `add_pinhole_visible_light` add them
+        with ``noise=False``, summed over the same pixels as *dn*. Default 0.
+    n_binned : int, optional
+        How many pixels each value of *dn* is the sum of. Default 1.
+
+    Returns
+    -------
+    np.ndarray
+        The variance, in DN squared, shaped as *dn*.
+    """
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    dark = n_binned * (det.dark_current * t_exp).to_value(u.electron / u.pixel)
+    read = n_binned * det.read_noise_rms.to_value(u.electron / u.pixel) ** 2
+    visible = np.asarray(visible_electrons, dtype=float)
+    electrons = np.asarray(dn, dtype=float) * gain
+    euv = np.maximum(electrons - dark - visible, 0.0)
+    per_electron = electrons_per_photon(rest_wavelength, det) + det.si_fano
+    variance_electrons = per_electron * euv + dark + visible + read
+    return variance_electrons / gain ** 2 + n_binned / 12.0
+
+
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
                            *, noise: bool = True, every_pixel: bool = False) -> np.ndarray:
     """
@@ -102,25 +186,12 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     if not np.any(mask_positive):
         return electron_counts
     
-    # Get CCD temperature from the detector dataclass
-    if not hasattr(det, 'ccd_temperature'):
-        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
-
-    # Convert to Kelvin for the calculation
-    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
-    
-    # Convert wavelength to photon energy: E = hc/lambda
-    photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
-    
-    # Calculate temperature-dependent energy per electron-hole pair
-    w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
-    
     # Mean number of electrons per photon.  The wavelength may be one value
     # for the whole array, or an array that broadcasts against it (one per
     # row, say, for a frame that spans the band); either way each pixel gets
     # its own conversion.
     mean_electrons_per_photon = np.broadcast_to(
-        np.asarray(photon_energy_ev / w_T, dtype=float), photon_counts.shape)[mask_positive]
+        electrons_per_photon(rest_wavelength, det), photon_counts.shape)[mask_positive]
 
     # Fano noise standard deviation per photon
     sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)

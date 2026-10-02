@@ -60,6 +60,7 @@ def _run(tmp_path, monkeypatch, config, text=None):
     (lambda: Telescope_EIS(psf_slit_width=np.inf * u.arcsec),
      "psf_slit_width must be a finite angle above zero"),
     (lambda: FitComponent(195.119), "wavelength must be the wavelength of a line"),
+    (lambda: FitConfig(weighted="yes"), "fitting.weighted must be true or false"),
     (lambda: FitConfig(components=[FitComponent(195.119 * u.AA), FitComponent(195.179 * u.AA)],
                        primary_component=1.0), "primary_component is 1.0"),
 ])

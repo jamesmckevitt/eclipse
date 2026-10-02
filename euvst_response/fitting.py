@@ -10,7 +10,7 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
-from scipy.optimize import curve_fit, OptimizeWarning
+from scipy.optimize import curve_fit, least_squares, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from .utils import gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
@@ -25,6 +25,28 @@ def _line_profile(x, *params, n_components=1, pixel=None):
     if pixel is None:
         return multi_gaussian(x, *params, n_components=n_components)
     return pixel_mean_gaussians(x, *params, n_components=n_components, pixel=pixel)
+
+
+def _poisson_residuals(counts: np.ndarray, model: np.ndarray) -> np.ndarray:
+    """
+    Residuals whose sum of squares is the Poisson deviance of the counts about the model.
+
+    Each is sign(d - m) sqrt(2 (m - d + d ln(d / m))), for counts d and model
+    m. The sum of their squares is minus twice the log of the Poisson
+    likelihood, give or take a constant, so a least-squares fit of them is
+    the fit of greatest likelihood. Where d = m the residual is zero, and
+    near it (d - m) / sqrt(d), the residual weighted by the counts' noise.
+
+    A model of zero has no likelihood for counts above zero, so it is taken
+    at the smallest positive number, to keep the arithmetic finite; the fit
+    then moves away from it.
+    """
+    d = np.asarray(counts, dtype=float)
+    m = np.maximum(np.asarray(model, dtype=float), np.finfo(float).tiny)
+    positive = d > 0
+    log_ratio = np.log(np.where(positive, d, 1.0) / m)
+    deviance = 2.0 * (m - d + np.where(positive, d * log_ratio, 0.0))
+    return np.sign(d - m) * np.sqrt(np.maximum(deviance, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +122,10 @@ class FitConfig:
     save_iterations : bool
         Keep every iteration's fit in the results, as well as the statistics.
         Default False.
+    weighted : bool
+        Weight each pixel of the DN spectra by one over its uncertainty
+        squared, worked out from its own signal, as eispac does, and fit the
+        photons' spectra by their Poisson likelihood. Default True.
     """
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
@@ -118,6 +144,12 @@ class FitConfig:
     # Keep every iteration's fitted parameters in the results, not only their
     # statistics. The results grow by about n_iter times the fit arrays.
     save_iterations: bool = False
+    # Weight the DN fits by each pixel's uncertainty, and fit the photons by
+    # their Poisson likelihood. Unweighted, a Gaussian line's velocity
+    # scatters by 1.24 times the least its photons allow, as the wings that
+    # fix its position count no more than its noisier peak. Fits made before
+    # this setting existed were unweighted.
+    weighted: bool = True
 
     def __post_init__(self):
         if len(self.components) == 1:
@@ -138,7 +170,8 @@ class FitConfig:
                 f"fitting.max_iter must be a positive integer, got "
                 f"{self.max_iter!r}."
             )
-        for key in ("bessel_correction", "save_iterations", "constrain_positive_intensity"):
+        for key in ("bessel_correction", "save_iterations", "constrain_positive_intensity",
+                    "weighted"):
             if not isinstance(getattr(self, key), bool):
                 raise ValueError(
                     f"fitting.{key} must be true or false, got "
@@ -344,12 +377,18 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
 
 def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
                    max_iter: int = FitConfig.max_iter,
-                   pixel: float | None = None) -> tuple[np.ndarray, bool]:
+                   pixel: float | None = None,
+                   sigma: np.ndarray | None = None,
+                   poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian, using mpfit.
 
     The same model, initial guess and fallback as :func:`_fit_one`, with the
     width held positive as on the multi-component mpfit path.  *max_iter* is
-    passed to mpfit, which counts iterations directly.
+    passed to mpfit, which counts iterations directly.  With *sigma*, each
+    pixel's uncertainty, the residuals are divided by it.  With *poisson*,
+    the spectrum is counts, fitted by their Poisson likelihood
+    (:func:`_poisson_residuals`), with the peak and background held at zero
+    or above so that the model is too.
 
     Returns the parameters and whether the fit succeeded; see
     :func:`_mpfit_succeeded`.
@@ -361,7 +400,12 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
         {"value": p0[2], "limited": [1, 0], "limits": [1e-30, 0.0]},
         {"value": p0[3]},
     ]
-    functkw = {"x": wv, "y": prof, "n_components": 1, "pixel": pixel}
+    if poisson:
+        for index in (0, 3):
+            p0[index] = max(p0[index], 0.0)
+            parinfo[index] = {"value": p0[index], "limited": [1, 0], "limits": [0.0, 0.0]}
+    functkw = {"x": wv, "y": prof, "n_components": 1, "pixel": pixel, "err": sigma,
+               "poisson": poisson}
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
                        functkw=functkw, quiet=True, maxiter=max_iter)
@@ -383,16 +427,59 @@ def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
     return status > 0 and status != 5 and bool(np.all(np.isfinite(params)))
 
 
+def _fit_one_poisson(wv: np.ndarray, counts: np.ndarray, p0: list, max_iter: int,
+                     pixel: float | None) -> tuple[np.ndarray, bool]:
+    """The single-Gaussian fit of greatest Poisson likelihood; see :func:`_fit_one`."""
+    offset = 0.5 * (float(np.min(wv)) + float(np.max(wv)))
+    step = float(np.median(np.abs(np.diff(wv)))) if len(wv) > 1 else 0.0
+    if not (np.isfinite(step) and step > 0):
+        step = 1.0
+    x = (np.asarray(wv, dtype=float) - offset) / step
+    width = None if pixel is None else pixel / step
+
+    def to_pixels(params):
+        return np.array([params[0], (params[1] - offset) / step, params[2] / step, params[3]])
+
+    def from_pixels(params):
+        return np.array([params[0], params[1] * step + offset, params[2] * step, params[3]])
+
+    start = to_pixels(np.asarray(p0, dtype=float))
+    start[[0, 3]] = np.maximum(start[[0, 3]], 0.0)
+    lower = np.array([0.0, -np.inf, -np.inf, 0.0])
+
+    def residuals(params):
+        return _poisson_residuals(counts, _line_profile(x, *params, pixel=width))
+
+    try:
+        result = least_squares(residuals, start, bounds=(lower, np.inf), method="trf",
+                               x_scale="jac", max_nfev=max_iter)
+    except Exception:
+        return from_pixels(start), False
+    succeeded = result.status > 0 and bool(np.all(np.isfinite(result.x)))
+    return from_pixels(result.x if succeeded else start), succeeded
+
+
 def _fit_one(wv: np.ndarray, prof: np.ndarray,
              max_iter: int = FitConfig.max_iter,
-             pixel: float | None = None) -> tuple[np.ndarray, bool]:
+             pixel: float | None = None,
+             sigma: np.ndarray | None = None,
+             poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit single spectrum with Gaussian.
 
     *max_iter* is an iteration count.  curve_fit uses lm here, since there are
     no bounds, and lm counts every residual call against maxfev including the
     one per parameter that builds each finite-difference Jacobian, so an
     iteration costs len(p0) + 1 evaluations.  With *pixel*, the Gaussian is
-    averaged over pixels that wide (:func:`_line_profile`).
+    averaged over pixels that wide (:func:`_line_profile`).  With *sigma*,
+    each pixel's uncertainty, each is weighted by one over its square.
+
+    With *poisson*, the spectrum is counts, fitted by their Poisson
+    likelihood (:func:`_poisson_residuals`). The peak and background are
+    held at zero or above, so that the model is too, which needs least
+    squares' trf method; it counts only its own residual calls, so there
+    *max_iter* is the cap as it is. Its finite differences step each
+    parameter by at least about 1e-8, which in cm is far wider than a line,
+    so this fit works in pixels from the middle of the window.
 
     Returns the parameters and whether the fit succeeded.  A failed fit,
     including one that runs out of iterations, returns the initial guess.
@@ -400,10 +487,12 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
     p0 = _guess_params(wv, prof)
     model = gaussian if pixel is None else (
         lambda x, *params: pixel_mean_gaussians(x, *params, n_components=1, pixel=pixel))
+    if poisson:
+        return _fit_one_poisson(wv, prof, p0, max_iter, pixel)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         try:
-            popt, _ = curve_fit(model, wv, prof, p0=p0,
+            popt, _ = curve_fit(model, wv, prof, p0=p0, sigma=sigma,
                                 maxfev=max_iter * (len(p0) + 1))
             return popt, bool(np.all(np.isfinite(popt)))
         except:
@@ -548,11 +637,16 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
                          model_func, free_to_full_A,
                          free_indices: list[int],
                          ratio_spec: dict, bounds,
-                         has_bounds: bool) -> tuple[np.ndarray, bool]:
+                         has_bounds: bool,
+                         sigma: np.ndarray | None = None,
+                         poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit one spectrum with scipy curve_fit (multi-component, A scaling).
 
     *wv_cm* is the wavelength axis in **cm** (CGS).  The fit is performed
-    in Angstrom internally, then the result is converted back to cm.
+    in Angstrom internally, then the result is converted back to cm.  With
+    *sigma*, each pixel's uncertainty, each is weighted by one over its
+    square.  With *poisson*, the spectrum is counts, fitted by their Poisson
+    likelihood (:func:`_poisson_residuals`) with least squares' trf method.
 
     Returns the parameters and whether the fit succeeded.  A failed fit
     returns the initial guess.
@@ -611,15 +705,36 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
             "method": "lm", "maxfev": max_iter * (n_free + 1),
         }
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", OptimizeWarning)
+    if poisson:
+        # Every amplitude fitted as itself, rather than as a ratio of
+        # another's, and the background, held at zero or above, so that the
+        # model is too.
+        lower = np.array(bounds[0], dtype=float) * np.ones(n_free)
+        upper = np.array(bounds[1], dtype=float) * np.ones(n_free)
+        n_full = fit_config.n_full_params
+        for pos, index in enumerate(free_indices):
+            if (index % 3 == 0 and pos not in ratio_spec) or index == n_full - 1:
+                lower[pos] = max(lower[pos], 0.0)
+        start = np.clip(p0_free_A, lower, upper)
         try:
-            popt_free_A, _ = curve_fit(model_func, wv_A, prof, p0=p0_free_A,
-                                       bounds=bounds, **fit_kwargs)
-            succeeded = bool(np.all(np.isfinite(popt_free_A)))
+            result = least_squares(lambda p: _poisson_residuals(prof, model_func(wv_A, *p)),
+                                   start, bounds=(lower, upper), method="trf",
+                                   x_scale="jac", max_nfev=max_iter)
+            succeeded = result.status > 0 and bool(np.all(np.isfinite(result.x)))
+            popt_free_A = result.x if succeeded else start
         except Exception:
-            popt_free_A = p0_free_A
+            popt_free_A = start
             succeeded = False
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", OptimizeWarning)
+            try:
+                popt_free_A, _ = curve_fit(model_func, wv_A, prof, p0=p0_free_A,
+                                           sigma=sigma, bounds=bounds, **fit_kwargs)
+                succeeded = bool(np.all(np.isfinite(popt_free_A)))
+            except Exception:
+                popt_free_A = p0_free_A
+                succeeded = False
 
     # Reconstruct full A vector, then convert centres & sigmas back to cm
     full_A = free_to_full_A(popt_free_A)
@@ -827,28 +942,40 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
 
 
 def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
-                     ratio_params=None, pixel=None):
+                     ratio_params=None, pixel=None, err=None, poisson=False):
     """Residual function in the form mpfit expects.
 
     Must return ``[status, residuals]`` where *status* is 0 for success.
+    With *err*, each pixel's uncertainty, the residuals are divided by it.
+    With *poisson*, *y* is counts, and the residuals are those whose squares
+    add up to the Poisson deviance (:func:`_poisson_residuals`).
     """
     p_eval = np.array(p, dtype=float)
     if ratio_params:
         for child_idx, parent_idx in _in_dependency_order(ratio_params):
             p_eval[child_idx] = p_eval[parent_idx] * p[child_idx]
     model = _line_profile(x, *p_eval, n_components=n_components, pixel=pixel)
-    return [0, y - model]
+    if poisson:
+        return [0, _poisson_residuals(y, model)]
+    residuals = y - model
+    return [0, residuals if err is None else residuals / err]
 
 
 def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
                    fit_config: FitConfig,
                    parinfo_template: list[dict],
                    ratio_params: dict | None = None,
-                   pixel: float | None = None) -> tuple[np.ndarray, bool]:
+                   pixel: float | None = None,
+                   sigma: np.ndarray | None = None,
+                   poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit a single spectrum with mpfit.
 
     With *pixel*, the Gaussians are averaged over pixels that wide
-    (:func:`_line_profile`).
+    (:func:`_line_profile`).  With *sigma*, each pixel's uncertainty, the
+    residuals are divided by it.  With *poisson*, the spectrum is counts,
+    fitted by their Poisson likelihood (:func:`_poisson_residuals`), with
+    every amplitude and the background held at zero or above so that the
+    model is too.
 
     Returns the *full* parameter vector (length ``3*N + 1``) with
     absolute amplitudes (ratio parameters are converted back), and whether
@@ -872,8 +999,16 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
             parinfo[child_idx]["value"] = ratio
             p0[child_idx] = ratio
 
+    if poisson:
+        nc = fit_config.n_components
+        held = [3 * i for i in range(nc) if 3 * i not in (ratio_params or {})] + [3 * nc]
+        for index in held:
+            p0[index] = max(p0[index], 0.0)
+            parinfo[index].update({"value": p0[index], "limited": [1, 0], "limits": [0.0, 0.0]})
+
     functkw = {"x": wv, "y": prof, "n_components": fit_config.n_components,
-               "ratio_params": ratio_params, "pixel": pixel}
+               "ratio_params": ratio_params, "pixel": pixel, "err": sigma,
+               "poisson": poisson}
 
     try:
         result = mpfit(_mpfit_residuals, p0, parinfo=parinfo,
@@ -917,20 +1052,23 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[False] = False, pixel_mean: bool = False
+                   return_failed: Literal[False] = False, pixel_mean: bool = False,
+                   uncertainty: np.ndarray | None = None, poisson: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit]]: ...
 
 
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: Literal[True], pixel_mean: bool = False
+                   return_failed: Literal[True], pixel_mean: bool = False,
+                   uncertainty: np.ndarray | None = None, poisson: bool = False
                    ) -> tuple[np.ndarray, list[u.Unit], np.ndarray]: ...
 
 
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
-                   return_failed: bool = False, pixel_mean: bool = False):
+                   return_failed: bool = False, pixel_mean: bool = False,
+                   uncertainty: np.ndarray | None = None, poisson: bool = False):
     """
     Fit a Gaussian, or several for a blend, on a flat background to the spectrum in every pixel.
 
@@ -938,6 +1076,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     as an observer fits a spectrum. With ``pixel_mean``, it is averaged over
     each pixel instead, which is what the pixel records. The two differ for a
     line not much wider than a pixel.
+
+    By default every pixel of a spectrum counts the same. Given
+    ``uncertainty``, each counts by one over its uncertainty squared, as
+    eispac weights its fits. Only the uncertainties' ratios within a spectrum
+    matter, not their scale. With ``poisson``, the spectra are counts, such
+    as photons, and each is fitted by its Poisson likelihood instead: the
+    fit the counts make most likely, which needs no uncertainty, even for a
+    pixel with none.
 
     Parameters
     ----------
@@ -951,6 +1097,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Also return which fits failed. Keyword only. Default False.
     pixel_mean : bool, optional
         Fit the Gaussians' mean over each pixel. Keyword only. Default False.
+    uncertainty : np.ndarray, optional
+        The uncertainty of every value in the cube, shaped as its data or
+        broadcastable to it, above zero everywhere. Keyword only. Default
+        None, for an unweighted fit.
+    poisson : bool, optional
+        The spectra are counts, zero or more, fitted by their Poisson
+        likelihood, with every amplitude and the background held at zero or
+        above. Not with ``uncertainty``. Keyword only. Default False.
 
     Returns
     -------
@@ -985,21 +1139,45 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     # The pixel width in the cm the fits take the wavelengths in.
     pixel = spectral_pixel_width(signal_cube).to_value(wv.unit) if pixel_mean else None
 
+    if poisson and uncertainty is not None:
+        raise ValueError("A Poisson fit needs no uncertainty: give poisson or uncertainty, "
+                         "not both.")
+    if poisson and not np.all(np.isfinite(signal_cube.data) & (signal_cube.data >= 0)):
+        raise ValueError("A Poisson fit is of counts, which are zero or more.")
+    if uncertainty is not None:
+        try:
+            uncertainty = np.broadcast_to(np.asarray(uncertainty, dtype=float),
+                                          signal_cube.data.shape)
+        except ValueError:
+            raise ValueError(
+                f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
+                f"spectra, shaped {signal_cube.data.shape}.") from None
+        if not np.all(np.isfinite(uncertainty) & (uncertainty > 0)):
+            raise ValueError("Every uncertainty must be finite and above zero, as each "
+                             "pixel is weighted by one over its square.")
+
+    def _rows():
+        """Each row along the slit, with its uncertainties."""
+        for i in range(n_slit):
+            yield signal_cube.data[i], None if uncertainty is None else uncertainty[i]
+
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
         use_mpfit = fit_config is not None and fit_config.backend == "mpfit"
         fit_one = _fit_one_mpfit if use_mpfit else _fit_one
 
-        def _fit_block(spec_block):
+        def _fit_block(spec_block, unc_block):
             results = np.empty((spec_block.shape[0], 4))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = fit_one(wv.value, spec_block[i], max_iter, pixel)
+                results[i], succeeded[i] = fit_one(
+                    wv.value, spec_block[i], max_iter, pixel,
+                    None if unc_block is None else unc_block[i], poisson)
             return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
             results = Parallel(n_jobs=n_jobs)(
-                delayed(_fit_block)(signal_cube.data[i]) for i in range(n_slit)
+                delayed(_fit_block)(spectra, unc) for spectra, unc in _rows()
             )
 
         data_array = np.stack([r[0] for r in results], axis=0)
@@ -1024,14 +1202,15 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
          free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
             fit_config, None if pixel is None else pixel * 1e8)
 
-        def _fit_block_multi(spec_block):
+        def _fit_block_multi(spec_block, unc_block):
             results = np.empty((spec_block.shape[0], n_params))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
                 results[i], succeeded[i] = _fit_one_scipy_multi(
                     wv.value, spec_block[i], fit_config,
                     model_func, free_to_full, free_indices,
-                    ratio_spec, bounds, has_bounds)
+                    ratio_spec, bounds, has_bounds,
+                    None if unc_block is None else unc_block[i], poisson)
             return results, succeeded
 
     else:
@@ -1047,18 +1226,19 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         p0_template = _guess_multi_params(wv.value, signal_cube.data[0, 0], fit_config)
         parinfo_template = _build_parinfo(fit_config, p0_template, ratio_params)
 
-        def _fit_block_multi(spec_block):
+        def _fit_block_multi(spec_block, unc_block):
             results = np.empty((spec_block.shape[0], n_params))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
                 results[i], succeeded[i] = _fit_one_multi(
                     wv.value, spec_block[i], fit_config,
-                    parinfo_template, ratio_params, pixel)
+                    parinfo_template, ratio_params, pixel,
+                    None if unc_block is None else unc_block[i], poisson)
             return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block_multi)(signal_cube.data[i]) for i in range(n_slit)
+            delayed(_fit_block_multi)(spectra, unc) for spectra, unc in _rows()
         )
 
     data_array = np.stack([r[0] for r in results], axis=0)
@@ -1263,7 +1443,8 @@ def summarise_fits(fit_data: np.ndarray, failed: np.ndarray, units: list,
 
 
 def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
-                         n_jobs: int = -1) -> dict:
+                         n_jobs: int = -1, *,
+                         uncertainty: np.ndarray | None = None) -> dict:
     """
     Fit the noiseless cube, and give each component's velocity and width.
 
@@ -1275,6 +1456,10 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
         The fit configuration; None for a single Gaussian.
     n_jobs : int
         Joblib parallelism.
+    uncertainty : np.ndarray, optional
+        Each pixel's uncertainty, to weight the fit as the measured spectra's
+        are, as for :func:`fit_cube_gauss`. Keyword only. Default None, for an
+        unweighted fit.
 
     Returns
     -------
@@ -1292,7 +1477,8 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
     # hide the same error in the noisy fits.
     data, units, failed = fit_cube_gauss(cube, n_jobs=n_jobs,
                                          fit_config=fit_config,
-                                         return_failed=True, pixel_mean=True)
+                                         return_failed=True, pixel_mean=True,
+                                         uncertainty=uncertainty)
     quantities = fit_quantities(data, units, spectral_pixel_width(cube),
                                 cube.meta["rest_wav"], fit_config)
     components = {
