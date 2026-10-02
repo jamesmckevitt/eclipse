@@ -42,7 +42,7 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
 
 
 def _weighted(fit_config) -> bool:
-    """Whether the DN fits are weighted: by default, and unless the fitting block says not."""
+    """Whether the fits are weighted: by default, and unless the fitting block says not."""
     return fit_config is None or fit_config.weighted
 
 
@@ -306,8 +306,8 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
 
     # Each DN spectrum is weighted by its pixels' uncertainties, worked out
     # from their own signal, with the visible light's share of it known. The
-    # photons' are fitted unweighted: with no read noise, a pixel with no
-    # photons would have no uncertainty.
+    # photons, with no read noise, would give a pixel with none no
+    # uncertainty; they are fitted by their Poisson likelihood instead.
     visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
                if do_dn and _weighted(fit_config) else None)
 
@@ -403,7 +403,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 print(f"  Fitting {len(photon_data_list)} photon MC spectra in parallel...")
                 photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
                     photon_batch, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, poisson=_weighted(fit_config))
                 photon_fit_results = _fit_results(
                     "Photon", photon_fit_values[:, np.newaxis, :, :],
                     photon_failed[:, np.newaxis, :], photon_fit_units,
@@ -446,7 +446,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
                 photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
                     photon_binned, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True)
+                    return_failed=True, poisson=_weighted(fit_config))
                 photon_fit_values_list.append((photon_fit_values, photon_failed))
 
         # --- MPI gather: collect fit arrays from all ranks on root -----------

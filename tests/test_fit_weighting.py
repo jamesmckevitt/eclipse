@@ -1,10 +1,12 @@
-"""The DN fits are weighted by each pixel's uncertainty, worked out from its own signal.
+"""The DN fits are weighted by each pixel's uncertainty, and the photon fits are of greatest likelihood.
 
 Unweighted, every pixel of a spectrum counted the same, though the pixels at
 a line's peak are noisier than those on its wings, which fix where the line
 is. A Gaussian line's velocity then scattered by 1.24 times the least its
-photons allow. eispac weights its fits by each pixel's uncertainty, and so do
-these now.
+photons allow. eispac weights its fits by each pixel's uncertainty, worked
+out from its own signal, and so do the DN fits now. The photons, a Poisson
+count with no read noise, are fitted by their Poisson likelihood, which
+needs no uncertainty and reaches the least scatter they allow.
 """
 import astropy.units as u
 import numpy as np
@@ -14,7 +16,7 @@ from ndcube import NDCube
 
 from euvst_response.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import create_uniform_intensity_cube
-from euvst_response.fitting import fit_cube_gauss
+from euvst_response.fitting import FitComponent, FitConfig, _poisson_residuals, fit_cube_gauss
 from euvst_response.monte_carlo import expected_dn_uncertainty
 from euvst_response.radiometric import dn_variance, to_dn, to_electrons
 
@@ -121,3 +123,87 @@ def test_the_ground_truths_weights_are_those_of_the_dn_with_no_noise():
     floor = np.sqrt(dn_variance(0.0, REST, sim.expos, det, n_binned=2))
     assert expected.min() == pytest.approx(floor, rel=1e-6)
     assert np.argmax(expected[0, 0]) == np.argmax(cube.data[0, 0])
+
+
+def test_the_poisson_residuals_add_up_to_the_deviance():
+    counts = np.array([0.0, 1.0, 4.0, 9.0, 30.0])
+    model = np.array([0.5, 2.0, 4.0, 6.0, 33.0])
+    residuals = _poisson_residuals(counts, model)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_term = np.where(counts > 0, counts * np.log(counts / model), 0.0)
+    assert np.sum(residuals ** 2) == pytest.approx(2 * np.sum(model - counts + log_term))
+    assert np.array_equal(np.sign(residuals), np.sign(counts - model))
+    assert residuals[0] == pytest.approx(-1.0)  # no counts: -sqrt(2 m)
+
+
+def _counts_cube(counts):
+    return NDCube(counts, wcs=_wcs(counts.shape[-1]), unit=u.photon / u.pixel,
+                  meta={"rest_wav": REST})
+
+
+def _cramer_rao_centre(peak, width, background, n_wave=31):
+    """The least variance of the centre, in pixels squared, that Poisson counts allow."""
+    x = np.arange(n_wave) - (n_wave - 1) / 2
+    g = np.exp(-0.5 * (x / width) ** 2)
+    model = peak * g + background
+    jacobian = np.stack([g, peak * g * x / width**2, peak * g * x**2 / width**3,
+                         np.ones_like(x)], axis=1)
+    fisher = jacobian.T @ (jacobian / model[:, np.newaxis])
+    return np.linalg.inv(fisher)[1, 1]
+
+
+def test_a_poisson_fit_of_photons_measures_a_line_as_precisely_as_its_photons_allow():
+    peak, width, background = 40.0, 2.0, 1.0
+    np.random.seed(14)
+    x = np.arange(31) - 15
+    expected = peak * np.exp(-0.5 * (x / width) ** 2) + background
+    cube = _counts_cube(np.random.poisson(np.tile(expected, (600, 1, 1))).astype(float))
+    poisson, _, poisson_failed = fit_cube_gauss(cube, n_jobs=1, return_failed=True,
+                                                poisson=True)
+    plain, _, plain_failed = fit_cube_gauss(cube, n_jobs=1, return_failed=True)
+    assert not poisson_failed.any() and not plain_failed.any()
+    pixels = lambda fits: (fits[:, 0, 1] - REST.to_value(u.cm)) / STEP.to_value(u.cm)  # noqa: E731
+    least = np.sqrt(_cramer_rao_centre(peak, width, background))
+    assert np.std(pixels(poisson)) == pytest.approx(least, rel=0.08)
+    assert np.std(pixels(plain)) > 1.08 * np.std(pixels(poisson))
+    assert abs(np.mean(pixels(poisson))) < 3 * least / np.sqrt(600)
+
+
+def test_a_poisson_fit_takes_pixels_with_no_photons_in_its_stride():
+    np.random.seed(15)
+    x = np.arange(31) - 15
+    expected = 4.0 * np.exp(-0.5 * (x / 2.0) ** 2)
+    counts = np.random.poisson(np.tile(expected, (200, 1, 1))).astype(float)
+    assert (counts == 0).any(axis=-1).all()
+    fits, _, failed = fit_cube_gauss(_counts_cube(counts), n_jobs=1, return_failed=True,
+                                     poisson=True)
+    assert failed.mean() < 0.02
+    assert np.all(fits[~failed[:, 0], 0, 0] >= 0) and np.all(fits[~failed[:, 0], 0, 3] >= 0)
+
+
+@pytest.mark.parametrize("components", [[], [FitComponent(REST), FitComponent(REST + 6 * STEP)]],
+                         ids=["one line", "a blend"])
+def test_scipy_and_mpfit_find_the_same_poisson_fit(components):
+    x = np.arange(31) - 15
+    expected = 300.0 * np.exp(-0.5 * (x / 1.5) ** 2) + 2.0
+    if components:
+        expected += 150.0 * np.exp(-0.5 * ((x - 6) / 1.5) ** 2)
+    np.random.seed(16)
+    cube = _counts_cube(np.random.poisson(np.tile(expected, (5, 1, 1))).astype(float))
+    fits = [fit_cube_gauss(cube, n_jobs=1, poisson=True,
+                           fit_config=FitConfig(components=components, backend=backend))[0]
+            for backend in ("scipy", "mpfit")]
+    step = STEP.to_value(u.cm)
+    centres = slice(1, None, 3)
+    assert np.allclose(fits[0][..., centres], fits[1][..., centres], rtol=0, atol=1e-3 * step)
+    assert np.allclose(fits[0][..., 0::3], fits[1][..., 0::3], rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("counts, uncertainty, message", [
+    (np.full(31, 3.0), np.ones(31), "give poisson or uncertainty, not both"),
+    (np.full(31, -1.0), None, "counts, which are zero or more"),
+])
+def test_a_poisson_fit_it_cannot_make_is_refused(counts, uncertainty, message):
+    with pytest.raises(ValueError, match=message):
+        fit_cube_gauss(_counts_cube(counts[np.newaxis, np.newaxis, :]), n_jobs=1,
+                       uncertainty=uncertainty, poisson=True)

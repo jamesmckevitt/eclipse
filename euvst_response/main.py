@@ -824,12 +824,14 @@ def main() -> None:
     if fit_signals != "both":
         skipped = "photon" if fit_signals == "dn" else "dn"
         print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
-    # The DN fits are weighted by each pixel's uncertainty unless the fitting
-    # block says not, and the ground truth with them. With only the photons
-    # fitted, which are not weighted, the ground truth is not either.
-    weighted_fits = (fit_config is None or fit_config.weighted) and fit_signals != "photon"
-    print("DN fits weighted by each pixel's uncertainty" if weighted_fits
-          else "Fits unweighted")
+    # Unless the fitting block says not, the DN fits are weighted by each
+    # pixel's uncertainty, and the photon fits are those of greatest Poisson
+    # likelihood. The ground truth is weighted as the DN fits are; with only
+    # the photons fitted it is not, as no DN uncertainty is worked out.
+    weighted_fits = fit_config is None or fit_config.weighted
+    weighted_truth = weighted_fits and fit_signals != "photon"
+    print("DN fits weighted by each pixel's uncertainty, photon fits by their Poisson "
+          "likelihood" if weighted_fits else "Fits unweighted")
 
     def _fit_ground_truth(cube_binned, offchip_bin_slit, uncertainty=None):
         """The fit to the spectra with no noise, saying where it failed."""
@@ -1290,7 +1292,7 @@ def main() -> None:
             # Weighted, the ground truth's fit takes the uncertainties the DN
             # would have, which change with the exposure and the instrument,
             # so it is fitted for each combination below.
-            ground_truth = (None if weighted_fits
+            ground_truth = (None if weighted_truth
                             else _fit_ground_truth(cube_reb_binned, offchip_bin_slit))
             rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
             # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
@@ -1364,7 +1366,7 @@ def main() -> None:
             print(f"  Pinhole sizes: {pinhole_sizes}")
             print(f"  Pinhole positions: {pinhole_positions}")
 
-        if weighted_fits:
+        if weighted_truth:
             # The ground truth is weighted by the uncertainty the DN would
             # have with no noise, so that it is the same fit as the measured
             # spectra's, of the same line.
@@ -1444,8 +1446,9 @@ def main() -> None:
             },
             "fit_config": fit_config,
             "fit_signals": fit_signals,
-            # Whether the DN fits, and the ground truth, were weighted. Results
-            # made before this was recorded were not.
+            # Whether the fits were weighted: the DN by each pixel's uncertainty,
+            # the photons by their Poisson likelihood. Results made before this was
+            # recorded were not.
             "fit_weighted": weighted_fits,
         }
 
