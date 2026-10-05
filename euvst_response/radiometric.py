@@ -703,24 +703,58 @@ def apply_focusing_optics_psf(
 
 def _blurred_cube(signal: NDCube, blur) -> NDCube:
     """
-    *signal*, photons on the pixels, blurred by *blur*, with the wavelengths
-    of the mean and the root mean square energies of each pixel's photons
-    carried along with them.
+    *signal*, photons on the pixels, blurred by *blur*, with what its
+    ``meta`` says of each pixel's photons carried along with them
+    (:func:`_carry_photon_meta`).
     """
-    data = np.asarray(signal.data, dtype=float)
-    meta = signal.meta
-    if "photon_wavelength" in (meta or {}):
-        mean = u.Quantity(meta["photon_wavelength"])
-        rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to(mean.unit)
-        # A pixel no photons reach keeps its own wavelength.
-        fill = signal.axis_world_coords_values(2)[0].to_value(mean.unit)
-        blurred, mean_value, rms_value = _carry_photon_wavelengths(
-            blur, data, mean.value, rms.value, fill)
-        meta = {**meta, "photon_wavelength": mean_value * mean.unit,
-                "photon_rms_wavelength": rms_value * mean.unit}
-    else:
-        blurred = blur(data)
+    blurred, meta = _carry_photon_meta(blur, signal)
     return NDCube(data=blurred, wcs=signal.wcs.deepcopy(), unit=signal.unit, meta=meta)
+
+
+def _carry_photon_meta(carry, cube: NDCube) -> tuple:
+    """
+    *cube*'s photons moved by *carry*, a linear map that keeps their
+    wavelength axis, and its ``meta`` with what it says of each pixel's
+    photons carried along with them.
+
+    That is the wavelengths of the mean and the root mean square energies
+    of the photons, ``photon_wavelength`` and ``photon_rms_wavelength``,
+    and, for the pinholes, the share of their light the filter passed,
+    ``photon_filter_transmission``, and the wavelengths of the mean and the
+    root mean square energies of the light it blocked,
+    ``blocked_photon_wavelength`` and ``blocked_photon_rms_wavelength``.
+    The photons and the blocked light are each moved as photons are, so
+    each of these is exact wherever they land. A pixel no photons reach
+    keeps its own wavelength, and blocks nothing.
+
+    Returns ``(moved, meta)``.
+    """
+    photons = np.asarray(cube.data, dtype=float)
+    meta = cube.meta
+    if "photon_wavelength" not in (meta or {}):
+        return carry(photons), meta
+    mean = u.Quantity(meta["photon_wavelength"])
+    unit = mean.unit
+    rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to_value(unit)
+    own = cube.axis_world_coords_values(2)[0].to_value(unit)
+    moved, moved_mean, moved_rms = _carry_photon_wavelengths(carry, photons, mean.value, rms,
+                                                             own)
+    meta = {**meta, "photon_wavelength": moved_mean * unit,
+            "photon_rms_wavelength": moved_rms * unit}
+    if "photon_filter_transmission" in meta:
+        passed = np.asarray(meta["photon_filter_transmission"], dtype=float)
+        blocked = photons * np.divide(1.0 - passed, passed, out=np.zeros(photons.shape),
+                                      where=passed > 0)
+        moved_blocked, blocked_mean, blocked_rms = _carry_photon_wavelengths(
+            carry, blocked, u.Quantity(meta["blocked_photon_wavelength"]).to_value(unit),
+            u.Quantity(meta["blocked_photon_rms_wavelength"]).to_value(unit), own)
+        before = moved + moved_blocked
+        meta.update({
+            "photon_filter_transmission": np.divide(moved, before, out=np.ones(moved.shape),
+                                                    where=before > 0),
+            "blocked_photon_wavelength": blocked_mean * unit,
+            "blocked_photon_rms_wavelength": blocked_rms * unit})
+    return moved, meta
 
 
 def to_electrons(

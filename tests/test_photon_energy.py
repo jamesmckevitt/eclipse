@@ -18,6 +18,7 @@ from ndcube import NDCube
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import rebin_atmosphere
 from euvst_response.monte_carlo import simulate_once
+from euvst_response.pinhole_diffraction import apply_euv_pinhole_diffraction
 from euvst_response.radiometric import (_vectorized_fano_noise, electrons_per_photon,
                                          photons_per_energy, to_electrons)
 from euvst_response.sampling import light_onto_pixels, photons_onto_pixels
@@ -27,7 +28,7 @@ REST = 195.119 * u.AA
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
 
 
-def _scene(data, cell, wavelength_step):
+def _scene(data, cell, wavelength_step, rest=REST):
     """A cube as the synthesis writes it, with square cells *cell* across."""
     ny, nx, nl = data.shape
     size = angle_to_distance(cell).to_value(u.Mm)
@@ -35,17 +36,18 @@ def _scene(data, cell, wavelength_step):
     wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
     wcs.wcs.cunit = ["Angstrom", "Mm", "Mm"]
     wcs.wcs.crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]
-    wcs.wcs.crval = [REST.to_value(u.AA), 0.0, 0.0]
+    wcs.wcs.crval = [rest.to_value(u.AA), 0.0, 0.0]
     wcs.wcs.cdelt = [wavelength_step.to_value(u.AA), size, size]
-    return NDCube(data, wcs=wcs, unit=RADIANCE, meta={"rest_wav": REST})
+    return NDCube(data, wcs=wcs, unit=RADIANCE, meta={"rest_wav": rest})
 
 
-def _broad_line(n_fine=401, step=0.0169 * u.AA / 10, offset=0.05 * u.AA, sigma=0.04 * u.AA):
+def _broad_line(n_fine=401, step=0.0169 * u.AA / 10, offset=0.05 * u.AA, sigma=0.04 * u.AA,
+                rest=REST):
     """A line off the rest wavelength, broad enough that its photons' energies differ, in every cell."""
-    wavelength = REST + (np.arange(n_fine) - (n_fine - 1) / 2) * step
-    profile = np.exp(-0.5 * ((wavelength - REST - offset) / sigma).decompose().value ** 2)
+    wavelength = rest + (np.arange(n_fine) - (n_fine - 1) / 2) * step
+    profile = np.exp(-0.5 * ((wavelength - rest - offset) / sigma).decompose().value ** 2)
     return _scene(np.broadcast_to(profile * 1e13, (8, 24, n_fine)).copy(), 0.1 * u.arcsec,
-                  step), wavelength
+                  step, rest), wavelength
 
 
 def test_a_pixel_holds_its_cells_photons_and_the_wavelengths_of_their_mean_and_rms_energies():
@@ -257,3 +259,98 @@ def test_rows_binned_off_the_chip_vary_as_their_own_photons_electrons_add_up():
                                rms_wavelength=binned_rms.ravel())
         expected = (spread + n_bin * read) / gain**2 + n_bin / 12
         assert variance == pytest.approx(expected, rel=1e-12)
+
+
+# ----------------------------------------------------------------------
+# The pinholes let through the light the filter blocked from each photon
+# ----------------------------------------------------------------------
+PINHOLES = dict(enable_pinholes=True, pinhole_sizes=[20 * u.um], pinhole_positions=[0.5])
+# On the filter's edge, where its transmission rises from 0.12 to 0.51
+# between 170.4 and 170.8 Angstrom, it changes across a pixel's photons.
+EDGE = 170.5 * u.AA
+
+
+class _OpenFilter:
+    """A filter that blocks none of the EUV."""
+
+    def total_throughput(self, wl0):
+        return np.ones(np.shape(wl0)) * u.dimensionless_unscaled
+
+
+def _pinhole_weights(photons, det, sim, tel):
+    """The share of the light a pinhole lets through that it adds to each pixel."""
+    shape = photons.data.shape
+    unit = NDCube(np.ones(shape), wcs=photons.wcs, unit=photons.unit,
+                  meta={"rest_wav": photons.meta["rest_wav"],
+                        "photon_filter_transmission": np.full(shape, 0.5)})
+    return apply_euv_pinhole_diffraction(unit, det, sim, tel).data - 1.0
+
+
+@pytest.mark.parametrize("psf", [False, True])
+def test_a_pinhole_lets_through_the_light_the_filter_blocked_from_each_photon(psf):
+    from euvst_response.monte_carlo import _photons_on_the_detector
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=psf, noise=False,
+                     **PINHOLES)
+    scene, _ = _broad_line(rest=EDGE)
+    steps = _photons_on_the_detector(rebin_atmosphere(scene, det, sim, tel=tel), 1 * u.s, det,
+                                     tel, sim)
+    passed, through = steps[4], steps[5]
+    # The same scene through a filter that blocks nothing: each pixel's
+    # photons before the filter, each counted at its own wavelength.
+    open_tel = Telescope_EUVST()
+    open_tel.filter = _OpenFilter()
+    no_pinholes = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=psf,
+                             noise=False)
+    before = _photons_on_the_detector(rebin_atmosphere(scene, det, no_pinholes, tel=open_tel),
+                                      1 * u.s, det, open_tel, no_pinholes)[5]
+    blocked = before.data - passed.data
+    weights = _pinhole_weights(passed, det, sim, tel)
+    added = through.data - passed.data
+    assert added.max() > 0
+    assert added == pytest.approx(weights * blocked, rel=1e-9, abs=1e-12 * added.max())
+    # Undoing the filter at each pixel's own wavelength gets it wrong here.
+    own = passed.axis_world_coords_values(2)[0]
+    at_pixels = weights * passed.data * (1 / tel.filter.total_throughput(own).value - 1)
+    lit = added > 1e-6 * added.max()
+    assert np.abs(at_pixels[lit] / added[lit] - 1).max() > 1e-3
+    # The pinholes' photons are of the blocked light's energies.
+
+    def per(cube, key, power=1):
+        return cube.data / u.Quantity(cube.meta[key]).to_value(u.AA) ** power
+
+    for key, power in (("photon_wavelength", 1), ("photon_rms_wavelength", 2)):
+        energy = per(passed, key, power) + weights * (per(before, key, power)
+                                                      - per(passed, key, power))
+        assert per(through, key, power) == pytest.approx(energy, rel=1e-9,
+                                                         abs=1e-12 * energy.max())
+    assert "photon_filter_transmission" not in through.meta
+
+
+def test_photons_counted_at_their_own_wavelengths_need_the_filter_for_the_pinholes():
+    from euvst_response.monte_carlo import _photons_on_the_detector
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    no_pinholes = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False)
+    cube = rebin_atmosphere(_broad_line(rest=EDGE)[0], det, no_pinholes, tel=tel)
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False,
+                     **PINHOLES)
+    with pytest.raises(ValueError, match="filter passed"):
+        _photons_on_the_detector(cube, 1 * u.s, det, tel, sim)
+
+
+def test_photons_counted_at_their_pixels_wavelength_passed_the_filter_there():
+    from euvst_response.monte_carlo import _photons_on_the_detector
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False,
+                     **PINHOLES)
+    cube = rebin_atmosphere(_broad_line(rest=EDGE)[0], det, sim)
+    steps = _photons_on_the_detector(cube, 1 * u.s, det, tel, sim)
+    passed, through = steps[4], steps[5]
+    own = passed.axis_world_coords_values(2)[0]
+    blocked = passed.data * (1 / tel.filter.total_throughput(own).value - 1)
+    weights = _pinhole_weights(passed, det, sim, tel)
+    assert through.data - passed.data == pytest.approx(weights * blocked, rel=1e-9,
+                                                       abs=1e-12 * through.data.max())
