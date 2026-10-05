@@ -122,6 +122,46 @@ def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
     return sparse.csr_matrix((share, (pixel, cell)), shape=(edges.size - 1, low.size))
 
 
+def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_matrix:
+    """
+    The share of the light of each point that each pixel records, once blurred.
+
+    This is :func:`light_onto_pixels` for light all at one place, such as a
+    line at its centre blurred by its own width.
+
+    Parameters
+    ----------
+    position : array
+        Where each point is, in one unit.
+    pixel_edges : array
+        The edges of the pixels, increasing, in that unit.
+    sigma, width : float or array
+        The blur, a Gaussian of *sigma* convolved with a rectangle *width*
+        wide, one value or one for each point, in that unit. *sigma* is above
+        0 where *width* is 0.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        ``(n_pixels, n_points)``.
+    """
+    position = np.atleast_1d(np.asarray(position, dtype=float))
+    edges = np.asarray(pixel_edges, dtype=float)
+    sigma = np.broadcast_to(np.asarray(sigma, dtype=float), position.shape)
+    width = np.broadcast_to(np.asarray(width, dtype=float), position.shape)
+    reach = _REACH_IN_SIGMA * sigma + width
+    first = np.searchsorted(edges[1:], position - reach, side="right")
+    last = np.searchsorted(edges[:-1], position + reach, side="left")
+    count = np.maximum(last - first, 0)
+    point = np.repeat(np.arange(position.size), count)
+    pixel = first[point] + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    x, s, w = position[point], sigma[point], width[point]
+    share = (_blurred_antiderivative(edges[pixel + 1] - x, s, w, 1)
+             - _blurred_antiderivative(edges[pixel] - x, s, w, 1))
+    return sparse.csr_matrix((np.maximum(share, 0.0), (pixel, point)),
+                             shape=(edges.size - 1, position.size))
+
+
 def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
                         wavelength: np.ndarray) -> tuple:
     """

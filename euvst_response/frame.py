@@ -36,7 +36,6 @@ from typing import Optional
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
-from scipy.special import erf
 
 from .radiometric import (
     _vectorized_fano_noise,
@@ -48,7 +47,7 @@ from .radiometric import (
     spectral_psf_reach,
 )
 from .readout import FocalPlane_SWC, expose
-from .sampling import _blurred_antiderivative, light_onto_pixels
+from .sampling import _REACH_IN_SIGMA, light_onto_pixels, points_onto_pixels
 from .utils import angle_to_distance, _fwhm_to_sigma
 
 
@@ -76,6 +75,40 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int 
         edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
     return np.column_stack([np.minimum(edges[:-1], edges[1:]),
                             np.maximum(edges[:-1], edges[1:])])
+
+
+# A line is laid onto cells this many to a row, by the exact integrals of
+# its Gaussian, so that the telescope's throughput and the photon energy
+# are taken at the wavelength of each cell's light rather than once for the
+# whole line.
+CELLS_PER_ROW = 16
+
+
+def _sorted_rows(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int = 0):
+    """
+    The edges of the rows, increasing in wavelength, in Angstrom, and the
+    order that puts the rows into that order.
+    """
+    bounds = _row_bounds(focal_plane, ccd, column, margin)
+    order = np.argsort(bounds[:, 0])
+    low, high = bounds[order, 0], bounds[order, 1]
+    if not np.allclose(high[:-1], low[1:], rtol=1e-12, atol=0.0):
+        raise ValueError("The rows must meet, each starting where the one before ends.")
+    return np.append(low, high[-1]), order
+
+
+def _cells(focal_plane: FocalPlane_SWC, ccd: str, column, row_edges: np.ndarray,
+           reach: float) -> np.ndarray:
+    """
+    The edges of cells ``CELLS_PER_ROW`` to the CCD's narrowest row, over the
+    rows and *reach* Angstrom past each end. The cells are whole steps from
+    0 Angstrom, so that the rows reaching further does not move them.
+    """
+    step = np.abs(np.diff(focal_plane.row_edges(ccd, column).to_value(u.Angstrom))).min()
+    step /= CELLS_PER_ROW
+    first = np.floor((row_edges[0] - reach) / step)
+    last = np.ceil((row_edges[-1] + reach) / step)
+    return step * np.arange(first, last + 1)
 
 
 def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
@@ -165,7 +198,10 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     """
     Photons per second in each row of one CCD from a list of emission lines.
 
-    With *spectral_psf*, each line is blurred by the instrument's spectral
+    Each line is shared between cells ``CELLS_PER_ROW`` to a row by the exact
+    integrals of its Gaussian, and each cell's light is counted in photons at
+    its own wavelength, with the telescope's area there. With
+    *spectral_psf*, the light is then blurred by the instrument's spectral
     response as it is laid onto the rows, which keeps a line narrower than a
     row where it is; blurring the rows after, with
     :func:`apply_spectral_psf`, moved it toward the middle of its row.
@@ -232,36 +268,45 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     if np.any(widths.value <= 0):
         raise ValueError("Line widths must be positive.")
 
-    solid_angle = pixel_solid_angle(focal_plane, slit_width)
-    # Photons per second per pixel the line would give if all of it landed in
-    # one row; the Gaussian below shares that out between the rows it covers.
-    total = (intensities * solid_angle * _photons_per_energy(telescope, wavelengths)).to(1 / u.s)
-
-    bounds = _row_bounds(focal_plane, ccd, column, margin)
-    rows = np.zeros(len(bounds))
-    scale = np.sqrt(2.0) * widths.to_value(u.Angstrom)
-    centre = wavelengths.to_value(u.Angstrom)
+    # A line outside the telescope's throughput tables is an error, as a
+    # spectrum reaching beyond them is.
+    at_centre = _photons_per_energy(telescope, wavelengths).to_value(u.cm**2 / u.erg)
+    edges, order = _sorted_rows(focal_plane, ccd, column, margin)
+    centre, width = wavelengths.to_value(u.Angstrom), widths.to_value(u.Angstrom)
+    light = (intensities * pixel_solid_angle(focal_plane, slit_width)).to_value(
+        u.erg / (u.s * u.cm**2))
     if spectral_psf is None:
-        for i, weight in enumerate(total.value):
-            if weight == 0:
-                continue
-            # Fraction of the line between each pair of row boundaries.
-            low = erf((bounds[:, 0] - centre[i]) / scale[i])
-            high = erf((bounds[:, 1] - centre[i]) / scale[i])
-            rows += weight * 0.5 * (high - low)
+        psf_sigma = box = np.zeros(centre.size)
     else:
-        # The line, a Gaussian, blurred by the response: a Gaussian of the two
-        # widths in quadrature, convolved with the slit's image for
-        # "convolution", and shared between the rows by its exact integrals.
         psf_sigma, box = _response(focal_plane, ccd, column, telescope, det, slit_width,
                                    spectral_psf, centre)
-        sigma = np.hypot(widths.to_value(u.Angstrom), psf_sigma)
-        for i, weight in enumerate(total.value):
-            if weight == 0:
-                continue
-            share = (_blurred_antiderivative(bounds[:, 1] - centre[i], sigma[i], box[i], 1)
-                     - _blurred_antiderivative(bounds[:, 0] - centre[i], sigma[i], box[i], 1))
-            rows += weight * np.maximum(share, 0.0)
+    # Each line, a Gaussian, blurred by the response: a Gaussian of the two
+    # widths in quadrature, convolved with the slit's image for
+    # "convolution", and shared between the rows by its exact integrals, in
+    # photons at its centre's wavelength.
+    sorted_rows = points_onto_pixels(centre, edges, np.hypot(width, psf_sigma), box) @ (
+        light * at_centre)
+    # Then, cell by cell across each line, the photons its light makes at the
+    # cell's own wavelength rather than at the centre's, which the telescope's
+    # throughput and the photon energy change, blurred as the line is.
+    reach = 0.0 if spectral_psf is None else _REACH_IN_SIGMA * psf_sigma.max() + box.max()
+    cells = _cells(focal_plane, ccd, column, edges, reach)
+    masses = points_onto_pixels(centre, cells, width)
+    in_cells = masses @ light
+    lit = np.flatnonzero(in_cells > 0)
+    low, high = cells[lit], cells[lit + 1]
+    middle = (low + high) / 2
+    own = np.nan_to_num(photons_per_energy(telescope, middle * u.Angstrom).to_value(
+        u.cm**2 / u.erg))
+    change = in_cells[lit] * own - (masses @ (light * at_centre))[lit]
+    if spectral_psf is None:
+        sigma = cell_box = 0.0
+    else:
+        sigma, cell_box = _response(focal_plane, ccd, column, telescope, det, slit_width,
+                                    spectral_psf, middle)
+    sorted_rows += light_onto_pixels(low, high, edges, sigma, cell_box) @ change
+    rows = np.zeros(edges.size - 1)
+    rows[order] = sorted_rows
 
     if lit_only:
         first, last = focal_plane.lit_rows(ccd, column)
@@ -430,7 +475,7 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     and :func:`detect` needs their mean energy to turn them into electrons.
     ``expose`` is linear in the rate, so exposing the energy-weighted rate
     gives the energy each pixel holds, and dividing by the photons gives the
-    mean.  A pixel with no photons keeps its own row's wavelength, and a
+    mean.  A pixel with no photons keeps the wavelength given for it, and a
     parallel overscan pixel with none the last image row's.
 
     Parameters
@@ -438,7 +483,8 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     rate : np.ndarray
         Photons per second reaching each pixel of one CCD, ``(n_rows, n_columns)``.
     wavelength : u.Quantity
-        The wavelength each row records, one per row.
+        The wavelength of the mean energy of the photons reaching each row,
+        one per row, or each pixel, shaped as *rate*.
     exposure, sequence
         As for ``expose``.
 
@@ -451,17 +497,20 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     """
     rate = np.asarray(rate, dtype=float)
     own = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
-    if rate.ndim != 2 or own.shape != (rate.shape[0],):
+    if rate.ndim != 2 or own.shape not in ((rate.shape[0],), rate.shape):
         raise ValueError(
-            f"One wavelength per row: got {own.shape} for a rate of {rate.shape}."
+            f"One wavelength per row or per pixel: got {own.shape} for a rate of "
+            f"{rate.shape}."
         )
+    own = np.broadcast_to(own[:, np.newaxis] if own.ndim == 1 else own, rate.shape)
     hc = (const.h * const.c).to_value(u.erg * u.Angstrom)
     photons = expose(rate, exposure, sequence)
-    energy = expose(rate * (hc / own)[:, np.newaxis], exposure, sequence)
-    fallback = np.concatenate([own, np.full(photons.shape[0] - own.size, own[-1])])
+    energy = expose(rate * (hc / own), exposure, sequence)
+    fallback = np.concatenate([own, np.repeat(own[-1:], photons.shape[0] - own.shape[0],
+                                              axis=0)])
     with np.errstate(divide="ignore", invalid="ignore"):
         mean = np.where(photons > 0, hc * photons / energy, np.nan)
-    return photons, np.where(np.isfinite(mean), mean, fallback[:, np.newaxis]) * u.Angstrom
+    return photons, np.where(np.isfinite(mean), mean, fallback) * u.Angstrom
 
 
 def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, det,
