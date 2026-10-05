@@ -116,6 +116,7 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(uniform_synthesis, 
     with h5py.File(path) as f:
         assert f["left/dn"].shape == (rows, samples) and f.attrs["noise"] == np.False_
         assert f["left/photon_wavelength"].shape == (rows, det.n_columns)
+        assert f["left/photon_rms_wavelength"].shape == (rows, det.n_columns)
         assert f.attrs["cells_per_row"] == 16
 
 
@@ -216,3 +217,12 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     assert frame.wavelength["left"][row].to_value(u.AA) == pytest.approx((low + high) / 2)
     assert reaching == pytest.approx(expected, abs=0.01 * abs(expected - REST))
     assert abs(reaching - REST) < 0.5 * abs((low + high) / 2 - REST)
+    # Their wavelengths spread by the thermal share of the blur's, and by
+    # how the place they land in the row moves their mean, which is what
+    # the root mean square energy gives, beside the mean energy.
+    z = norm.cdf(b) - norm.cdf(a)
+    landing = total**2 * (1 + (a * norm.pdf(a) - b * norm.pdf(b)) / z
+                          - ((norm.pdf(a) - norm.pdf(b)) / z) ** 2)
+    spread = (thermal * psf[0] / total) ** 2 + (thermal / total) ** 4 * landing
+    rms = frame.photon_rms_wavelength["left"][row, middle].to_value(u.AA)
+    assert 1 / rms**2 - 1 / reaching**2 == pytest.approx(spread / expected**4, rel=2e-2)

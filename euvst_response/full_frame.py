@@ -38,7 +38,7 @@ import astropy.units as u
 
 from .band import BandLines
 from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
-                    detect, digitise, expose_with_wavelength, pixel_solid_angle)
+                    detect, digitise, expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import photons_per_energy
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
@@ -241,7 +241,7 @@ def _layout(focal_plane: FocalPlane_SWC, ccd: str, telescope, det, slit_width: u
 def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
                    slit_width: u.Quantity, blur: Optional[str], wavelength: np.ndarray,
                    thermal: np.ndarray, g: np.ndarray, velocity: np.ndarray,
-                   bins: np.ndarray, solid_angle: float) -> Tuple[np.ndarray, np.ndarray]:
+                   bins: np.ndarray, solid_angle: float) -> Tuple[np.ndarray, ...]:
     """
     The photons per second in each row of one CCD for a unit of emission measure, at one temperature.
 
@@ -258,14 +258,16 @@ def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, teles
 
     Returns
     -------
-    photons, per_wavelength : np.ndarray
+    photons, per_wavelength, per_square : np.ndarray
         ``(nN, nv, n_rows)``: photons per second per pixel per cm^-5, and
-        the same with each photon divided by its wavelength in Angstrom, from
-        which the mean energy of a pixel's photons follows.
+        the same with each photon divided by its wavelength in Angstrom, and
+        by its square, from which the mean and the root mean square energies
+        of a pixel's photons follow.
     """
     n_rows = layout.edges.size - 1
     photons = np.zeros((g.shape[1], velocity.size, n_rows))
     per_wavelength = np.zeros_like(photons)
+    per_square = np.zeros_like(photons)
     masses = points_onto_pixels(wavelength, layout.cells, thermal)          # (cells, lines)
     at_rest = masses @ g                                                     # (cells, nN)
     for v in bins:
@@ -284,23 +286,28 @@ def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, teles
                                    np.hypot(thermal * factor, psf_sigma), box)
         weighted = g * at_centre[:, np.newaxis]
         per_centre = weighted / centre[:, np.newaxis]
+        per_centre_square = per_centre / centre[:, np.newaxis]
         rows = exact @ weighted
         rows_per = exact @ per_centre
+        rows_square = exact @ per_centre_square
         # ... and, cell by cell across each line, the photons at the cell's
         # own wavelength rather than at the centre's.
         collected = layout.collected[v][:, np.newaxis]
         own = layout.cell_wavelength[v][:, np.newaxis]
         change = collected * at_rest - masses @ weighted
         change_per = collected / own * at_rest - masses @ per_centre
+        change_square = collected / own**2 * at_rest - masses @ per_centre_square
         rows += layout.onto_rows[v] @ change
         rows_per += layout.onto_rows[v] @ change_per
+        rows_square += layout.onto_rows[v] @ change_square
         photons[:, v, layout.order] = rows.T
         per_wavelength[:, v, layout.order] = rows_per.T
+        per_square[:, v, layout.order] = rows_square.T
     first, last = layout.lit
-    for array in (photons, per_wavelength):
+    for array in (photons, per_wavelength, per_square):
         array[..., :first] = 0.0
         array[..., last + 1:] = 0.0
-    return photons, per_wavelength
+    return photons, per_wavelength, per_square
 
 
 # What the workers of `full_ccd_frame` share, set before they are forked.
@@ -311,7 +318,7 @@ def _rates_at(temperatures: Sequence[int]):
     """
     The photons per second in each pixel of both CCDs from the plasma at some
     temperatures, and the same with each photon divided by its wavelength in
-    Angstrom, by CCD, each (n_columns, n_rows).
+    Angstrom, and by its square, by CCD, each (n_columns, n_rows).
     """
     context = _CONTEXT
     scene, lines, along = context["scene"], context["lines"], context["along"]
@@ -323,6 +330,7 @@ def _rates_at(temperatures: Sequence[int]):
     shape = (focal_plane.n_columns, focal_plane.n_rows)
     rate = {ccd: np.zeros(shape) for ccd in CCDS}
     per_wavelength = {ccd: np.zeros(shape) for ccd in CCDS}
+    per_square = {ccd: np.zeros(shape) for ccd in CCDS}
     for t in temperatures:
         em = scene.emission_measure[:, t]                              # (image rows, nN, nv)
         em_columns = along @ em.reshape(em.shape[0], -1)               # (columns, nN * nv)
@@ -342,12 +350,13 @@ def _rates_at(temperatures: Sequence[int]):
                         & (wavelength - _REACH_IN_SIGMA * thermal <= layout.cells[-1]))
                 if not near.any():
                     continue
-                photons, per = _lines_on_rows(
+                photons, per, square = _lines_on_rows(
                     layout, focal_plane, ccd, telescope, det, slit_width, blur,
                     wavelength[near], thermal[near], g[near], scene.velocity, bins,
                     solid_angle)
                 rate[ccd] += em_columns @ photons.reshape(n_n * n_v, -1)
                 per_wavelength[ccd] += em_columns @ per.reshape(n_n * n_v, -1)
+                per_square[ccd] += em_columns @ square.reshape(n_n * n_v, -1)
         if continuum is not None:
             wavelength, free, two_photon = continuum
             em_density = em_columns.reshape(-1, n_n, n_v).sum(axis=-1)   # (columns, nN)
@@ -362,17 +371,22 @@ def _rates_at(temperatures: Sequence[int]):
                 light = step * (density[:, 1:] + density[:, :-1]) / 2
                 per_sample = density / wavelength
                 light_per = step * (per_sample[:, 1:] + per_sample[:, :-1]) / 2
+                square_sample = per_sample / wavelength
+                light_square = step * (square_sample[:, 1:] + square_sample[:, :-1]) / 2
                 rows = np.zeros((n_n, focal_plane.n_rows))
                 rows_per = np.zeros_like(rows)
+                rows_square = np.zeros_like(rows)
                 rows[:, order] = (onto_rows @ light.T).T
                 rows_per[:, order] = (onto_rows @ light_per.T).T
+                rows_square[:, order] = (onto_rows @ light_square.T).T
                 first, last = layouts[ccd].lit
-                for array in (rows, rows_per):
+                for array in (rows, rows_per, rows_square):
                     array[:, :first] = 0.0
                     array[:, last + 1:] = 0.0
                 rate[ccd] += em_density @ rows
                 per_wavelength[ccd] += em_density @ rows_per
-    return rate, per_wavelength
+                per_square[ccd] += em_density @ rows_square
+    return rate, per_wavelength, per_square
 
 
 @dataclass
@@ -398,6 +412,9 @@ class FullFrame:
         The wavelength of the mean energy of the photons in each pixel of
         the frame, with the parallel overscan rows, which sets the electrons
         they free.
+    photon_rms_wavelength : dict
+        The wavelength of the root mean square energy of the same photons,
+        which sets how far their electrons spread.
     exposure : u.Quantity
     slit_position, slit_width : u.Quantity
     """
@@ -407,6 +424,7 @@ class FullFrame:
     dn: Dict[str, np.ndarray]
     wavelength: Dict[str, u.Quantity]
     photon_wavelength: Dict[str, u.Quantity]
+    photon_rms_wavelength: Dict[str, u.Quantity]
     exposure: u.Quantity
     slit_position: u.Quantity
     slit_width: u.Quantity
@@ -569,28 +587,35 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         _CONTEXT = None
     rate = {ccd: sum(part[0][ccd] for part in parts) for ccd in CCDS}
     per_wavelength = {ccd: sum(part[1][ccd] for part in parts) for ccd in CCDS}
+    per_square = {ccd: sum(part[2][ccd] for part in parts) for ccd in CCDS}
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
     rows = np.arange(focal_plane.n_rows)
-    frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {}}
+    frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
+             "photon_rms_wavelength": {}}
     for ccd in CCDS:
         image_rate = rate[ccd].T                                          # (rows, columns)
         wavelength = focal_plane.wavelength(rows, ccd)
-        # The wavelength of the mean energy of the photons reaching each
-        # pixel; a pixel none reach keeps its row's.
+        # The wavelengths of the mean and the root mean square energies of
+        # the photons reaching each pixel; a pixel none reach keeps its row's.
         own = np.broadcast_to(wavelength.to_value(u.Angstrom)[:, np.newaxis], image_rate.shape)
         reaching = np.divide(image_rate, per_wavelength[ccd].T, out=np.array(own, dtype=float),
                              where=per_wavelength[ccd].T > 0) * u.Angstrom
-        photons, mean_wavelength = expose_with_wavelength(image_rate, reaching, exposure,
-                                                          sequence)
+        reaching_rms = np.sqrt(np.divide(image_rate, per_square[ccd].T,
+                                         out=np.array(own, dtype=float) ** 2,
+                                         where=per_square[ccd].T > 0)) * u.Angstrom
+        photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
+            image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons
-        electrons = detect(drawn, mean_wavelength, dark, det, noise=noise)
+        electrons = detect(drawn, mean_wavelength, dark, det, noise=noise,
+                           rms_wavelength=rms_wavelength)
         frame["rate"][ccd] = image_rate
         frame["photons"][ccd] = drawn
         frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise)
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
+        frame["photon_rms_wavelength"][ccd] = rms_wavelength
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
@@ -609,9 +634,9 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     The root holds the settings as attributes, and a group for each CCD,
     ``left`` and ``right``, holds ``dn``, the frame as read out with its
     prescan and overscan, ``photons``, ``rate``, ``wavelength``, the
-    wavelength each image row records, and ``photon_wavelength``, the
-    wavelength of the mean energy of each pixel's photons, each with its
-    unit.
+    wavelength each image row records, and ``photon_wavelength`` and
+    ``photon_rms_wavelength``, the wavelengths of the mean and the root mean
+    square energies of each pixel's photons, each with its unit.
 
     Parameters
     ----------
@@ -645,7 +670,10 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
                                      ("wavelength", frame.wavelength[ccd].to_value(u.AA),
                                       "Angstrom"),
                                      ("photon_wavelength",
-                                      frame.photon_wavelength[ccd].to_value(u.AA), "Angstrom")):
+                                      frame.photon_wavelength[ccd].to_value(u.AA), "Angstrom"),
+                                     ("photon_rms_wavelength",
+                                      frame.photon_rms_wavelength[ccd].to_value(u.AA),
+                                      "Angstrom")):
                 group.create_dataset(name, data=data, compression="gzip")
                 group[name].attrs["unit"] = unit
     return path

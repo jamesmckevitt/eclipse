@@ -66,6 +66,7 @@ For each CCD, `"left"` and `"right"`:
 - `photons`: the photons in each pixel over the exposure;
 - `dn`: the frame as it is read out, in DN;
 - `wavelength`: the wavelength each row records;
-- `photon_wavelength`: the wavelength of the mean energy of each pixel's photons.
+- `photon_wavelength`: the wavelength of the mean energy of each pixel's photons;
+- `photon_rms_wavelength`: the wavelength of the root mean square energy of each pixel's photons, which sets how far their electrons spread.
 
 `dn` holds each row as the two outputs read it: the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The parallel overscan rows follow the image's rows.
