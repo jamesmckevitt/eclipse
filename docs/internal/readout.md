@@ -114,17 +114,18 @@ The frame has `parallel_overscan_rows` more rows than the image area. With a shu
 
 `dark_current_time` gives how long each packet collects dark current, which is the time it spends in the image area. For an image row, that is its part of the clear, the exposure, and the wait while the rows before it are read. For a parallel overscan row, it is the time it takes to cross the chip during the read-out. It is the same with a shutter as without one, and longest for the rows read last.
 
-`detect` and `digitise` in `euvst_response.frame` take the frame through the same detector stages as the rest of ECLIPSE, to electrons and then to DN. A full-band frame needs two things more: a dark current time for each row, and a photon energy for each pixel, since a 170 A photon frees a quarter more electrons than a 212 A one. Without a shutter, a pixel holds photons from every row its charge crossed, so its photon energy is the mean over what it holds. `expose_with_wavelength` works this out: it exposes the energy-weighted rate alongside the photons, and gives each pixel the wavelength of that mean energy.
+`detect` and `digitise` in `euvst_response.frame` take the frame through the same detector stages as the rest of ECLIPSE, to electrons and then to DN. A full-band frame needs two things more: a dark current time for each row, and photon energies for each pixel, since a 170 A photon frees a quarter more electrons than a 212 A one. Without a shutter, a pixel holds photons from every row its charge crossed, so they have a spread of energies. `expose_with_wavelengths` works this out: it exposes the rate weighted by the photon energy, and by its square, alongside the photons, and gives each pixel the wavelengths of their mean and root mean square energies. The first sets the electrons the photons free, and the second how far those spread.
 
 ```python
-from euvst_response.frame import detect, digitise, expose_with_wavelength
+from euvst_response.frame import detect, digitise, expose_with_wavelengths
 from euvst_response.readout import dark_current_time
 
 wavelength = fp.wavelength(np.arange(fp.n_rows), "left")
-frame, pixel_wavelength = expose_with_wavelength(rate, wavelength, 1.0 * u.s, sequence)
+frame, mean, rms = expose_with_wavelengths(rate, wavelength, 1.0 * u.s, sequence)
 
 photons = np.random.poisson(frame)
-electrons = detect(photons, pixel_wavelength, dark_current_time(1.0 * u.s, sequence, fp.n_rows), det)
+electrons = detect(photons, mean, dark_current_time(1.0 * u.s, sequence, fp.n_rows), det,
+                   rms_wavelength=rms)
 dn = digitise(electrons, det)
 ```
 

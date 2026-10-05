@@ -27,6 +27,7 @@ from euvst_response.frame import (
     detect,
     digitise,
     expose_with_wavelength,
+    expose_with_wavelengths,
     photons_from_lines,
     photons_from_spectrum,
     pixel_solid_angle,
@@ -292,6 +293,52 @@ def test_each_pixel_gets_the_wavelength_of_its_mean_photon_energy():
                                np.concatenate([lam, [lam[-1]] * 2]), rtol=1e-12)
 
 
+def test_each_pixel_gets_the_wavelength_of_its_photons_root_mean_square_energy():
+    # The same two rows. A packet's photons come from both, so their
+    # electrons spread by how far apart the two energies are, which the
+    # photon-weighted mean of one over the wavelength squared gives.
+    n_rows = 8
+    wavelength = np.linspace(170.0, 210.0, n_rows) * u.Angstrom
+    first, second = np.zeros((n_rows, 1)), np.zeros((n_rows, 1))
+    first[5], second[2] = 100.0, 40.0
+    sequence = ReadoutSequence(shutter=False, dump_rows=n_rows, parallel_overscan_rows=2)
+    photons, mean, rms = expose_with_wavelengths(first + second, wavelength, 1.0 * u.s,
+                                                 sequence)
+    a, b = (expose(rate, 1.0 * u.s, sequence) for rate in (first, second))
+    lam = wavelength.to_value(u.Angstrom)
+    np.testing.assert_allclose(rms.to_value(u.Angstrom),
+                               np.sqrt((a + b) / (a / lam[5]**2 + b / lam[2]**2)), rtol=1e-9)
+    by_mean = expose_with_wavelength(first + second, wavelength, 1.0 * u.s, sequence)
+    np.testing.assert_array_equal(by_mean[0], photons)
+    np.testing.assert_array_equal(by_mean[1], mean)
+    # Rows whose own photons already spread keep that spread too.
+    own = lam * 0.999
+    _, _, rms = expose_with_wavelengths(first + second, wavelength, 1.0 * u.s, sequence,
+                                        rms_wavelength=own * u.Angstrom)
+    np.testing.assert_allclose(rms.to_value(u.Angstrom),
+                               np.sqrt((a + b) / (a / own[5]**2 + b / own[2]**2)), rtol=1e-9)
+
+
+def test_each_pixel_can_bring_the_wavelength_of_the_photons_reaching_it():
+    # Two columns whose lit row takes photons of different wavelengths, as a
+    # line blurred onto its neighbour does: each keeps its own through the
+    # smear, and the same wavelength across a row gives what one per row does.
+    n_rows = 8
+    wavelength = np.linspace(170.0, 210.0, n_rows)
+    rate = np.zeros((n_rows, 2))
+    rate[5] = 100.0
+    reaching = np.repeat(wavelength[:, np.newaxis], 2, axis=1)
+    reaching[5] = [180.0, 190.0]
+    sequence = ReadoutSequence(shutter=False, dump_rows=n_rows, parallel_overscan_rows=2)
+    _, mean = expose_with_wavelength(rate, reaching * u.Angstrom, 1.0 * u.s, sequence)
+    lit = mean.to_value(u.Angstrom)[:, :][expose(rate, 1.0 * u.s, sequence) > 0]
+    assert set(np.round(lit, 9)) == {180.0, 190.0}
+    by_row = expose_with_wavelength(rate[:, :1], wavelength * u.Angstrom, 1.0 * u.s, sequence)
+    by_pixel = expose_with_wavelength(rate[:, :1], wavelength[:, np.newaxis] * u.Angstrom,
+                                      1.0 * u.s, sequence)
+    np.testing.assert_array_equal(by_row[1], by_pixel[1])
+
+
 def test_the_spectral_psf_refuses_an_unknown_mode():
     with pytest.raises(ValueError, match="quadrature"):
         apply_spectral_psf(np.ones(10) / u.s, Telescope_EUVST(), Detector_SWC(),
@@ -398,6 +445,29 @@ def test_a_pixel_can_carry_its_own_wavelength():
     assert electrons == pytest.approx(expected, rel=1e-6)
     with pytest.raises(ValueError, match="per row or per pixel"):
         detect(np.zeros((2, 2)), [190.0, 191.0, 192.0] * u.Angstrom, 1.0 * u.s, det)
+
+
+def test_photons_of_different_energies_spread_a_pixels_electrons():
+    # A pixel holding photons of 170 and 212 Angstrom, as the smear gives
+    # it, with every photon caught and no dark current or read noise: each
+    # photon frees its own electrons, so they spread by how far apart those
+    # are, as well as by the Fano factor.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C, qe_euv=1.0)
+    det.dark_current = 0 * u.electron / (u.pixel * u.s)
+    det.read_noise_rms = 0 * u.electron / u.pix
+    counts, lam = np.array([200.0, 100.0]), np.array([170.0, 212.0])
+    n = counts.sum()
+    mean = n / (counts / lam).sum()
+    rms = np.sqrt(n / (counts / lam**2).sum())
+    np.random.seed(20261005)
+    electrons = detect(np.full((300, 300), n), np.full(300, mean) * u.Angstrom, 1.0 * u.s,
+                       det, rms_wavelength=np.full(300, rms) * u.Angstrom)
+    own = photon_energy_ev(lam) / W_EV_AT_MINUS_60
+    m = (counts * own).sum() / n
+    spread = n * ((counts * own**2).sum() / n - m**2)
+    fano = n * det.si_fano * m
+    assert electrons.var() == pytest.approx(spread + fano, rel=2e-2)
+    assert fano < 0.5 * (spread + fano)
 
 
 def test_each_row_collects_dark_current_for_its_own_time():
@@ -568,10 +638,30 @@ def test_a_line_laid_as_a_spectrum_gives_the_rows_it_gives_as_a_line(spectral_ps
                                         radiance * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom),
                                         lit_only=False, det=det,
                                         spectral_psf=spectral_psf).value
-    # The effective area and the photon energy are taken at each sample's
-    # wavelength in the spectrum and at the line's centre for the line.
-    np.testing.assert_allclose(as_spectrum, as_line, rtol=2e-3, atol=1e-6 * as_line.max())
-    assert _centroid(as_spectrum) == pytest.approx(_centroid(as_line), abs=1e-4)
+    # Both take the effective area and the photon energy at each part of the
+    # line's own wavelength.
+    np.testing.assert_allclose(as_spectrum, as_line, rtol=1e-4, atol=1e-6 * as_line.max())
+    assert _centroid(as_spectrum) == pytest.approx(_centroid(as_line), abs=1e-5)
+
+
+@pytest.mark.parametrize("spectral_psf", [None, "quadrature", "convolution"])
+def test_a_line_on_the_filters_edge_takes_the_throughput_across_it(spectral_psf):
+    """At 170.45 A the filter's throughput rises fifteen times over an Angstrom."""
+    fp, telescope, det = FocalPlane_SWC(), Telescope_EUVST(), Detector_SWC()
+    slit, centre, sigma = SLIT_WIDTH * u.arcsec, 170.45, 0.004
+    grid = centre + np.linspace(-0.25, 0.25, 100001)
+    radiance = 1.0 / (np.sqrt(2 * np.pi) * sigma) * np.exp(-0.5 * ((grid - centre) / sigma) ** 2)
+    as_line = photons_from_lines(fp, "left", telescope, slit, [centre] * u.Angstrom,
+                                 [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [sigma] * u.Angstrom,
+                                 lit_only=False, det=det, spectral_psf=spectral_psf).value
+    as_spectrum = photons_from_spectrum(fp, "left", telescope, slit, grid * u.Angstrom,
+                                        radiance * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom),
+                                        lit_only=False, det=det,
+                                        spectral_psf=spectral_psf).value
+    assert as_line.sum() == pytest.approx(as_spectrum.sum(), rel=1e-5)
+    assert _centroid(as_line) == pytest.approx(_centroid(as_spectrum), abs=1e-4)
+    bright = as_spectrum > 1e-3 * as_spectrum.max()
+    np.testing.assert_allclose(as_line[bright], as_spectrum[bright], rtol=3e-3)
 
 
 def test_the_edge_rows_get_the_light_from_just_off_the_chip_without_a_margin():
@@ -606,3 +696,25 @@ def test_blurring_the_rows_after_says_it_is_deprecated():
     with pytest.warns(FutureWarning, match="apply_spectral_psf is deprecated"):
         apply_spectral_psf(np.ones(40) / u.s, Telescope_EUVST(), Detector_SWC(),
                            SLIT_WIDTH * u.arcsec)
+
+
+@pytest.mark.parametrize("spectral_psf", [None, "quadrature"])
+def test_no_lines_give_no_photons(spectral_psf):
+    rows = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(), SLIT_WIDTH * u.arcsec,
+                              [] * u.Angstrom, [] * u.erg / (u.s * u.cm**2 * u.sr),
+                              [] * u.Angstrom, det=Detector_SWC(), spectral_psf=spectral_psf)
+    assert rows.shape == (FocalPlane_SWC().n_rows,) and not rows.value.any()
+
+
+def test_lines_laid_a_block_at_a_time_give_what_they_give_all_at_once(monkeypatch):
+    from euvst_response import frame
+
+    lines = ([195.119, 195.179, 192.394] * u.Angstrom,
+             [1.0, 0.5, 0.2] * u.erg / (u.s * u.cm**2 * u.sr), [0.004, 0.01, 0.006] * u.Angstrom)
+    settings = {"det": Detector_SWC(), "spectral_psf": "quadrature"}
+    together = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(),
+                                  SLIT_WIDTH * u.arcsec, *lines, **settings).value
+    monkeypatch.setattr(frame, "_LINES_AT_ONCE", 1)
+    apart = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(),
+                               SLIT_WIDTH * u.arcsec, *lines, **settings).value
+    np.testing.assert_allclose(apart, together, rtol=1e-12, atol=1e-15 * together.max())
