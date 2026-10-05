@@ -120,7 +120,9 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
         The DN in each pixel, as `to_dn` gives them, or summed over
         ``n_binned`` pixels along the slit.
     rest_wavelength : u.Quantity
-        The line's rest wavelength, which sets the electrons per photon.
+        The wavelength of the mean energy of the photons in each pixel, shaped
+        as *dn*, or one for all, such as the line's rest wavelength. It sets
+        the electrons per photon.
     t_exp : u.Quantity
         The exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
@@ -227,6 +229,34 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     electron_counts[mask_positive] = total_electrons
     
     return electron_counts
+
+
+def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
+    """
+    The photons the telescope collects for each erg of light reaching it, at each wavelength.
+
+    This is the telescope's collecting area times its throughput, over the
+    energy of a photon. ECLIPSE takes it at each photon's own wavelength,
+    before the spectrograph's blur moves where the photon lands, as the blur
+    changes where a photon lands but not its wavelength.
+
+    Parameters
+    ----------
+    tel : Telescope_EUVST or Telescope_EIS
+        The telescope, asked for every wavelength at once.
+    wavelength : u.Quantity
+        The wavelengths.
+
+    Returns
+    -------
+    u.Quantity
+        In cm2 / erg, one value per wavelength, NaN where the telescope's
+        throughput tables do not reach.
+    """
+    wavelength = np.atleast_1d(u.Quantity(wavelength))
+    area = np.broadcast_to(u.Quantity(tel.ea_and_throughput(wavelength)).to(u.cm**2),
+                           wavelength.shape, subok=True)
+    return (area * wavelength / (const.h * const.c)).to(u.cm**2 / u.erg)
 
 
 def intensity_to_photons(I: NDCube) -> NDCube:
@@ -552,9 +582,7 @@ def apply_focusing_optics_psf(
         raise ValueError(
             f"boundary must be 'replicate' or 'zero', got {boundary!r}."
         )
-    data_in = signal.data
-    unit = signal.unit
-    n_slit, n_scan, n_lambda = data_in.shape
+    n_slit, n_scan, n_lambda = signal.data.shape
 
     psf_type = tel.psf_type.lower()
     psf_params = tel.psf_params
@@ -601,12 +629,11 @@ def apply_focusing_optics_psf(
         # grid extends several sigma past the line, so there is no flux at its
         # edges to lose.
         psf_1d = spectral_1d / spectral_1d.sum()
-        return NDCube(
-            data=convolve1d(data_in, psf_1d, axis=2, mode="constant", cval=0.0),
-            wcs=signal.wcs.deepcopy(),
-            unit=unit,
-            meta=signal.meta,
-        )
+
+        def blur(cube):
+            return convolve1d(cube, psf_1d, axis=2, mode="constant", cval=0.0)
+
+        return _blurred_cube(signal, blur)
 
     if quadrature:
         # Coordinate grids centred at zero
@@ -632,20 +659,41 @@ def apply_focusing_optics_psf(
     # see replicated rows rather than the zeros convolve2d assumes outside the
     # array; the spectral axis is left to zero-fill, which is correct there.
     pad = (ky // 2) if boundary == "replicate" else 0
-    blurred = np.empty_like(data_in)
-    for i in range(n_scan):
-        frame = data_in[:, i, :]
-        if pad:
-            frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
-        convolved = convolve2d(frame, psf, mode="same")
-        blurred[:, i, :] = convolved[pad:pad + n_slit, :] if pad else convolved
 
-    return NDCube(
-        data=blurred,
-        wcs=signal.wcs.deepcopy(),
-        unit=unit,
-        meta=signal.meta,
-    )
+    def blur(cube):
+        blurred = np.empty(cube.shape)
+        for i in range(n_scan):
+            frame = cube[:, i, :]
+            if pad:
+                frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
+            convolved = convolve2d(frame, psf, mode="same")
+            blurred[:, i, :] = convolved[pad:pad + n_slit, :] if pad else convolved
+        return blurred
+
+    return _blurred_cube(signal, blur)
+
+
+def _blurred_cube(signal: NDCube, blur) -> NDCube:
+    """
+    *signal*, photons on the pixels, blurred by *blur*, with the wavelength
+    of the mean energy of each pixel's photons carried along with them.
+    """
+    data = np.asarray(signal.data, dtype=float)
+    meta = signal.meta
+    if "photon_wavelength" in (meta or {}):
+        own = u.Quantity(meta["photon_wavelength"])
+        per_wavelength = blur(np.divide(data, own.value, out=np.zeros(data.shape),
+                                        where=own.value > 0))
+        blurred = blur(data)
+        # A pixel no photons reach keeps its own wavelength.
+        fill = np.broadcast_to(signal.axis_world_coords_values(2)[0].to_value(own.unit),
+                               data.shape)
+        meta = {**meta, "photon_wavelength": np.divide(
+            blurred, per_wavelength, out=np.array(fill, dtype=float),
+            where=per_wavelength > 0) * own.unit}
+    else:
+        blurred = blur(data)
+    return NDCube(data=blurred, wcs=signal.wcs.deepcopy(), unit=signal.unit, meta=meta)
 
 
 def to_electrons(
@@ -671,7 +719,9 @@ def to_electrons(
     photon_counts : NDCube
         The photons in each pixel, as `sample_photon_arrivals` gives them:
         whole numbers, or with ``noise=False`` their expected, fractional
-        numbers.
+        numbers. Its ``meta["photon_wavelength"]``, the wavelength of the
+        mean energy of each pixel's photons, sets the electrons per photon,
+        or without it ``meta["rest_wav"]``.
     t_exp : u.Quantity
         The exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
@@ -691,8 +741,12 @@ def to_electrons(
     NDCube
         The electrons in each pixel.
     """
-    # Get rest wavelength from metadata (keep as Quantity with units)
-    rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
+    # Each photon frees electrons by its own energy: the cube gives the
+    # wavelength of the mean energy of each pixel's photons, as
+    # `simulate_once` keeps it, or else the line's rest wavelength.
+    meta = photon_counts.meta or {}
+    rest_wavelength = (meta["photon_wavelength"] if "photon_wavelength" in meta
+                       else meta["rest_wav"])
 
     # Apply quantum efficiency.  With noise on this is a binomial draw over
     # whole photons; with it off the same expectation, qe * N, without the

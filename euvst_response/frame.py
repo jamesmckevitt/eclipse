@@ -36,10 +36,11 @@ from typing import Optional
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
-from scipy.special import erf, erfc
+from scipy.special import erf
 
 from .radiometric import (
     _vectorized_fano_noise,
+    photons_per_energy,
     slit_image_width,
     spectral_line_spread,
     spectral_optics_fwhm,
@@ -47,6 +48,7 @@ from .radiometric import (
     spectral_psf_reach,
 )
 from .readout import FocalPlane_SWC, expose
+from .sampling import _blurred_antiderivative, light_onto_pixels
 from .utils import angle_to_distance, _fwhm_to_sigma
 
 
@@ -74,10 +76,6 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int 
         edges = focal_plane.row_edges(ccd, column).to_value(u.Angstrom)
     return np.column_stack([np.minimum(edges[:-1], edges[1:]),
                             np.maximum(edges[:-1], edges[1:])])
-
-
-# A Gaussian's weight beyond this many sigma is below a part in 1e30 of it.
-_REACH_IN_SIGMA = 12.0
 
 
 def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
@@ -110,31 +108,6 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     return sigma_rows * row_width, box_rows * row_width
 
 
-def _integrated(v, sigma, order: int):
-    """
-    The *order*-th antiderivative, 1 (the cumulative distribution), 2 or 3,
-    of a unit Gaussian of *sigma*, vanishing at minus infinity.
-    """
-    cdf = 0.5 * erfc(-v / (np.sqrt(2.0) * sigma))
-    if order == 1:
-        return cdf
-    density = np.exp(-0.5 * (v / sigma) ** 2) / (np.sqrt(2.0 * np.pi) * sigma)
-    if order == 2:
-        return v * cdf + sigma**2 * density
-    return (v**2 + sigma**2) / 2 * cdf + sigma**2 * v / 2 * density
-
-
-def _blurred(v, sigma, box, order: int):
-    """
-    :func:`_integrated` of the Gaussian convolved with a rectangle *box*
-    wide, where *box* is above zero, as a slit's image is.
-    """
-    if np.all(box == 0):
-        return _integrated(v, sigma, order)
-    return (_integrated(v + box / 2, sigma, order + 1)
-            - _integrated(v - box / 2, sigma, order + 1)) / box
-
-
 def _intervals_onto_rows(bounds: np.ndarray, low: np.ndarray, high: np.ndarray,
                          light: np.ndarray, sigma: np.ndarray, box: np.ndarray) -> np.ndarray:
     """
@@ -145,22 +118,11 @@ def _intervals_onto_rows(bounds: np.ndarray, low: np.ndarray, high: np.ndarray,
     """
     order = np.argsort(bounds[:, 0])
     row_low, row_high = bounds[order, 0], bounds[order, 1]
-    reach = _REACH_IN_SIGMA * sigma + box
-    first = np.searchsorted(row_high, low - reach, side="right")
-    last = np.searchsorted(row_low, high + reach, side="left")
-    count = np.maximum(last - first, 0)
-    interval = np.repeat(np.arange(low.size), count)
-    row = first[interval] + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
-    s, w = sigma[interval], box[interval]
-
-    def corner(x, b):
-        return _blurred(x - b, s, w, 2)
-
-    b_low, b_high = low[interval], high[interval]
-    share = (corner(row_high[row], b_low) - corner(row_high[row], b_high)
-             - corner(row_low[row], b_low) + corner(row_low[row], b_high)) / (b_high - b_low)
+    if not np.allclose(row_high[:-1], row_low[1:], rtol=1e-12, atol=0.0):
+        raise ValueError("The rows must meet, each starting where the one before ends.")
+    share = light_onto_pixels(low, high, np.append(row_low, row_high[-1]), sigma, box)
     rows = np.zeros(len(bounds))
-    np.add.at(rows, order[row], light[interval] * np.maximum(share, 0.0))
+    rows[order] = share @ np.asarray(light, dtype=float)
     return rows
 
 
@@ -175,27 +137,24 @@ def _check_margin(margin: int, lit_only: bool) -> None:
         )
 
 
-def _collecting(telescope, wavelength: u.Quantity) -> np.ndarray:
+def _photons_per_energy(telescope, wavelength: u.Quantity) -> u.Quantity:
     """
-    Effective area in cm^2 at each wavelength, from the telescope model.
+    :func:`~euvst_response.radiometric.photons_per_energy` at each wavelength.
 
-    The telescope is asked for every wavelength at once, and may answer with
-    one area for all of them.  Outside its throughput tables it has no
-    effective area, and a single such wavelength would turn every row of the
-    frame to NaN through the spectral blur, so that is an error here rather
-    than a silent result.
+    Outside its throughput tables the telescope has no effective area, and a
+    single such wavelength would turn every row of the frame to NaN through
+    the spectral blur, so that is an error here rather than a silent result.
     """
-    wavelength = np.atleast_1d(wavelength)
-    area = u.Quantity(telescope.ea_and_throughput(wavelength)).cgs.value
-    area = np.array(np.broadcast_to(area, wavelength.shape), dtype=float)
-    if not np.all(np.isfinite(area)):
-        outside = wavelength[~np.isfinite(area)].to_value(u.Angstrom)
+    wavelength = np.atleast_1d(u.Quantity(wavelength))
+    collected = photons_per_energy(telescope, wavelength)
+    if not np.all(np.isfinite(collected)):
+        outside = wavelength[~np.isfinite(collected)].to_value(u.Angstrom)
         raise ValueError(
             f"The telescope has no effective area at {outside.min():.4f} to "
             f"{outside.max():.4f} Angstrom ({outside.size} wavelengths); the "
             f"spectrum must stay within its throughput tables."
         )
-    return area
+    return collected
 
 
 def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
@@ -274,11 +233,9 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         raise ValueError("Line widths must be positive.")
 
     solid_angle = pixel_solid_angle(focal_plane, slit_width)
-    energy = (const.h * const.c / wavelengths).to(u.erg)
-    area = _collecting(telescope, wavelengths) * u.cm**2
     # Photons per second per pixel the line would give if all of it landed in
     # one row; the Gaussian below shares that out between the rows it covers.
-    total = (intensities * solid_angle * area / energy).to(1 / u.s)
+    total = (intensities * solid_angle * _photons_per_energy(telescope, wavelengths)).to(1 / u.s)
 
     bounds = _row_bounds(focal_plane, ccd, column, margin)
     rows = np.zeros(len(bounds))
@@ -302,8 +259,8 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         for i, weight in enumerate(total.value):
             if weight == 0:
                 continue
-            share = (_blurred(bounds[:, 1] - centre[i], sigma[i], box[i], 1)
-                     - _blurred(bounds[:, 0] - centre[i], sigma[i], box[i], 1))
+            share = (_blurred_antiderivative(bounds[:, 1] - centre[i], sigma[i], box[i], 1)
+                     - _blurred_antiderivative(bounds[:, 0] - centre[i], sigma[i], box[i], 1))
             rows += weight * np.maximum(share, 0.0)
 
     if lit_only:
@@ -359,23 +316,20 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         raise ValueError("The wavelength grid must increase.")
 
     solid_angle = pixel_solid_angle(focal_plane, slit_width)
-    energy = (const.h * const.c / wavelength).to(u.erg)
-    area = _collecting(telescope, wavelength) * u.cm**2
     # Photons per second per pixel per Angstrom, on the input grid.
-    density = (radiance * solid_angle * area / energy).to(1 / (u.s * u.Angstrom)).value
+    density = (radiance * solid_angle * _photons_per_energy(telescope, wavelength)).to_value(
+        1 / (u.s * u.Angstrom))
 
     grid = wavelength.to_value(u.Angstrom)
     bounds = _row_bounds(focal_plane, ccd, column, margin)
+    low, high = grid[:-1], grid[1:]
     if spectral_psf is None:
-        cumulative = np.concatenate([[0.0], np.cumsum(np.diff(grid) * (density[1:] + density[:-1]) / 2)])
-        rows = (np.interp(bounds[:, 1], grid, cumulative, left=cumulative[0], right=cumulative[-1])
-                - np.interp(bounds[:, 0], grid, cumulative, left=cumulative[0], right=cumulative[-1]))
+        sigma = box = np.zeros(low.size)
     else:
-        low, high = grid[:-1], grid[1:]
         sigma, box = _response(focal_plane, ccd, column, telescope, det, slit_width,
                                spectral_psf, (low + high) / 2)
-        rows = _intervals_onto_rows(bounds, low, high, np.diff(grid) * (density[1:] + density[:-1]) / 2,
-                                    sigma, box)
+    rows = _intervals_onto_rows(bounds, low, high, np.diff(grid) * (density[1:] + density[:-1]) / 2,
+                                sigma, box)
 
     if lit_only:
         first, last = focal_plane.lit_rows(ccd, column)

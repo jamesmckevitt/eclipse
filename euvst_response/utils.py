@@ -443,8 +443,46 @@ def rebin_slit_offchip(cube, n_bin: int):
         new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
     ) / n_bin + 0.5
 
-    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit,
-                  meta=cube.meta)
+    # The photon wavelength of a binned pixel comes from its rows' photons,
+    # which binned_photon_wavelength takes, and is not carried here.
+    meta = cube.meta
+    if isinstance(meta, dict) and "photon_wavelength" in meta:
+        meta = {key: value for key, value in meta.items() if key != "photon_wavelength"}
+    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit, meta=meta)
+
+
+def binned_photon_wavelength(photons, n_bin: int) -> u.Quantity:
+    """
+    The wavelength of the mean energy of the photons in each pixel once binned off the chip.
+
+    Parameters
+    ----------
+    photons : NDCube
+        The photons in each pixel, with the wavelength of the mean energy of
+        each pixel's in ``meta["photon_wavelength"]``, as `simulate_once`
+        gives them.
+    n_bin : int
+        How many pixels along the slit are added together, as
+        :func:`rebin_slit_offchip` adds them.
+
+    Returns
+    -------
+    u.Quantity
+        Shaped as the binned pixels. A binned pixel no photons reach takes
+        the wavelength of its first row.
+    """
+    from ndcube import NDCube
+
+    wavelength = u.Quantity(photons.meta["photon_wavelength"])
+    if n_bin == 1:
+        return wavelength
+    data = np.asarray(photons.data, dtype=float)
+    count = rebin_slit_offchip(NDCube(data, wcs=photons.wcs), n_bin).data
+    per_wavelength = rebin_slit_offchip(
+        NDCube(np.divide(data, wavelength.value, out=np.zeros(data.shape),
+                         where=wavelength.value > 0), wcs=photons.wcs), n_bin).data
+    first = np.array(wavelength.value[:count.shape[0] * n_bin:n_bin], dtype=float)
+    return np.divide(count, per_wavelength, out=first, where=per_wavelength > 0) * wavelength.unit
 
 
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:

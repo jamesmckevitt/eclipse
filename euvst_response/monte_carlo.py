@@ -16,7 +16,7 @@ from .radiometric import (
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
-from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
+from .utils import angle_to_distance, binned_photon_wavelength, rebin_slit_offchip, _get_mpi_info
 
 
 def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
@@ -39,6 +39,33 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
         line = f"  {label} fits: none of {failed.size} failed"
     print(line)
     return results
+
+
+def _with_photon_wavelength(cube: NDCube) -> NDCube:
+    """
+    *cube*, with the wavelength of the mean energy of each pixel's photons in
+    its ``meta["photon_wavelength"]``: its own, or each pixel's wavelength.
+    """
+    meta = dict(cube.meta or {})
+    if "photon_wavelength" in meta:
+        if np.shape(meta["photon_wavelength"]) != cube.data.shape:
+            raise ValueError(
+                f"The cube's photon_wavelength is shaped {np.shape(meta['photon_wavelength'])}, "
+                f"not as its data, {cube.data.shape}.")
+        return cube
+    meta["photon_wavelength"] = np.broadcast_to(cube.axis_world_coords_values(2)[0],
+                                                cube.data.shape, subok=True)
+    return NDCube(cube.data, wcs=cube.wcs, unit=cube.unit, meta=meta)
+
+
+def _photon_wavelength(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                       offchip_bin_slit: int, uniform_mode: bool) -> u.Quantity:
+    """
+    The wavelength of the mean energy of the photons in each pixel, as the DN are binned.
+    """
+    quiet = dataclasses.replace(sim, noise=False)
+    photons = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)[5]
+    return binned_photon_wavelength(photons, offchip_bin_slit)
 
 
 def _weighted(fit_config) -> bool:
@@ -87,7 +114,8 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         The uncertainty in DN, shaped as the binned DN.
     """
     quiet = dataclasses.replace(sim, noise=False)
-    electrons = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)[8]
+    steps = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
+    electrons = steps[8]
     # Clipped at the digitiser's maximum in each pixel, before any are summed,
     # as to_dn clips the measured DN; not rounded, as the mean is not.
     dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
@@ -95,8 +123,8 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
                             offchip_bin_slit).data
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
-    return np.sqrt(dn_variance(dn, I_cube.meta["rest_wav"], t_exp, det, visible,
-                               offchip_bin_slit))
+    wavelength = binned_photon_wavelength(steps[5], offchip_bin_slit)
+    return np.sqrt(dn_variance(dn, wavelength, t_exp, det, visible, offchip_bin_slit))
 
 
 def simulate_once(
@@ -153,8 +181,10 @@ def simulate_once(
     # Apply exposure time
     intensity_exp = apply_exposure(I_cube, t_exp)
     
-    # Convert to total photons
-    photons_total = intensity_to_photons(intensity_exp)
+    # Convert to total photons, each pixel's at its own wavelength unless the
+    # cube gives the wavelength of the mean energy of its photons, which it
+    # does once laid onto the pixels through the telescope.
+    photons_total = _with_photon_wavelength(intensity_to_photons(intensity_exp))
     
     # Apply telescope optical throughput
     photons_throughput = add_telescope_throughput(photons_total, tel)
@@ -310,11 +340,15 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # uncertainty; they are fitted by their Poisson likelihood instead.
     visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
                if do_dn and _weighted(fit_config) else None)
+    # Each photon frees electrons by its own energy, so the DN of a pixel
+    # vary as its photons' mean energy says.
+    photon_wavelength = (None if visible is None else _photon_wavelength(
+        I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
 
     def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
         if visible is None:
             return None
-        return np.sqrt(dn_variance(dn_data, rest_wavelength, t_exp, det, visible,
+        return np.sqrt(dn_variance(dn_data, photon_wavelength, t_exp, det, visible,
                                    offchip_bin_slit))
 
     # --- MPI distribution: split iterations across ranks -----------------

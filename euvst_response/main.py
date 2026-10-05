@@ -1307,25 +1307,27 @@ def main() -> None:
 
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
-        # The cube the Monte Carlo observes. With the PSF on, the scene goes
-        # onto the pixels through it, which is exact where blurring the pixels
-        # afterwards moves a narrow line within its pixel; the ground truth
-        # stays the scene without it. A uniform intensity is centred on a
-        # pixel and uniform along the slit, and the Monte Carlo blurs it.
+        # The cube the Monte Carlo observes: the scene laid onto the pixels
+        # through the telescope, each photon counted at its own wavelength.
+        # With the PSF on, it goes onto the pixels through that too, which is
+        # exact where blurring the pixels afterwards moves a narrow line
+        # within its pixel; the ground truth stays the scene without either.
+        # A uniform intensity is centred on a pixel and uniform along the
+        # slit, and the Monte Carlo blurs it.
         cube_obs = cube_reb
-        if psf and not uniform_intensity_mode:
+        if not uniform_intensity_mode:
             # The observed cube carries the telescope's throughput as well as
             # its PSF, so every setting of the telescope and filter is in the key.
             telescope_key = _params_to_key({
                 **_extract_config_params(TEL, "telescope"),
                 **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
-            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, telescope_key)
+            psf_key = (*cube_reb_key, psf, spectral_psf, psf_boundary, telescope_key)
             if psf_key not in observed_cache:
-                print("Laying the scene onto the detector through the PSF...")
+                print("Laying the scene onto the detector through the telescope...")
                 SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
-                                     ncpu=ncpu, instrument=instrument, psf=True,
+                                     ncpu=ncpu, instrument=instrument, psf=psf,
                                      psf_boundary=psf_boundary, spectral_psf=spectral_psf)
-                across = TEL.psf_across_slit
+                across = TEL.psf_across_slit if psf else None
                 extend = psf_boundary == "replicate"
                 if atmosphere_series_mode:
                     scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(
