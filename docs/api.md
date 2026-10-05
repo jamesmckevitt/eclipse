@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis`, and the lines of a band, in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, and the lines of a band, in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -137,6 +137,12 @@ These are the steps `simulate_once` takes, in order.
 ::: euvst_response.synthesis.create_atmosphere_ndcube
 
 ::: euvst_response.synthesis.create_line_cube
+
+::: euvst_response.continuum.compute_continuum_fiasco
+
+::: euvst_response.continuum.continuum_spectra
+
+::: euvst_response.continuum.continuum_windows
 
 ## Every line in a band
 

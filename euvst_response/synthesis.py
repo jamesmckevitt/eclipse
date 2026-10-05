@@ -18,6 +18,7 @@ from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
+from .continuum import compute_continuum_fiasco, continuum_spectra, continuum_windows
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
 
@@ -1405,6 +1406,7 @@ def synthesise_cubes(
     integration_axis: str,
     precision: type,
     *,
+    continuum: Optional[Dict[str, dict]] = None,
     return_density: bool = False,
 ) -> Union[Tuple[Dict[str, dict], np.ndarray, np.ndarray],
            Tuple[Dict[str, dict], np.ndarray, np.ndarray, np.ndarray]]:
@@ -1437,6 +1439,11 @@ def synthesise_cubes(
         the box to look from, such as ``"-x"``; see `line_of_sight_velocity`.
     precision : type
         np.float32 or np.float64.
+    continuum : dict, optional
+        The continuum to add, by entry name: ``"wl_grid"``, its
+        wavelengths, and ``"free"`` and ``"two_photon"``, as
+        `continuum.compute_continuum_fiasco` gives them on these
+        temperatures and densities. Keyword only. Default None, for none.
     return_density : bool, optional
         Also return the electron density at each temperature of each pixel,
         the mean of its cells weighted by their emission measure, which the
@@ -1447,7 +1454,10 @@ def synthesise_cubes(
     lines : dict
         A copy of *goft* whose entries also hold ``"g"``, the contribution
         function on the DEM, ``"wl_grid"`` and ``"si"``, the specific
-        intensity ``(rows, columns, wavelength)``.
+        intensity ``(rows, columns, wavelength)``. With *continuum*, it also
+        holds an entry for each of its names, with ``"wl_grid"``, ``"si"``,
+        ``"wl0"``, the middle of its wavelengths, and no ``"atom"`` or
+        ``"ion"``.
     dem_map : np.ndarray
         As :func:`compute_dem` returns it.
     em_tv : np.ndarray
@@ -1481,6 +1491,19 @@ def synthesise_cubes(
     em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis)
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+
+    # The continuum takes the emission measure in each temperature bin, from
+    # the DEM, which keeps the cells moving faster than the velocity grid
+    # reaches, as the continuum is not Doppler shifted, and each pixel's
+    # density at that temperature.
+    if continuum:
+        emission_measure = dem_map * _temperature_bins(logT_grid)[0]
+        for name, table in continuum.items():
+            grid = u.Quantity(table["wl_grid"]).to(u.cm)
+            spectra = continuum_spectra(emission_measure, avg_ne_map, logN_grid,
+                                        table["free"], table["two_photon"])
+            lines[name] = {"si": spectra.astype(precision), "wl_grid": grid,
+                           "wl0": grid[grid.size // 2], "atom": None, "ion": None}
     if return_density:
         return lines, dem_map, em_tv, avg_ne_map
     return lines, dem_map, em_tv
@@ -1748,6 +1771,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Line specifications (e.g. Fe12_195.1190 Fe09_171.073)")
     parser.add_argument("--abundance", type=str, default="sun_coronal_2021_chianti",
                        help="CHIANTI abundance dataset name for fiasco")
+    parser.add_argument("--continuum", action="store_true",
+                       help="Also synthesise the free-free, free-bound and two-photon "
+                            "continuum under the lines' windows, as entries of its own "
+                            "beside the lines")
     parser.add_argument("--n-workers", type=int, default=0,
                        help="Number of parallel workers for fiasco G(T,N) "
                             "computation (0 = all CPUs, default: 0)")
@@ -2370,10 +2397,30 @@ def main(args=None) -> None:
     dh_cm = los_thickness.to_value(u.cm)
 
     # ---------------- DEM, EM(T,v) and spectra -----------------
+    # The continuum over the lines' windows, each group of overlapping ones
+    # an entry of its own: the windows are each line's velocity grid about
+    # its wavelength in CHIANTI, as synthesise_spectra lays them out.
+    continuum = None
+    if getattr(args, "continuum", False):
+        windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+                                     for info in goft.values()])
+        print(f"Computing the continuum over {len(windows)} window"
+              f"{'' if len(windows) == 1 else 's'} via fiasco ({print_mem()})")
+        wavelength = np.concatenate([grid.to_value(u.cm) for grid in windows.values()]) * u.cm
+        free, two_photon = compute_continuum_fiasco(
+            wavelength, logT_grid, logN_grid, abundance=args.abundance,
+            n_workers=args.n_workers, hdf5_dbase_root=goft_dbase_root)
+        continuum, start = {}, 0
+        for name, grid in windows.items():
+            stop = start + grid.size
+            continuum[name] = {"wl_grid": grid, "free": free[:, start:stop],
+                               "two_photon": two_photon[:, :, start:stop]}
+            start = stop
+
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
     goft, dem_map, em_tv, electron_density = synthesise_cubes(
         temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
-        vel_grid, view, precision, return_density=True)
+        vel_grid, view, precision, continuum=continuum, return_density=True)
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
@@ -2406,7 +2453,7 @@ def main(args=None) -> None:
         # are not kept a second time here.
         "goft": {name: {key: value for key, value in info.items()
                         if key not in ("si", "wl_grid")}
-                 for name, info in goft.items()},
+                 for name, info in goft.items() if name not in (continuum or {})},
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "dynamic_mode": dynamic_mode_metadata,
         "atmosphere": atmosphere_metadata,
@@ -2423,6 +2470,7 @@ def main(args=None) -> None:
             "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
             "lines": args.lines,
             "abundance": args.abundance,
+            "continuum": bool(getattr(args, "continuum", False)),
             "hdf5_dbase_root": goft_dbase_root,
             "integration_axis": view,
             "velocity_convention": VELOCITY_CONVENTION,
@@ -2438,7 +2486,9 @@ def main(args=None) -> None:
     if write_pickle:
         # As older versions wrote it, contribution functions and all.
         with open(output_file, "wb") as f:
-            dill.dump({"line_cubes": line_cubes, **products, "goft": goft}, f)
+            dill.dump({"line_cubes": line_cubes, **products,
+                       "goft": {name: info for name, info in goft.items()
+                                if name not in (continuum or {})}}, f)
     else:
         # The snapshot's time goes with the spectra, so that syntheses of a
         # series of snapshots can be observed as a time series.
