@@ -165,3 +165,24 @@ def test_with_the_psf_off_a_run_still_observes_through_the_telescope(tmp_path, m
     assert cube.data == pytest.approx(expected.data, rel=1e-10, abs=0)
     assert "psf_applied" not in cube.meta
     assert np.shape(cube.meta["photon_wavelength"]) == cube.data.shape
+
+
+def test_rows_binned_off_the_chip_vary_as_their_own_electrons_add_up():
+    from euvst_response.monte_carlo import _variance_wavelength
+    from euvst_response.radiometric import dn_variance
+
+    det = Detector_SWC()
+    data = np.array([200.0, 100.0]).reshape(2, 1, 1)
+    wavelength = np.array([170.0, 210.0]).reshape(2, 1, 1) * u.AA
+    photons = NDCube(data, wcs=WCS(naxis=3), unit=u.photon / u.pix,
+                     meta={"rest_wav": REST, "photon_wavelength": wavelength})
+    per_photon = electrons_per_photon(wavelength, det).ravel()
+    electrons = data.ravel() * per_photon
+    # Each row's EUV electrons vary by its electrons per photon, plus the
+    # Fano factor, times their number, and the rows add up.
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    read = det.read_noise_rms.to_value(u.electron / u.pixel) ** 2
+    expected = (((per_photon + det.si_fano) * electrons).sum() + 2 * read) / gain**2 + 2 / 12
+    variance = dn_variance(np.array([electrons.sum() / gain]),
+                           _variance_wavelength(photons, 2).ravel(), 0 * u.s, det, 0.0, 2)
+    assert variance.item() == pytest.approx(expected, rel=1e-12)
