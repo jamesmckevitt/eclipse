@@ -16,7 +16,7 @@ from .radiometric import (
 )
 from .pinhole_diffraction import apply_euv_pinhole_diffraction
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
-from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
+from .utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip, _get_mpi_info
 
 
 def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
@@ -43,54 +43,31 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
 
 def _with_photon_wavelength(cube: NDCube) -> NDCube:
     """
-    *cube*, with the wavelength of the mean energy of each pixel's photons in
-    its ``meta["photon_wavelength"]``: its own, or each pixel's wavelength.
+    *cube*, with the wavelengths of the mean and the root mean square
+    energies of each pixel's photons in its ``meta["photon_wavelength"]``
+    and ``meta["photon_rms_wavelength"]``: its own, or else each pixel's
+    wavelength, for photons of one energy.
     """
     meta = dict(cube.meta or {})
-    if "photon_wavelength" in meta:
-        if np.shape(meta["photon_wavelength"]) != cube.data.shape:
-            raise ValueError(
-                f"The cube's photon_wavelength is shaped {np.shape(meta['photon_wavelength'])}, "
-                f"not as its data, {cube.data.shape}.")
-        return cube
-    meta["photon_wavelength"] = np.broadcast_to(cube.axis_world_coords_values(2)[0],
-                                                cube.data.shape, subok=True)
+    if "photon_wavelength" not in meta:
+        meta["photon_wavelength"] = np.broadcast_to(cube.axis_world_coords_values(2)[0],
+                                                    cube.data.shape, subok=True)
+    meta.setdefault("photon_rms_wavelength", meta["photon_wavelength"])
+    for key in ("photon_wavelength", "photon_rms_wavelength"):
+        if np.shape(meta[key]) != cube.data.shape:
+            raise ValueError(f"The cube's {key} is shaped {np.shape(meta[key])}, not as its "
+                             f"data, {cube.data.shape}.")
     return NDCube(cube.data, wcs=cube.wcs, unit=cube.unit, meta=meta)
 
 
-def _variance_wavelength(photons: NDCube, n_bin: int) -> u.Quantity:
+def _photon_wavelengths(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                        offchip_bin_slit: int, uniform_mode: bool) -> tuple:
     """
-    The wavelength `dn_variance` takes the electrons per photon at, for each pixel as the DN are binned.
-
-    Rows binned off the chip are each read out on their own, so a binned
-    pixel's EUV electrons vary as the sum of each row's: the electrons per
-    photon *m*, plus the Fano factor, times the row's electrons. Over the
-    rows, that is *m* weighted by the electrons, sum(N m^2) / sum(N m), which
-    is the electrons per photon of the wavelength sum(N / l) / sum(N / l^2),
-    for N photons in a row whose mean energy is that of wavelength l. With
-    no binning, it is l.
-    """
-    wavelength = u.Quantity(photons.meta["photon_wavelength"])
-    if n_bin == 1:
-        return wavelength
-    data = np.asarray(photons.data, dtype=float)
-    per_wavelength = np.divide(data, wavelength.value, out=np.zeros(data.shape),
-                               where=wavelength.value > 0)
-    per_square = np.divide(per_wavelength, wavelength.value, out=np.zeros(data.shape),
-                           where=wavelength.value > 0)
-    first = rebin_slit_offchip(NDCube(per_wavelength, wcs=photons.wcs), n_bin).data
-    second = rebin_slit_offchip(NDCube(per_square, wcs=photons.wcs), n_bin).data
-    row = np.array(wavelength.value[:first.shape[0] * n_bin:n_bin], dtype=float)
-    return np.divide(first, second, out=row, where=second > 0) * wavelength.unit
-
-
-def _photon_wavelength(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
-                       offchip_bin_slit: int, uniform_mode: bool) -> u.Quantity:
-    """
-    The wavelength `dn_variance` takes the electrons per photon at, as the DN are binned.
+    The wavelengths of the mean and the root mean square energies of the
+    photons in each pixel, as the DN are binned, for `dn_variance`.
     """
     photons = _photons_on_the_detector(I_cube, t_exp, det, tel, sim, uniform_mode)[-1]
-    return _variance_wavelength(photons, offchip_bin_slit)
+    return binned_photon_wavelengths(photons, offchip_bin_slit)
 
 
 def _weighted(fit_config) -> bool:
@@ -148,8 +125,9 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
                             offchip_bin_slit).data
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
-    wavelength = _variance_wavelength(steps[5], offchip_bin_slit)
-    return np.sqrt(dn_variance(dn, wavelength, t_exp, det, visible, offchip_bin_slit))
+    mean, rms = binned_photon_wavelengths(steps[5], offchip_bin_slit)
+    return np.sqrt(dn_variance(dn, mean, t_exp, det, visible, offchip_bin_slit,
+                               rms_wavelength=rms))
 
 
 def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
@@ -384,15 +362,16 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
                if do_dn and _weighted(fit_config) else None)
     # Each photon frees electrons by its own energy, so the DN of a pixel
-    # vary as its photons' mean energy says.
-    photon_wavelength = (None if visible is None else _photon_wavelength(
+    # vary as its photons' mean and root mean square energies say.
+    photon_wavelengths = (None if visible is None else _photon_wavelengths(
         I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
 
     def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
         if visible is None:
             return None
-        return np.sqrt(dn_variance(dn_data, photon_wavelength, t_exp, det, visible,
-                                   offchip_bin_slit))
+        mean, rms = photon_wavelengths
+        return np.sqrt(dn_variance(dn_data, mean, t_exp, det, visible, offchip_bin_slit,
+                                   rms_wavelength=rms))
 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
