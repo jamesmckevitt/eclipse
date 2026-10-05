@@ -250,8 +250,8 @@ def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
     Returns
     -------
     u.Quantity
-        In cm2 / erg, one value per wavelength, NaN where the telescope's
-        throughput tables do not reach.
+        In cm2 / erg, one value per wavelength. Beyond its throughput tables,
+        EUVST's telescope gives NaN, and EIS's raises a ValueError.
     """
     wavelength = np.atleast_1d(u.Quantity(wavelength))
     area = np.broadcast_to(u.Quantity(tel.ea_and_throughput(wavelength)).to(u.cm**2),

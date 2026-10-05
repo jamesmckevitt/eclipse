@@ -459,8 +459,8 @@ def binned_photon_wavelength(photons, n_bin: int) -> u.Quantity:
     ----------
     photons : NDCube
         The photons in each pixel, with the wavelength of the mean energy of
-        each pixel's in ``meta["photon_wavelength"]``, as `simulate_once`
-        gives them.
+        each pixel's photons in ``meta["photon_wavelength"]``, as
+        `simulate_once` gives them.
     n_bin : int
         How many pixels along the slit are added together, as
         :func:`rebin_slit_offchip` adds them.
