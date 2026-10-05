@@ -206,7 +206,7 @@ synthesise-spectra --help
 
 - `--lines`: The lines to synthesise, for example `--lines Fe12_195.1190 Fe12_195.1790`, named as in [Naming spectral lines](line-names.md) (required)
 - `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
-- `--continuum`: Also synthesise the continuum under the lines' windows (default: off). The continuum is the light the plasma gives at every wavelength, not only at its lines: free-free, free-bound and two-photon emission, from CHIANTI for every element. Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in. It is small in most of the corona, but in hot flare plasma it can be a large part of the light.
+- `--continuum`: Also synthesise the continuum under the lines' windows (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
 - `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
 - `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.
 - `--goft-temperature-chunk`: Compute the contribution functions for this many temperatures at a time, rather than the whole grid at once, to use less memory (default: the whole grid). With several ions and `--n-workers`, every worker needs that memory at the same time.
