@@ -292,6 +292,26 @@ def test_each_pixel_gets_the_wavelength_of_its_mean_photon_energy():
                                np.concatenate([lam, [lam[-1]] * 2]), rtol=1e-12)
 
 
+def test_each_pixel_can_bring_the_wavelength_of_the_photons_reaching_it():
+    # Two columns whose lit row takes photons of different wavelengths, as a
+    # line blurred onto its neighbour does: each keeps its own through the
+    # smear, and the same wavelength across a row gives what one per row does.
+    n_rows = 8
+    wavelength = np.linspace(170.0, 210.0, n_rows)
+    rate = np.zeros((n_rows, 2))
+    rate[5] = 100.0
+    reaching = np.repeat(wavelength[:, np.newaxis], 2, axis=1)
+    reaching[5] = [180.0, 190.0]
+    sequence = ReadoutSequence(shutter=False, dump_rows=n_rows, parallel_overscan_rows=2)
+    _, mean = expose_with_wavelength(rate, reaching * u.Angstrom, 1.0 * u.s, sequence)
+    lit = mean.to_value(u.Angstrom)[:, :][expose(rate, 1.0 * u.s, sequence) > 0]
+    assert set(np.round(lit, 9)) == {180.0, 190.0}
+    by_row = expose_with_wavelength(rate[:, :1], wavelength * u.Angstrom, 1.0 * u.s, sequence)
+    by_pixel = expose_with_wavelength(rate[:, :1], wavelength[:, np.newaxis] * u.Angstrom,
+                                      1.0 * u.s, sequence)
+    np.testing.assert_array_equal(by_row[1], by_pixel[1])
+
+
 def test_the_spectral_psf_refuses_an_unknown_mode():
     with pytest.raises(ValueError, match="quadrature"):
         apply_spectral_psf(np.ones(10) / u.s, Telescope_EUVST(), Detector_SWC(),
@@ -568,10 +588,30 @@ def test_a_line_laid_as_a_spectrum_gives_the_rows_it_gives_as_a_line(spectral_ps
                                         radiance * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom),
                                         lit_only=False, det=det,
                                         spectral_psf=spectral_psf).value
-    # The effective area and the photon energy are taken at each sample's
-    # wavelength in the spectrum and at the line's centre for the line.
-    np.testing.assert_allclose(as_spectrum, as_line, rtol=2e-3, atol=1e-6 * as_line.max())
-    assert _centroid(as_spectrum) == pytest.approx(_centroid(as_line), abs=1e-4)
+    # Both take the effective area and the photon energy at each part of the
+    # line's own wavelength.
+    np.testing.assert_allclose(as_spectrum, as_line, rtol=1e-4, atol=1e-6 * as_line.max())
+    assert _centroid(as_spectrum) == pytest.approx(_centroid(as_line), abs=1e-5)
+
+
+@pytest.mark.parametrize("spectral_psf", [None, "quadrature", "convolution"])
+def test_a_line_on_the_filters_edge_takes_the_throughput_across_it(spectral_psf):
+    """At 170.45 A the filter's throughput rises fifteen times over an Angstrom."""
+    fp, telescope, det = FocalPlane_SWC(), Telescope_EUVST(), Detector_SWC()
+    slit, centre, sigma = SLIT_WIDTH * u.arcsec, 170.45, 0.004
+    grid = centre + np.linspace(-0.25, 0.25, 100001)
+    radiance = 1.0 / (np.sqrt(2 * np.pi) * sigma) * np.exp(-0.5 * ((grid - centre) / sigma) ** 2)
+    as_line = photons_from_lines(fp, "left", telescope, slit, [centre] * u.Angstrom,
+                                 [1.0] * u.erg / (u.s * u.cm**2 * u.sr), [sigma] * u.Angstrom,
+                                 lit_only=False, det=det, spectral_psf=spectral_psf).value
+    as_spectrum = photons_from_spectrum(fp, "left", telescope, slit, grid * u.Angstrom,
+                                        radiance * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom),
+                                        lit_only=False, det=det,
+                                        spectral_psf=spectral_psf).value
+    assert as_line.sum() == pytest.approx(as_spectrum.sum(), rel=1e-5)
+    assert _centroid(as_line) == pytest.approx(_centroid(as_spectrum), abs=1e-4)
+    bright = as_spectrum > 1e-3 * as_spectrum.max()
+    np.testing.assert_allclose(as_line[bright], as_spectrum[bright], rtol=3e-3)
 
 
 def test_the_edge_rows_get_the_light_from_just_off_the_chip_without_a_margin():
