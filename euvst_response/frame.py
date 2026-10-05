@@ -47,7 +47,8 @@ from .radiometric import (
     spectral_psf_reach,
 )
 from .readout import FocalPlane_SWC, expose
-from .sampling import _REACH_IN_SIGMA, light_onto_pixels, points_onto_pixels
+from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
+                       points_onto_pixels)
 from .utils import angle_to_distance, _fwhm_to_sigma
 
 
@@ -483,12 +484,8 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     Photons in each pixel of a frame, as :func:`~euvst_response.readout.expose`
     gives them, and the wavelength that carries their mean energy.
 
-    Without a shutter a pixel holds photons from every row its charge crossed,
-    and :func:`detect` needs their mean energy to turn them into electrons.
-    ``expose`` is linear in the rate, so exposing the energy-weighted rate
-    gives the energy each pixel holds, and dividing by the photons gives the
-    mean.  A pixel with no photons keeps the wavelength given for it, and a
-    parallel overscan pixel with none the last image row's.
+    This is :func:`expose_with_wavelengths` without the spread of the
+    photons' energies, which :func:`detect` also takes.
 
     Parameters
     ----------
@@ -507,26 +504,73 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     wavelength : u.Quantity
         The wavelength of their mean energy, the same shape.
     """
+    photons, mean, _ = expose_with_wavelengths(rate, wavelength, exposure, sequence)
+    return photons, mean
+
+
+def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: u.Quantity,
+                            sequence, rms_wavelength: Optional[u.Quantity] = None) -> tuple:
+    """
+    Photons in each pixel of a frame, as :func:`~euvst_response.readout.expose`
+    gives them, and the wavelengths of their mean and root mean square energies.
+
+    Without a shutter a pixel holds photons from every row its charge crossed,
+    and :func:`detect` needs their mean energy to turn them into electrons,
+    and their root mean square energy for how far the electrons of photons
+    of different energies spread.  ``expose`` is linear in the rate, so
+    exposing the rate weighted by the energy, and by its square, gives the
+    energy and the square energy each pixel holds, and dividing by the
+    photons gives the means.  A pixel with no photons keeps the wavelength
+    given for it, and a parallel overscan pixel with none the last image
+    row's.
+
+    Parameters
+    ----------
+    rate : np.ndarray
+        Photons per second reaching each pixel of one CCD, ``(n_rows, n_columns)``.
+    wavelength : u.Quantity
+        The wavelength of the mean energy of the photons reaching each row,
+        one per row, or each pixel, shaped as *rate*.
+    exposure, sequence
+        As for ``expose``.
+    rms_wavelength : u.Quantity, optional
+        The wavelength of the root mean square energy of the photons
+        reaching each row or pixel, as *wavelength*.  Default *wavelength*:
+        the photons reaching each are of one energy.
+
+    Returns
+    -------
+    photons : np.ndarray
+        Photons per pixel, ``(n_rows + parallel_overscan_rows, n_columns)``.
+    wavelength, rms_wavelength : u.Quantity
+        The wavelengths of their mean and root mean square energies, the
+        same shape.
+    """
     rate = np.asarray(rate, dtype=float)
-    own = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
-    if rate.ndim != 2 or own.shape not in ((rate.shape[0],), rate.shape):
+    if rate.ndim != 2:
+        raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
+    own = _per_pixel(wavelength, rate.shape)
+    rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
+    n_more = sequence.parallel_overscan_rows
+    fallback = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])
+    photons, mean, rms = _carry_photon_wavelengths(
+        lambda values: expose(values, exposure, sequence), rate, own, rms, fallback)
+    return photons, mean * u.Angstrom, rms * u.Angstrom
+
+
+def _per_pixel(wavelength: u.Quantity, shape: tuple) -> np.ndarray:
+    """*wavelength*, one per row or per pixel of a frame *shape*, as one per pixel, in Angstrom."""
+    values = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
+    if values.shape not in ((shape[0],), shape):
         raise ValueError(
-            f"One wavelength per row or per pixel: got {own.shape} for a rate of "
-            f"{rate.shape}."
+            f"One wavelength per row or per pixel: got {values.shape} for a frame of "
+            f"{shape}."
         )
-    own = np.broadcast_to(own[:, np.newaxis] if own.ndim == 1 else own, rate.shape)
-    hc = (const.h * const.c).to_value(u.erg * u.Angstrom)
-    photons = expose(rate, exposure, sequence)
-    energy = expose(rate * (hc / own), exposure, sequence)
-    fallback = np.concatenate([own, np.repeat(own[-1:], photons.shape[0] - own.shape[0],
-                                              axis=0)])
-    with np.errstate(divide="ignore", invalid="ignore"):
-        mean = np.where(photons > 0, hc * photons / energy, np.nan)
-    return photons, np.where(np.isfinite(mean), mean, fallback) * u.Angstrom
+    return np.broadcast_to(values[:, np.newaxis] if values.ndim == 1 else values, shape)
 
 
 def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, det,
-           *, noise: bool = True) -> np.ndarray:
+           *, noise: bool = True, rms_wavelength: Optional[u.Quantity] = None) -> np.ndarray:
     """
     Electrons per pixel from the photons a frame recorded.
 
@@ -547,7 +591,7 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         pixel as an array the shape of *photons*.  Without a shutter a pixel
         holds photons from every row its charge crossed, and the per-pixel
         form takes the wavelength that carries their mean energy, as
-        :func:`expose_with_wavelength` gives it.
+        :func:`expose_with_wavelengths` gives it.
     dark_time : u.Quantity
         How long each row collects dark current, one per row or one for all.
         :func:`euvst_response.readout.dark_current_time` gives it.
@@ -555,6 +599,12 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         The detector.
     noise : bool
         With it off every random draw is replaced by its mean.
+    rms_wavelength : u.Quantity, optional
+        The wavelength of the root mean square energy of the photons in each
+        row or pixel, as *wavelength*, as :func:`expose_with_wavelengths`
+        gives it.  Photons of different energies free different numbers of
+        electrons, which spreads a pixel's electrons further.  Default
+        *wavelength*: the photons in each are of one energy.
 
     Returns
     -------
@@ -564,21 +614,16 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
     photons = np.asarray(photons, dtype=float)
     if photons.ndim != 2:
         raise ValueError(f"A frame has two axes, rows and columns, not {photons.ndim}.")
-    wavelength = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
-    if wavelength.ndim == 1 and wavelength.size == photons.shape[0]:
-        wavelength = wavelength[:, np.newaxis]
-    elif wavelength.shape != photons.shape:
-        raise ValueError(
-            f"One wavelength per row or per pixel: got {wavelength.shape} for a "
-            f"frame of {photons.shape}."
-        )
+    wavelength = _per_pixel(wavelength, photons.shape)
+    rms = wavelength if rms_wavelength is None else _per_pixel(rms_wavelength, photons.shape)
     if noise:
         if not np.all(np.mod(photons, 1) == 0):
             raise ValueError("With noise on the photons must be whole numbers, as from a Poisson draw.")
         detected = np.random.binomial(photons.astype(np.int64), det.qe_euv).astype(float)
     else:
         detected = photons * det.qe_euv
-    electrons = _vectorized_fano_noise(detected, wavelength * u.Angstrom, det, noise=noise)
+    electrons = _vectorized_fano_noise(detected, wavelength * u.Angstrom, det, noise=noise,
+                                       rms_wavelength=rms * u.Angstrom)
 
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
     dark = np.broadcast_to(np.reshape(dark, (-1, 1)) if np.ndim(dark) else dark, photons.shape)

@@ -11,6 +11,7 @@ from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.special import erf
 from scipy.stats import binom, poisson
+from .sampling import _carry_photon_wavelengths
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
 
@@ -91,8 +92,9 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     return np.asarray(photon_energy_ev / w_T, dtype=float)
 
 
-def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, det,
-                visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1) -> np.ndarray:
+def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
+                visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1, *,
+                rms_wavelength: u.Quantity | None = None) -> np.ndarray:
     """
     The variance of each pixel's DN, worked out from the DN itself, as an observer would.
 
@@ -102,9 +104,10 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
     `add_visible_stray_light` and `to_dn` draw it:
 
     - the EUV photons: each detected photon frees *m* electrons
-      (`electrons_per_photon`), with a Fano spread of ``si_fano * m``. With
-      the photons a Poisson count, their electrons vary by *m* + ``si_fano``
-      times their mean.
+      (`electrons_per_photon`) by its own energy, with a Fano spread of
+      ``si_fano * m``. With the photons a Poisson count, their electrons
+      vary by the mean of *m* squared over the mean of *m*, plus
+      ``si_fano``, times their mean.
     - the dark current and the visible light: one electron each, a Poisson
       count, which varies by its mean.
     - the read noise: ``read_noise_rms`` squared.
@@ -119,10 +122,11 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
     dn : np.ndarray
         The DN in each pixel, as `to_dn` gives them, or summed over
         ``n_binned`` pixels along the slit.
-    rest_wavelength : u.Quantity
+    wavelength : u.Quantity
         The wavelength of the mean energy of the photons in each pixel, shaped
-        as *dn*, or one for all, such as the line's rest wavelength. It sets
-        the electrons per photon.
+        as *dn*, or one for all, such as the line's rest wavelength; of all
+        the photons of the summed pixels, as `binned_photon_wavelengths`
+        gives it. It sets the electrons per photon.
     t_exp : u.Quantity
         The exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
@@ -133,6 +137,11 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
         with ``noise=False``, summed over the same pixels as *dn*. Default 0.
     n_binned : int, optional
         How many pixels each value of *dn* is the sum of. Default 1.
+    rms_wavelength : u.Quantity, optional
+        The wavelength of the root mean square energy of the same photons,
+        as *wavelength*, which sets how far the electrons of photons of
+        different energies spread. Default *wavelength*: photons all of one
+        energy.
 
     Returns
     -------
@@ -145,13 +154,16 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
     visible = np.asarray(visible_electrons, dtype=float)
     electrons = np.asarray(dn, dtype=float) * gain
     euv = np.maximum(electrons - dark - visible, 0.0)
-    per_electron = electrons_per_photon(rest_wavelength, det) + det.si_fano
+    mean = electrons_per_photon(wavelength, det)
+    square = mean**2 if rms_wavelength is None else electrons_per_photon(rms_wavelength, det)**2
+    per_electron = square / mean + det.si_fano
     variance_electrons = per_electron * euv + dark + visible + read
     return variance_electrons / gain ** 2 + n_binned / 12.0
 
 
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
-                           *, noise: bool = True, every_pixel: bool = False) -> np.ndarray:
+                           *, noise: bool = True, every_pixel: bool = False,
+                           rms_wavelength: u.Quantity | None = None) -> np.ndarray:
     """
     Vectorized version of Fano noise calculation for improved performance.
 
@@ -160,7 +172,8 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     photon_counts : np.ndarray
         Array of photon counts (unitless values)
     rest_wavelength : u.Quantity
-        Rest wavelength with units
+        The wavelength of the mean energy of each pixel's photons, one for
+        all or an array that broadcasts against *photon_counts*.
     det : Detector_SWC or Detector_EIS
         Detector object with fano noise parameters
     noise : bool, optional
@@ -173,6 +186,11 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
         random values used do not depend on how many pixels have photons
         and runs that differ only in photon flux stay in step.  The
         distribution is the same.  Default False.
+    rms_wavelength : u.Quantity, optional
+        The wavelength of the root mean square energy of each pixel's
+        photons, as *rest_wavelength*. Photons of different energies free
+        different numbers of electrons, which spreads a pixel's electrons
+        further. Default *rest_wavelength*: photons all of one energy.
 
     Returns
     -------
@@ -195,21 +213,31 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     mean_electrons_per_photon = np.broadcast_to(
         electrons_per_photon(rest_wavelength, det), photon_counts.shape)[mask_positive]
 
-    # Fano noise standard deviation per photon
-    sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)
+    # The spread of one photon's electrons: the Fano spread, and between
+    # photons of different energies, the variance of their mean electrons,
+    # the mean of its square, which the root mean square energy gives, less
+    # the square of its mean. For photons of one energy that is zero, which
+    # rounding can take a hair below.
+    variance_per_photon = det.si_fano * mean_electrons_per_photon
+    if rms_wavelength is not None:
+        rms_electrons_per_photon = np.broadcast_to(
+            electrons_per_photon(rms_wavelength, det), photon_counts.shape)[mask_positive]
+        variance_per_photon = variance_per_photon + np.maximum(
+            rms_electrons_per_photon**2 - mean_electrons_per_photon**2, 0.0)
+    sigma_per_photon = np.sqrt(variance_per_photon)
 
     # Work only with positive photon counts
     positive_photons = photon_counts[mask_positive]
-    
+
     # For efficiency, use a simpler approximation for most cases
-    # The exact method is: for each photon, sample from Normal(mean_e, sigma_fano)
-    # Approximation: for N photons, sample from Normal(N*mean_e, sqrt(N)*sigma_fano)
-    # This is mathematically equivalent for large N and much faster
-    
+    # The exact method is: for each photon, sample its electrons from its own energy
+    # Approximation: for N photons, sample from Normal(N*mean_e, sqrt(N)*sigma_per_photon)
+    # This has the same mean and variance, is equivalent for large N and much faster
+
     mean_total_electrons = positive_photons * mean_electrons_per_photon
 
     if noise:
-        std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
+        std_total_electrons = np.sqrt(positive_photons) * sigma_per_photon
 
         # Sample total electrons per pixel
         if standard is None:
@@ -675,22 +703,21 @@ def apply_focusing_optics_psf(
 
 def _blurred_cube(signal: NDCube, blur) -> NDCube:
     """
-    *signal*, photons on the pixels, blurred by *blur*, with the wavelength
-    of the mean energy of each pixel's photons carried along with them.
+    *signal*, photons on the pixels, blurred by *blur*, with the wavelengths
+    of the mean and the root mean square energies of each pixel's photons
+    carried along with them.
     """
     data = np.asarray(signal.data, dtype=float)
     meta = signal.meta
     if "photon_wavelength" in (meta or {}):
-        own = u.Quantity(meta["photon_wavelength"])
-        per_wavelength = blur(np.divide(data, own.value, out=np.zeros(data.shape),
-                                        where=own.value > 0))
-        blurred = blur(data)
+        mean = u.Quantity(meta["photon_wavelength"])
+        rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to(mean.unit)
         # A pixel no photons reach keeps its own wavelength.
-        fill = np.broadcast_to(signal.axis_world_coords_values(2)[0].to_value(own.unit),
-                               data.shape)
-        meta = {**meta, "photon_wavelength": np.divide(
-            blurred, per_wavelength, out=np.array(fill, dtype=float),
-            where=per_wavelength > 0) * own.unit}
+        fill = signal.axis_world_coords_values(2)[0].to_value(mean.unit)
+        blurred, mean_value, rms_value = _carry_photon_wavelengths(
+            blur, data, mean.value, rms.value, fill)
+        meta = {**meta, "photon_wavelength": mean_value * mean.unit,
+                "photon_rms_wavelength": rms_value * mean.unit}
     else:
         blurred = blur(data)
     return NDCube(data=blurred, wcs=signal.wcs.deepcopy(), unit=signal.unit, meta=meta)
@@ -721,7 +748,9 @@ def to_electrons(
         whole numbers, or with ``noise=False`` their expected, fractional
         numbers. Its ``meta["photon_wavelength"]``, the wavelength of the
         mean energy of each pixel's photons, sets the electrons per photon,
-        or without it ``meta["rest_wav"]``.
+        and its ``meta["photon_rms_wavelength"]``, that of their root mean
+        square energy, how far the electrons of photons of different
+        energies spread; without them, ``meta["rest_wav"]`` sets both.
     t_exp : u.Quantity
         The exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
@@ -742,11 +771,15 @@ def to_electrons(
         The electrons in each pixel.
     """
     # Each photon frees electrons by its own energy: the cube gives the
-    # wavelength of the mean energy of each pixel's photons, as
-    # `simulate_once` keeps it, or else the line's rest wavelength.
+    # wavelengths of the mean and the root mean square energies of each
+    # pixel's photons, as `simulate_once` keeps them, or else the line's
+    # rest wavelength for all.
     meta = photon_counts.meta or {}
-    rest_wavelength = (meta["photon_wavelength"] if "photon_wavelength" in meta
-                       else meta["rest_wav"])
+    if "photon_wavelength" in meta:
+        rest_wavelength = meta["photon_wavelength"]
+        rms_wavelength = meta.get("photon_rms_wavelength", rest_wavelength)
+    else:
+        rest_wavelength = rms_wavelength = meta["rest_wav"]
 
     # Apply quantum efficiency.  With noise on this is a binomial draw over
     # whole photons; with it off the same expectation, qe * N, without the
@@ -762,7 +795,8 @@ def to_electrons(
     # Apply proper Fano noise per pixel using a vectorized approach
     electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
                                              rest_wavelength, det, noise=noise,
-                                             every_pixel=photon_shot_inverse_transform)
+                                             every_pixel=photon_shot_inverse_transform,
+                                             rms_wavelength=rms_wavelength)
 
     e = electron_counts * (u.electron / u.pixel)
 

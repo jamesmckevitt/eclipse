@@ -165,7 +165,7 @@ def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_ma
 def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
                         wavelength: np.ndarray) -> tuple:
     """
-    Photons in cells laid onto pixels, and the wavelength of each pixel's mean photon energy.
+    Photons in cells laid onto pixels, and the wavelengths of the mean and the root mean square energies of each pixel's photons.
 
     Parameters
     ----------
@@ -180,19 +180,63 @@ def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
     Returns
     -------
     tuple
-        ``(on_pixels, photon_wavelength)``, both with the pixels on the last
-        axis. A photon frees electrons in a detector by its energy, so the
-        second, in the unit of *wavelength*, is the wavelength whose energy
-        is the mean of the photons a pixel receives, NaN where none arrive.
+        ``(on_pixels, photon_wavelength, rms_wavelength)``, all with the
+        pixels on the last axis. A photon frees electrons in a detector by
+        its energy, so the second, in the unit of *wavelength*, is the
+        wavelength whose energy is the mean of the photons a pixel receives,
+        and the third the wavelength whose energy is their root mean square,
+        which sets how far their electrons spread. Both are NaN where none
+        arrive.
     """
     photons = np.asarray(photons, dtype=float)
     flat = photons.reshape(-1, photons.shape[-1])
-    on = np.asarray(share @ flat.T).T
-    per_wavelength = np.asarray(share @ (flat / np.asarray(wavelength, dtype=float)).T).T
-    photon_wavelength = np.divide(on, per_wavelength, out=np.full(on.shape, np.nan),
-                                  where=per_wavelength > 0)
+    wavelength = np.asarray(wavelength, dtype=float)
+    on, photon_wavelength, rms_wavelength = _carry_photon_wavelengths(
+        lambda cells: np.asarray(share @ cells.T).T, flat, wavelength, wavelength, np.nan)
     shape = photons.shape[:-1] + (share.shape[0],)
-    return on.reshape(shape), photon_wavelength.reshape(shape)
+    return on.reshape(shape), photon_wavelength.reshape(shape), rms_wavelength.reshape(shape)
+
+
+def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
+    """
+    Photons moved by *carry*, and the wavelengths of the mean and the root
+    mean square energies of the photons wherever they land.
+
+    A photon's energy goes as one over its wavelength. Photons whose mean
+    energy is that of wavelength *mean*, and whose root mean square energy
+    is that of *rms*, hold an energy that goes as photons / mean, and a
+    square energy that goes as photons / rms**2. Both add up as the photons
+    do, so *carry*, any linear map of the photons, moves them as it moves
+    the photons.
+
+    Parameters
+    ----------
+    carry : callable
+        A linear map, from an array shaped as *photons* to where they land.
+    photons : np.ndarray
+        The photons.
+    mean, rms : np.ndarray
+        The wavelengths of the mean and the root mean square energies of
+        *photons*, broadcasting against them.
+    fill : float or np.ndarray
+        The wavelength of both where no photons land, broadcasting against
+        where they land.
+
+    Returns
+    -------
+    tuple
+        ``(moved, mean, rms)``.
+    """
+    photons = np.asarray(photons, dtype=float)
+    mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
+    rms = np.broadcast_to(np.asarray(rms, dtype=float), photons.shape)
+    moved = carry(photons)
+    energy = carry(np.divide(photons, mean, out=np.zeros(photons.shape), where=mean > 0))
+    square = carry(np.divide(photons, rms**2, out=np.zeros(photons.shape), where=rms > 0))
+    empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
+    moved_mean = np.divide(moved, energy, out=np.array(empty), where=energy > 0)
+    moved_rms = np.sqrt(np.divide(moved, square, out=np.array(empty) ** 2, where=square > 0))
+    return moved, moved_mean, moved_rms
 
 
 def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.0,

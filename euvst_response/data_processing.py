@@ -15,7 +15,8 @@ from scipy.special import erf
 from tqdm import tqdm
 from .radiometric import (photons_per_energy, slit_image_width, spectral_optics_fwhm,
                           spectral_psf_fwhm, spectral_psf_margin)
-from .sampling import centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights
+from .sampling import (_carry_photon_wavelengths, centred_edges, light_onto_pixels,
+                       photons_onto_pixels, pixel_weights)
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
 
@@ -407,21 +408,21 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
         return np.ascontiguousarray(np.moveaxis(cube, 0, 1))
 
     scene = np.asarray(new_cube_spec.data, dtype=float)
-    data = onto_pixels(scene)
     meta = dict(new_cube_spec.meta or {})
     if "photon_wavelength" in meta:
         # Each pixel takes the photons of the cells it covers, which at one
-        # wavelength are as the data, so the wavelength of their mean energy
-        # comes from the same weights; a pixel none reach keeps its own
-        # wavelength.
-        own = u.Quantity(meta["photon_wavelength"])
-        grid = new_cube_spec.axis_world_coords_values(2)[0].to_value(own.unit)
-        per_wavelength = onto_pixels(np.divide(scene, own.value, out=np.zeros(scene.shape),
-                                               where=own.value > 0))
-        fill = np.broadcast_to(grid, data.shape)
-        meta["photon_wavelength"] = np.divide(
-            data, per_wavelength, out=np.array(fill, dtype=float),
-            where=per_wavelength > 0) * own.unit
+        # wavelength are as the data, so the wavelengths of their mean and
+        # root mean square energies come from the same weights; a pixel none
+        # reach keeps its own wavelength.
+        mean = u.Quantity(meta["photon_wavelength"])
+        rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to(mean.unit)
+        grid = new_cube_spec.axis_world_coords_values(2)[0].to_value(mean.unit)
+        data, mean_value, rms_value = _carry_photon_wavelengths(
+            onto_pixels, scene, mean.value, rms.value, grid)
+        meta["photon_wavelength"] = mean_value * mean.unit
+        meta["photon_rms_wavelength"] = rms_value * mean.unit
+    else:
+        data = onto_pixels(scene)
     # In the units wcslib keeps them in, metres and degrees, as a
     # reprojection's WCS has always come back.
     wcs_tgt.wcs.set()
@@ -458,10 +459,11 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     blur moves it. The Monte Carlo counts a pixel's photons at the pixel's
     wavelength, so the spectra come back as the radiance that gives the
     photons each pixel receives that way. A photon frees electrons in the
-    detector by its own energy, so the wavelength of the mean energy of the
-    photons in each pixel comes back too.
+    detector by its own energy, so the wavelengths of the mean and the root
+    mean square energies of the photons in each pixel come back too.
 
-    Returns ``(spectra, grid, photon_wavelength)``, the last two in cm.
+    Returns ``(spectra, grid, photon_wavelength, rms_wavelength)``, the last
+    three in cm.
     """
     step = (det.wvl_res * u.pix).to_value(u.cm)
     centres = spectral_world.to_value(u.cm)
@@ -478,7 +480,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     # The photons each cell's light makes at its own wavelength; none where
     # the telescope's tables do not reach.
     own = np.nan_to_num(photons_per_energy(tel, centres * u.cm).value)
-    photons, photon_wavelength = photons_onto_pixels(
+    photons, photon_wavelength, rms_wavelength = photons_onto_pixels(
         share, np.asarray(data, dtype=float) * (np.diff(cells) * own), centres)
     # The radiance a pixel's photons come from at the pixel's own wavelength;
     # a pixel no light reaches keeps its own wavelength.
@@ -486,7 +488,8 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     spectra = np.divide(photons, step * pixel, out=np.zeros(photons.shape),
                         where=pixel > 0)
     photon_wavelength = np.where(np.isfinite(photon_wavelength), photon_wavelength, grid)
-    return spectra, grid * u.cm, photon_wavelength * u.cm
+    rms_wavelength = np.where(np.isfinite(rms_wavelength), rms_wavelength, grid)
+    return spectra, grid * u.cm, photon_wavelength * u.cm, rms_wavelength * u.cm
 
 
 def _spatial_blur(tel, det, sim) -> dict:
@@ -510,7 +513,8 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
     wavelength and in space. Given *tel*, each wavelength's light is counted
     in photons at its own wavelength, which the cube's ``meta`` keeps as
     ``photon_wavelength``, the wavelength of the mean energy of each pixel's
-    photons. With ``sim.psf`` on as well, the scene is blurred by the
+    photons, and ``photon_rms_wavelength``, that of their root mean square
+    energy. With ``sim.psf`` on as well, the scene is blurred by the
     focusing optics' PSF on its own grids before the pixels average it,
     which is exact however fine the scene is, and ``meta`` records it in
     ``psf_applied``, so that the Monte Carlo does not blur it again.
@@ -545,13 +549,14 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
                                                                 ncpu=sim.ncpu)
 
     blurred = _through_the_optics(tel, sim)
-    data, grid, photon_wavelength = _spectra_on_the_detector(
+    data, grid, photon_wavelength, rms_wavelength = _spectra_on_the_detector(
         cube_sim.data, cube_sim.axis_world_coords_values(2)[0], det, sim, tel)
     wcs = cube_sim.wcs.deepcopy()
     unit = wcs.wcs.cunit[0]
     wcs.wcs.crpix[0], wcs.wcs.crval[0], wcs.wcs.cdelt[0] = _even_grid_wcs(grid, unit)
     cube_spec = NDCube(data, wcs=wcs, unit=cube_sim.unit,
                        meta={**(cube_sim.meta or {}), "photon_wavelength": photon_wavelength,
+                             "photon_rms_wavelength": rms_wavelength,
                              **({"psf_applied": True} if blurred else {})})
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     return reproject_ndcube_heliocentric_to_helioprojective(
@@ -603,9 +608,10 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     radiance = synthesis.summed(reference_line) if summed is None else summed
     blurred = _through_the_optics(tel, sim)
     if tel is not None:
-        data, grid, photon_wavelength = _spectra_on_the_detector(
+        data, grid, photon_wavelength, rms_wavelength = _spectra_on_the_detector(
             radiance.value, reference.wavelength, det, sim, tel)
         meta = {**(meta or {}), "photon_wavelength": photon_wavelength,
+                "photon_rms_wavelength": rms_wavelength,
                 **({"psf_applied": True} if blurred else {})}
     else:
         data, grid = resample_spectra(radiance.value, reference.wavelength, det.wvl_res * u.pix)

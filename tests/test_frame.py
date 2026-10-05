@@ -27,6 +27,7 @@ from euvst_response.frame import (
     detect,
     digitise,
     expose_with_wavelength,
+    expose_with_wavelengths,
     photons_from_lines,
     photons_from_spectrum,
     pixel_solid_angle,
@@ -292,6 +293,32 @@ def test_each_pixel_gets_the_wavelength_of_its_mean_photon_energy():
                                np.concatenate([lam, [lam[-1]] * 2]), rtol=1e-12)
 
 
+def test_each_pixel_gets_the_wavelength_of_its_photons_root_mean_square_energy():
+    # The same two rows. A packet's photons come from both, so their
+    # electrons spread by how far apart the two energies are, which the
+    # photon-weighted mean of one over the wavelength squared gives.
+    n_rows = 8
+    wavelength = np.linspace(170.0, 210.0, n_rows) * u.Angstrom
+    first, second = np.zeros((n_rows, 1)), np.zeros((n_rows, 1))
+    first[5], second[2] = 100.0, 40.0
+    sequence = ReadoutSequence(shutter=False, dump_rows=n_rows, parallel_overscan_rows=2)
+    photons, mean, rms = expose_with_wavelengths(first + second, wavelength, 1.0 * u.s,
+                                                 sequence)
+    a, b = (expose(rate, 1.0 * u.s, sequence) for rate in (first, second))
+    lam = wavelength.to_value(u.Angstrom)
+    np.testing.assert_allclose(rms.to_value(u.Angstrom),
+                               np.sqrt((a + b) / (a / lam[5]**2 + b / lam[2]**2)), rtol=1e-9)
+    by_mean = expose_with_wavelength(first + second, wavelength, 1.0 * u.s, sequence)
+    np.testing.assert_array_equal(by_mean[0], photons)
+    np.testing.assert_array_equal(by_mean[1], mean)
+    # Rows whose own photons already spread keep that spread too.
+    own = lam * 0.999
+    _, _, rms = expose_with_wavelengths(first + second, wavelength, 1.0 * u.s, sequence,
+                                        rms_wavelength=own * u.Angstrom)
+    np.testing.assert_allclose(rms.to_value(u.Angstrom),
+                               np.sqrt((a + b) / (a / own[5]**2 + b / own[2]**2)), rtol=1e-9)
+
+
 def test_each_pixel_can_bring_the_wavelength_of_the_photons_reaching_it():
     # Two columns whose lit row takes photons of different wavelengths, as a
     # line blurred onto its neighbour does: each keeps its own through the
@@ -418,6 +445,29 @@ def test_a_pixel_can_carry_its_own_wavelength():
     assert electrons == pytest.approx(expected, rel=1e-6)
     with pytest.raises(ValueError, match="per row or per pixel"):
         detect(np.zeros((2, 2)), [190.0, 191.0, 192.0] * u.Angstrom, 1.0 * u.s, det)
+
+
+def test_photons_of_different_energies_spread_a_pixels_electrons():
+    # A pixel holding photons of 170 and 212 Angstrom, as the smear gives
+    # it, with every photon caught and no dark current or read noise: each
+    # photon frees its own electrons, so they spread by how far apart those
+    # are, as well as by the Fano factor.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C, qe_euv=1.0)
+    det.dark_current = 0 * u.electron / (u.pixel * u.s)
+    det.read_noise_rms = 0 * u.electron / u.pix
+    counts, lam = np.array([200.0, 100.0]), np.array([170.0, 212.0])
+    n = counts.sum()
+    mean = n / (counts / lam).sum()
+    rms = np.sqrt(n / (counts / lam**2).sum())
+    np.random.seed(20261005)
+    electrons = detect(np.full((300, 300), n), np.full(300, mean) * u.Angstrom, 1.0 * u.s,
+                       det, rms_wavelength=np.full(300, rms) * u.Angstrom)
+    own = photon_energy_ev(lam) / W_EV_AT_MINUS_60
+    m = (counts * own).sum() / n
+    spread = n * ((counts * own**2).sum() / n - m**2)
+    fano = n * det.si_fano * m
+    assert electrons.var() == pytest.approx(spread + fano, rel=2e-2)
+    assert fano < 0.5 * (spread + fano)
 
 
 def test_each_row_collects_dark_current_for_its_own_time():
