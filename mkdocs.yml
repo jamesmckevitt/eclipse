@@ -38,6 +38,7 @@ nav:
       - Fitting blended lines: fitting.md
       - A single line of known intensity: uniform-intensity.md
       - Time series: time-series.md
+      - A full-CCD frame: full-ccd-frame.md
       - Instruments: instruments.md
   - 3. Analysing the results: analysis.md
   - Python:
