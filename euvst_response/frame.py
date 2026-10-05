@@ -83,6 +83,10 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int 
 # whole line.
 CELLS_PER_ROW = 16
 
+# Lines are laid a block of this many at a time, which bounds the memory a
+# whole band takes and changes nothing else.
+_LINES_AT_ONCE = 10000
+
 
 def _sorted_rows(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int = 0):
     """
@@ -280,25 +284,33 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     else:
         psf_sigma, box = _response(focal_plane, ccd, column, telescope, det, slit_width,
                                    spectral_psf, centre)
-    # Each line, a Gaussian, blurred by the response: a Gaussian of the two
-    # widths in quadrature, convolved with the slit's image for
-    # "convolution", and shared between the rows by its exact integrals, in
-    # photons at its centre's wavelength.
-    sorted_rows = points_onto_pixels(centre, edges, np.hypot(width, psf_sigma), box) @ (
-        light * at_centre)
+    reach = (_REACH_IN_SIGMA * psf_sigma.max() + box.max()
+             if spectral_psf is not None and centre.size else 0.0)
+    cells = _cells(focal_plane, ccd, column, edges, reach)
+    sorted_rows = np.zeros(edges.size - 1)
+    in_cells, at_centres = np.zeros(cells.size - 1), np.zeros(cells.size - 1)
+    for start in range(0, centre.size, _LINES_AT_ONCE):
+        block = slice(start, start + _LINES_AT_ONCE)
+        collected = light[block] * at_centre[block]
+        # Each line, a Gaussian, blurred by the response: a Gaussian of the
+        # two widths in quadrature, convolved with the slit's image for
+        # "convolution", and shared between the rows by its exact integrals,
+        # in photons at its centre's wavelength.
+        sorted_rows += points_onto_pixels(
+            centre[block], edges, np.hypot(width[block], psf_sigma[block]), box[block]
+        ) @ collected
+        masses = points_onto_pixels(centre[block], cells, width[block])
+        in_cells += masses @ light[block]
+        at_centres += masses @ collected
     # Then, cell by cell across each line, the photons its light makes at the
     # cell's own wavelength rather than at the centre's, which the telescope's
     # throughput and the photon energy change, blurred as the line is.
-    reach = 0.0 if spectral_psf is None else _REACH_IN_SIGMA * psf_sigma.max() + box.max()
-    cells = _cells(focal_plane, ccd, column, edges, reach)
-    masses = points_onto_pixels(centre, cells, width)
-    in_cells = masses @ light
     lit = np.flatnonzero(in_cells > 0)
     low, high = cells[lit], cells[lit + 1]
     middle = (low + high) / 2
     own = np.nan_to_num(photons_per_energy(telescope, middle * u.Angstrom).to_value(
         u.cm**2 / u.erg))
-    change = in_cells[lit] * own - (masses @ (light * at_centre))[lit]
+    change = in_cells[lit] * own - at_centres[lit]
     if spectral_psf is None:
         sigma = cell_box = 0.0
     else:

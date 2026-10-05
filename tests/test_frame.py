@@ -646,3 +646,25 @@ def test_blurring_the_rows_after_says_it_is_deprecated():
     with pytest.warns(FutureWarning, match="apply_spectral_psf is deprecated"):
         apply_spectral_psf(np.ones(40) / u.s, Telescope_EUVST(), Detector_SWC(),
                            SLIT_WIDTH * u.arcsec)
+
+
+@pytest.mark.parametrize("spectral_psf", [None, "quadrature"])
+def test_no_lines_give_no_photons(spectral_psf):
+    rows = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(), SLIT_WIDTH * u.arcsec,
+                              [] * u.Angstrom, [] * u.erg / (u.s * u.cm**2 * u.sr),
+                              [] * u.Angstrom, det=Detector_SWC(), spectral_psf=spectral_psf)
+    assert rows.shape == (FocalPlane_SWC().n_rows,) and not rows.value.any()
+
+
+def test_lines_laid_a_block_at_a_time_give_what_they_give_all_at_once(monkeypatch):
+    from euvst_response import frame
+
+    lines = ([195.119, 195.179, 192.394] * u.Angstrom,
+             [1.0, 0.5, 0.2] * u.erg / (u.s * u.cm**2 * u.sr), [0.004, 0.01, 0.006] * u.Angstrom)
+    settings = {"det": Detector_SWC(), "spectral_psf": "quadrature"}
+    together = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(),
+                                  SLIT_WIDTH * u.arcsec, *lines, **settings).value
+    monkeypatch.setattr(frame, "_LINES_AT_ONCE", 1)
+    apart = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(),
+                               SLIT_WIDTH * u.arcsec, *lines, **settings).value
+    np.testing.assert_allclose(apart, together, rtol=1e-12, atol=1e-15 * together.max())
