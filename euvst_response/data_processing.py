@@ -13,7 +13,7 @@ from astropy.wcs import WCS
 from scipy.sparse import csr_matrix
 from scipy.special import erf
 from tqdm import tqdm
-from .pinhole_diffraction import _pinholes_on
+from .pinhole_diffraction import _filter_transmission, _pinholes_on
 from .radiometric import (_carry_photon_meta, photons_per_energy, slit_image_width,
                           spectral_optics_fwhm, spectral_psf_fwhm, spectral_psf_margin)
 from .sampling import centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights
@@ -491,7 +491,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
         # The photons the filter blocked from each cell's light, which a
         # pinhole lets through: those that passed, over the share it passed,
         # less those that passed.
-        passed = tel.filter.total_throughput(centres * u.cm).to_value(u.dimensionless_unscaled)
+        passed = _filter_transmission(tel, centres * u.cm)
         blocked = in_cells * np.divide(1.0 - passed, passed, out=np.zeros(passed.shape),
                                        where=passed > 0)
         on_pixels, blocked_wavelength, blocked_rms = photons_onto_pixels(share, blocked, centres)

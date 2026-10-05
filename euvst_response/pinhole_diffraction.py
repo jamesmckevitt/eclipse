@@ -193,6 +193,26 @@ def _pinholes_on(sim) -> bool:
     return bool(sim.enable_pinholes and len(sim.pinhole_sizes) > 0)
 
 
+def _filter_transmission(tel, wavelength: u.Quantity) -> np.ndarray:
+    """
+    The share of the EUV the filter passes at each of *wavelength*, for the
+    pinholes, which work out the light it blocks from the light it passes:
+    where it passes none, that is lost, so a filter that passes none at a
+    wavelength its tables reach is refused.
+    """
+    wavelength = u.Quantity(wavelength)
+    passed = tel.filter.total_throughput(wavelength).to_value(u.dimensionless_unscaled)
+    opaque = np.isfinite(passed) & (passed <= 0)
+    if opaque.any():
+        where = np.broadcast_to(wavelength, passed.shape, subok=True)[opaque].to(u.AA)
+        raise ValueError(
+            f"The filter passes no EUV from {where.min():.3f} to {where.max():.3f}, so the "
+            f"light the pinholes let through there cannot be worked out from the light it "
+            f"passes. Model the pinholes with a filter that passes some EUV at every "
+            f"wavelength.")
+    return passed
+
+
 def _with_filter_transmission(photon_counts: NDCube, tel) -> NDCube:
     """
     *photon_counts*, photons counted at each pixel's own wavelength, with the
@@ -203,8 +223,7 @@ def _with_filter_transmission(photon_counts: NDCube, tel) -> NDCube:
     meta = dict(photon_counts.meta or {})
     own = photon_counts.axis_world_coords_values(2)[0]
     shape = photon_counts.data.shape
-    meta["photon_filter_transmission"] = np.broadcast_to(
-        tel.filter.total_throughput(own).to_value(u.dimensionless_unscaled), shape)
+    meta["photon_filter_transmission"] = np.broadcast_to(_filter_transmission(tel, own), shape)
     meta["blocked_photon_wavelength"] = meta.get("photon_wavelength",
                                                  np.broadcast_to(own, shape, subok=True))
     meta["blocked_photon_rms_wavelength"] = meta.get("photon_rms_wavelength",

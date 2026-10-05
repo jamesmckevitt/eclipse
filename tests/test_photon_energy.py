@@ -354,3 +354,20 @@ def test_photons_counted_at_their_pixels_wavelength_passed_the_filter_there():
     weights = _pinhole_weights(passed, det, sim, tel)
     assert through.data - passed.data == pytest.approx(weights * blocked, rel=1e-9,
                                                        abs=1e-12 * through.data.max())
+
+
+def test_the_pinholes_refuse_a_filter_that_passes_no_euv():
+    # The light a pinhole lets through is worked out from the light the
+    # filter passes, which there is none of to work from.
+    from euvst_response.config import AluminiumFilter
+    from euvst_response.monte_carlo import _photons_on_the_detector
+
+    det = Detector_SWC()
+    opaque = Telescope_EUVST(filter=AluminiumFilter(mesh_throughput=0.0))
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False,
+                     **PINHOLES)
+    scene = _broad_line(rest=EDGE)[0]
+    with pytest.raises(ValueError, match="passes no EUV"):
+        rebin_atmosphere(scene, det, sim, tel=opaque)
+    with pytest.raises(ValueError, match="passes no EUV"):
+        _photons_on_the_detector(rebin_atmosphere(scene, det, sim), 1 * u.s, det, opaque, sim)
