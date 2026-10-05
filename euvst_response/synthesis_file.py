@@ -653,6 +653,9 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
     - ``dem_map``: the DEM in each pixel, on the temperatures ``logT_grid``
     - ``em_tv``: the emission measure in each pixel by temperature and
       velocity, on the velocities ``vel_grid``
+    - ``electron_density``: the electron density in cm^-3 at each temperature
+      of each pixel, shaped as ``dem_map``, which the contribution functions
+      were taken at: the mean of its cells, weighted by their emission measure
     - ``goft``: each line's contribution function, on the temperatures and
       the densities ``logN_grid``
     - ``voxel_sizes``, ``atmosphere``, ``dynamic_mode`` and ``config``: the

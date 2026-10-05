@@ -89,7 +89,7 @@ x runs across the slit, the direction a raster steps in, and y runs along it. Th
 
 ### Reading one
 
-A synthesis file from ECLIPSE holds each line's spectra over the image, and also what the synthesis worked out on the way: the DEM, the emission measure by temperature and velocity, the contribution functions, and the settings it ran with. `load_synthesis` reads all of it:
+A synthesis file from ECLIPSE holds each line's spectra over the image, and also what the synthesis worked out on the way: the DEM, the emission measure by temperature and velocity, the electron density at each temperature of each pixel, the contribution functions, and the settings it ran with. `load_synthesis` reads all of it:
 
 ```python
 import euvst_response

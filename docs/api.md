@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, and the lines of a band, in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -143,6 +143,20 @@ These are the steps `simulate_once` takes, in order.
 ::: euvst_response.continuum.continuum_spectra
 
 ::: euvst_response.continuum.continuum_windows
+
+## Every line in a band
+
+A full-CCD frame holds every line in the band, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, and keep them in a file.
+
+::: euvst_response.band.band_contribution_functions
+
+::: euvst_response.band.BandLines
+
+::: euvst_response.band.IonLines
+
+::: euvst_response.band.write_band_lines
+
+::: euvst_response.band.read_band_lines
 
 ## Results files
 
