@@ -14,7 +14,8 @@ from .radiometric import (
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light, dn_variance
 )
-from .pinhole_diffraction import apply_euv_pinhole_diffraction
+from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
+                                  apply_euv_pinhole_diffraction)
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
 from .utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip, _get_mpi_info
 
@@ -155,6 +156,21 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                                              det.plate_scale_length,
                                              angle_to_distance(sim.slit_width))
 
+    # The pinholes let through the light the filter blocked from each photon,
+    # which has to be known before a blur mixes the photons of different
+    # pixels. A cube laid onto the pixels through the telescope with the
+    # pinholes on gives it at each photon's own wavelength; photons counted
+    # at their pixel's wavelength passed the filter there.
+    meta = I_cube.meta or {}
+    if _pinholes_on(sim) and "photon_filter_transmission" not in meta:
+        if "photon_wavelength" in meta:
+            raise ValueError(
+                "The cube's photons were counted at their own wavelengths, but it does not say "
+                "how much of their light the filter passed, which the pinholes need. Lay it "
+                "onto the pixels with rebin_atmosphere or rebin_spectra, given the telescope "
+                "and a simulation with the pinholes on.")
+        photons_pixels = _with_filter_transmission(photons_pixels, tel)
+
     # Apply focusing optics PSF (primary mirror + diffraction grating), unless
     # the cube was laid onto the pixels through it (rebin_atmosphere with a
     # telescope), which is exact where blurring the pixels is not.
@@ -167,7 +183,7 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         photons_focused = photons_pixels
 
     # Apply EUV pinhole diffraction effects (after focusing optics, if enabled)
-    if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
+    if _pinholes_on(sim):
         photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
     else:
         photons_euv_pinholes = photons_focused

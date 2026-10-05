@@ -443,10 +443,12 @@ def rebin_slit_offchip(cube, n_bin: int):
         new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
     ) / n_bin + 0.5
 
-    # The photon wavelengths of a binned pixel come from its rows' photons,
-    # which binned_photon_wavelengths takes, and are not carried here.
+    # What the cube says of each pixel's photons is not carried here: a
+    # binned pixel's photon wavelengths come from its rows' photons, which
+    # binned_photon_wavelengths takes.
     meta = cube.meta
-    carried = ("photon_wavelength", "photon_rms_wavelength")
+    carried = ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
+               "blocked_photon_wavelength", "blocked_photon_rms_wavelength")
     if isinstance(meta, dict) and any(key in meta for key in carried):
         meta = {key: value for key, value in meta.items() if key not in carried}
     return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit, meta=meta)
