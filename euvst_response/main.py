@@ -747,6 +747,14 @@ def main() -> None:
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
             "modelled by euvst_response.readout, which takes the detector's settings.")
+    # Nor does a run model the read-out, so the charge left behind in its
+    # transfers would be taken and ignored; refused too.
+    for name in ("cte_parallel", "cte_serial"):
+        if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
+            raise ValueError(
+                f"detector.{name} must be 1 for an instrument run, which does not model the "
+                f"read-out. Charge left behind as a frame is read is modelled by "
+                f"euvst_response.readout, which takes the detector's settings.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
     # are sized for the spectral PSF of the slit, which also depends on the

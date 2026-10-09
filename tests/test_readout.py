@@ -20,7 +20,14 @@ rather than taken from the module:
 and, before the exposure, the packet that ends the clear at row r has been
 clocked down from row r + dump_rows, collecting one row transfer at each row on
 the way.
+
+The third is the charge each transfer leaves behind. The expected values come
+from moving the charge one transfer at a time, each transfer keeping a fraction
+cte of every well's charge and leaving the rest for the packet behind, rather
+than from the closed form the module uses.
 """
+import warnings
+
 import astropy.units as u
 import numpy as np
 import pytest
@@ -32,7 +39,9 @@ from euvst_response.readout import (
     ReadoutSequence,
     dark_current_time,
     expose,
+    expose_variance,
     smear_photons,
+    transfer_probabilities,
     windows_from_wavelengths,
 )
 
@@ -533,6 +542,9 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
 
     sequence = ReadoutSequence.from_detector(det, windows=[(0, 9)])
     assert sequence.shutter is True
+    assert (sequence.cte_parallel, sequence.cte_serial) == (1.0, 1.0)
+    leaky = ReadoutSequence.from_detector(Detector_SWC(cte_parallel=0.99999, cte_serial=0.9999))
+    assert (leaky.cte_parallel, leaky.cte_serial) == (0.99999, 0.9999)
     assert sequence.row_transfer_time == 20.0 * u.us
     assert sequence.pixel_period == 1.0 * u.us
     assert (sequence.serial_prescan, sequence.serial_image_pixels,
@@ -563,8 +575,166 @@ def test_the_defaults_are_those_of_the_default_camera():
     sequence, from_det = ReadoutSequence(), ReadoutSequence.from_detector(det)
     for name in ("shutter", "row_transfer_time", "pixel_period", "serial_prescan",
                  "serial_image_pixels", "serial_overscan", "parallel_overscan_rows",
-                 "dump_rows", "windows"):
+                 "dump_rows", "windows", "cte_parallel", "cte_serial"):
         assert np.all(getattr(sequence, name) == getattr(from_det, name)), name
     # The numbers the documents give, so that a change to either class shows.
     assert sequence.line_read_time.to_value(u.us) == pytest.approx(547.0)
     assert fp.pixel_size.to_value(u.um) == pytest.approx(13.5)
+
+
+def _transfer(wells, cte):
+    """One transfer: the front well's charge moved out, and every well keeping what it is left."""
+    moved = cte * wells
+    left = wells - moved
+    after = np.empty_like(wells)
+    after[:-1] = moved[1:] + left[:-1]
+    after[-1] = left[-1]
+    return moved[0], after
+
+
+def _read_one_transfer_at_a_time(rate, exposure, sequence):
+    """The charge each packet brings to the register, moving it one transfer at a time."""
+    n_rows = rate.size
+    wells = np.zeros(n_rows)
+    lit = not sequence.shutter
+    for _ in range(sequence.dump_rows):
+        if lit:
+            wells = wells + rate * sequence.row_transfer_time.to_value(u.s)
+        _, wells = _transfer(wells, sequence.cte_parallel)
+    wells = wells + rate * exposure
+    dwell = sequence.dwell(n_rows)
+    read = np.zeros(n_rows + sequence.parallel_overscan_rows)
+    for step in range(read.size):
+        read[step], wells = _transfer(wells, sequence.cte_parallel)
+        if lit:
+            wells = wells + rate * dwell[step]
+    return read
+
+
+def test_transfer_probabilities_count_the_ways_charge_can_be_held_back():
+    """Arriving k packets late after m transfers is m moves and k waits, the last a move."""
+    m, cte = np.array([1, 2, 5]), 0.8
+    probability = transfer_probabilities(m, cte)
+    assert probability[0] == pytest.approx(cte ** m)
+    assert probability[1] == pytest.approx(m * cte ** m * (1 - cte))
+    assert probability[2] == pytest.approx(m * (m + 1) / 2 * cte ** m * (1 - cte) ** 2)
+    assert probability.sum(axis=0) == pytest.approx(1.0, abs=1e-14)
+    assert transfer_probabilities(m, 1.0).tolist() == [[1.0, 1.0, 1.0]]
+    # Stopping at the latest arrival wanted.
+    assert transfer_probabilities(m, cte, most=2).shape == (3, 3)
+    with pytest.raises(ValueError, match="at least one transfer"):
+        transfer_probabilities([0], cte)
+
+
+@pytest.mark.parametrize("shutter", [True, False])
+@pytest.mark.parametrize("windows", [[], [(2, 4), (8, 9)]])
+@pytest.mark.parametrize("dump_rows", [12, 5, 0])
+@pytest.mark.parametrize("cte", [0.99, 0.9])
+def test_charge_left_behind_arrives_as_moving_it_one_transfer_at_a_time(
+        shutter, windows, dump_rows, cte):
+    """The clear, the exposure, every read and dumped row, and the packets dumped in the clear."""
+    rate = np.random.default_rng(1).uniform(0.0, 5.0, 12)
+    rate[3] = 200.0
+    sequence = ReadoutSequence(shutter=shutter, windows=windows, dump_rows=dump_rows,
+                               parallel_overscan_rows=3, cte_parallel=cte)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        frame = expose(rate[:, np.newaxis], 0.7 * u.s, sequence)[:, 0]
+    expected = _read_one_transfer_at_a_time(rate, 0.7, sequence)
+    assert frame == pytest.approx(expected, rel=1e-12, abs=1e-12 * expected.max())
+
+
+def test_charge_left_behind_along_the_register_trails_towards_its_middle():
+    """Each half is read from its own end, through the prescan."""
+    rate = np.random.default_rng(2).uniform(0.0, 3.0, (4, 10))
+    rate[1, 2] = 100.0
+    sequence = ReadoutSequence(serial_prescan=3, serial_image_pixels=5, parallel_overscan_rows=0,
+                               dump_rows=4, cte_serial=0.9)
+    frame = expose(rate, 1.0 * u.s, sequence)
+    expected = np.zeros_like(rate)
+    for columns in (np.arange(5), np.arange(9, 4, -1)):
+        for row in range(rate.shape[0]):
+            register = np.concatenate([np.zeros(3), rate[row, columns]])
+            read = []
+            for _ in range(register.size):
+                out, register = _transfer(register, 0.9)
+                read.append(out)
+            expected[row, columns] = read[3:]
+    assert frame == pytest.approx(expected, rel=1e-12)
+    with pytest.raises(ValueError, match="needs the frame's every column"):
+        expose(rate[:, :8], 1.0 * u.s, sequence)
+
+
+def test_a_perfect_transfer_leaves_the_frame_as_it_was():
+    """The defaults change nothing: the smear and the exposure, as without the transfer."""
+    rate = np.random.default_rng(3).uniform(0.0, 5.0, (40, 6))
+    sequence = ReadoutSequence(shutter=False, windows=[(5, 9)], parallel_overscan_rows=4)
+    smear = smear_photons(rate, sequence)
+    expected = smear.copy()
+    expected[:40] += rate * 2.0
+    assert np.array_equal(expose(rate, 2.0 * u.s, sequence), expected)
+    assert np.array_equal(expose_variance(rate, rate, 2.0 * u.s, sequence),
+                          expose(rate, 2.0 * u.s, sequence))
+
+
+def test_a_bright_row_trails_into_the_rows_read_after_it():
+    """What is left behind is picked up by the packets behind, and none of it goes the other way."""
+    rate = np.zeros((20, 1))
+    rate[5] = 1000.0
+    sequence = ReadoutSequence(shutter=True, parallel_overscan_rows=0, cte_parallel=0.999)
+    frame = expose(rate, 1.0 * u.s, sequence)[:, 0]
+    assert np.all(frame[:5] == 0.0)
+    assert frame[5] == pytest.approx(1000.0 * 0.999 ** 6)
+    assert np.all(np.diff(frame[6:]) <= 0.0) and frame[6] > 0.0
+    assert frame.sum() == pytest.approx(1000.0, rel=1e-12)
+
+
+def test_the_variance_of_charge_left_behind_is_that_of_draws_of_every_electron():
+    """Photons of three electrons each, every electron left behind or not on its own."""
+    rng = np.random.default_rng(4)
+    rate, cte, per_photon, draws = np.array([4.0, 0.5, 9.0, 1.0, 2.0, 0.2]), 0.8, 3, 40000
+    sequence = ReadoutSequence(shutter=False, parallel_overscan_rows=2, cte_parallel=cte,
+                               row_transfer_time=0.05 * u.s, pixel_period=1e-3 * u.s,
+                               serial_prescan=0, serial_image_pixels=1, serial_overscan=0)
+
+    def collect(wells, seconds):
+        return wells + per_photon * rng.poisson(rate * seconds, size=wells.shape)
+
+    def move(wells):
+        kept = rng.binomial(wells, cte)
+        after = np.empty_like(wells)
+        after[:, :-1] = kept[:, 1:] + wells[:, :-1] - kept[:, :-1]
+        after[:, -1] = wells[:, -1] - kept[:, -1]
+        return kept[:, 0], after
+
+    wells = np.zeros((draws, rate.size), dtype=np.int64)
+    for _ in range(sequence.dump_rows):
+        _, wells = move(collect(wells, sequence.row_transfer_time.to_value(u.s)))
+    wells = collect(wells, 0.6)
+    dwell = sequence.dwell(rate.size)
+    read = np.zeros((draws, rate.size + 2))
+    for step in range(read.shape[1]):
+        read[:, step], wells = move(wells)
+        wells = collect(wells, dwell[step])
+    variance = expose_variance((per_photon ** 2 * rate)[:, np.newaxis],
+                               (per_photon * rate)[:, np.newaxis], 0.6 * u.s, sequence)[:, 0]
+    # Each drawn variance is good to about sqrt(2 / draws), 0.7 percent.
+    assert read.var(axis=0) == pytest.approx(variance, rel=0.035)
+
+
+def test_dark_charge_is_left_behind_like_any_other():
+    """The dark current time is that of an even light, with or without a shutter."""
+    sequence = ReadoutSequence(windows=[(10, 19)], parallel_overscan_rows=5, cte_parallel=0.99)
+    time = dark_current_time(2.0 * u.s, sequence, 60).to_value(u.s)
+    lit = ReadoutSequence(shutter=False, windows=[(10, 19)], parallel_overscan_rows=5,
+                          cte_parallel=0.99)
+    assert time == pytest.approx(expose(np.ones((60, 1)), 2.0 * u.s, lit)[:, 0], rel=1e-12)
+    assert time[0] < dark_current_time(2.0 * u.s, ReadoutSequence(
+        windows=[(10, 19)], parallel_overscan_rows=5), 60).to_value(u.s)[0]
+
+
+def test_a_transfer_efficiency_is_a_fraction():
+    with pytest.raises(ValueError, match="cte_parallel is the fraction"):
+        ReadoutSequence(cte_parallel=0.0)
+    with pytest.raises(ValueError, match="cte_serial is the fraction"):
+        ReadoutSequence(cte_serial=1.5)

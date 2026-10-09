@@ -64,6 +64,8 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `serial_prescan` | The samples each output digitises before the image pixels of a row it reads | `50` | - |
 | `serial_overscan` | The samples each output digitises after them | `20` | - |
 | `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
+| `cte_parallel` | The charge transfer efficiency of a row transfer: the fraction of a packet's charge that moves with it. A run does not model the read-out, so a value below 1 is refused. | `1` | - |
+| `cte_serial` | The same for a transfer along the serial register | `1` | - |
 
 ## telescope
 
