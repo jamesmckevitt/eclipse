@@ -473,6 +473,15 @@ class Detector_SWC:
         between 0 and 200.
     parallel_overscan_rows : int
         The rows clocked and read after the last image row. Default 20.
+    cte_parallel, cte_serial : float
+        The charge transfer efficiency of one transfer along the columns,
+        towards the serial register, and of one along the serial register:
+        the fraction of a packet's charge that moves with it, the rest being
+        left behind for the packet that follows. Default 1, a perfect
+        transfer. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 asks for more than
+        0.999993 at -60 Celsius at the start of the mission, and
+        SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1 gives 0.99999 as typical for
+        both.
     """
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
@@ -506,9 +515,17 @@ class Detector_SWC:
     serial_prescan: int = field(default=50, kw_only=True)
     serial_overscan: int = field(default=20, kw_only=True)
     parallel_overscan_rows: int = field(default=20, kw_only=True)
+    cte_parallel: float = field(default=1.0, kw_only=True)
+    cte_serial: float = field(default=1.0, kw_only=True)
 
     def __post_init__(self):
         _check_detector(self)
+        for name in ("cte_parallel", "cte_serial"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float, np.floating))
+                    or not 0 < value <= 1):
+                raise ValueError(f"detector.{name} is the fraction of a packet's charge one "
+                                 f"transfer moves, above 0 and at most 1, got {value!r}.")
         # The scans are what the FEE can be set to (SOLC-EUVST-MSSL-RS-0002 v2.0).
         for name, least, most in (("n_rows", 1, None), ("n_columns", 1, None),
                                   ("serial_prescan", 0, 200), ("serial_overscan", 0, 200),

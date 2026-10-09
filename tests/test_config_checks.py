@@ -43,6 +43,8 @@ def _run(tmp_path, monkeypatch, config, text=None):
     (lambda: Detector_SWC(serial_overscan=201), "detector.serial_overscan can be set between 0 and 200"),
     (lambda: Detector_SWC(n_rows=2.5), "detector.n_rows must be a whole number, 1 or more"),
     (lambda: Detector_SWC(n_columns=True), "detector.n_columns must be a whole number"),
+    (lambda: Detector_SWC(cte_parallel=0), "detector.cte_parallel is the fraction"),
+    (lambda: Detector_SWC(cte_serial=1.000001), "detector.cte_serial is the fraction"),
     (lambda: Detector_EIS(material="silicn"), "detector.material must be one of"),
     (lambda: AluminiumFilter(mesh_throughput=80), "filter.mesh_throughput is a fraction"),
     (lambda: AluminiumFilter(al_thickness=-5 * u.AA), "al_thickness cannot be negative"),
@@ -189,6 +191,15 @@ def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
     """A run models the window with the shutter closed while it is read; the smear of the band is the read-out model's."""
     with pytest.raises(ValueError, match="detector.shutter must be true for an instrument run"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"shutter": shutter}})
+
+
+@pytest.mark.parametrize("name", ["cte_parallel", "cte_serial"])
+def test_a_run_with_charge_left_behind_is_refused_rather_than_taken_as_without(
+        tmp_path, monkeypatch, name):
+    """A run does not model the read-out, so it cannot leave charge behind in it."""
+    with pytest.raises(ValueError, match=f"detector.{name} must be 1 for an instrument run"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 0.99999}})
+    _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 1.0}})
 
 
 def test_the_cameras_read_out_settings_are_taken_from_the_configuration(tmp_path, monkeypatch):

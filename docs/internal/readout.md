@@ -66,6 +66,7 @@ The shutter, the timing and the register layout are the camera's, so they come f
 - `row_transfer_time`: 15 us by default, and can be changed in flight.
 - `pixel_period`, `serial_prescan`, `serial_overscan`: the register read, 50 + 1024 + 20 samples per output at 500 ns. The 1024 image pixels are half the detector's columns, one half of the register per output. Both scans can be set between 0 and 200 in flight.
 - `parallel_overscan_rows`: rows moved and read after the last image row. Without a shutter they hold only smear, since their charge crosses the whole lit area on the way out, so they measure it directly.
+- `cte_parallel`, `cte_serial`: the charge transfer efficiency of a row transfer and of a transfer along the serial register, 1 (perfect) by default. See [Charge left behind](#charge-left-behind).
 
 The windows and the clear belong to an observation, and are given to `from_detector`:
 
@@ -128,9 +129,27 @@ electrons = detect(photons, pixel_wavelength, dark_current_time(1.0 * u.s, seque
 dn = digitise(electrons, det)
 ```
 
+## Charge left behind
+
+No transfer moves all of a packet's charge. Each moves a fraction, the charge transfer efficiency, and leaves the rest in the well it vacated, where the packet behind it picks it up. So charge trails behind bright rows, towards the rows read after them, and is lost from the rows themselves. The CCD specification asks for an efficiency above 0.999993 at -60 C at the start of the mission (SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1), and the design reports give 0.99999 as typical for both directions (SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1). The charge of the far rows makes about 2,000 transfers to reach the register, so at 0.99999 about 2 percent of it arrives in later packets.
+
+```python
+det = Detector_SWC(cte_parallel=0.99999, cte_serial=0.99999)
+sequence = ReadoutSequence.from_detector(det, shutter=False)
+frame = expose(rate, 1.0 * u.s, sequence)
+```
+
+Every electron is taken to be left behind independently, with the same chance at every transfer. Charge collected at row `x`, during the clear, the exposure or the read-out, has `x + 1` row transfers to go, so `transfer_probabilities` gives where it arrives: `k` packets late with probability `C(x + k, k) * cte**(x + 1) * (1 - cte)**k`. `expose`, `smear_photons` and `dark_current_time` weight everything a packet collects by those probabilities, including the charge of packets that the clear sends into the dump drain, some of which they leave in the first rows read. Along the serial register, each half is read from its own end through the prescan, so a pixel `j` image pixels from the end of its half has `serial_prescan + j + 1` transfers to go, and what it leaves behind trails towards the middle of the register. That needs the frame's every column, so that each column's distance from its output is known.
+
+`expose` gives the mean. A frame drawn from it with `np.random.poisson` has the right mean, but its noise leaves out how the charge left behind varies from frame to frame. `expose_variance` gives each pixel's variance with it included: a pixel that receives a fraction `P` of a charge `Q` gets `P**2` of its variance and `P * (1 - P)` of its mean.
+
+An instrument run does not model the read-out, so a configuration file with either efficiency below 1 is refused.
+
 ## What is not modelled
 
 - **Blooming.** A saturated pixel's charge spills along the column, the same direction as the smear. The CCDs have no anti-blooming. Their full well, `Detector_SWC.full_well`, is 150 ke- (typical in non-inverted mode; 80 ke- at the least), below the 182 ke- the FEE accepts, so in a flare a pixel fills before the digitiser does. ECLIPSE does not clip or spill charge at the full well; use it to find which pixels a frame would saturate.
 - **The shutter in motion.** The shutter takes about 30 ms to open and the same to close, and light falls during both.
 - **Vignetting shape.** The edge of the illuminated area is treated as a step.
 - **Dark current in the serial register.** A packet collects dark current while it is in the image area, not while it is read.
+- **Traps.** Charge is left behind in the same fraction whatever the packet holds. Real losses come from traps in the silicon, which take a larger fraction of a small packet than of a large one, and are fewer once a packet's own charge, or a background such as the smear, has filled them. The traps radiation damage adds in flight are not modelled either.
+- **Charge left behind along the register by the dark current.** `dark_current_time` follows dark charge along the columns, not along the register, where for a dark current the same in every column it changes only the first pixels each output reads, by less than `(serial_prescan + 1) * (1 - cte_serial)`.
