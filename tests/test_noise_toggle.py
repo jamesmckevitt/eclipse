@@ -1,9 +1,8 @@
-"""With noise off, the chain returns the signal the instrument measures on average.
+"""With noise off, the chain returns the mean signal the instrument measures.
 
-Every random draw is replaced by its own mean, so two runs agree exactly and
-the result sits where the noisy realisations scatter about. Deterministic
-detector behaviour stays: DN are still rounded and still clip at the full
-well, because those are not noise.
+Every random draw is replaced by its mean, so two runs agree exactly and the
+result sits at the centre of the noisy realisations. DN are still rounded and
+still clip at the full well, because that is detector behaviour, not noise.
 """
 import astropy.units as u
 import numpy as np
@@ -51,14 +50,14 @@ def _electron_cube():
 
 
 def _electrons_per_photon(det, wavelength):
-    """E_ph / w(T), the mean electrons one absorbed photon liberates."""
+    """Mean electrons freed per absorbed photon: photon energy over w(T)."""
     temp_k = det.ccd_temperature.to_value(u.K, equivalencies=u.temperature())
     w_ev = 3.71 - 0.0006 * (temp_k - 300.0)
     return (12398.419843320026 / wavelength.to_value(u.Angstrom)) / w_ev
 
 
 def _intensity_cube(peak=2.0e4):
-    """A Gaussian line, in the units the synthesis stage emits."""
+    """A Gaussian line in the synthesis output units."""
     lam = np.arange(NWAVE) - NWAVE / 2.0
     profile = peak * np.exp(-0.5 * (lam / 1.5) ** 2)
     data = np.tile(profile, (NSLIT, NSCAN, 1))
@@ -83,7 +82,7 @@ def test_photon_arrivals_are_still_random_by_default():
 
 
 def test_electrons_are_qe_times_gain_exactly():
-    """Both draws collapse to their expectation: N * qe * (E_ph / w(T))."""
+    """Both draws give their mean: photons times QE times electrons per photon."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.dark_current = 0 * u.electron / (u.pix * u.s)
     det.read_noise_rms = 0 * u.electron / u.pix
@@ -111,7 +110,7 @@ def test_dark_current_still_contributes_its_expected_electrons():
 
 
 def test_read_noise_is_dropped_not_averaged():
-    """It is zero-mean, so its expectation adds nothing."""
+    """It has zero mean, so it adds nothing."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.dark_current = 0 * u.electron / (u.pix * u.s)
     det.read_noise_rms = 50 * u.electron / u.pix
@@ -121,19 +120,19 @@ def test_read_noise_is_dropped_not_averaged():
 
 
 def test_read_noise_takes_a_dark_pixel_below_zero_as_often_as_above():
-    """A CCD reads out above a bias level; clipping at zero raised the mean of faint pixels."""
+    """A CCD reads above a bias level; clipping at zero would raise the mean of faint pixels."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.dark_current = 0 * u.electron / (u.pix * u.s)
     det.read_noise_rms = 50 * u.electron / u.pix
     np.random.seed(5)
     noisy = to_electrons(_photon_cube(0.0), 1 * u.s, det)
     assert (noisy.data < 0).any()
-    # The mean of zero, to a few standard errors of the pixels drawn.
+    # Mean of zero, to within five standard errors of the pixels drawn.
     assert abs(noisy.data.mean()) < 5 * 50 / np.sqrt(noisy.data.size)
 
 
 def test_the_dark_current_is_worked_out_from_the_rate_given():
-    """The rate at 293 K was read from the class default whatever the detector was given."""
+    """The rate at 293 K must come from the detector, not the class default."""
     for detector in (Detector_SWC, Detector_EIS):
         default = detector(ccd_temperature=-20 * u.deg_C)
         doubled = detector(ccd_temperature=-20 * u.deg_C,
@@ -142,7 +141,7 @@ def test_the_dark_current_is_worked_out_from_the_rate_given():
 
 
 def test_a_window_beyond_the_band_is_refused_and_the_band_edge_is_inside_it():
-    """Beyond the throughput tables there is no detector; 214 A itself had rounded out of them."""
+    """There is no detector beyond the throughput tables; 214 A must not round out of them."""
     tel = Telescope_EUVST()
     assert np.isfinite(tel.ea_and_throughput(214.0 * u.AA).value)
     assert np.isfinite(tel.ea_and_throughput(170.0 * u.AA).value)
@@ -159,7 +158,7 @@ def test_a_window_beyond_the_band_is_refused_and_the_band_edge_is_inside_it():
 
 
 def test_stray_light_contributes_its_mean():
-    """Flux * pixel area * t * qe, one electron per photon, with no filter in the way."""
+    """Flux times pixel area, exposure and QE, one electron per photon, with no filter."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.qe_vis = 0.37  # the SWC default of 1 would hide a missing QE factor
     sim = Simulation(instrument="SWC",
@@ -175,8 +174,8 @@ def test_stray_light_contributes_its_mean():
     again = add_visible_stray_light(_electron_cube(), t_exp, det, sim, noise=False)
     assert np.array_equal(out.data, again.data)
 
-    # With noise, a Poisson count of photons, each detected with the QE: its
-    # variance is its mean.
+    # With noise, a Poisson count of photons, each detected with the QE, so
+    # the variance equals the mean.
     np.random.seed(3)
     noisy = np.stack([add_visible_stray_light(_electron_cube(), t_exp, det, sim).data
                       for _ in range(200)])
@@ -185,7 +184,10 @@ def test_stray_light_contributes_its_mean():
 
 
 def test_pinhole_light_contributes_its_mean():
-    """Photons through the hole * diffraction pattern * qe, one electron each, in every scan."""
+    """Photons through the hole times diffraction pattern and QE, in every scan.
+
+    Each photon frees one electron.
+    """
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
     det.qe_vis = 0.37
     diameter = 50 * u.um
@@ -215,7 +217,7 @@ def test_pinhole_light_contributes_its_mean():
                                       Telescope_EUVST(), noise=False)
     assert np.array_equal(out.data, again.data)
 
-    # With noise, each scan position its own photons, not one draw repeated.
+    # With noise, each scan position gets its own draw, not one repeated.
     noisy = add_pinhole_visible_light(_electron_cube(), t_exp, det, sim, Telescope_EUVST())
     assert not all(np.array_equal(noisy.data[:, 0, :], noisy.data[:, scan, :])
                    for scan in range(1, NSCAN))
@@ -235,11 +237,10 @@ def test_a_noiseless_run_is_reproducible_end_to_end():
 
 
 def test_the_noiseless_signal_sits_where_the_noisy_ones_scatter():
-    """The whole claim: noise off gives the mean of noise on.
+    """Noise off gives the mean of noise on.
 
     Compared against the spread of the noisy runs rather than a fixed
-    tolerance, so the test states the statistical claim rather than a number
-    that happened to pass.
+    tolerance, so the test checks the statistical claim itself.
     """
     det, tel = Detector_SWC(), Telescope_EUVST()
     noisy_sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec)
@@ -262,7 +263,7 @@ def test_the_noiseless_signal_sits_where_the_noisy_ones_scatter():
 
 
 def test_noise_defaults_to_on():
-    """An existing config that says nothing must keep its noise."""
+    """A config that does not set noise keeps it on."""
     assert Simulation().noise is True
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec)
@@ -279,9 +280,9 @@ def test_dn_are_still_quantised_and_still_clip():
     tel = Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, noise=False)
 
-    # 1e12 erg/(s cm2 sr cm) only reaches a few hundred DN through the real
-    # SWC effective area, so the line has to be far brighter than anything
-    # solar to drive the digitiser to its maximum.
+    # 1e12 erg/(s cm2 sr cm) gives only a few hundred DN through the real SWC
+    # effective area, so saturating the digitiser needs a line far brighter
+    # than any solar one.
     dn = simulate_once(_intensity_cube(peak=1.0e16), 40 * u.s, det, tel, sim)[-1]
     assert np.array_equal(dn.data, np.round(dn.data))
     assert dn.data.max() == det.max_dn.to_value(u.DN / u.pix)

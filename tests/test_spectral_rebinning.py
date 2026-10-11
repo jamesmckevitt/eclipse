@@ -1,12 +1,11 @@
-"""The instrument's spectral axis is labelled with the wavelengths its pixels hold, whatever their number.
+"""The rebinned spectral axis has the right wavelengths for any number of pixels.
 
-Rebinning onto the detector's wavelength pixels puts the WCS reference at the
-centre of the axis. With an even number of pixels that centre lies between
-two pixels, and the reference value used to be the wavelength of the pixel
-below it, so the whole axis was labelled half a pixel low and every fitted
-velocity came out half a pixel blue: 13 km/s at 195 Angstrom, 15 at 171.
-Whether a run was affected depended only on how many pixels the synthesis
-window happened to span.
+Rebinning onto the detector pixels puts the WCS reference at the centre of
+the axis. With an even number of pixels that centre lies between two
+pixels. The reference value was once the wavelength of the pixel below it,
+so the axis was labelled half a pixel low and every fitted velocity came out
+half a pixel blue: 13 km/s at 195 Angstrom, 15 at 171. Whether a run was
+affected depended only on how many pixels the synthesis window spanned.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -31,8 +30,8 @@ PARITIES = [(121, 0), (131, 1)]
 
 
 def _line_cube(n_fine, centre_offset, sigma, ny=4, nx=4, voxel=0.192):
-    """A line cube as the synthesis writes it: (y, x, wavelength) against
-    (WAVE, SOLX, SOLY), with the same Gaussian in every column."""
+    """Line cube as the synthesis writes it, with the same Gaussian in every
+    column: data axes (y, x, wavelength), WCS axes (WAVE, SOLX, SOLY)."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
     wcs.wcs.cunit = ["Angstrom", "Mm", "Mm"]
@@ -55,7 +54,7 @@ def _centroid_velocity(cube):
 
 
 def _pixel_count(cube, resolution):
-    """How many detector pixels the resampling produces, counted as it counts them."""
+    """Number of detector pixels the resampling produces, counted the same way."""
     wavelength = cube.axis_world_coords(2)[0].to_value(resolution.unit)
     return len(np.arange(wavelength.min(), wavelength.max() + resolution.value,
                          resolution.value))
@@ -80,7 +79,7 @@ def test_the_resampled_axis_keeps_a_line_where_it_is(n_fine, parity):
 
 @pytest.mark.parametrize("n_fine, parity", PARITIES)
 def test_a_line_at_rest_is_fitted_at_rest_through_the_instrument(n_fine, parity):
-    """Rebinned to the detector and fitted, a line at rest reports no velocity."""
+    """A line at rest, rebinned to the detector and fitted, has zero velocity."""
     cube = _line_cube(n_fine, centre_offset=0 * u.Angstrom, sigma=0.012 * u.Angstrom,
                       ny=8, nx=8)
     det = Detector_SWC()

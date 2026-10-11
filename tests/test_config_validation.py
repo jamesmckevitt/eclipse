@@ -1,9 +1,9 @@
-"""Config keys ECLIPSE does not read are now rejected, not ignored.
+"""Config keys ECLIPSE does not read are rejected, not ignored.
 
 A key at the wrong depth is the dangerous case. It is a real parameter name,
 so it looks right, but nothing reads it and the run silently uses the default.
-A sweep written that way is worse still: it returns a full set of results that
-happen to be identical across every combination.
+A sweep written that way returns a full set of results that are identical
+across every combination.
 """
 import sys
 
@@ -75,7 +75,7 @@ def test_section_keys_are_checked_too():
 
 
 def test_simulation_rejects_keys_that_belong_at_the_top_level():
-    """n_iter under simulation: was parsed and then dropped on the floor."""
+    """n_iter under simulation: was parsed and then ignored."""
     with pytest.raises(ValueError, match="at the top level"):
         _validate_config_keys(
             dict(MINIMAL, simulation={"n_iter": 100}), "SWC")
@@ -107,7 +107,7 @@ def test_eis_and_swc_have_different_valid_keys():
 
 
 def test_eis_still_accepts_the_keys_it_warns_about():
-    """microroughness_sigma and filter: are ignored loudly, not silently."""
+    """microroughness_sigma and filter: are ignored with a warning."""
     _validate_config_keys(
         dict(MINIMAL, instrument="EIS",
              telescope={"microroughness_sigma": "0.3 nm"},
@@ -139,7 +139,7 @@ def test_fitting_section_and_components_are_checked():
 @pytest.mark.parametrize(
     "name", ["simulation", "detector", "telescope", "filter", "fitting"])
 def test_a_section_that_is_not_a_mapping_is_rejected(name, value):
-    """None is what a heading left empty parses to."""
+    """An empty heading parses to None."""
     with pytest.raises(ValueError, match=f"'{name}:' section must be a mapping"):
         _validate_config_keys(dict(MINIMAL, **{name: value}), "SWC")
 
@@ -189,7 +189,7 @@ def test_the_message_lists_what_is_valid():
 
 
 def test_private_fields_are_accepted_but_not_advertised():
-    """_dark_current_293k is a real constructor argument, just not a knob."""
+    """_dark_current_293k is a real constructor argument, but not a user setting."""
     _validate_config_keys(
         dict(MINIMAL, detector={"_dark_current_293k": 1.0}), "SWC")
     with pytest.raises(ValueError) as excinfo:
@@ -207,20 +207,20 @@ def test_suggest_returns_none_when_nothing_is_close():
 
 # --- the key lists have to agree with what main() reads ----------------------
 
-# main() and the helpers it hands the parsed config to.
+# main() and the helpers it passes the parsed config to.
 _CONFIG_READERS = ("main", "_parse_pinhole_config", "_parse_fitting_config",
                    "_parse_synthesis_settings", "_parse_raster_plan",
                    "_series_paths", "_reference_line")
 
 
 def _keys_main_reads(*names, readers=_CONFIG_READERS):
-    """String keys main() looks up in any of the dicts called *names*.
+    """String keys main() looks up in any of the dicts named in `names`.
 
-    Covers ``d["key"]``, ``d.get("key")``, ``"key" in d`` and the section
-    helpers ``_quantity_or_none(d, "key", ...)`` and ``_range_or_none``, in
-    the functions *readers*, main() and the helpers it hands the config to
-    by default. A key held by a loop over a tuple of names, or of tuples
-    starting with one, stands for every name in it.
+    Covers `d["key"]`, `d.get("key")`, `"key" in d` and the section helpers
+    `_quantity_or_none(d, "key", ...)` and `_range_or_none`, in the functions
+    `readers` (by default main() and the helpers it passes the config to). A
+    key taken from a loop over a tuple of names, or of tuples starting with a
+    name, stands for every name in it.
     """
     import ast
     import importlib
@@ -233,7 +233,7 @@ def _keys_main_reads(*names, readers=_CONFIG_READERS):
                  if isinstance(node, ast.FunctionDef) and node.name in readers]
     assert {node.name for node in functions} == set(readers)
     def lookups(tree):
-        """The key of every lookup in one of the dicts *names* under *tree*."""
+        """Key of every lookup in one of the `names` dicts under `tree`."""
         for node in ast.walk(tree):
             if isinstance(node, ast.Subscript):
                 target, key = node.value, node.slice
@@ -256,7 +256,7 @@ def _keys_main_reads(*names, readers=_CONFIG_READERS):
         for key in lookups(function):
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 keys.add(key.value)
-        # A key held by a loop variable, within that loop.
+        # Keys held by a loop variable, looked up within that loop.
         for loop in ast.walk(function):
             if not (isinstance(loop, ast.For) and isinstance(loop.iter, (ast.Tuple, ast.List))):
                 continue
@@ -282,10 +282,10 @@ def _keys_main_reads(*names, readers=_CONFIG_READERS):
     (("section",), _RASTER_KEYS, ("_parse_raster_plan",)),
 ], ids=["top-level", "simulation", "fitting", "fitting.components", "synthesis", "raster"])
 def test_the_key_lists_match_what_main_reads(names, accepted, readers):
-    """The lists are written out by hand, so a new key can be missed.
+    """The lists are written by hand, so a new key can be missed.
 
-    simulation.noise is the example: main() reads it, and a key list written
-    before it existed would refuse every config that sets it.
+    For example, main() reads simulation.noise, and a key list written before
+    it existed would refuse every config that sets it.
     """
     read = _keys_main_reads(*names, readers=readers)
     assert read - accepted == set(), (
@@ -298,9 +298,9 @@ def test_the_key_lists_match_what_main_reads(names, accepted, readers):
 # --- the documentation has to agree with the validator -----------------------
 
 def _doc_yaml_blocks():
-    """Every config example in the docs, with the page it came from.
+    """Every config example in the docs, with its page.
 
-    That is each ```yaml block in a page, and each notebook cell that writes a
+    These are the ```yaml blocks in pages and the notebook cells that write a
     YAML file with %%writefile.
     """
     import json
@@ -310,8 +310,8 @@ def _doc_yaml_blocks():
 
     docs = Path(__file__).resolve().parent.parent / "docs"
     blocks = []
-    # The internal pages too, which are out of the site's navigation but not
-    # out of use.
+    # Include the internal pages, which are not in the site navigation but are
+    # still used.
     for page in sorted(docs.rglob("*.md")):
         for match in re.finditer(r"```yaml\n(.*?)```", page.read_text(), re.S):
             blocks.append((str(page.relative_to(docs)), match.group(1)))
@@ -328,14 +328,14 @@ def _doc_yaml_blocks():
 def test_every_config_example_in_the_docs_is_valid():
     """Otherwise the docs teach a config the code refuses.
 
-    This is the check that would have caught an over-tight key list: the
-    examples are the closest thing to a corpus of configs people write.
+    The examples are the closest thing to a corpus of real configs, so this
+    check would have caught an over-tight key list.
 
-    A block that names its instrument is checked against that one. Several
-    examples are fragments showing one section, and take their instrument
-    from the prose around them, so those have to pass for either instrument
-    rather than for an assumed default. That still catches a key no
-    instrument accepts, which is the mismatch worth finding.
+    A block that names its instrument is checked against it. Several
+    examples are fragments showing one section and take their instrument
+    from the surrounding text, so they must pass for either instrument
+    rather than an assumed default. This still catches a key that no
+    instrument accepts, which is the mismatch that matters.
     """
     import yaml
 

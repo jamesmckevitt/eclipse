@@ -1,8 +1,7 @@
-"""A fitting block without components now configures the single-Gaussian fit.
+"""A fitting block without components configures the single-Gaussian fit.
 
-It used to be dropped whole unless it had at least two components, so there
-was no way to change max_iter or the backend for a single Gaussian, and a
-block with exactly one component did nothing at all (issue #70).
+This lets max_iter and the backend be set for a single Gaussian. A block
+with exactly one component is refused rather than ignored (issue #70).
 """
 import astropy.units as u
 import numpy as np
@@ -17,8 +16,8 @@ from euvst_response.main import _parse_fitting_config
 REST = 195.119 * u.Angstrom
 N_WAVE = 25
 STEP = 0.0169 * u.Angstrom
-# Between pixels and away from the window centre, so the initial guess, which
-# puts the centre on the brightest pixel, is not already the answer.
+# Between pixels and off the window centre, so the initial guess (centre on
+# the brightest pixel) is not already the answer.
 TRUE = {"peak": 100.0, "centre": REST + 0.37 * STEP, "sigma": 2.3 * STEP,
         "back": 5.0}
 
@@ -54,7 +53,7 @@ def test_no_fitting_block_gives_no_fit_config():
 
 
 def test_a_block_without_components_configures_the_single_gaussian_fit():
-    """The case from the issue: this block used to be dropped."""
+    """The block from issue #70."""
     fit_config = _parse_fitting_config(
         {"fitting": {"max_iter": 5000, "backend": "mpfit"}})
     assert fit_config.is_single
@@ -87,7 +86,7 @@ def test_two_components_still_build_a_multi_component_fit():
 ], ids=["primary_component", "constrain_positive_intensity"])
 def test_multi_component_settings_without_components_are_refused(settings,
                                                                  message):
-    """Accepting them would look effective and change nothing."""
+    """Accepting them would appear to work but change nothing."""
     with pytest.raises(ValueError, match=message):
         _parse_fitting_config({"fitting": settings})
 
@@ -107,7 +106,7 @@ def test_a_primary_component_that_does_not_exist_is_refused():
 ])
 def test_bad_backend_and_max_iter_are_refused_without_components(settings,
                                                                  message):
-    """Checked in FitConfig now, so they no longer need components to apply."""
+    """FitConfig checks these, so the checks apply without components."""
     with pytest.raises(ValueError, match=message):
         _parse_fitting_config({"fitting": settings})
 

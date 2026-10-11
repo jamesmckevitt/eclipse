@@ -1,10 +1,9 @@
-"""The spatial PSF no longer treats the Sun outside the field as dark.
+"""Boundary handling of the spatial PSF along the slit.
 
 convolve2d(..., mode="same") fills everything beyond the array with zeros.
-Along the wavelength axis that is right, because the grid runs several sigma
-past the line. Along the slit it is not: the raster is a window onto a Sun
-that carries on, so the rows just inside the edge really do receive PSF
-contributions from emission the zero fill throws away.
+That is right along wavelength, where the grid runs several sigma past the
+line. It is wrong along the slit: the Sun carries on beyond the raster, so
+the rows near the edge get PSF light from emission that zero fill drops.
 """
 import astropy.units as u
 import numpy as np
@@ -43,10 +42,10 @@ SIM = Simulation()
 
 
 def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
-    """The clearest case: this field has no edges to speak of.
+    """A field uniform along the slit is unchanged by the PSF.
 
-    Every row along the slit is identical, so blurring along the slit cannot
-    change anything. Under zero fill the outer rows lose flux anyway.
+    Every row is identical, so blurring along the slit should change nothing.
+    With zero fill the outer rows would lose flux.
     """
     cube = _uniform_slit_cube()
     replicated = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
@@ -57,11 +56,11 @@ def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
 
 
 def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
-    """Quantifies what the old default cost, against the kernel itself.
+    """Zero fill loses the kernel weight that falls off the array.
 
-    The deficit in row r is the fraction of the Gaussian kernel's weight that
-    falls off the end of the array, computed here from the kernel rather than
-    quoted, so the numbers cannot drift apart from the PSF they describe.
+    The flux lost from row r is the fraction of the Gaussian kernel's weight
+    beyond the edge. It is computed from the kernel rather than quoted, so it
+    cannot drift from the PSF.
     """
     cube = _uniform_slit_cube()
     zero_filled = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="zero")
@@ -96,7 +95,7 @@ def test_the_interior_is_untouched_by_the_choice():
     interior = slice(4, N_SLIT - 4)
     assert np.allclose(zero_filled.data[interior, :, :],
                        replicated.data[interior, :, :], rtol=1e-12)
-    # and the edges really are different, or the test above proves nothing
+    # The edge rows must differ, or the check above proves nothing.
     assert not np.allclose(zero_filled.data[0, :, :], replicated.data[0, :, :])
 
 
@@ -111,19 +110,19 @@ def test_the_spectral_axis_is_still_zero_filled():
 
 
 def test_replication_does_not_invent_flux_in_a_dark_field():
-    """Continuing a dark edge outward must stay dark."""
+    """Replicating a dark edge adds no flux."""
     data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[N_SLIT // 2, :, N_WAVE // 2] = 1.0
     out = apply_focusing_optics_psf(_cube(data), TEL, DET, SIM, boundary="replicate")
 
-    # A point source well inside the field keeps all of its flux, and none of
-    # it appears at the edge rows the replication reaches.
+    # A point source well inside the field keeps all its flux, and none of it
+    # reaches the edge rows.
     assert out.data.sum() == pytest.approx(data.sum(), rel=1e-9)
     assert out.data[0, :, :].sum() == pytest.approx(0.0, abs=1e-12)
 
 
 def test_the_uniform_intensity_path_is_unaffected():
-    """It skips the spatial convolution entirely, so the boundary is moot."""
+    """This path skips the spatial convolution, so the boundary has no effect."""
     cube = _uniform_slit_cube()
     a = apply_focusing_optics_psf(cube, TEL, DET, SIM, convolve_spatial=False,
                                   boundary="replicate")
@@ -147,7 +146,7 @@ def test_the_simulation_rejects_an_unknown_boundary():
 
 
 def test_scan_positions_stay_independent():
-    """The PSF acts within one detector frame; exposures are taken in turn."""
+    """The PSF does not mix scan positions, which are separate exposures."""
     data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[N_SLIT // 2, 0, N_WAVE // 2] = 1.0
     out = apply_focusing_optics_psf(_cube(data), TEL, DET, SIM, boundary="replicate")

@@ -1,13 +1,13 @@
-"""--goft-temperature-chunk has to change the memory fiasco needs and nothing else.
+"""--goft-temperature-chunk must change only the memory fiasco needs.
 
-fiasco solves the level populations for all the temperatures it is given at
-once, so its memory grows with their number. Passing it the temperature grid a
-chunk at a time lowers that peak, and the contribution functions it returns
-have to be the same, value for value and in the same order, as from the whole
-grid in one call.
+fiasco solves the level populations for all its temperatures at once, so its
+memory grows with their number. Passing the temperature grid in chunks lowers
+the peak, and the contribution functions must match those from the whole grid
+in one call, value for value and in the same order.
 
-A stand-in for fiasco, whose contribution function depends on temperature,
-density and transition, lets these run without the CHIANTI database.
+A stand-in for fiasco, with a contribution function that depends on
+temperature, density and transition, lets the tests run without the CHIANTI
+database.
 """
 import sys
 import types
@@ -55,16 +55,15 @@ class _Ion:
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):
-    # The real fiasco is imported first, so that the logger it names after
-    # itself is its own. Made first by the synthesis, under the stand-in, it
-    # is a plain one, which the real fiasco fails to set up when a later test
-    # imports it.
+    # Import the real fiasco first so that it creates its own "fiasco" logger.
+    # Created by the synthesis under the stand-in, it would be a plain logger,
+    # which the real fiasco fails to set up when a later test imports it.
     import fiasco  # noqa: F401
     module = types.ModuleType("fiasco")
     module.Ion = _Ion
     (tmp_path / "chianti_dbase.h5").touch()
     module.defaults = {"hdf5_dbase_root": str(tmp_path / "chianti_dbase.h5")}
-    # The database is there, so the offer to build it asks nothing.
+    # The database exists, so there is no prompt to build it.
     util = types.ModuleType("fiasco.util")
     util.check_database = lambda hdf5_dbase_root, **kwargs: None
     module.util = util
@@ -144,7 +143,10 @@ def test_the_command_line_option_reaches_the_calculation(tmp_path, monkeypatch,
 
 
 def test_a_density_grid_carried_on_from_the_default_has_its_values_at_its_points(fake_fiasco):
-    """Each density is worked out on its own, so a grid sized to an atmosphere changes nothing it shares."""
+    """A grid sized to an atmosphere matches the default at the points they share.
+
+    Each density is computed on its own, so the grid range changes nothing.
+    """
     from euvst_response.synthesis import _density_point
 
     whole, _, logn = compute_goft_fiasco(LINES, n_workers=1)

@@ -1,11 +1,12 @@
 """What each MPI rank draws, runs on, and does when one fails.
 
-Seeded alike, as the docs' recipe for comparing runs has it, every rank drew
-the same numbers, so eight iterations on four ranks were two iterations four
-times. Every rank was pinned to CPUs 0 to n, the same ones, which on a node
-shared with another job need not be the job's. A rank that failed left the
-others waiting in the gather until the job's time ran out, and a rank other
-than the first failed without a word, its output being silenced.
+Ranks seeded alike, as the docs suggest for comparing runs, must still draw
+different numbers, or eight iterations on four ranks are two iterations four
+times. Each rank must run on the job's CPUs, not on CPUs 0 to n, which on a
+node shared with another job need not be the job's. A failing rank must
+report the error and end the run. Otherwise the other ranks wait in the
+gather until the job's time runs out, and a rank other than the first fails
+silently, since its output is suppressed.
 """
 import importlib
 import sys
@@ -16,7 +17,7 @@ import pytest
 from euvst_response import cli
 from euvst_response.main import _allowed_cpus, _cpu_list, _rank_cpus
 
-# The package's own monte_carlo is the function, not the module.
+# The package attribute monte_carlo is the function, so import the module.
 monte_carlo = importlib.import_module("euvst_response.monte_carlo")
 
 
@@ -37,7 +38,7 @@ def test_a_cpu_list_is_read_as_linux_writes_it():
 @pytest.mark.parametrize("environ, cpus", [
     ({"SLURM_CPUS_PER_TASK": "4", "SLURM_LOCALID": "0"}, [16, 17, 18, 19]),
     ({"SLURM_CPUS_PER_TASK": "4", "SLURM_LOCALID": "1"}, [20, 21, 22, 23]),
-    # Too few for every task to have its own: all of them, still the job's.
+    # Too few CPUs for each task to have its own: use all of the job's.
     ({"SLURM_CPUS_PER_TASK": "8", "SLURM_LOCALID": "1"}, list(range(16, 24))),
     ({}, []),
 ])
@@ -52,8 +53,8 @@ NODE = list(range(128))
 @pytest.mark.parametrize("environ, cpuset, affinity, allowed", [
     # The step's cpuset, wider than the core an MPI library pinned the rank to.
     ({"SLURM_CPUS_ON_NODE": "8"}, STEP, [17], STEP),
-    # A cpuset that is the whole node, where SLURM does not confine steps to
-    # their cores, could hold other jobs' CPUs: the affinity is kept.
+    # A whole-node cpuset, where SLURM does not confine steps to their cores,
+    # may include other jobs' CPUs, so the affinity is kept.
     ({"SLURM_CPUS_ON_NODE": "8"}, NODE, [17], [17]),
     ({}, STEP, [17], [17]),
     ({"SLURM_CPUS_ON_NODE": "8"}, None, [17], [17]),

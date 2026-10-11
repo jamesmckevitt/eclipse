@@ -1,12 +1,12 @@
-"""The DN fits are weighted by each pixel's uncertainty, and the photon fits are of greatest likelihood.
+"""DN fits are weighted by pixel uncertainty; photon fits use the Poisson likelihood.
 
-Unweighted, every pixel of a spectrum counted the same, though the pixels at
-a line's peak are noisier than those on its wings, which fix where the line
-is. A Gaussian line's velocity then scattered by 1.24 times the least its
-photons allow. eispac weights its fits by each pixel's uncertainty, worked
-out from its own signal, and so do the DN fits now. The photons, a Poisson
-count with no read noise, are fitted by their Poisson likelihood, which
-needs no uncertainty and reaches the least scatter they allow.
+An unweighted fit counts every pixel the same, though pixels at a line's
+peak are noisier than those on its wings, which fix the line position. A
+Gaussian line's velocity then scatters by 1.24 times the minimum its photons
+allow. Like eispac, the DN fits weight each pixel by an uncertainty
+estimated from its own signal. Photons, a Poisson count with no read noise,
+are fitted by their Poisson likelihood, which needs no uncertainty and
+reaches the minimum scatter.
 """
 import astropy.units as u
 import numpy as np
@@ -35,7 +35,7 @@ def _wcs(n_wave):
 
 
 def _observed(photons, det, t_exp):
-    """Photons, arriving as a Poisson count, through the detector to DN."""
+    """Poisson photon counts taken through the detector to DN."""
     arrivals = np.random.poisson(photons).astype(float)
     cube = NDCube(arrivals, wcs=_wcs(arrivals.shape[-1]), unit=u.photon / u.pixel,
                   meta={"rest_wav": REST})
@@ -83,7 +83,7 @@ def test_a_pixel_with_a_large_uncertainty_hardly_moves_a_weighted_fit():
 
 
 def test_weighting_by_each_pixels_own_uncertainty_measures_a_bright_line_more_precisely():
-    """For a line of several thousand photons, as eispac's weighting does for EIS."""
+    """For a line of several thousand photons, as with eispac's weighting for EIS."""
     det, t_exp = Detector_SWC(), 1 * u.s
     np.random.seed(13)
     n_spectra = 400
@@ -142,7 +142,7 @@ def _counts_cube(counts):
 
 
 def _cramer_rao_centre(peak, width, background, n_wave=31):
-    """The least variance of the centre, in pixels squared, that Poisson counts allow."""
+    """Minimum variance of the centre for Poisson counts (Cramer-Rao), in pixels^2."""
     x = np.arange(n_wave) - (n_wave - 1) / 2
     g = np.exp(-0.5 * (x / width) ** 2)
     model = peak * g + background

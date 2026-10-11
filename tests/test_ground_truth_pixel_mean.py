@@ -1,10 +1,9 @@
-"""The ground truth is the line whose mean over each pixel the noiseless cube holds.
+"""The ground truth is the line whose pixel means match the noiseless cube.
 
-It was fitted with the Gaussian at each pixel's centre, as the noisy spectra
-are. For a line not much wider than a pixel that pulls the fitted centre
-toward the middle of its pixel and widens it, by up to 0.9 km/s at 0.28
-pixels, and the same error in the noisy fits was then measured against it
-and cancelled out.
+Fitting the Gaussian at each pixel's centre, as for the noisy spectra, pulls
+the centre of a line not much wider than a pixel toward the middle of its
+pixel and widens it, by up to 0.9 km/s at a sigma of 0.28 pixels. Measured
+against such a truth, the same error in the noisy fits would cancel out.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -28,7 +27,7 @@ def _wavelengths():
 
 
 def _pixel_means(lines, background=1.0):
-    """Each (peak, centre, sigma) Gaussian's mean over every pixel, exactly."""
+    """Exact mean over every pixel of the (peak, centre, sigma) Gaussians."""
     edges = _wavelengths()[:, np.newaxis] + np.array([-0.5, 0.5]) * STEP
     total = np.full(N_WAVE, background)
     for peak, centre, sigma in lines:
@@ -57,7 +56,7 @@ def test_the_truth_of_a_line_narrower_than_a_pixel_is_where_it_is():
     (component,) = summary["components"].values()
     assert not summary["failed"].any()
     assert component["velocity"].to_value(u.km / u.s) == pytest.approx(truth, abs=1e-4)
-    # The fit at the pixel centres is where the truth used to come from.
+    # A fit at the pixel centres is off in both centre and width.
     sampled, units = fit_cube_gauss(cube, n_jobs=1)
     sampled_velocity = ((sampled[..., 1] * units[1] - REST) / REST).decompose().value * C
     assert np.all(np.abs(sampled_velocity - truth) > 0.3)

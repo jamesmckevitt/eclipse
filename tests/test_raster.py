@@ -1,16 +1,17 @@
-"""A slit observing a time series sees each strip of the box at the moment it is exposed.
+"""Rasters of a time series: each strip of the box is seen when it is exposed.
 
-The observing plan lives in the instrument configuration, the atmosphere is
-a series of files each carrying its time, and each exposure is synthesised
-from the columns under the slit and the snapshots that overlap it. These
-build small series in which the temperature, density and velocity of each
-snapshot are known, so what an exposure should collect can be worked out by
-hand, and run the synthesis with a flat contribution function in place of
-fiasco, so the intensity of a column is its emission measure.
+The observing plan is in the instrument configuration, and the atmosphere
+is a series of files, each with its time. Each exposure is synthesised from
+the columns under the slit and the snapshots that overlap it.
 
-A series of synthesis files is observed the same way, with each column's
-spectra read rather than synthesised, whether ECLIPSE or another code wrote
-them.
+The tests build small series with known temperature, density and velocity,
+so the expected signal of an exposure can be worked out by hand. A flat
+contribution function replaces fiasco, so a column's intensity is its
+emission measure.
+
+A series of synthesis files, written by ECLIPSE or another code, is
+observed the same way, with each column's spectra read instead of
+synthesised.
 """
 import subprocess
 import sys
@@ -54,7 +55,10 @@ def _edges(shape=SHAPE):
 
 
 def _snapshot(time, density_scale=1.0, velocity=0.0, columns=None):
-    """A uniform box at *time*; *columns* maps x indices to their own (density scale, velocity in km/s)."""
+    """Uniform box at `time`.
+
+    `columns` maps x indices to their own (density scale, velocity in km/s).
+    """
     nz, ny, nx = SHAPE
     density = np.full(SHAPE, ELECTRON_DENSITY.value * density_scale)
     vz = np.full(SHAPE, velocity)
@@ -77,11 +81,11 @@ GOFT = 1.0e-24  # erg cm^3 / s, the order of a strong coronal line's peak
 
 
 def _flat_goft(lines, logN_min=8.0, logN_max=10.0, nN=21, **kwargs):
-    """A contribution function that is the same everywhere, in place of fiasco.
+    """Contribution function flat in temperature and density, replacing fiasco.
 
-    Flat in temperature and density, so a column's intensity is its emission
-    measure; of a realistic size, so the instrument run's photon counts are
-    ones a detector can hold."""
+    A column's intensity is then its emission measure. The value is
+    realistic, so the photon counts in an instrument run are ones a detector
+    can hold."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(logN_min, logN_max, nN)
     goft = {name: {"wl0": REST.to(u.cm), "g_tn": np.full((logN_grid.size, logT_grid.size), GOFT),
@@ -123,7 +127,7 @@ def test_a_series_orders_its_files_by_time_and_needs_one_in_each(tmp_path):
         AtmosphereSeries(paths + [untimed])
     with pytest.raises(ValueError, match="same time"):
         AtmosphereSeries(paths + [write_atmosphere(_snapshot(10.0), tmp_path / "twin.h5")])
-    # A time that is not a finite number would slip through the ordering.
+    # A non-finite time would slip through the ordering.
     for bad in (np.nan, np.inf):
         broken = write_atmosphere(_snapshot(30.0), tmp_path / "broken.h5")
         with h5py.File(broken, "r+") as f:
@@ -140,7 +144,7 @@ def test_an_exposure_is_shared_between_the_snapshots_it_spans(tmp_path):
     assert series.coverage(2 * u.s, 8 * u.s) == [(0, 1.0)]
     # A quarter in the first, three quarters in the second.
     assert series.coverage(5 * u.s, 25 * u.s) == pytest.approx([(0, 0.25), (1, 0.75)])
-    # The last snapshot stands for as long as the gap before it.
+    # The last snapshot lasts as long as the gap before it.
     assert series.coverage(40 * u.s, 50 * u.s) == [(2, 1.0)]
     for start, end in ((-1, 5), (45, 51), (5, 5)):
         with pytest.raises(ValueError):
@@ -169,8 +173,8 @@ def test_a_plan_places_its_exposures_in_space_and_time():
         with pytest.raises(ValueError, match="whole number"):
             plan.exposures(0.4 * u.arcsec, 2 * u.s, 0 * u.Mm, repeat=bad)
 
-    # The step and the cadence default to the slit width and the exposure,
-    # and a sit-and-stare's exposures are rasters of one position.
+    # The step and cadence default to the slit width and exposure time, and
+    # each sit-and-stare exposure is a raster of one position.
     stare = RasterPlan(start=0 * u.s, repeats=3)
     for repeat in range(3):
         exposures = stare.exposures(0.4 * u.arcsec, 10 * u.s, atmosphere_centre=1 * u.Mm,
@@ -205,7 +209,7 @@ def test_the_slit_covers_the_columns_under_it(tmp_path, flat_goft):
 
 
 def test_an_exposure_averages_over_the_slit_and_over_time(tmp_path, flat_goft):
-    """Two columns of different brightness, seen across two snapshots of different brightness."""
+    """An exposure averages two columns and two snapshots of different brightness."""
     first = _snapshot(0.0, columns={6: (1.0, 0.0), 7: (2.0, 0.0)})
     second = _snapshot(10.0, density_scale=3.0)
     series = AtmosphereSeries(_series(tmp_path, [first, second]))
@@ -242,8 +246,8 @@ def test_a_wider_slit_synthesises_only_the_columns_a_narrower_one_has_not(tmp_pa
         synthesise_strip(snapshot, first, last)
 
     monkeypatch.setattr(synthesiser, "_synthesise_strip", recording)
-    # Centred on cell 6, a 0.2 arcsec slit covers it alone, and a 0.4 arcsec
-    # one half of each neighbour as well.
+    # Centred on cell 6, a 0.2 arcsec slit covers only that cell, and a
+    # 0.4 arcsec slit also covers half of each neighbour.
     exposure = raster_module.Exposure(0, 0.5 * CELL, 2 * u.s, 8 * u.s)
     synthesiser.exposure_spectra(exposure, 0.2 * u.arcsec)
     synthesiser.exposure_spectra(exposure, 0.4 * u.arcsec)
@@ -275,7 +279,7 @@ def test_every_snapshot_must_share_the_first_ones_grid(tmp_path, flat_goft):
 
 
 def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
-    """Through the instrument's spatial rebinning, the columns stay at their slit positions."""
+    """Spatial rebinning keeps the columns at their slit positions."""
     from euvst_response.config import Detector_SWC, Simulation
     from euvst_response.data_processing import rebin_atmosphere
     from euvst_response.utils import distance_to_angle
@@ -294,8 +298,8 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
     scan = rebinned.axis_world_coords(1)[0]
     assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
 
-    # A strip cropped to one row along the slit, 0.2 arcsec, is smaller than
-    # an EIS pixel of 1 arcsec, which the rebinning says rather than producing
+    # A strip cropped to one 0.2 arcsec row along the slit is smaller than a
+    # 1 arcsec EIS pixel, and the rebinning says so rather than returning
     # nothing. Two 1 arcsec slit positions keep the raster inside the box.
     from euvst_response.config import Detector_EIS
     one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
@@ -308,7 +312,7 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
 
 
 def test_a_static_atmosphere_one_cell_wide_synthesises(tmp_path, monkeypatch):
-    """A single column has a size from its edges, so the line cube can still carry a WCS."""
+    """A single column takes its width from its edges, so the line cube still has a WCS."""
     from euvst_response import synthesis
     column = Atmosphere(temperature=np.full((4, 6, 1), TEMPERATURE.value) * u.K,
                         electron_density=np.full((4, 6, 1), ELECTRON_DENSITY.value) / u.cm**3,
@@ -342,8 +346,8 @@ def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, f
     assert cube.meta["raster"] is True
     assert cube.meta["starts"].to_value(u.s) == pytest.approx([0.0, 10.0, 20.0])
     assert cube.meta["velocity_convention"]
-    # Each exposure fell in one snapshot, and the density grew with time, so
-    # the columns brighten along the raster as the square of the density.
+    # Each exposure falls in one snapshot and the density grows with time, so
+    # the columns brighten along the raster as the density squared.
     columns = cube.data.sum(axis=(0, 2))
     assert columns / columns[0] == pytest.approx([1.0, 4.0, 9.0], rel=1e-6)
 
@@ -351,8 +355,8 @@ def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, f
     assert summed.data == pytest.approx(cube.data)
     assert summed.meta["combined_lines"] == [LINE]
 
-    # The reference pixel sits at the middle of the raster, with the
-    # coordinate the grid has there, like a static line cube's.
+    # As in a static line cube, the reference pixel is at the middle of the
+    # raster, with the grid's coordinate there.
     assert cube.wcs.wcs.crpix[1] == pytest.approx(2.0)
     assert cube.wcs.wcs.crval[1] == pytest.approx(0.0)
     assert cube.wcs.wcs.crpix[2] == pytest.approx((SHAPE[1] + 1) / 2)
@@ -379,7 +383,10 @@ def test_the_raster_cube_has_one_column_per_exposure_at_its_position(tmp_path, f
 
 
 def test_a_raster_can_step_towards_decreasing_x(tmp_path, flat_goft):
-    """As the deprecated dynamic mode scanned: the image is the same way round, its times reversed."""
+    """A raster stepping towards decreasing x, as the deprecated dynamic mode did.
+
+    The image is the same way round, with its times reversed.
+    """
     snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
     synthesiser = RasterSynthesiser(AtmosphereSeries(_series(tmp_path, snapshots)), _settings())
     step = angle_to_distance(0.4 * u.arcsec).to_value(u.Mm)
@@ -399,7 +406,7 @@ def test_a_raster_can_step_towards_decreasing_x(tmp_path, flat_goft):
 
 
 def test_a_plan_the_series_cannot_hold_is_refused_before_anything_is_synthesised(tmp_path):
-    """Any slit width and exposure time of the sweep is checked, not only the first."""
+    """Every slit width and exposure time of the sweep is checked, not only the first."""
     series = AtmosphereSeries(_series(tmp_path, [_snapshot(t) for t in (0.0, 10.0, 20.0)]))
     plan = RasterPlan(start=0 * u.s, steps=3)
     RasterSynthesiser.check_plan(series, plan, [0.2 * u.arcsec], [5 * u.s, 10 * u.s])
@@ -435,7 +442,7 @@ def _config(tmp_path, series_glob, **extra):
 
 
 def test_the_contribution_functions_can_be_computed_in_temperature_chunks(tmp_path, monkeypatch):
-    """The synthesis: section takes goft_temperature_chunk as synthesise-spectra takes the option."""
+    """The `synthesis` section accepts `goft_temperature_chunk`, as synthesise-spectra does."""
     from euvst_response.main import _parse_synthesis_settings
     received = {}
 
@@ -469,9 +476,9 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     assert raster["times"].to_value(u.s) == pytest.approx([0.0, 10.0, 20.0, 30.0])
     keys = sorted(raster["cubes"])
     assert [(k[1], k[2]) for k in keys] == [(5.0, 0), (5.0, 1), (10.0, 0), (10.0, 1)]
-    # The second exposure of the 10 s raster, from 10 to 20 s, sees the
-    # second snapshot; that of the 5 s raster, from 5 to 10 s, still the
-    # first, so the second column is brighter at 10 s.
+    # The second exposure of the 10 s raster (10 to 20 s) sees the second
+    # snapshot, and that of the 5 s raster (5 to 10 s) still sees the first,
+    # so the second column is brighter at 10 s.
     short, long = (raster["cubes"][k].data.sum(axis=(0, 2)) for k in (keys[0], keys[2]))
     assert long[1] > short[1]
     assert long[0] == pytest.approx(short[0], rel=1e-6)
@@ -514,13 +521,13 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
                               ("mass_per_electron", "1.29 u", "number of atomic mass units")):
         with pytest.raises(ValueError, match=f"'synthesis.{key}' must be a {match}"):
             run(synthesis={"lines": [LINE], key: value})
-    # Before the contribution functions are computed, for any exposure time
-    # of the sweep.
+    # The plan is checked before the contribution functions are computed, for
+    # every exposure time of the sweep.
     monkeypatch.setattr(raster_module, "compute_goft_fiasco", None)
     with pytest.raises(ValueError, match="outside the series"):
         run(simulation={"slit_width": "0.4 arcsec", "expos": ["5 s", "15 s"], "psf": False})
-    # An empty reference_line is the first line, as docs/time-series.md says,
-    # so the run gets as far.
+    # An empty reference_line means the first line (docs/time-series.md), so
+    # the run gets as far.
     with pytest.raises(ValueError, match="outside the series"):
         run(reference_line=None)
     with pytest.raises(FileNotFoundError, match="matches no file"):
@@ -536,23 +543,22 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
 # ----------------------------------------------------------------------
 # A series of synthesis files
 # ----------------------------------------------------------------------
-# On the detector, the two routes resample from the same wavelengths reached
-# through WCSs referenced at different pixels, which differ in the last bit,
-# about 4e-22 cm at 195 Angstrom. Against the 5 km/s bins of the synthesis,
-# 3e-11 cm, that is about a part in 1e11 of a bin, which is how far apart the
-# resampled spectra can then be.
+# On the detector, the two routes get the same wavelengths from WCSs with
+# different reference pixels, which differ in the last bit, about 4e-22 cm at
+# 195 Angstrom. That is about a part in 1e11 of a 5 km/s synthesis bin
+# (3e-11 cm), and the resampled spectra can differ by as much.
 DETECTOR_ROUNDING = 1e-10
 
 
 def _assert_close(found, expected, rel=1e-12):
-    """Equal but for rounding: no element further from *expected* than *rel* of its largest."""
+    """Equal to rounding: no element further from `expected` than `rel` of its largest."""
     found, expected = np.asarray(found), np.asarray(expected)
     assert found.shape == expected.shape
     assert np.max(np.abs(found - expected)) <= rel * np.max(np.abs(expected))
 
 
 def _synthesise(out_dir, atmospheres, monkeypatch):
-    """ECLIPSE's synthesis of each atmosphere file, with the flat contribution function."""
+    """Synthesise each atmosphere file with ECLIPSE and the flat contribution function."""
     from euvst_response import synthesis
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     paths = []
@@ -567,13 +573,13 @@ def _synthesise(out_dir, atmospheres, monkeypatch):
 
 
 def _ramp(times=(0.0, 10.0, 20.0, 30.0)):
-    """Snapshots that brighten and speed up with time, with two columns of their own."""
+    """Snapshots that brighten and speed up with time, with two distinct columns."""
     return [_snapshot(t, density_scale=1.0 + t / 10, velocity=t / 2,
                       columns={5: (2.0 + t / 10, -10.0), 8: (0.5, 30.0)}) for t in times]
 
 
 def test_a_series_of_eclipse_syntheses_is_seen_as_the_atmospheres_they_came_from(tmp_path, monkeypatch, flat_goft):
-    """Synthesising each snapshot first and observing the files gives what synthesising under the slit gives."""
+    """Observing a synthesis file per snapshot matches synthesising under the slit."""
     from euvst_response.config import Detector_SWC, Simulation
     from euvst_response.data_processing import rebin_atmosphere, rebin_spectra
 
@@ -642,15 +648,18 @@ def test_an_instrument_run_observes_a_synthesis_series_as_its_atmosphere_series(
     assert raster["settings"] is None and raster["hdf5_dbase_root"] is None
 
 
-# A line profile on wavelengths that are denser in the core, as optically
-# thick codes give them, bright enough for the detector to count.
+# A line profile on wavelengths denser in the core, as from optically thick
+# codes, and bright enough for the detector to count.
 UNEVEN = REST + np.concatenate([np.linspace(-0.3, -0.05, 6), np.linspace(-0.04, 0.04, 17),
                                 np.linspace(0.05, 0.3, 6)]) * u.Angstrom
 PEAK = 2.0e4 * u.erg / (u.s * u.cm**2 * u.sr * u.Angstrom)
 
 
 def _other_code_file(path, time, scale, wavelength=UNEVEN, x_edges=None, extra=None):
-    """A synthesis file as another code might write it: each column the line profile times its *scale*."""
+    """Synthesis file as another code might write it.
+
+    Each column is the line profile times its value in `scale`.
+    """
     ny = SHAPE[1]
     profile = np.exp(-0.5 * ((wavelength - REST) / (0.02 * u.Angstrom)).decompose().value ** 2)
     intensity = np.ones((ny, 1, 1)) * np.asarray(scale, float)[None, :, None] * profile
@@ -671,17 +680,17 @@ def test_an_exposure_of_a_synthesis_series_averages_over_the_slit_and_over_time(
              _other_code_file(tmp_path / "b.h5", 10.0, 3.0 * np.ones(nx))]
     raster = SynthesisRaster(SynthesisSeries(paths, LINE))
     profile = raster.column_spectra(0, 6)[LINE]
-    # In the radiance ECLIPSE works in, per cm rather than per Angstrom.
+    # In ECLIPSE's radiance unit, per cm rather than per Angstrom.
     assert profile.max() == pytest.approx(PEAK.to_value(RADIANCE_UNIT))
 
-    # A slit two cells wide on the boundary of columns 6 and 7, open for
-    # half its exposure in each snapshot.
+    # A slit two cells wide on the boundary of columns 6 and 7, with half its
+    # exposure in each snapshot.
     exposure = raster_module.Exposure(0, CELL, 5 * u.s, 15 * u.s)
     spectra = raster.exposure_spectra(exposure, 0.4 * u.arcsec)[LINE]
     expected = 0.5 * (0.5 * 1.0 + 0.5 * 2.0) + 0.5 * 3.0
     assert spectra == pytest.approx(expected * profile, rel=1e-12)
-    # Column 6 of the first snapshot was read already; then 7 of the first,
-    # and 6 and 7 of the second as one strip.
+    # Column 6 of the first snapshot was already read; then column 7 of the
+    # first, and 6 and 7 of the second as one strip.
     assert raster.strips_read == 3
     with pytest.raises(ValueError, match="outside the image"):
         raster.columns_under(10 * CELL, 0.4 * u.arcsec)
@@ -710,11 +719,11 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
     scan = rebinned.axis_world_coords(1)[0]
     expected = distance_to_angle(meta["positions"]).to_value(u.arcsec)
     assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
-    # The second exposure, from 10 to 20 s, saw the second snapshot, twice as bright.
+    # The second exposure, from 10 to 20 s, sees the second snapshot, twice as bright.
     columns = rebinned.data.sum(axis=(0, 2))
     assert columns[1] / columns[0] == pytest.approx(2.0, rel=1e-9)
 
-    # The exposures are seen along the axis their files were.
+    # The raster keeps the integration axis of its files.
     import dataclasses
     along_x = [write_synthesis(dataclasses.replace(read_synthesis(path), integration_axis="x"),
                                tmp_path / f"along_x_{i}.h5") for i, path in enumerate(paths)]
@@ -722,7 +731,7 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
         RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL), 0.4 * u.arcsec, 10 * u.s)
     assert synthesis.integration_axis == "x"
 
-    # And each line is the ion its files say it is.
+    # Each line keeps the atom and ion given in its files.
     identified = []
     for i, path in enumerate(paths):
         base = read_synthesis(path)
@@ -772,7 +781,7 @@ def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
         LINE: dataclasses.replace(base.lines[LINE], atom=26, ion=12)})
     with pytest.raises(ValueError, match="the atom and ion"):
         SynthesisSeries(good + [write_synthesis(identified, tmp_path / "identified.h5")], LINE)
-    # A series of one file cannot say how long it stands for.
+    # A series of one file cannot say how long that file lasts.
     with pytest.raises(ValueError, match="as a single snapshot, with 'synthesis_file'"):
         SynthesisSeries(good[:1], LINE).valid_until()
     # The slit is laid over pixels of one size, from the first file on.
@@ -920,7 +929,7 @@ def test_the_telescopes_blur_across_the_slit_brings_in_the_columns_beside_it(tmp
 
 
 def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypatch, flat_goft):
-    """The run observes the exposures collected through the telescope's blur and laid onto the pixels through the PSF."""
+    """Exposures are collected through the telescope's blur and put onto the pixels by the PSF."""
     import importlib
 
     from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
@@ -958,7 +967,7 @@ def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypat
 
 def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_snapshots_need(
         tmp_path, monkeypatch):
-    """Each snapshot is read when an exposure needs it, so the density grid grows as they are."""
+    """Snapshots are read as exposures need them, and the density grid grows as they are read."""
     calls = []
 
     def density_goft(lines, logN_min, logN_max, nN, **kwargs):
@@ -975,7 +984,8 @@ def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_sn
     assert calls == [] and synthesiser.goft is None
     for snapshot in range(3):
         synthesiser._synthesise_strip(snapshot, 0, 1)
-    # 1e9 needs 10^8.8 and 10^9.1; 1e10 is a point, so 10^9.7 to 10^10.3; 1e7 likewise 10^6.7 to 10^7.3.
+    # 1e9 needs 10^8.8 and 10^9.1; 1e10 is a point, so 10^9.7 to 10^10.3;
+    # 1e7 likewise 10^6.7 to 10^7.3.
     assert calls == [(8.8, 9.1), (9.4, 10.3), (6.7, 8.5)]
     assert np.allclose(synthesiser.logN_grid, np.arange(6.7, 10.35, 0.3))
     assert np.array_equal(synthesiser.goft[LINE]["g_tn"][:, 0], synthesiser.logN_grid)

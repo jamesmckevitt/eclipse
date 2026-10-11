@@ -1,11 +1,10 @@
-"""The velocity and wavelength grids have to be uniform, and now say so.
+"""The velocity and wavelength grids must be uniform, and other grids are refused.
 
-ECLIPSE takes one spacing for the whole velocity grid and uses it for every
-bin edge, and writes the output cube's wavelength CDELT from it. Both are
-correct for a uniform grid and quietly wrong otherwise, which is what these
-tests pin down: the shape of the right answer for a uniform grid, and a
-refusal rather than a plausible number for every way a grid can fail to be
-one.
+ECLIPSE uses one spacing for every bin edge of the velocity grid, and sets
+the output cube's wavelength CDELT from it. Both are right for a uniform
+grid and silently wrong otherwise. These tests check the right answer for a
+uniform grid, and a refusal, not a plausible number, for every way a grid
+can fail to be uniform.
 """
 import warnings
 
@@ -33,8 +32,8 @@ def test_edges_are_the_midpoints_of_a_uniform_grid():
 
     assert edges.shape == (centres.size + 1,)
     assert np.allclose(edges, [-12.5, -7.5, -2.5, 2.5, 7.5, 12.5])
-    # Every centre lies in its own bin, which is the property the binning in
-    # build_em_tv relies on.
+    # Every centre lies in its own bin, which the binning in build_em_tv
+    # relies on.
     assert np.all(edges[:-1] <= centres)
     assert np.all(centres < edges[1:])
 
@@ -57,7 +56,7 @@ def test_quantity_grids_are_accepted_and_keep_their_units():
 
 
 def test_uneven_grid_is_refused():
-    """A grid that is uniform at the start is the dangerous case: it looks fine and is not."""
+    """A grid uniform at the start is the dangerous case, as it looks fine."""
     centres = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     with pytest.raises(ValueError, match="evenly spaced"):
         velocity_centers_to_edges(centres)
@@ -72,10 +71,10 @@ def test_error_points_at_the_element_furthest_from_even():
 
 def test_edges_use_the_mean_spacing():
     """
-    Within the tolerance, the one spacing applied everywhere is the mean.
+    Within the tolerance, the spacing used everywhere is the mean.
 
-    The second spacing here is off by 5e-7 of a bin, which the check lets
-    through. The first spacing would carry that slip to every later edge.
+    The second spacing here is off by 5e-7 of a bin, which the check allows.
+    Using the first spacing would carry that slip to every later edge.
     """
     centres = np.array([0.0, 1.0, 2.0 + 5e-7, 3.0 + 5e-7])
     step = (3.0 + 5e-7) / 3
@@ -86,10 +85,10 @@ def test_edges_use_the_mean_spacing():
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_a_grid_rounded_to_single_precision_counts_as_even(dtype):
     """
-    As MURaM's heights are, 0.064 Mm apart up to 42 Mm and stored as float32.
+    Like MURaM heights: 0.064 Mm apart up to 42 Mm, stored as float32.
 
-    The rounding stays in the values when they are cast to double. A slip of
-    two thousandths of a spacing is still refused.
+    The rounding stays in the values when cast to double. A slip of two
+    thousandths of a spacing is still refused.
     """
     heights = (np.arange(656, dtype=np.float32) * np.float32(0.064)).astype(dtype)
     assert heights[-1] > 41.9 and np.ptp(np.diff(heights.astype(float))) > 1e-6 * 0.064
@@ -102,10 +101,10 @@ def test_a_grid_rounded_to_single_precision_counts_as_even(dtype):
 
 def test_single_precision_rounding_is_not_admitted_where_it_reaches_half_a_spacing():
     """
-    Near 1e8 single precision rounds by more than a spacing of 1, so it cannot hold such a grid.
+    Near 1e8, single precision rounds by more than a spacing of 1, so cannot hold such a grid.
 
     Spacings of 1, 1, 1 and 7 are uneven there as anywhere, and an even grid
-    there is held to the usual tolerance and passes it.
+    there passes the usual tolerance.
     """
     with pytest.raises(ValueError, match=r"Element 3 is 100000003, -1.8 of a spacing"):
         require_uniform_grid(1e8 + np.array([0.0, 1.0, 2.0, 3.0, 10.0]), "z")
@@ -176,7 +175,7 @@ def test_create_line_cube_refuses_an_uneven_wavelength_grid():
 
 
 def test_a_uniform_grid_still_synthesises_end_to_end():
-    """The guard must not stand in the way of the grids people actually use."""
+    """The check must not block the grids people actually use."""
     nz, ny, nx, n_temp = 4, 2, 3, 2
     logT_grid = np.array([6.0, 6.2])
     vel_grid = np.arange(-50.0, 50.0 + 25.0, 25.0) * u.km / u.s
@@ -207,14 +206,14 @@ from euvst_response.utils import velocity_grid  # noqa: E402
 
 @pytest.mark.parametrize("res, lim", [(3, 10), (0.7, 300), (20, 250), (5, 300)])
 def test_the_velocity_grid_has_a_bin_centred_on_zero_and_reaches_its_limit(res, lim):
-    """Built from -lim, a limit that was not a whole number of steps left zero between bins."""
+    """Building from -lim would put zero between bins if lim is not a whole number of steps."""
     grid = velocity_grid(res * u.km / u.s, lim * u.km / u.s).to_value(u.km / u.s)
     assert np.min(np.abs(grid)) == 0.0
     assert grid == pytest.approx(-grid[::-1], abs=1e-9)
     assert grid[-1] >= lim - 1e-9 and grid[-1] < lim + res
     assert np.diff(grid) == pytest.approx(res)
     if (res, lim) == (5, 300):
-        # The default grid is the one there always was.
+        # The default grid keeps its 121 points.
         assert grid.size == 121
 
 
@@ -226,7 +225,7 @@ def test_a_velocity_grid_that_cannot_be_built_is_refused_naming_the_option(res, 
 
 
 def test_a_velocity_grid_in_any_unit_shifts_the_lines_alike():
-    """A grid in km/s was taken to be in cm/s, moving every line 1e5 times too little."""
+    """Guards against a km/s grid read as cm/s, which shifted lines 1e5 times too little."""
     ny, nx, n_temp = 1, 1, 2
     grid = velocity_grid(10 * u.km / u.s, 100 * u.km / u.s)
     em_tv = np.zeros((ny, nx, n_temp, grid.size))
@@ -254,7 +253,7 @@ def test_emission_beyond_the_velocity_grid_is_left_out_and_said_to_be():
 
 
 def test_the_density_of_a_temperature_with_no_plasma_is_zero():
-    """It was whatever memory the division left, which reached the saved G diagnostic."""
+    """Not uninitialised memory left by the division, which reached the saved G diagnostic."""
     logT = np.full((3, 4, 5), 6.0)
     logN = np.full((3, 4, 5), 9.0)
     _, avg_ne = compute_dem(logT, logN, 1.0e8, np.array([5.5, 6.0, 6.5]), "z")
@@ -283,12 +282,12 @@ def _grid_points(log_ne, temperature=1.0e6):
 
 
 @pytest.mark.parametrize("log_ne, expected", [
-    # Inside the default grid: its own points, past the densities, and no more.
+    # Inside the default grid: its own points, just past the densities.
     ([8.5, 11.0], [8.2, 8.5, 8.8, 9.1, 9.4, 9.7, 10.0, 10.3, 10.6, 10.9, 11.2]),
-    # On one of its points: the points either side, so that a mean density a
-    # rounding error off it is still on the grid.
+    # On one of its points: also the points either side, so a mean density a
+    # rounding error away is still on the grid.
     ([10.0], [9.7, 10.0, 10.3]),
-    # Beyond it either way: carried on, on the same points.
+    # Beyond it either way: extended in the same steps.
     ([5.0, 7.2], np.round(np.arange(4.9, 7.5, 0.3), 1)),
     ([12.5, 14.0], np.round(np.arange(12.4, 14.4, 0.3), 1)),
 ])
@@ -302,7 +301,7 @@ def test_only_cells_with_electrons_at_a_temperature_on_the_grid_count():
     density = np.array([1.0e17, 1.0e9, 0.0]).reshape(-1, 1, 1)
     logN_min, logN_max, _ = density_grid(temperature, density, LOG_T)
     assert (logN_min, logN_max) == pytest.approx((8.8, 9.1))
-    # With none, the default grid.
+    # With no such cells, the default grid.
     assert density_grid(temperature[:1], density[:1], LOG_T) == (7.0, 13.0, 21)
 
 
@@ -313,11 +312,11 @@ def _flat_goft_on(logN_grid, n_temp):
 
 @pytest.mark.parametrize("log_ne", [5.0, 7.0, 13.0, 14.5])
 def test_no_emission_is_lost_at_densities_the_default_grid_did_not_reach(log_ne):
-    """G(T, n) was taken as zero below 10^7 and above 10^13 cm^-3."""
+    """The default grid would take G(T, n) as zero below 10^7 and above 10^13 cm^-3."""
     shape = (3, 1, 2)
     temperature = np.full(shape, 1.0e6)
     density = np.full(shape, 10.0 ** log_ne)
-    density[:, :, 1] = 0.0  # a column with no electrons emits nothing and is no warning
+    density[:, :, 1] = 0.0  # a column with no electrons emits nothing and raises no warning
     vel_grid = velocity_grid(5 * u.km / u.s, 150 * u.km / u.s)
     logN_min, logN_max, nN = density_grid(temperature, density, LOG_T)
     logN_grid = np.linspace(logN_min, logN_max, nN)
@@ -328,7 +327,7 @@ def test_no_emission_is_lost_at_densities_the_default_grid_did_not_reach(log_ne)
             LOG_T, logN_grid, vel_grid, "z", np.float64)
     intensity = lines["Fe12_195.1190"]["si"].sum(axis=-1)
     assert intensity[0, 0] > 0 and intensity[0, 1] == 0
-    # G n_e^2 dh over 4 pi, in erg / (s cm^2 sr), whatever the density.
+    # G n_e^2 dh / (4 pi), in erg / (s cm^2 sr), at any density.
     wavelength_step = np.diff(lines["Fe12_195.1190"]["wl_grid"].to_value(u.cm))[0]
     expected = 1.0e-24 * 3 * 10.0 ** (2 * log_ne) * 1.0e8 / (4 * np.pi)
     assert intensity[0, 0] * wavelength_step == pytest.approx(expected, rel=1e-6)

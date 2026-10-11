@@ -1,15 +1,15 @@
-"""A simulated flow has the Doppler shift the observer of the synthesised map sees.
+"""A simulated flow has the Doppler shift seen by the observer of the synthesised map.
 
 Simulation velocities are positive towards increasing coordinate, so an upflow
 has a positive vz. Seen from above, it moves towards the observer and is
 blueshifted. ECLIPSE 0.8.0 and earlier used the velocity along the integration
-axis directly as the line-of-sight velocity. For views along z and x that is
-opposite in sign to the velocity away from the observer; for views along y,
+axis directly as the line-of-sight velocity. For views along z and x this has
+the opposite sign to the velocity away from the observer. For views along y,
 whose observer is at -y, the two agree.
 
-These run the real synthesis on small uniform atmospheres, with a flat
-contribution function standing in for fiasco, and measure where each line
-sits in wavelength.
+These tests run the real synthesis on small uniform atmospheres, with a flat
+contribution function in place of fiasco, and measure where each line sits in
+wavelength.
 """
 import sys
 import warnings
@@ -32,7 +32,7 @@ from euvst_response.utils import VELOCITY_CONVENTION, view_axis_and_side
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
-SHAPE = (8, 6, 4)  # the files' own (nx, nz, ny) layout
+SHAPE = (8, 6, 4)  # the files' (nx, nz, ny) layout
 FLOW = 20.0 * u.km / u.s
 MEAN_MOL_WT = 1.29
 VELOCITY_FILES = {"x": "vx/result_prim_1", "y": "vy/result_prim_3",
@@ -42,13 +42,13 @@ DYNAMIC = ["--slit-rest-time", "40 s", "--slit-width", "0.2 arcsec"]
 
 
 def _write_cube(path, data):
-    """A cube in the files' own (nx, nz, ny) Fortran layout."""
+    """Write a cube in the files' (nx, nz, ny) Fortran layout."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.asarray(data, dtype=np.float32).ravel(order="F").tofile(path)
 
 
 def _write_muram_files(root, velocity, suffix="0270000", time=None):
-    """Uniform coronal plasma, with *velocity* mapping an axis to its cube."""
+    """Write MURaM files of uniform coronal plasma; `velocity` maps an axis to its cube."""
     density = (1.0e9 / u.cm**3 * MEAN_MOL_WT * const.u).to_value(u.g / u.cm**3)
     _write_cube(root / "temp" / f"eosT.{suffix}", np.full(SHAPE, 1.0e6))
     _write_cube(root / "rho" / f"result_prim_0.{suffix}", np.full(SHAPE, density))
@@ -62,7 +62,7 @@ def _write_muram_files(root, velocity, suffix="0270000", time=None):
 
 
 def _flat_goft(lines, **kwargs):
-    """A contribution function of 1 everywhere, in place of fiasco."""
+    """Contribution function of 1 everywhere, in place of fiasco."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(8.0, 10.0, 21)
     goft = {LINE: {
@@ -76,7 +76,7 @@ def _flat_goft(lines, **kwargs):
 
 
 def _atmosphere_file(tmp_path, axis, suffix="0270000"):
-    """The MURaM files above as an atmosphere file, placed as dynamic mode places them."""
+    """Write the MURaM files above as an atmosphere file, placed as in dynamic mode."""
     root = tmp_path / "atmosphere"
     files = {"temperature": ("temp/eosT", u.K),
              "mass_density": ("rho/result_prim_0", u.g / u.cm**3),
@@ -158,8 +158,8 @@ def test_the_observer_is_where_the_map_is_the_right_way_round(
 
     The line cube's columns run left to right and its rows bottom to top, so
     the column axis crossed with the row axis points at the observer who sees
-    the map that way round. The expected shift is worked out from the cube's
-    own WCS, not from ECLIPSE's table of observers.
+    the map that way round. The expected shift comes from the cube's own WCS,
+    not from ECLIPSE's table of observers.
     """
     flow_vector = FLOW.value * np.array(UNIT_VECTORS[f"SOL{axis.upper()}"])
     _write_muram_files(tmp_path / "atmosphere",
@@ -189,9 +189,9 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
         -FLOW.value, abs=0.1)
 
 
-# For each axis, where a flow along it is put in the files' own (nx, nz, ny)
-# layout, so that it fills the image columns of lowest coordinate, and the
-# view from the other side.
+# For each axis: the slice, in the files' (nx, nz, ny) layout, where a flow
+# along it fills the image columns of lowest coordinate; and the view from
+# the other side.
 HALF_ALONG_COLUMNS = {"x": np.s_[:, :, :SHAPE[2] // 2], "y": np.s_[:SHAPE[0] // 2],
                       "z": np.s_[:SHAPE[0] // 2]}
 OTHER_SIDE = {"x": "-x", "y": "+y", "z": "-z"}
@@ -214,8 +214,9 @@ def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
     other = _load(_synthesise(tmp_path, monkeypatch, OTHER_SIDE[axis]))
     named_cube, other_cube = named["line_cubes"][LINE], other["line_cubes"][LINE]
 
-    # Seen from the side the axis names, the flow is on the left and moves as
-    # OBSERVER_SIDE says; from the other side, on the right, the other way.
+    # From the side the axis names, the flow is on the left and moves as
+    # OBSERVER_SIDE says. From the other side it is on the right and moves
+    # the other way.
     towards = -synthesis.OBSERVER_SIDE[axis] * FLOW.value
     half = named_cube.data.shape[1] // 2
     assert _doppler_velocity(named_cube)[:, :half] == pytest.approx(towards, abs=0.1)
@@ -223,14 +224,14 @@ def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
     assert _doppler_velocity(other_cube)[:, -half:] == pytest.approx(-towards, abs=0.1)
     assert _doppler_velocity(other_cube)[:, :-half] == pytest.approx(0.0, abs=0.1)
 
-    # The whole of each spectrum is mirrored about the rest wavelength, the
-    # velocity grid being centred on zero, and so is the emission measure.
+    # Each spectrum is mirrored about the rest wavelength, since the velocity
+    # grid is centred on zero, and so is the emission measure.
     assert other_cube.data == pytest.approx(named_cube.data[:, ::-1, ::-1], rel=1e-9)
     assert other["em_tv"] == pytest.approx(named["em_tv"][:, ::-1, :, ::-1], rel=1e-9)
     assert other["dem_map"] == pytest.approx(named["dem_map"][:, ::-1], rel=1e-9)
 
-    # The columns run along the box's coordinate with its sign changed, so
-    # they still increase to the observer's right; the rows are unchanged.
+    # The columns follow the box's coordinate with its sign flipped, so they
+    # still increase to the observer's right. The rows are unchanged.
     def columns(cube):
         return cube.wcs.low_level_wcs.pixel_to_world_values(
             0, np.arange(cube.data.shape[1]), 0)[1]
@@ -284,14 +285,14 @@ def test_dynamic_mode_looks_only_from_the_side_the_axis_names(tmp_path, monkeypa
 @pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])
 def test_synthesis_files_from_before_the_change_are_refused_where_their_sign_differs(
         tmp_path, monkeypatch, axis, refused):
-    """Views along y kept their sign, so older ones still agree and still load."""
+    """Views along y kept their sign, so older files agree and still load."""
     _write_muram_files(tmp_path / "atmosphere", {})
     path = _synthesise(tmp_path, monkeypatch, axis)
     saved = _load(path)
     assert saved["config"]["velocity_convention"] == VELOCITY_CONVENTION
 
-    # The same line cubes as a pickle of an older version, which did not
-    # record the convention.
+    # The same line cubes pickled as by an older version, which did not record
+    # the convention.
     del saved["line_cubes"][LINE].meta["velocity_convention"]
     old = tmp_path / "old.pkl"
     with open(old, "wb") as f:
@@ -304,7 +305,7 @@ def test_synthesis_files_from_before_the_change_are_refused_where_their_sign_dif
 
 
 def _write_results_file(path, meta):
-    """A results file whose atmosphere cube carries *meta*; None means uniform intensity mode."""
+    """Results file whose atmosphere cube has `meta`; None means uniform intensity mode."""
     cube_sim = None if meta is None else NDCube(np.ones((2, 2, 3)),
                                                 wcs=WCS(naxis=3), meta=meta)
     return save_results(path, {"results": {"all_combinations": {}, "fit_weighted": True},
@@ -318,13 +319,13 @@ def _write_results_file(path, meta):
 ], ids=["z", "x", "no axis"])
 def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
     written = _write_results_file(tmp_path / "written.h5", meta)
-    # The versions that wrote such results wrote them as pickles.
+    # Older versions wrote such results as pickles.
     pickled = tmp_path / "pickled.pkl"
     with open(pickled, "wb") as f:
         dill.dump({"results": {"all_combinations": {}},
                    "cube_sim": NDCube(np.ones((2, 2, 3)), wcs=WCS(naxis=3), meta=meta)}, f)
     for path in (written, pickled):
-        # The pickle's own warning is not the one looked for here.
+        # Ignore the pickle's own warning, which is not the one tested here.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             with pytest.raises(ValueError, match="opposite signs"):

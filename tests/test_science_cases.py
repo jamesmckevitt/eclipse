@@ -1,9 +1,9 @@
-"""The science case table, and the configurations written from it.
+"""The science case table and the configurations written from it.
 
-The cases are there to test changes to the instrument or to ECLIPSE against a
-fixed set of observations. So the table has to read cleanly, the numbers
-written into each configuration have to be the ones the cases were analysed
-with, and every configuration has to be one the current ECLIPSE accepts.
+The cases test changes to the instrument or to ECLIPSE against a fixed set of
+observations. The table must read cleanly, each configuration must carry the
+numbers the cases were analysed with, and every configuration must be valid
+for the current ECLIPSE.
 """
 import sys
 
@@ -222,7 +222,7 @@ def test_the_list_refuses_a_line_choice_that_matches_nothing(argv, capsys):
 
 
 def test_a_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
-    """The brightest line, with the iterations cut down so that it is quick."""
+    """Uses the brightest line, with few iterations to keep it quick."""
     from euvst_response.main import main
 
     paths, _ = sc.write_science_case_configs(

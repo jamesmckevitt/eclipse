@@ -1,11 +1,14 @@
-"""Finding a combination, dating a map, and reading fits as fit_cube_gauss returns them.
+"""Tests for finding a combination, dating a map and reading fit_cube_gauss output.
 
-A combination was found by its SI values to 1e-8 of at least one, so every
-length under 10 nm matched every other, and units were dropped, so 5 m
-matched 5 s. A date with an offset stamped the maps with the time they were
-made. The exposure-time map held the exposure's index under a unit of
-seconds, and the velocity and width helpers failed on the plain array
-fit_cube_gauss returns.
+These cover earlier bugs:
+
+- A combination was found by its SI values to 1e-8 of at least one, so any
+  two lengths under 10 nm matched, and units were dropped, so 5 m matched
+  5 s.
+- A date with an offset stamped the maps with the time they were made.
+- The exposure-time map held the exposure's index with a unit of seconds.
+- The velocity and width helpers failed on the plain array returned by
+  fit_cube_gauss.
 """
 import astropy.units as u
 import numpy as np
@@ -26,10 +29,10 @@ def test_a_small_length_swept_picks_out_its_combination():
     results = _results([0.3 * u.nm, 0.5 * u.nm, 1.0 * u.nm])
     found = get_results_for_combination(results, **{"telescope.microroughness_sigma": 0.5 * u.nm})
     assert found["index"] == 1
-    # The same length in another unit is the same value.
+    # The same length in another unit matches.
     found = get_results_for_combination(results, **{"telescope.microroughness_sigma": 5 * u.AA})
     assert found["index"] == 1
-    # A value that was never run is not any of them.
+    # A value that was never run matches none.
     with pytest.raises(ValueError, match="No combination matches"):
         get_results_for_combination(results, **{"telescope.microroughness_sigma": 0.4 * u.nm})
 
@@ -66,7 +69,7 @@ def test_a_date_with_an_offset_is_written_in_utc(given, expected):
 
 
 def test_the_fits_as_fit_cube_gauss_returns_them_give_velocities_and_widths():
-    """A plain array, in the cm fit_cube_gauss fits in."""
+    """Plain array in cm, as returned by fit_cube_gauss."""
     rest = 195.119 * u.AA
     fits = np.zeros((2, 3, 4))
     fits[..., 1] = (rest * (1 + 10 * u.km / u.s / (299792.458 * u.km / u.s))).to_value(u.cm)

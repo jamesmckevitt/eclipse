@@ -1,13 +1,18 @@
-"""Small changes around the edges.
+"""Small fixes around the edges.
 
-The command line hid what kind of error stopped a run, printed a syntax
-warning from its logo and pointed to a folder that is not there; --debug
-opened on a frame outside ECLIPSE; the git commit recorded could be the user's own
-project's; atmosphere info described files it could not read, and files
-written the IDL way were refused; a script's old option name was ignored;
-the science-case tool wrote configurations the run refuses, and shared
-their lists; the deprecated dynamic mode mixed its snapshots along the line
-of sight, and crashed on a crop one cell wide.
+Bugs fixed include:
+
+- Command line: hid the type of error that stopped a run, printed a syntax
+  warning from its logo, and pointed to a folder that is not there.
+- --debug opened on a frame outside ECLIPSE.
+- Recorded git commit: could be that of the user's own project.
+- atmosphere info: described files it could not read, and refused files
+  written the IDL way.
+- A script's old option name was ignored.
+- Science-case tool: wrote configurations the run refuses, and shared their
+  lists.
+- Deprecated dynamic mode: mixed its snapshots along the line of sight, and
+  crashed on a crop one cell wide.
 """
 import argparse
 import subprocess
@@ -51,7 +56,7 @@ def test_an_unexpected_error_says_what_it_was_and_where(monkeypatch, tmp_path, c
     captured = capsys.readouterr()
     assert "Error during simulation: TypeError: boom" in captured.out
     assert "Traceback" in captured.err
-    # A refusal says why, which is enough.
+    # A refusal (ValueError) explains itself, so it gets no traceback.
     _cli(monkeypatch, tmp_path, ValueError("slit_width must be 0.2"))
     captured = capsys.readouterr()
     assert "Error during simulation: ValueError: slit_width must be 0.2" in captured.out
@@ -87,7 +92,7 @@ def test_debug_opens_in_the_frame_of_the_function_that_failed(monkeypatch):
 
 
 def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypatch):
-    """Raised in a function the decorated one called, the session opened with the caller's locals."""
+    """When raised in a function the decorated one calls, it opens there, not in the caller."""
     from euvst_response.config import check_pinhole_lists
 
     seen = {}
@@ -215,7 +220,7 @@ def test_an_exposure_a_rounding_error_past_the_series_is_inside_it_and_one_furth
 
 
 def test_a_series_of_times_far_from_zero_allows_rounding_and_no_more():
-    """Scaled by the times themselves, the allowance was a second for a series at 1e9 s."""
+    """An allowance scaled by the times themselves would be a second at 1e9 s."""
     series = object.__new__(AtmosphereSeries)
     series.times = (1e9 + np.array([0.0, 0.5, 1.0])) * u.s
     end = series.valid_until()[-1].to_value(u.s)
@@ -225,7 +230,7 @@ def test_a_series_of_times_far_from_zero_allows_rounding_and_no_more():
 
 
 def test_an_exposure_that_starts_where_the_series_ends_is_refused():
-    """Allowed as rounding and cut to the series, it had no length, and its fractions were 0 / 0."""
+    """If allowed as rounding, it would be cut to zero length, with fractions of 0 / 0."""
     series = object.__new__(AtmosphereSeries)
     series.times = np.array([0.0, 0.5, 1.0]) * u.s
     end = series.valid_until()[-1].to_value(u.s)
@@ -250,7 +255,7 @@ def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
 
 
 def test_a_synthesis_files_text_attributes_written_as_one_element_arrays_are_read(tmp_path):
-    """As IDL writes them, for a synthesis another code wrote."""
+    """As IDL writes them, in a synthesis written by another code."""
     from euvst_response.synthesis_file import (FORMAT_NAME, SpectralLine, Synthesis, read_synthesis,
                                                read_synthesis_layout, write_synthesis)
 

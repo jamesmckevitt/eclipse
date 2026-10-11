@@ -1,11 +1,11 @@
 """Chains of ties and of amplitude orderings in a multi-component fit.
 
-A tie to a component that was itself tied read a value the fit had not set
-yet, which on the scipy path was whatever memory held and on mpfit's lagged
-a step behind; an amplitude held below one that was itself held below
-another was capped, or never fitted, depending on the order the components
-were listed in; and a primary held fainter than another started outside its
-bounds, so that every fit failed. Loops, which no fit can meet, are refused.
+A tie to a component that is itself tied must read a value the fit has
+already set. Otherwise scipy reads uninitialised memory and mpfit lags a
+step behind. An amplitude held below one that is itself held below another
+must fit in any listing order, rather than being capped or never fitted. A
+primary held fainter than another must start inside its bounds, or every
+fit fails. Loops, which no fit can satisfy, are refused.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -27,7 +27,7 @@ CLOSE = 1e-4
 
 
 def _cube(peaks):
-    """Three Gaussians at VELOCITY with *peaks*, in every pixel of a (1, 2, N_WAVE) cube."""
+    """Three Gaussians at VELOCITY with `peaks`, in every pixel of a (1, 2, N_WAVE) cube."""
     wave = CENTRE + (np.arange(N_WAVE) - (N_WAVE - 1) / 2) * STEP
     profile = 10.0 + sum(peak * np.exp(-0.5 * ((wave - rest * (1 + VELOCITY / const.c))
                                                 / SIGMA).decompose().value ** 2)
@@ -58,14 +58,14 @@ def _velocities(params):
                                       {"constrain_positive_intensity": True}],
                          ids=["mpfit", "scipy-trf"])
 def test_a_chain_of_ties_fits_as_ties_to_its_free_end(settings):
-    """2 is tied to 1, which is tied to 0, in centre and in width."""
+    """Component 2 is tied to 1, and 1 to 0, in centre and width."""
     components = [FitComponent(RESTS[0]),
                   FitComponent(RESTS[1], tie_center=0, tie_width=0),
                   FitComponent(RESTS[2], tie_center=1, tie_width=1)]
     first = _fit((500.0, 1000.0, 300.0), components, **settings)
     assert _velocities(first) == pytest.approx([VELOCITY.value] * 3, abs=CLOSE * 10)
     assert first[2::3][:3] == pytest.approx([SIGMA.to_value(u.cm)] * 3, rel=CLOSE)
-    # The same again, not what the last fit left in memory.
+    # A repeat fit gives the same result, not values left in memory.
     assert np.array_equal(_fit((500.0, 1000.0, 300.0), components, **settings), first)
 
 
@@ -73,10 +73,10 @@ def test_a_chain_of_ties_fits_as_ties_to_its_free_end(settings):
 @pytest.mark.parametrize("order", [(0, 1, 2), (2, 1, 0)], ids=["listed", "reversed"])
 def test_a_chain_of_amplitude_orders_fits_whatever_the_listing(settings, order):
     """
-    Each component is held brighter than the next along *order*.
+    Each component is held brighter than the next in `order`.
 
-    Reversed, each parent is listed after its child. The brightest is the
-    primary either way, which the guess starts at the peak.
+    In reverse order, each parent is listed after its child. The brightest
+    is the primary either way, and the guess starts it at the peak.
     """
     peaks = np.zeros(3)
     peaks[list(order)] = (900.0, 400.0, 100.0)
@@ -88,7 +88,7 @@ def test_a_chain_of_amplitude_orders_fits_whatever_the_listing(settings, order):
 
 
 def test_a_primary_held_fainter_than_another_is_fitted():
-    """The guess starts the primary brightest, which put its ratio above 1."""
+    """The guess starts the primary brightest, which puts its ratio above 1."""
     components = [FitComponent(RESTS[0]), FitComponent(RESTS[1], amplitude_greater_than=0),
                   FitComponent(RESTS[2])]
     fitted = _fit((300.0, 1000.0, 200.0), components)

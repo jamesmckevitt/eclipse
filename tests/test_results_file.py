@@ -1,9 +1,8 @@
 """Results survive a round trip through the results file, and old pickles still load.
 
-The tests that matter here are the ones that compare against the object that
-went in, field by field, because a format change that loses something does
-not announce itself: the file still opens and the numbers still look like
-numbers.
+The key tests compare the result field by field with the object saved,
+because a format change that loses something fails silently: the file still
+opens and the numbers still look like numbers.
 """
 import dataclasses
 import datetime
@@ -34,7 +33,7 @@ REST = 195.119 * u.Angstrom
 
 
 def _wcs():
-    """The WCS of a (n_slit, n_scan, n_wavelength) = (2, 3, 4) cube."""
+    """WCS of a (n_slit, n_scan, n_wavelength) = (2, 3, 4) cube."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
@@ -52,7 +51,7 @@ def _cube(offset=0.0):
 
 
 def _payload():
-    """A tree with one of everything a real result file holds."""
+    """Tree with one of each kind of item a real results file holds."""
     return {
         "instrument": "SWC",
         "software_version": "0.7.0",
@@ -60,7 +59,7 @@ def _payload():
         "config": {"instrument": "SWC", "n_iter": 5,
                    "simulation": {"expos": ["5 s", "20 s"]}},
         "cube_sim": _cube(),
-        # Cubes alike but for their data, which must not come back as one.
+        # Cubes that differ only in their data, which must not come back as one.
         "cube_reb_dict": {(0.2, 1): _cube(), (0.4, 2): _cube(offset=100.0)},
         "results": {
             "all_combinations": {
@@ -117,7 +116,7 @@ def test_the_file_is_hdf5_not_a_pickle(tmp_path):
 
 def test_a_failed_write_leaves_the_file_there_as_it_was(tmp_path):
     path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
-    # And says where what it cannot write is.
+    # The error gives the location of what it cannot write.
     with pytest.raises(TypeError, match="/deep: Values of type object cannot be written"):
         save_results(path, {"instrument": "EIS", "deep": {"odd": object()}})
     assert load_results(path)["instrument"] == "SWC"
@@ -134,9 +133,13 @@ def test_what_yaml_can_put_in_a_configuration_survives(tmp_path):
 
 
 def test_the_file_is_made_as_any_file_is(tmp_path):
-    """With the permissions any other file there gets, so that colleagues can read it, and through a link."""
-    # A umask that lets the group write, which a file made only for its owner,
-    # or with permissions of its own, would not follow.
+    """The results file is made like any other file.
+
+    It gets the same permissions as any other new file there, so colleagues
+    can read it, and saving to a symlink writes its target.
+    """
+    # A umask that lets the group write; a file made only for its owner, or
+    # with fixed permissions, would not follow it.
     previous = os.umask(0o002)
     try:
         path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
@@ -202,9 +205,9 @@ def test_the_cube_comes_back_whole(tmp_path):
 
 
 def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
-    """A WCS written as a FITS header comes back in SI units unless its own are put back.
+    """A WCS saved as a FITS header comes back in its own units, not SI.
 
-    Without this, a wavelength axis written in cm comes back in m. The
+    Otherwise a wavelength axis written in cm comes back in m. The
     coordinates are the same, but anything reading wcs.wcs.cdelt directly
     would be out by a factor of a hundred.
     """
@@ -218,7 +221,7 @@ def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
 
 
 def test_the_wcs_describes_the_same_world_coordinates(tmp_path):
-    """The property that actually matters, whatever the keywords say."""
+    """The world coordinates, which matter more than the keywords, are unchanged."""
     out = _round_trip(tmp_path)
     before = _cube().axis_world_coords(2)[0].to_value(u.cm)
     after = out["cube_sim"].axis_world_coords(2)[0].to_value(u.cm)
@@ -226,10 +229,11 @@ def test_the_wcs_describes_the_same_world_coordinates(tmp_path):
 
 
 def test_saving_leaves_the_callers_wcs_alone(tmp_path):
-    """Writing a WCS as a header normalises it to SI in place.
+    """Saving does not change the caller's WCS.
 
-    Saving must not do that to the cube or WCS the caller still holds, or a
-    script that saves and then carries on would find its cdelt rescaled.
+    Writing a WCS as a header converts it to SI in place. Saving must not do
+    that to the caller's cube or WCS, or a script that saves and carries on
+    would find its cdelt rescaled.
     """
     cube, wcs = _cube(), _wcs()
     save_results(tmp_path / "out.h5", {"cube_sim": cube, "wcs": wcs})
@@ -284,7 +288,7 @@ def test_config_objects_come_back_as_the_right_classes(tmp_path):
     assert isinstance(objects["detector"], Detector_SWC)
     assert isinstance(objects["simulation"], Simulation)
     assert isinstance(objects["telescope"], Telescope_EUVST)
-    # nested dataclass, and a value that was not the default
+    # A nested dataclass, with a value that is not the default.
     assert isinstance(objects["telescope"].filter, AluminiumFilter)
     assert objects["telescope"].filter.al_thickness == 1500 * u.AA
 
@@ -306,8 +310,8 @@ def _same(before, after):
 
 
 @pytest.mark.parametrize("config_object", [
-    # Fields away from their defaults, and each stored by name (checked below),
-    # so that a field dropped on the way out cannot pass as its default.
+    # Fields set away from their defaults, each stored by name (checked below),
+    # so a field lost on saving cannot pass as its default.
     Simulation(expos=20 * u.s, n_iter=3, slit_width=0.4 * u.arcsec, ncpu=2,
                instrument="SWC", vis_sl=10 * u.photon / (u.s * u.cm**2),
                psf=True, noise=False, enable_pinholes=True,
@@ -330,7 +334,7 @@ def _same(before, after):
                   calibration="dz2025", date="2012-06-03"),
     RasterPlan(start=100 * u.s, steps=4, step=0.3 * u.arcsec, repeats=2,
                cadence=12 * u.s, centre=1.5 * u.Mm),
-    # A time series' synthesis settings, the precision being a NumPy type.
+    # Synthesis settings of a time series, with a NumPy type as the precision.
     SynthesisSettings(lines=("Fe12_195.1190", "Fe09_171.0730"),
                       abundance="sun_photospheric_2015_scott",
                       vel_res=10 * u.km / u.s, vel_lim=500 * u.km / u.s,
@@ -379,8 +383,8 @@ def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
                                                             monkeypatch):
     """Package data is found in the reader's installation, not the writer's.
 
-    An absolute path to a throughput table names the installation that wrote
-    the file, which a colleague reading it elsewhere does not have.
+    An absolute path to a throughput table names the writer's installation,
+    which a colleague reading the file elsewhere does not have.
     """
     telescope = Telescope_EUVST()
     path = save_results(tmp_path / "out.h5", {"telescope": telescope})
@@ -413,7 +417,7 @@ def test_the_fit_config_survives(tmp_path):
     assert isinstance(fit_config.components[1], FitComponent)
     assert fit_config.components[1].tie_center == 0
     assert fit_config.components[0].wavelength == 195.119 * u.AA
-    # a derived property, so the object is genuinely functional
+    # A derived property, so the object really works.
     assert fit_config.n_components == 2
 
 
@@ -459,7 +463,7 @@ def test_a_pkl_name_is_corrected_rather_than_written(tmp_path, name):
 
 
 def test_an_old_pickle_still_loads(tmp_path):
-    """Existing result files have to keep working, whatever they are named."""
+    """Existing result files must still load, under any name."""
     import dill
 
     path = tmp_path / "old.pkl"
@@ -474,7 +478,10 @@ def test_an_old_pickle_still_loads(tmp_path):
 
 
 def test_a_pickle_named_as_an_hdf5_file_is_not_unpickled(tmp_path):
-    """A reader takes a .h5 file to be safe to open; a pickle under any other name loads, with a warning."""
+    """A reader expects a .h5 file to be safe to open.
+
+    A pickle under any other name loads, with a warning.
+    """
     import dill
 
     misnamed = tmp_path / "actually_a_pickle.h5"
@@ -495,7 +502,7 @@ def test_a_pickle_named_as_an_hdf5_file_is_not_unpickled(tmp_path):
         with pytest.warns(FutureWarning, match="results pickle"):
             assert load_results(named)["instrument"] == "EIS"
 
-    # And a results file named .pkl, with no .h5 beside it, reads as one.
+    # A results file named .pkl, with no .h5 beside it, reads as a results file.
     results = save_results(tmp_path / "results.h5", {"instrument": "SWC"})
     renamed = results.rename(tmp_path / "renamed.pkl")
     with warnings.catch_warnings():
@@ -504,7 +511,7 @@ def test_a_pickle_named_as_an_hdf5_file_is_not_unpickled(tmp_path):
 
 
 def test_a_file_cannot_name_an_arbitrary_class(tmp_path):
-    """The point of leaving pickle: reading must not construct what it likes."""
+    """Unlike pickle, reading must not construct any class a file names."""
     path = tmp_path / "hostile.h5"
     with h5py.File(path, "w") as f:
         f.attrs["format"] = "eclipse-results"
@@ -577,7 +584,11 @@ def test_dates_times_text_and_edge_values_survive(tmp_path):
 
 
 def test_text_arrays_keep_their_shape_and_width(tmp_path):
-    """Written as their items, which do not give an empty array's shape or a width wider than the text."""
+    """Text arrays keep their shape and width.
+
+    They are written as their items, which do not record an empty array's
+    shape or a width wider than the text.
+    """
     text = {"wide": np.array(["a"], dtype="U5"), "empty": np.empty((0, 3), dtype="U5"),
             "grid": np.array([["ab", "c"], ["d", "e"]]), "none": np.empty((2, 0), dtype="U1"),
             "padded": np.array(["a"] * 100, dtype="U100"), "uneven": np.array(["x" * 200] + [""] * 2000),
@@ -620,7 +631,7 @@ def test_a_file_that_does_not_hold_together_is_refused(tmp_path):
 
 
 def test_only_the_configuration_objects_it_rebuilds_are_written(tmp_path):
-    """So that a file is not written that cannot then be read."""
+    """A file that could not be read back is not written."""
     @dataclasses.dataclass
     class Mine:
         value: int = 1
@@ -629,7 +640,7 @@ def test_only_the_configuration_objects_it_rebuilds_are_written(tmp_path):
         save_results(tmp_path / "mine.h5", {"mine": Mine()})
     assert not (tmp_path / "mine.h5").exists()
 
-    # Nor one only named like one of them.
+    # Nor a class that only shares a name with one of them.
     @dataclasses.dataclass
     class Simulation:
         value: int = 1
@@ -639,7 +650,7 @@ def test_only_the_configuration_objects_it_rebuilds_are_written(tmp_path):
 
 
 def _with_attribute(tmp_path, name, value):
-    """A results file with *value* written by hand as the JSON of member *name*."""
+    """Results file with `value` written by hand as the JSON of member `name`."""
     path = save_results(tmp_path / "hand.h5", {"instrument": "SWC"})
     with h5py.File(path, "r+") as f:
         f.attrs[name] = json.dumps(value)
@@ -648,7 +659,7 @@ def _with_attribute(tmp_path, name, value):
 
 
 def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path):
-    """As one from a later check, or with a setting since removed, would be."""
+    """Such as one from a later check, or with a setting since removed."""
     fit = FitConfig(components=[FitComponent(wavelength=195.119 * u.AA),
                                 FitComponent(wavelength=195.179 * u.AA)])
     encoded = results_file._jsonable(fit)
@@ -672,7 +683,7 @@ def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path
 
 
 def test_a_setting_added_since_the_file_was_made_is_said_to_take_todays_default(tmp_path):
-    """A file from an earlier version lacks the settings added since; they are defaulted, and said."""
+    """Settings missing from an older file get today's defaults, with a warning."""
     encoded = results_file._jsonable(Detector_SWC(row_transfer_time=20 * u.us))
     del encoded["fields"]["shutter"], encoded["fields"]["row_transfer_time"]
     with pytest.warns(UserWarning, match="Detector_SWC in the results file has no "
@@ -683,7 +694,7 @@ def test_a_setting_added_since_the_file_was_made_is_said_to_take_todays_default(
 
 
 def test_a_fit_from_before_weighting_existed_reads_back_as_unweighted(tmp_path):
-    """Its fits were unweighted, so it is not given today's default, which weights them."""
+    """Its fits were unweighted, so it gets False, not today's weighted default."""
     encoded = results_file._jsonable(FitConfig())
     del encoded["fields"]["weighted"]
     with pytest.warns(UserWarning, match="FitConfig in the results file has no weighted, which "
@@ -694,7 +705,7 @@ def test_a_fit_from_before_weighting_existed_reads_back_as_unweighted(tmp_path):
 
 
 def test_results_from_before_weighting_existed_are_said_to_be_unweighted(tmp_path):
-    """With no fitting block there is no FitConfig to say so, so the results do."""
+    """With no fitting block there is no FitConfig to record it, so the results do."""
     payload = _payload()
     del payload["results"]["fit_weighted"]
     payload["results"]["fit_config"] = None
@@ -718,13 +729,13 @@ def test_a_pickle_from_before_weighting_existed_is_said_to_be_unweighted(tmp_pat
 
 
 def test_what_a_configuration_object_worked_out_is_kept_as_the_run_had_it(tmp_path):
-    """A detector's dark current, as the run used it, whatever this version works out."""
+    """A detector's dark current is kept as the run used it, not recomputed."""
     detector = Detector_SWC()
     as_run = 42 * detector.dark_current.unit
     object.__setattr__(detector, "dark_current", as_run)
     assert _round_trip(tmp_path, {"detector": detector})["detector"].dark_current == as_run
 
-    # Only what it works out, so that a file cannot set a setting past its checks.
+    # Only derived values are kept, so a file cannot set a setting past its checks.
     encoded = results_file._jsonable(Detector_SWC())
     encoded["derived"].update(qe_euv=7.0, __dict__={"qe_euv": 7.0}, not_a_field=1)
     restored = load_results(_with_attribute(tmp_path, "detector", encoded))["detector"]
@@ -755,7 +766,7 @@ def test_a_crafted_file_cannot_have_the_reader_repeat_itself_or_swell(tmp_path):
 
 
 def _crafted_dataset(tmp_path, write=None, **options):
-    """A results file whose one dataset is made with *options* by hand, and then *write* done to it."""
+    """Results file with one dataset made by hand from `options`, then passed to `write`."""
     path = save_results(tmp_path / "crafted.h5", {"instrument": "SWC"})
     with h5py.File(path, "r+") as f:
         data = f.create_dataset("data", **options)
@@ -770,7 +781,7 @@ def _first_quarter(data):
 
 
 def _one_small_chunk(data):
-    """A chunk stored as a few bytes of deflate, which could not give back all it declares."""
+    """Chunk of a few deflate bytes, which decompress to less than it declares."""
     data.id.write_direct_chunk((0,), zlib.compress(bytes(16)))
 
 
@@ -789,7 +800,7 @@ def test_a_dataset_not_as_eclipse_writes_one_is_refused(tmp_path, options, write
 
 
 def test_datasets_that_store_more_than_the_file_are_refused(tmp_path, monkeypatch):
-    """As they would if several read the same stored data, which a crafted file could have."""
+    """This happens when several datasets read the same stored data, as a crafted file could."""
     path = save_results(tmp_path / "out.h5", {"data": np.arange(4000.0)}, compression=None)
     reading = results_file._Reading
     monkeypatch.setattr(results_file, "_Reading", lambda size: reading(size=16000))
@@ -798,7 +809,10 @@ def test_datasets_that_store_more_than_the_file_are_refused(tmp_path, monkeypatc
 
 
 def test_a_damaged_file_is_named(tmp_path):
-    """HDF5's own error, as for a chunk that does not decompress, is given with the file's name, as the OSError it is."""
+    """HDF5's own errors are raised as OSError with the file's name.
+
+    One example is a chunk that does not decompress.
+    """
     path = _crafted_dataset(tmp_path, lambda data: data.id.write_direct_chunk((0,), bytes(100)),
                             shape=(100,), chunks=(100,), dtype="f8", compression="gzip")
     with pytest.raises(OSError, match="crafted.h5 could not be read"):
@@ -854,7 +868,7 @@ def test_an_attribute_that_is_not_one_value_is_refused_before_it_is_read(tmp_pat
 
 
 def _with_cards(wcs, **cards):
-    """The tree :func:`_jsonable` writes for *wcs*, with *cards* set in its header."""
+    """Tree :func:`_jsonable` writes for `wcs`, with `cards` set in its header."""
     tree = results_file._jsonable(wcs)
     header = fits.Header.fromstring(tree["header"], sep="\n")
     header.update(cards)
@@ -864,7 +878,10 @@ def _with_cards(wcs, **cards):
 
 @pytest.mark.filterwarnings("ignore:Some non-standard WCS keywords were excluded")
 def test_a_wcs_is_read_back_without_what_a_results_file_does_not_hold(tmp_path):
-    """A distortion, which is not written, and which astropy would tabulate at any size a header asks."""
+    """A WCS distortion is neither written nor read back.
+
+    astropy would tabulate it at any size a header asks for.
+    """
     sky = WCS(naxis=2)
     sky.wcs.ctype, sky.wcs.cunit, sky.wcs.cdelt = ["HPLN-TAN", "HPLT-TAN"], ["arcsec"] * 2, [0.2, 0.2]
     tree = _with_cards(sky, A_ORDER=2, B_ORDER=2, A_2_0=0.001, B_0_2=0.001)
@@ -872,7 +889,7 @@ def test_a_wcs_is_read_back_without_what_a_results_file_does_not_hold(tmp_path):
     restored = load_results(_with_attribute(tmp_path, "wcs", tree))["wcs"]
     assert restored.sip is None and restored.wcs.cdelt.tolist() == [0.2, 0.2]
 
-    # Nor its number of axes, which wcslib makes room for as the square of.
+    # Nor the header's number of axes, as wcslib allocates room for its square.
     tree = _with_cards(_wcs(), WCSAXES=5)
     assert WCS(fits.Header.fromstring(tree["header"], sep="\n")).naxis == 5
     assert load_results(_with_attribute(tmp_path, "wcs", tree))["wcs"].naxis == 3
@@ -913,12 +930,12 @@ def test_another_kind_of_eclipse_file_is_refused(tmp_path):
         f.attrs["version"] = 1
     with pytest.raises(ValueError, match="is not an ECLIPSE results file") as error:
         load_results(tmp_path / "synthesis.h5")
-    # Nor sent to docs that do not give the layout.
+    # The error does not point to docs, which do not give the layout.
     assert "documentation" not in str(error.value)
 
 
 def test_every_value_is_strict_json(tmp_path):
-    """So that a reader in another language parses it, NaN and infinity included."""
+    """Strict JSON, NaN and infinity included, so readers in other languages can parse it."""
     payload = {"nan": float("nan"), "inf": -np.inf * u.s, "list": [1.0, float("inf")],
                "array": np.array(["a"]), "quantities": [np.nan * u.m],
                "group": {"data": np.ones(3), "nan": float("nan"), (1, 2): {"x": np.ones(2)}},
@@ -928,7 +945,7 @@ def test_every_value_is_strict_json(tmp_path):
     def refuse(constant):
         raise ValueError(f"{constant} is not JSON")
 
-    # Every attribute but those of plain text or a number.
+    # Every attribute except those holding plain text or a number.
     plain = {"format", "version", "unit", "eclipse_type", "eclipse_length", "target"}
     checked = []
     with h5py.File(path, "r") as f:
@@ -977,7 +994,10 @@ def test_what_save_results_is_given_is_checked_first(tmp_path, monkeypatch):
 
 
 def test_another_save_of_the_same_name_is_left_alone(tmp_path, monkeypatch):
-    """Two runs saving one name at once write their own partial files, even if they draw the same name."""
+    """Two runs saving to one name at once write separate partial files.
+
+    This holds even when both draw the same partial-file name.
+    """
     draws = iter(["aaaa", "bbbb"])
     monkeypatch.setattr("euvst_response.atmosphere.secrets.token_hex", lambda size: next(draws))
     theirs = tmp_path / "out.h5.aaaa.part"
@@ -1026,7 +1046,7 @@ def test_a_missing_or_foreign_file_is_named_for_what_it_is(tmp_path):
 
 
 def test_what_the_results_hold_in_more_than_one_place_is_written_once(tmp_path):
-    """As a ground truth the combinations share, or the last raster cube kept as cube_sim."""
+    """Such as a ground truth shared by combinations, or the last raster cube kept as cube_sim."""
     shared, cube = {"fit": np.arange(2000.0)}, _cube()
     payload = {"a": {"truth": shared, "cube": cube}, "b": {"truth": shared}, "cube_sim": cube}
     path = save_results(tmp_path / "out.h5", payload)
@@ -1063,7 +1083,7 @@ def test_a_reference_is_only_to_what_the_file_holds(tmp_path, target, match):
 
 
 def test_the_numbers_of_a_wcs_come_back_exactly(tmp_path):
-    """A header holds 14 digits, which 0.2 arcsec in degrees is not."""
+    """A header holds 14 digits, too few for 0.2 arcsec in degrees."""
     wcs = _wcs()
     wcs.wcs.cunit = ["cm", "deg", "deg"]
     wcs.wcs.cdelt = [1.69e-11, (0.2 * u.arcsec).to_value(u.deg), (0.159 * u.arcsec).to_value(u.deg)]
@@ -1088,7 +1108,7 @@ def test_a_rotated_wcs_or_one_given_by_a_cd_matrix_comes_back_exactly(tmp_path):
     both = WCS(naxis=2)
     both.wcs.ctype, both.wcs.cunit = matrix.wcs.ctype, matrix.wcs.cunit
     both.wcs.cdelt, both.wcs.pc, both.wcs.cd = [0.2, 0.159], [[1.0, 0.1], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]]
-    # As an older solar FITS header can give it.
+    # CROTA, as older solar FITS headers can have.
     crota = WCS(naxis=2)
     crota.wcs.ctype, crota.wcs.cunit = matrix.wcs.ctype, matrix.wcs.cunit
     crota.wcs.cdelt, crota.wcs.crota = [0.6, 0.6], [0.0, 12.0]
@@ -1116,7 +1136,7 @@ def test_a_file_that_holds_no_mapping_is_refused(tmp_path):
 
 
 def _combinations(first, second):
-    """Results of two combinations, with the DN signal data and unit of each given."""
+    """Results of two combinations, each with the given DN signal data and unit."""
     return {"results": {"all_combinations": {
         ("a",): {"first_signal_wcs": _wcs(), "first_dn_signal_data": first[0],
                  "first_dn_signal_unit": first[1], "first_photon_signal_data": np.ones((2, 3, 4)),
@@ -1137,7 +1157,8 @@ def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
     assert results[("b",)]["first_dn_signal"].data.tolist() == (signal * 2).tolist()
     assert results[("b",)]["first_dn_signal"].unit == u.DN
 
-    # Held once by the file, as a crafted file could for any number of combinations.
+    # Stored once in the file and shared, as a crafted file could do for any
+    # number of combinations.
     path = save_results(tmp_path / "out.h5", _combinations((signal, u.DN), (signal, u.DN)))
     results = load_instrument_response_results(path)["results"]["all_combinations"]
     assert np.shares_memory(results[("a",)]["first_dn_signal"].data,
@@ -1154,7 +1175,7 @@ def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
 
 
 def test_numbers_keep_their_numpy_types(tmp_path):
-    """As the keys of a cube's sampling have them, and a setting given in single precision."""
+    """Such as the keys of a cube's sampling, and a setting given in single precision."""
     values = {"f32": np.float32(0.76), "f64": np.float64(0.2), "i32": np.int32(26),
               "flag": np.bool_(True), "zero_d": np.array(5.0), "count": u.Quantity(3, u.pix, dtype=int),
               "single": np.float32(1.5) * u.s, "keys": {(np.float64(0.2), 1): np.zeros(3)}}
@@ -1186,7 +1207,11 @@ def test_a_unit_keeps_its_whole_scale(tmp_path):
 ], ids=["unit of a script's own", "function unit", "masked array", "numpy date", "numpy date type",
         "complex number"])
 def test_what_would_not_read_back_is_refused_when_written(tmp_path, value, match):
-    """With where it is, rather than written as something that cannot be read or reads as another value."""
+    """The error gives the value's location.
+
+    Writing it would give a file that cannot be read, or that reads back as
+    another value.
+    """
     with pytest.raises(TypeError, match=f"/group/value: .*{match}"):
         save_results(tmp_path / "out.h5", {"group": {"value": value, "data": np.ones(3)}})
     assert list(tmp_path.iterdir()) == []
@@ -1204,7 +1229,7 @@ def test_a_cube_or_value_that_cannot_be_written_is_said_where_it_is(tmp_path):
 
 
 def test_names_hdf5_cannot_hold_are_kept_as_keys(tmp_path):
-    """A NUL, which HDF5 would cut the name at, or text UTF-8 has no form for."""
+    """Such as a NUL, where HDF5 would cut the name, or text with no UTF-8 form."""
     payload = {"group": {"a\x00b": np.ones(2), "a": np.zeros(2), "\ud800": 1}}
     out = _round_trip(tmp_path, payload)["group"]
     assert list(out) == ["a\x00b", "a", "\ud800"]
@@ -1212,7 +1237,7 @@ def test_names_hdf5_cannot_hold_are_kept_as_keys(tmp_path):
 
 
 def test_a_path_the_reader_would_not_follow_is_kept_as_given(tmp_path):
-    """The package itself, say, which is no file in it."""
+    """For example the package root, which is not a file inside the package."""
     root = results_file._package_root()
     out = _round_trip(tmp_path, {"root": root, "table": root / "data" / "throughput" / "source.txt"})
     assert out["root"] == root and out["table"] == root / "data" / "throughput" / "source.txt"
@@ -1228,7 +1253,7 @@ def test_a_read_only_results_file_is_not_written_over(tmp_path):
 
 
 def test_a_long_name_is_written(tmp_path):
-    """Its partial file takes no more of the name than a filesystem allows."""
+    """Its partial file name stays within the filesystem's length limit."""
     path = save_results(tmp_path / ("x" * 240 + ".h5"), {"instrument": "SWC"})
     assert load_results(path)["instrument"] == "SWC"
     assert [p.name for p in tmp_path.iterdir()] == [path.name]
@@ -1251,7 +1276,7 @@ def test_odd_paths_are_named_for_what_they_are(tmp_path, monkeypatch):
 
 
 class _Gone:
-    """A class a pickle names, which a later version no longer has."""
+    """Class named in a pickle, which a later version no longer has."""
 
 
 def test_a_pickle_of_a_class_this_version_lacks_is_named(tmp_path, monkeypatch):
@@ -1269,7 +1294,7 @@ def test_a_pickle_of_a_class_this_version_lacks_is_named(tmp_path, monkeypatch):
 
 
 def test_a_wcs_keeps_its_time_and_its_observer(tmp_path):
-    """The file promises them back; a sunpy map's WCS carries both."""
+    """The file format promises them back, and a sunpy map's WCS has both."""
     wcs = _wcs()
     wcs.wcs.dateobs = "2024-03-20T00:00:00"
     wcs.wcs.aux.hgln_obs = 0.0

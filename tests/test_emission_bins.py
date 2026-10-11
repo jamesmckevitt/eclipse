@@ -1,11 +1,11 @@
-"""Each cell's emission measure is shared between the two bins about it in temperature and velocity.
+"""Emission measure is shared between the bins either side of a cell's temperature and velocity.
 
-Put wholly in the nearest bin, a uniform 2.4 km/s flow on the default 5 km/s
-grid was synthesised at rest and a 2.6 km/s one at 5 km/s, and a cell's
-contribution function was that of the nearest temperature bin, 0.025 dex away
-at most. Shared in proportion to how near each bin is, a line's mean velocity
-is the cell's, and its contribution function is interpolated between the two
-temperatures.
+With all of it in the nearest bin, a uniform 2.4 km/s flow on the default
+5 km/s grid would be synthesised at rest and a 2.6 km/s one at 5 km/s, and
+the contribution function would be taken from a temperature up to 0.025 dex
+away. Sharing it linearly between the two bins keeps the line's mean
+velocity at the cell's, and interpolates the contribution function between
+the two temperatures.
 """
 import astropy.units as u
 import numpy as np
@@ -41,7 +41,7 @@ def test_a_temperature_between_two_bins_is_shared_between_them():
 
 @pytest.mark.parametrize("velocity", [2.4, -17.3, 2.6])
 def test_the_synthesised_line_is_centred_on_the_flow(velocity):
-    """At rest, or at 5 km/s, as the nearest bin was, a flow of 2.4 or 2.6 km/s was off by half a bin."""
+    """The nearest bin alone would put a 2.4 or 2.6 km/s flow at 0 or 5 km/s, half a bin off."""
     log_t, v, em = _one_cell(6.15, velocity, 1.0e27)
     em_tv = build_em_tv(log_t, v, LOGT, GRID, em, "z")
     line = {"Fe12_195.1190": {"wl0": (195.119 * u.AA).to(u.cm), "g": np.ones((1, 1, LOGT.size)),
@@ -76,7 +76,7 @@ def test_a_value_beyond_the_edges_is_in_no_bin():
 
 
 def _shared(values, centres, edges):
-    """The bins a value is shared between, worked out one value at a time."""
+    """Weights of the bins a single value is shared between."""
     if not edges[0] <= values < edges[-1]:
         return {}
     if values <= centres[0]:

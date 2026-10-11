@@ -1,15 +1,14 @@
-"""--downsample has to describe the same Sun as a full-resolution run.
+"""--downsample must describe the same Sun as a full-resolution run.
 
-Striding by a factor keeps one cell in every *factor* along each axis, so each
-kept cell stands for that many cells of the simulation. The voxel sizes have to
-grow by the factor exactly once: in the WCS, in the path length used for the
-emission measure, and in what the synthesis file records. The factor used to
-be applied in main() and again in every load_cube call, in place, so it
-compounded across the cubes (issue #72).
+Downsampling keeps one cell in every `downsample` along each axis, so each
+kept cell stands for that many simulation cells. The voxel sizes must grow by
+the factor exactly once: in the WCS, in the path length for the emission
+measure, and in the synthesis file. Applying it in both main() and every
+load_cube call, in place, compounded it across the cubes (issue #72).
 
-These run the real synthesis on a small uniform atmosphere with a flat
-contribution function standing in for fiasco, so a uniform column has to come
-out with the same intensity at any downsampling.
+The tests run the real synthesis on a small uniform atmosphere, with a flat
+contribution function in place of fiasco, so a uniform column must give the
+same intensity at any downsampling.
 """
 import sys
 
@@ -32,7 +31,7 @@ VOXEL = {"dx": 0.1 * u.Mm, "dy": 0.15 * u.Mm, "dz": 0.05 * u.Mm}
 
 
 def _write_cube(path, shape, value):
-    """A uniform cube in the file's own (nx, nz, ny) Fortran layout."""
+    """Write a uniform cube in the file's (nx, nz, ny) Fortran layout."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.full(shape, value, dtype=np.float32).ravel(order="F").tofile(path)
 
@@ -61,7 +60,7 @@ def _flat_goft(lines, **kwargs):
 
 
 def _atmosphere_file(tmp_path, shape, suffix="0270000"):
-    """The MURaM files above as an atmosphere file, placed as dynamic mode places them."""
+    """Atmosphere file from the MURaM files above, positioned as in dynamic mode."""
     root = tmp_path / "atmosphere"
     files = {"temperature": ("temp/eosT", u.K),
              "mass_density": ("rho/result_prim_0", u.g / u.cm**3),
@@ -153,8 +152,8 @@ def test_downsampling_keeps_the_field_of_view_and_the_intensity(
     assert nx * dx == pytest.approx(full_nx * full_dx)
     assert ny * dy == pytest.approx(full_ny * full_dy)
 
-    # A uniform column holds the same emission measure however finely it is
-    # sampled, so its intensity cannot depend on the downsampling.
+    # A uniform column has the same emission measure at any sampling, so its
+    # intensity must not depend on the downsampling.
     assert np.all(_intensity(full) > 0)
     assert _intensity(reduced) == pytest.approx(
         np.full((ny, nx), _intensity(full).mean()), rel=1e-6)
@@ -166,7 +165,7 @@ def test_downsampling_keeps_the_field_of_view_and_the_intensity(
 
 def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
                                                             monkeypatch):
-    """Crops are in world coordinates, so they rely on the WCS being right."""
+    """Crops are in world coordinates, so they depend on a correct WCS."""
     shape = (16, 8, 8)
     _write_muram_files(tmp_path / "atmosphere", shape)
     crop = ["--crop-x", "-0.4 Mm", "0.4 Mm"]
@@ -174,8 +173,8 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
     full = _synthesise(tmp_path, monkeypatch, shape, 1, crop)
     reduced = _synthesise(tmp_path, monkeypatch, shape, 2, crop)
 
-    # A world box a fixed width wide spans about that width at any pixel size,
-    # so what shows a wrong WCS is how many simulation cells it keeps. Each
+    # A box of fixed width spans about that width at any pixel size, so a
+    # wrong WCS shows up in how many simulation cells it keeps. Each
     # downsampled cell stands for two, and striding moves the cell edges, so
     # allow one downsampled cell either way.
     full_cells = _intensity(full).shape[1]
@@ -185,7 +184,7 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
 
 
 def _write_muram_series(root, shape):
-    """Two snapshots, with the header files dynamic mode reads times from."""
+    """Write two snapshots, with header files giving their times for dynamic mode."""
     for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
         _write_muram_files(root, shape, suffix)
         header = root / "header" / f"Header.{suffix}"
@@ -212,7 +211,7 @@ def test_dynamic_mode_downsamples_the_same_way(tmp_path, monkeypatch):
 
 
 def test_load_cube_refuses_a_factor_that_does_not_divide_the_cube(tmp_path):
-    """9 cells by 2 would keep 5 cells of 2 voxels each, a domain of 10."""
+    """Downsampling 9 cells by 2 would keep 5 cells of 2 voxels, a domain of 10."""
     path = tmp_path / "eosT.0270000"
     _write_cube(path, (9, 8, 8), 1.0)
     with pytest.raises(ValueError, match="does not divide the cube shape"):
@@ -225,7 +224,7 @@ def test_load_cube_refuses_a_factor_that_does_not_divide_the_cube(tmp_path):
 @pytest.mark.parametrize("mode", [[], DYNAMIC], ids=["static", "dynamic"])
 def test_synthesis_refuses_a_factor_that_does_not_divide_the_cube(
         tmp_path, monkeypatch, mode):
-    """In either mode, rather than a domain and path length that are too large."""
+    """Both modes raise rather than give too large a domain and path length."""
     shape = (8, 8, 9)
     _write_muram_series(tmp_path / "atmosphere", shape)
     with pytest.raises(ValueError, match="does not divide the cube shape"):
