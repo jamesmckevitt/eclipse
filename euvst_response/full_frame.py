@@ -417,6 +417,9 @@ class FullFrame:
         how far their electrons spread.
     exposure : u.Quantity
     slit_position, slit_width : u.Quantity
+    settings : dict
+        Options the frame was made with, and the prescan and overscan sizes
+        in `dn`.
     """
 
     rate: Dict[str, np.ndarray]
@@ -512,6 +515,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
     focal_plane = FocalPlane_SWC.from_detector(det) if focal_plane is None else focal_plane
+    if (focal_plane.n_rows, focal_plane.n_columns) != (det.n_rows, det.n_columns):
+        raise ValueError(
+            f"The focal plane has {focal_plane.n_rows} rows and {focal_plane.n_columns} "
+            f"columns and the detector {det.n_rows} and {det.n_columns}; they must match.")
     if any(value != 0.0 for value in focal_plane.slit_image_tilt):
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
@@ -631,7 +638,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
                                "continuum": continuum is not None,
-                               "cells_per_row": frame_module.CELLS_PER_ROW})
+                               "cells_per_row": frame_module.CELLS_PER_ROW,
+                               "serial_prescan": det.serial_prescan,
+                               "serial_overscan": det.serial_overscan,
+                               "parallel_overscan_rows": det.parallel_overscan_rows})
 
 
 FRAME_FORMAT = "eclipse-full-ccd-frame"
@@ -642,8 +652,10 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     """
     Write a full-CCD frame to an HDF5 file.
 
-    The root holds the settings as attributes. A group for each CCD, `left`
-    and `right`, holds these datasets, each with its unit:
+    The root holds the settings as attributes, including the prescan and
+    overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
+    `parallel_overscan_rows`). A group for each CCD, `left` and `right`,
+    holds these datasets, each with its unit:
 
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.

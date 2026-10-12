@@ -20,7 +20,7 @@ if __name__ == "__main__":
     write_band_lines(lines, "band_lines.h5")
 ```
 
-On the default grids this takes about two hours and 150 GB of memory on 32 cores, so it is done once. A synthesis's densities are always steps of 0.3 in log10 n_e, so lines worked out over a wider run of those steps serve any synthesis whose densities fall within it.
+On the default grids this takes about two hours and 150 GB of memory on 16 cores, so it is done once. A synthesis's densities are always steps of 0.3 in log10 n_e, so lines worked out over a wider run of those steps serve any synthesis whose densities fall within it.
 
 ## 2. The continuum
 
@@ -37,7 +37,7 @@ if __name__ == "__main__":
                                                 abundance=lines.abundance)
 ```
 
-This takes about 5 minutes on 32 cores.
+This takes about 6 minutes on 16 cores.
 
 ## 3. The frame
 

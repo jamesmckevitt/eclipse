@@ -124,6 +124,9 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(uniform_synthesis, 
         assert f["left/photon_wavelength"].shape == (rows, det.n_columns)
         assert f["left/photon_rms_wavelength"].shape == (rows, det.n_columns)
         assert f.attrs["cells_per_row"] == 16
+        assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
+                f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
+                                                       det.parallel_overscan_rows)
 
 
 def test_the_prescan_and_overscan_hold_only_the_read_noise():
@@ -188,6 +191,10 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
                   np.zeros((lines.logN_grid.size, lines.logT_grid.size, 11)))
     with pytest.raises(ValueError, match="finite and increase"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=descending,
+                       n_workers=1)
+    smaller = FocalPlane_SWC.from_detector(Detector_SWC(n_columns=1024))
+    with pytest.raises(ValueError, match="they must match"):
+        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=smaller,
                        n_workers=1)
     tilted = FocalPlane_SWC.from_detector(Detector_SWC(), slit_image_tilt=(0.5, 0.0))
     with pytest.raises(ValueError, match="tilted"):
