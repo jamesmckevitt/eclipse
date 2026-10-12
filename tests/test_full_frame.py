@@ -192,6 +192,10 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
     with pytest.raises(ValueError, match="finite and increase"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=descending,
                        n_workers=1)
+    for settings in ({"exposure": -1 * u.s}, {"exposure": 1.0}, {"slit_width": 0 * u.arcsec}):
+        settings = {"exposure": 1 * u.s, **settings}
+        with pytest.raises(ValueError, match="above zero"):
+            full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, **settings, n_workers=1)
     smaller = FocalPlane_SWC.from_detector(Detector_SWC(n_columns=1024))
     with pytest.raises(ValueError, match="they must match"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=smaller,

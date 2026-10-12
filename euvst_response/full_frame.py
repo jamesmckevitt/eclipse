@@ -515,6 +515,12 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
     focal_plane = FocalPlane_SWC.from_detector(det) if focal_plane is None else focal_plane
+    for name, value, unit in (("exposure", exposure, u.s), ("slit_width", slit_width, u.arcsec)):
+        value = u.Quantity(value)
+        if not (value.isscalar and value.unit.is_equivalent(unit) and np.isfinite(value.value)
+                and value.value > 0):
+            raise ValueError(f"{name} must be a finite {unit.physical_type} above zero, got "
+                             f"{value}.")
     if (focal_plane.n_rows, focal_plane.n_columns) != (det.n_rows, det.n_columns):
         raise ValueError(
             f"The focal plane has {focal_plane.n_rows} rows and {focal_plane.n_columns} "
