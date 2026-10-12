@@ -1,10 +1,12 @@
 # Files
 
-ECLIPSE works with three kinds of file, all of them HDF5:
+ECLIPSE works with five kinds of file, all of them HDF5:
 
 - An **atmosphere file** holds one snapshot of a simulation. `synthesise-spectra`, and a [time series](time-series.md), read it.
 - A **synthesis file** holds the spectra an atmosphere emits. `synthesise-spectra` writes one, or you can write one from [another code's spectra](other-codes.md), and `eclipse` observes it.
 - A **results file** holds what `eclipse` measured. It is written to `run/result/<config name>.h5`.
+- A **band lines file** holds the contribution functions of every line in a band, for a [full-CCD frame](full-ccd-frame.md). `write_band_lines` writes one and `read_band_lines` reads it.
+- A **frame file** holds a full-CCD frame of the SW camera. `write_full_frame` writes one.
 
 ## Atmosphere files
 
@@ -121,3 +123,27 @@ print(f"Settings: {data['config']}")
 - The version of ECLIPSE and the git commit that made them
 
 Read them with `load_instrument_response_results`, as described in [Analysing the results](analysis.md).
+
+## Frame files
+
+`write_full_frame` writes a [full-CCD frame](full-ccd-frame.md). Its root has a `format` attribute of `eclipse-full-ccd-frame`, a `version` of `1`, and these attributes:
+
+| Attribute | Value |
+| --- | --- |
+| `exposure`, `slit_position`, `slit_width` | Each with its unit in `exposure_unit`, `slit_position_unit` and `slit_width_unit` |
+| `psf`, `spectral_psf`, `noise`, `continuum` | The options the frame was made with |
+| `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
+| `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
+| `parallel_overscan_rows` | The overscan rows read after the image |
+
+A group for each CCD, `left` and `right`, holds these datasets, each with a `unit` attribute:
+
+| Dataset | Shape | What it holds |
+| --- | --- | --- |
+| `dn` | `(n_rows + parallel_overscan_rows, n_columns + 2 * (serial_prescan + serial_overscan))` | The frame as read out, in DN |
+| `photons` | `(n_rows + parallel_overscan_rows, n_columns)` | The photons in each pixel over the exposure |
+| `rate` | `(n_rows, n_columns)` | The photons per second reaching each image pixel |
+| `wavelength` | `(n_rows,)` | The wavelength each row records |
+| `photon_wavelength`, `photon_rms_wavelength` | `(n_rows + parallel_overscan_rows, n_columns)` | The wavelengths of the mean and root mean square energies of each pixel's photons |
+
+Each row of `dn` is, in order, the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan.
