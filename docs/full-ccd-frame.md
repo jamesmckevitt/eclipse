@@ -54,7 +54,7 @@ write_full_frame(frame, "frame.h5")
 
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit.
 
-For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about half an hour and 90 GB of memory on 32 cores.
+For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about 50 minutes and 110 GB of memory on 32 cores.
 
 Every part of each line, and of the continuum, is counted in photons at its own wavelength, with the telescope's throughput there, and the photons in each pixel free the electrons of their own energy.
 
