@@ -28,14 +28,14 @@ def _flat_goft(lines, **kwargs):
             logT_grid, logN_grid)
 
 
-def _synthesise(tmp_path, temperature):
-    """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, at rest."""
+def _synthesise(tmp_path, temperature, velocity=0.0):
+    """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, moving at `velocity` km/s."""
     nz, ny, nx = temperature.size, 44, 6
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
     atmosphere = Atmosphere(
         temperature=np.broadcast_to(temperature[:, None, None], (nz, ny, nx)).copy() * u.K,
         mass_density=np.full((nz, ny, nx), density.value) * density.unit,
-        velocity_z=np.zeros((nz, ny, nx)) * u.km / u.s,
+        velocity_z=np.full((nz, ny, nx), velocity) * u.km / u.s,
         x_edges=np.arange(nx + 1) * 0.1 * u.Mm, y_edges=np.arange(ny + 1) * 0.1 * u.Mm,
         z_edges=np.arange(nz + 1) * 0.1 * u.Mm)
     path = write_atmosphere(atmosphere, tmp_path / "atmosphere.h5")
@@ -54,6 +54,12 @@ def _synthesise(tmp_path, temperature):
 def uniform_synthesis(tmp_path_factory):
     """Uniform corona at 1 MK."""
     return _synthesise(tmp_path_factory.mktemp("frame"), np.full(4, 1e6))
+
+
+@pytest.fixture(scope="module")
+def fast_synthesis(tmp_path_factory):
+    """Uniform corona at 1 MK moving at 500 km/s, beyond the velocity grid of +/-300 km/s."""
+    return _synthesise(tmp_path_factory.mktemp("fast"), np.full(4, 1e6), velocity=500.0)
 
 
 @pytest.fixture(scope="module")
@@ -196,6 +202,8 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
         settings = {"exposure": 1 * u.s, **settings}
         with pytest.raises(ValueError, match="above zero"):
             full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, **settings, n_workers=1)
+    with pytest.raises(ValueError, match="one position"):
+        full_ccd_frame(uniform_synthesis, lines, [0.3, 0.4] * u.Mm, 1 * u.s, n_workers=1)
     smaller = FocalPlane_SWC.from_detector(Detector_SWC(n_columns=1024))
     with pytest.raises(ValueError, match="they must match"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=smaller,
@@ -275,8 +283,10 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
     det, tel = Detector_SWC(), Telescope_EUVST()
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
-    # all at 1e9 cm^-3. The continuum is per unit emission measure and per cm.
-    em = products["em_tv"][0, 0].sum(axis=-1)                       # (nT,)
+    # all at 1e9 cm^-3, from the DEM per unit log T. The continuum is per unit
+    # emission measure and per cm.
+    logT = products["logT_grid"]
+    em = products["dem_map"][0, 0] * (logT[1] - logT[0])            # (nT,)
     density = int(np.argmin(np.abs(wider - 9.0)))
     radiance = (em[:, None] * (free + two_photon[density])).sum(axis=0) * 1e-8
     expected = photons_from_spectrum(
@@ -310,3 +320,22 @@ def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis,
         alone = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s,
                                n_workers=2, **settings)
     assert np.array_equal(alone.rate["left"], one.rate["left"])
+
+
+def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthesis,
+                                                                  fast_synthesis):
+    products = read_synthesis_products(uniform_synthesis)
+    fast = read_synthesis_products(fast_synthesis)
+    # The fast plasma is beyond the velocity grid, so it has no lines.
+    assert not fast["em_tv"].any() and products["em_tv"].any()
+    lines = _one_line(products)
+    lines.ions[0].g[:] = 0.0
+    wavelength = np.linspace(194.0, 196.0, 201)
+    n_t, n_n = lines.logT_grid.size, lines.logN_grid.size
+    continuum = (wavelength * u.AA, np.full((n_t, wavelength.size), 1e-30),
+                 np.full((n_n, n_t, wavelength.size), 1e-30))
+    settings = {"psf": False, "noise": False, "continuum": continuum, "n_workers": 1}
+    at_rest = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
+    moving = full_ccd_frame(fast_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
+    assert at_rest.rate["left"].any()
+    assert np.allclose(moving.rate["left"], at_rest.rate["left"], rtol=1e-12, atol=0)

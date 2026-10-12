@@ -84,6 +84,7 @@ class _Scene:
     logN_grid: np.ndarray
     velocity: np.ndarray            # bin centres, cm/s
     emission_measure: np.ndarray    # (image rows, nT, nN, nv), under the slit
+    total_emission_measure: np.ndarray  # (image rows, nT, nN), from the DEM
     y_edges: np.ndarray             # arcsec along the slit, from the image centre
 
 
@@ -92,11 +93,17 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
     """
     Emission measure under the slit from a synthesis file, by temperature, density and velocity.
 
+    The emission measure by velocity (`em_tv`) holds only plasma within the
+    velocity grid. The total at each temperature, from the DEM, also holds
+    plasma moving faster, and is kept for the continuum, which is not
+    Doppler shifted.
+
     Parameters
     ----------
     path : str or Path
         Synthesis file from ECLIPSE's own synthesis, with the emission
-        measure (`em_tv`) and the electron density at each temperature.
+        measure (`em_tv`), the DEM and the electron density at each
+        temperature.
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates.
@@ -106,20 +113,24 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         FWHM of the telescope's blur across the slit, which brings in
         emission from beside the slit. Default None, for no blur.
     """
+    from .synthesis import _temperature_bins
+
+    slit_position = u.Quantity(slit_position)
+    if not slit_position.isscalar:
+        raise ValueError(f"slit_position must be one position, got {slit_position}.")
     path = Path(path).expanduser()
     with h5py.File(path, "r") as f:
         x_edges = u.Quantity(f["x_edges"][()], f["x_edges"].attrs["unit"])
         y_edges = u.Quantity(f["y_edges"][()], f["y_edges"].attrs["unit"])
         products = f["synthesis"]
-        missing = [key for key in ("em_tv", "electron_density", "logT_grid", "logN_grid",
-                                   "vel_grid") if key not in products]
+        missing = [key for key in ("em_tv", "dem_map", "electron_density", "logT_grid",
+                                   "logN_grid", "vel_grid") if key not in products]
         if missing:
             raise ValueError(
                 f"{path} has no {', '.join(missing)}, which a full-CCD frame needs: it was "
                 f"not made by this version of ECLIPSE's synthesis. Synthesise it again.")
         x = _angle(x_edges)
-        centre = _angle(u.Quantity(slit_position)[np.newaxis] if
-                        u.Quantity(slit_position).isscalar else slit_position)[0]
+        centre = _angle(slit_position[np.newaxis])[0]
         width = u.Quantity(slit_width).to_value(u.arcsec)
         sigma = (0.0 if psf_across_slit is None
                  else _fwhm_to_sigma(u.Quantity(psf_across_slit).to_value(u.arcsec)))
@@ -130,6 +141,7 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
                              f"{x_edges[0]} to {x_edges[-1]}.")
         first, last = columns[0], columns[-1] + 1
         em = products["em_tv"][:, first:last, :, :].astype(float)
+        dem = products["dem_map"][:, first:last, :].astype(float)
         density = products["electron_density"][:, first:last, :].astype(float)
         logT = products["logT_grid"][()]
         logN = products["logN_grid"][()]
@@ -140,14 +152,19 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         np.log10(np.where(density > 0, density, np.nan)), logN)
     ny, _, n_t, n_v = em.shape
     scene = np.zeros((ny, n_t, logN.size, n_v))
+    total = np.zeros((ny, n_t, logN.size))
+    # The DEM is per unit log T, as the synthesis's continuum takes it.
+    total_em = dem * _temperature_bins(logT)[0]
     for k, weight in enumerate(weights):
         for share, index in ((low_share, lower), (high_share, upper)):
             part = weight * share[:, k, :, np.newaxis] * em[:, k, :, :]
             rows, temperatures = np.indices(index[:, k, :].shape)
             np.add.at(scene, (rows, temperatures, index[:, k, :]), part)
+            np.add.at(total, (rows, temperatures, index[:, k, :]),
+                      weight * share[:, k, :] * total_em[:, k, :])
     y = _angle(y_edges)
     return _Scene(logT_grid=logT, logN_grid=logN, velocity=velocity, emission_measure=scene,
-                  y_edges=y - 0.5 * (y[0] + y[-1]))
+                  total_emission_measure=total, y_edges=y - 0.5 * (y[0] + y[-1]))
 
 
 @dataclass
@@ -360,7 +377,11 @@ def _rates_at(t: int, context: dict):
             per_square[ccd] += em_used @ square.reshape(em_used.shape[1], -1)
     if continuum is not None:
         wavelength, free, two_photon = continuum
-        em_density = em_columns[:, densities].sum(axis=-1)            # (columns, densities)
+        # The continuum takes the total emission measure, which also holds
+        # plasma faster than the velocity grid.
+        total = along @ scene.total_emission_measure[:, t]             # (columns, nN)
+        densities = np.flatnonzero(total.any(axis=0))
+        em_density = total[:, densities]
         for ccd in CCDS:
             onto_rows, at_samples = layouts[ccd].continuum
             order = layouts[ccd].order
@@ -567,7 +588,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
     blur = spectral_psf if psf else None
     temperatures = [t for t in range(scene.logT_grid.size)
-                    if np.any(scene.emission_measure[:, t])]
+                    if np.any(scene.emission_measure[:, t])
+                    or (continuum is not None and np.any(scene.total_emission_measure[:, t]))]
     solid_angle = pixel_solid_angle(focal_plane, slit_width).to_value(u.sr)
     if continuum is not None:
         wavelength, free, two_photon = continuum

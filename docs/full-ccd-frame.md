@@ -58,6 +58,8 @@ For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a fr
 
 Every part of each line, and of the continuum, is counted in photons at its own wavelength, with the telescope's throughput there, and the photons in each pixel free the electrons of their own energy.
 
+The lines come only from plasma within the synthesis's velocity grid, so set `--vel-lim` wide enough for the fastest flows. The continuum is not Doppler shifted, and comes from all the plasma.
+
 ## What a frame holds
 
 For each CCD, `"left"` and `"right"`:
