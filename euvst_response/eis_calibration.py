@@ -1,44 +1,25 @@
 """
-Hinode/EIS effective area, as a function of wavelength and observation date.
+Hinode/EIS effective area as a function of wavelength and date.
 
-EIS is included in ECLIPSE as a reference instrument, so its throughput has to
-be as honest as the EUVST one. The effective area is strongly
-wavelength-dependent - 0.30 cm^2 at Fe XII 195 against 0.029 cm^2 at Ca XV
-181.9 in the ground calibration, a factor of ten across the short-wavelength
-channel alone - and it has fallen substantially since launch, by up to a
-factor of seven in parts of the long-wavelength channel by 2022 in the dz2025
-calibration. Any study comparing photon statistics
-between lines, or between epochs, depends on both.
+Four calibrations, as the `calib=` keywords of `eis_get_fitdata.pro`:
 
-Four calibrations are available, matching the ``calib=`` keywords of
-``eis_get_fitdata.pro``:
+`ground`
+    Pre-flight MSSL calibration, April 2007, with no time dependence.
+    Port of `eis_ea.pro`.
+`dz2013`
+    Del Zanna (2013). Port of `eis_ltds.pro`. The long-wavelength channel
+    degrades as a polynomial, held constant after 2012-09-14 where the fit
+    ends; the short-wavelength channel does not change.
+`warren2014`
+    Warren, Ugarte-Urra & Landi (2014). Exponential decay at each spline
+    knot, from `nrl_ea_coeff_v1.3.genx`.
+`dz2025`
+    Del Zanna et al. (2025), the current recommendation, fitted to EIS
+    spectra from 2007 to 2022. Port of `interpol_eis_ea.pro`.
 
-``ground``
-    Pre-flight MSSL calibration, April 2007. No time dependence.
-    Port of ``eis_ea.pro``.
-``dz2013``
-    Del Zanna (2013). Port of ``eis_ltds.pro``. The long-wavelength channel
-    carries a polynomial degradation, clamped after 2012-09-14 where the
-    original fit ends; the short-wavelength channel is time-independent.
-``warren2014``
-    Warren, Ugarte-Urra & Landi (2014). Exponential decay per spline knot,
-    from ``nrl_ea_coeff_v1.3.genx``.
-``dz2025``
-    Del Zanna et al. (2025), the current recommendation. Time- and
-    wavelength-dependent areas fitted to 2007-2022 EIS spectra. Port of
-    ``interpol_eis_ea.pro``.
-
-All four return the effective area **including** the CCD quantum efficiency
-(0.64), because that is the convention the tables are quoted in and the one
-the EIS radiometric calibration formula uses. Callers that apply the quantum
-efficiency separately must divide it back out; ``config.Telescope_EIS`` does
-exactly that, since ECLIPSE draws detected photons binomially further down the
-chain.
-
-Only the effective area lives here. Converting measured DN back to physical
-units is a data-analysis step with its own conventions (per spectral pixel,
-per arcsec^2, exposure time excluded) and is deliberately out of scope for a
-forward-modelling package.
+All four include the CCD quantum efficiency of 0.64, as the tables do.
+`config.Telescope_EIS` divides it out, as ECLIPSE applies the quantum
+efficiency in the detector.
 
 References
 ----------
@@ -69,9 +50,9 @@ __all__ = [
     "normalise_date",
 ]
 
-# EIS observes two disjoint bands; there is no effective area between them.
-# Edges as in eis_get_band (eis_ea_nrl.pro). The latest ground tables, which
-# eis_ea.pro reads, are sampled 165-213 and 245-292 Angstrom.
+# EIS observes two separate bands, with no effective area between them.
+# Edges as in eis_get_band (eis_ea_nrl.pro). The latest ground tables, read
+# by eis_ea.pro, are sampled over 165-213 and 245-292 Angstrom.
 SW_BAND = (165.0, 213.0)
 LW_BAND = (245.0, 292.0)
 
@@ -83,11 +64,9 @@ TIME_DEPENDENT_CALIBRATIONS = ("dz2013", "warren2014", "dz2025")
 _DATA_DIR = files("euvst_response") / "data" / "eis_response"
 _DZ2025_SAV = _DATA_DIR / "fit_eis_ea_2023-05-04_smooth.sav"
 
-# The tabulated areas include this CCD quantum efficiency (EIS SW Note 2).
-# It is a property of how the tables are quoted, not a free parameter: change
-# it and the areas no longer mean what their source says they mean. The
-# detector QE that ECLIPSE applies is a separate, configurable quantity on
-# Detector_EIS.
+# CCD quantum efficiency included in the tabulated areas (EIS SW Note 2).
+# It is fixed by how the tables are quoted, not a free parameter. The
+# detector QE that ECLIPSE applies is a separate setting on Detector_EIS.
 QE_IN_TABLES = 0.64
 
 
@@ -98,9 +77,9 @@ QE_IN_TABLES = 0.64
 def normalise_date(date) -> str:
     """Coerce a date to an ISO string.
 
-    Accepts a string, a ``datetime.date``, a ``datetime.datetime`` or anything
-    with an ``isot`` attribute (``astropy.time.Time``). YAML parses an unquoted
-    ``2012-06-03`` into a ``datetime.date``, so this is not a theoretical case.
+    Accepts a string, a `datetime.date`, a `datetime.datetime` or anything
+    with an `isot` attribute (`astropy.time.Time`). Note that YAML reads an
+    unquoted `2012-06-03` as a `datetime.date`.
     """
     if isinstance(date, str):
         return date
@@ -117,17 +96,17 @@ def normalise_date(date) -> str:
 def _parse_date(date_str: str) -> _datetime:
     """Parse an ISO date string to a UTC datetime.
 
-    A string carrying an offset is *converted* to UTC rather than relabelled.
-    ``replace(tzinfo=utc)`` would keep the wall clock and move the instant, so
-    ``2012-06-03T00:00:00-05:00`` would enter the degradation calculation five
+    A string with an offset is converted to UTC, not relabelled.
+    `replace(tzinfo=utc)` would keep the wall clock and move the instant, so
+    `2012-06-03T00:00:00-05:00` would enter the degradation calculation five
     hours early.
     """
     text = normalise_date(date_str).replace("Z", "+00:00")
-    # Every ISO form, offsets included, is read whole from Python 3.11; one
-    # that is not is refused, rather than read with what follows a + dropped.
+    # From Python 3.11 this reads any ISO form, offsets included, and refuses
+    # anything else rather than dropping what follows a +.
     parsed = _datetime.fromisoformat(text)
     if parsed.tzinfo is None:
-        # Naive input is taken to be UTC, which is what EIS dates are.
+        # EIS dates are UTC, so naive input is taken as UTC.
         return parsed.replace(tzinfo=_tz.utc)
     return parsed.astimezone(_tz.utc)
 
@@ -149,9 +128,9 @@ def _ground_table(band: str, latest: bool = False) -> tuple[np.ndarray, np.ndarr
     """
     Wavelength (Angstrom) and effective area (cm^2) from the SSW tables.
 
-    eis_ltds.pro names the .004 tables. eis_ea.pro reads the latest, which
-    for the short band is B.005, the same with a point at 213 Angstrom added,
-    so *latest* gives that.
+    eis_ltds.pro uses the .004 tables. eis_ea.pro reads the latest, which for
+    the short band is B.005: B.004 with a point added at 213 Angstrom. Set
+    `latest` to read that one.
     """
     fname = ("EIS_EffArea_B.005" if latest else "EIS_EffArea_B.004") if band == "SW" \
         else "EIS_EffArea_A.004"
@@ -167,31 +146,31 @@ def _ground_table(band: str, latest: bool = False) -> tuple[np.ndarray, np.ndarr
 
 
 # ---------------------------------------------------------------------------
-# IDL's interpolants, as the SolarSoft routines call them
+# IDL interpolants, as called by the SolarSoft routines
 # ---------------------------------------------------------------------------
 
 class _IdlInterpolSpline:
     """
-    IDL's ``INTERPOL(y, x, xout, /SPLINE)`` through the points *x*, *y*, called with *xout*.
+    IDL's `INTERPOL(y, x, xout, /SPLINE)` through `x`, `y`, called with `xout`.
 
-    Not one spline through all the points: at each output point, a natural
-    cubic spline through the four data points around it, the interval it is
-    in and one either side, or the end four beyond the data, from which it
-    extrapolates. As interpol.pro in IDL 8.8. The splines are made once, so
-    that a call only evaluates them.
+    This is not one spline through all the points. At each output point it
+    is a natural cubic spline through four data points: the two ends of the
+    interval holding the point and one either side. Beyond the data it
+    extrapolates from the end four. As interpol.pro in IDL 8.8. The splines
+    are built once, so a call only evaluates them.
     """
 
     def __init__(self, x, y):
         self.x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
-        # One for each interval with a point either side, by its first point.
+        # One spline per interval with a point either side, by its first point.
         self.splines = [CubicSpline(self.x[first - 1:first + 3], y[first - 1:first + 3],
                                     bc_type="natural")
                         for first in range(1, self.x.size - 2)]
 
     def __call__(self, xout) -> np.ndarray:
         xout = np.atleast_1d(np.asarray(xout, dtype=float))
-        # VALUE_LOCATE, kept to the intervals that have a point either side.
+        # VALUE_LOCATE, limited to intervals with a point either side.
         start = np.clip(np.searchsorted(self.x, xout, side="right") - 1, 1, self.x.size - 3)
         out = np.empty(xout.shape)
         for first in np.unique(start):
@@ -202,12 +181,12 @@ class _IdlInterpolSpline:
 
 class _IdlTensionSpline:
     """
-    IDL's ``SPLINE(x, y, t)`` through the points *x*, *y*, called with *t*.
+    IDL's `SPLINE(x, y, t)` through `x`, `y`, called with `t`.
 
-    A spline under tension *sigma*, as spline.pro in IDL 8.8. Its end slopes
+    A spline under tension `sigma`, as spline.pro in IDL 8.8. The end slopes
     are those of the quadratics through the first and last three points.
-    Ported step for step, in double precision, with the solve done once, so
-    that a call only evaluates it.
+    Ported step by step in double precision. The solve is done once, so a
+    call only evaluates the spline.
     """
 
     def __init__(self, x, y, sigma: float = 1.0):
@@ -267,7 +246,7 @@ class _IdlTensionSpline:
     def __call__(self, t) -> np.ndarray:
         xx, yy, yp, sigmap = self.xx, self.yy, self.yp, self.sigmap
         tt = np.atleast_1d(np.asarray(t, dtype=float))
-        # The knot at or beyond each point, from the second to the last.
+        # Knot at or beyond each point, between the second knot and the last.
         subs = np.clip(np.searchsorted(xx, tt, side="right"), 1, xx.size - 1)
         subs1 = subs - 1
         del1 = tt - xx[subs1]
@@ -288,7 +267,7 @@ class _IdlTensionSpline:
 # ---------------------------------------------------------------------------
 
 # Spline control points. The divisors are part of the published correction,
-# not a normalisation applied here: they are how eis_ltds.pro scales the
+# not a normalisation added here: eis_ltds.pro uses them to scale the
 # pre-flight curve onto the 2013 calibration, point by point.
 _DZ2013_SW_WAVE = np.array([
     165, 171, 174.5, 177.2, 178.1, 180.4, 182.2,
@@ -320,8 +299,8 @@ _DZ2013_LW_EA = np.array([
 # Long-wavelength degradation polynomial, in seconds since the reference time.
 _DZ2013_LW_COEFF = np.array([1.0326230, -5.2495791e-09, 1.2055185e-17])
 
-# 22-Sept-2006 21:36 UTC, and the 14-Sept-2012 end of the fitted range.
-# datetime rather than IDL anytim2tai, for portability.
+# Reference time (22-Sept-2006 21:36 UTC) and end of the fitted range
+# (14-Sept-2012), as datetimes rather than IDL anytim2tai, for portability.
 _DZ2013_REF_DT = _datetime(2006, 9, 22, 21, 36, 0, tzinfo=_tz.utc)
 _DZ2013_LAST_DT = _datetime(2012, 9, 14, 0, 0, 0, tzinfo=_tz.utc)
 
@@ -333,20 +312,21 @@ def _ground_curve(date_str: str, band: str):
     return lambda wl: np.exp(spline(wl))
 
 
-# The wavelengths eis_ltds.pro corrects, each band's open interval; elsewhere
-# its correction is 1.
+# Open interval of each band that eis_ltds.pro corrects; elsewhere the
+# correction is 1.
 _DZ2013_CORRECTED = {"SW": (165.0, 212.0), "LW": (245.0, 292.0)}
 
 
 def _dz2013_curve(date_str: str, band: str):
     """
-    eis_ea_gdz.pro: eis_ea.pro's ground area over eis_ltds.pro's correction.
+    eis_ea_gdz.pro: ground area from eis_ea.pro divided by the eis_ltds.pro correction.
 
-    The correction is the ground table over the Del Zanna curve, both put at
-    the wavelength by INTERPOL /SPLINE, the curve having been put on the
-    table's grid the same way first. Before launch it is 1, and after 14
-    September 2012 the long-wavelength decay is held, as eis_ltds.pro does;
-    :func:`effective_area` says so, as eis_ltds.pro prints.
+    The correction is the ground table divided by the Del Zanna curve, both
+    interpolated to the wavelength with INTERPOL /SPLINE. The curve is first
+    interpolated onto the table's grid the same way. The correction is 1
+    before launch. After 14 September 2012 the long-wavelength decay is held
+    fixed, as in eis_ltds.pro, and :func:`effective_area` warns of this as
+    eis_ltds.pro prints it.
     """
     ground = _ground_curve(date_str, band)
     when = _parse_date(date_str)
@@ -414,15 +394,15 @@ def _dz2025_table() -> dict:
     """Load the fitted effective-area save file."""
     import scipy.io
 
-    # readsav needs a filesystem path, so the resource is materialised first.
-    # For a normal install as_file just hands back the path unchanged.
+    # readsav needs a filesystem path. For a normal install as_file returns
+    # the path unchanged.
     with as_file(_DZ2025_SAV) as path:
         fit_ea = scipy.io.readsav(str(path))["fit_ea"]
     dates = [date.decode() for date in fit_ea["DATE_OBS"][0]]
     return {
         "year_fr": fit_ea["YEAR_FR"][0].astype(np.float64),
-        # The fitted dates as TAI days, which interpol_eis_ea.pro interpolates
-        # in; decimal years are not linear in time across a year's end.
+        # Fitted dates as TAI days, which interpol_eis_ea.pro interpolates in;
+        # decimal years are not linear in time across the end of a year.
         "dates": dates,
         "tai": Time(dates, scale="utc").tai.mjd,
         "SW_ea": fit_ea["SW_EA"][0].astype(np.float64),
@@ -439,9 +419,9 @@ def _dz2025_reference(date_str: str, band: str) -> tuple[np.ndarray, np.ndarray]
     ref_area = table[f"{band}_ea"]
     year_fr = table["year_fr"]
 
-    # The fit covers 2007-2022; outside it the endpoint value is held, as
-    # interpol_eis_ea.pro does, which also says so, as effective_area does.
-    # Extrapolating a degradation curve would be worse than saying so.
+    # The fit covers 2007-2022. Outside it the end value is held, as in
+    # interpol_eis_ea.pro, and effective_area warns as that routine does.
+    # This is safer than extrapolating a degradation curve.
     tai = table["tai"]
     when = np.clip(Time(_parse_date(date_str)).tai.mjd, tai[0], tai[-1])
 
@@ -467,10 +447,10 @@ def _dz2025_curve(date_str: str, band: str):
 # ---------------------------------------------------------------------------
 
 # Each calibration's area against wavelength, for a date and a band, built as
-# the SolarSoft routine it ports builds it. The interpolation matters: a
-# linear one in place of eis_ltds.pro's splines put Fe XIII 203.83 12 per cent
-# too bright in dz2013, and the other routines' local splines differ from one
-# spline through every point by up to a few per cent.
+# in the SolarSoft routine it ports. The interpolation matters: linear
+# interpolation instead of eis_ltds.pro's splines puts Fe XIII 203.83 12 per
+# cent too bright in dz2013, and the other routines' local splines differ
+# from one spline through every point by up to a few per cent.
 _METHODS = {
     "ground": _ground_curve,
     "dz2013": _dz2013_curve,
@@ -490,14 +470,14 @@ def _check_method(method: str) -> str:
 
 @lru_cache(maxsize=256)
 def _interpolator(method: str, date_str: str, band: str):
-    """Build, once per calibration and epoch, a callable EA(wavelength_aa).
+    """Callable EA(wavelength_aa), built once per calibration and epoch.
 
-    Cached because ``radiometric.add_telescope_throughput`` evaluates the
+    Cached because `radiometric.add_telescope_throughput` evaluates the
     telescope response one wavelength sample at a time, in a Python loop, on
     every Monte Carlo iteration. Rebuilding a 49-point spline per sample would
-    dominate the run time. The cache holds interpolators with their splines
-    made, not results, so it is exact. Nothing is said from here, since a
-    cached call would not say it: :func:`effective_area` says what it must.
+    dominate the run time. The cache holds built interpolators, not results,
+    so it is exact. Warnings are left to :func:`effective_area`, since a
+    cached call would not repeat them.
     """
     return _METHODS[_check_method(method)](date_str, band)
 
@@ -505,9 +485,10 @@ def _interpolator(method: str, date_str: str, band: str):
 @lru_cache(maxsize=256)
 def _beyond_the_fit(method: str, date_str: str) -> tuple:
     """
-    What the SolarSoft routine prints for a date beyond the dates *method* is fitted to.
+    Messages the SolarSoft routine prints for a date outside the fit of `method`.
 
-    Pairs of the bands it concerns and the message, none for a date within.
+    `(bands, message)` pairs, where `bands` are those the message concerns.
+    Empty for a date within the fit.
     """
     if method == "dz2013":
         when = _parse_date(date_str)
@@ -530,7 +511,7 @@ def _beyond_the_fit(method: str, date_str: str) -> tuple:
 
 
 def band_of(wavelength_aa: float) -> str | None:
-    """``'SW'``, ``'LW'``, or ``None`` for a wavelength EIS does not observe."""
+    """EIS band of a wavelength: `'SW'`, `'LW'`, or `None` if EIS does not observe it."""
     if SW_BAND[0] <= wavelength_aa <= SW_BAND[1]:
         return "SW"
     if LW_BAND[0] <= wavelength_aa <= LW_BAND[1]:
@@ -540,28 +521,26 @@ def band_of(wavelength_aa: float) -> str | None:
 
 def effective_area(wavelengths_aa, date=None, method="ground") -> np.ndarray:
     """
-    EIS's effective area, including its detector's quantum efficiency, from one of its calibrations.
+    EIS effective area, including the detector quantum efficiency.
 
     Parameters
     ----------
     wavelengths_aa : array_like
-        Wavelengths in Angstrom, in either or both of EIS's bands.
+        Wavelengths in Angstrom, in either or both EIS bands.
     date : str or datetime or astropy.time.Time, optional
-        The date of the observation, which every calibration but ``"ground"``
-        needs.
+        Observation date, needed by every calibration but `"ground"`.
     method : str, optional
-        The calibration: ``"ground"`` (default), ``"dz2013"``,
-        ``"warren2014"`` or ``"dz2025"``.
+        Calibration: `"ground"` (default), `"dz2013"`, `"warren2014"` or
+        `"dz2025"`.
 
     Returns
     -------
     np.ndarray
-        The effective area in cm2, NaN outside EIS's two bands.
+        Effective area in cm2, NaN outside the two EIS bands.
     """
-    # The bands are treated separately rather than by one interpolation
-    # across the gap: EIS has two detectors with independent calibrations,
-    # and one curve through both would put a meaningless area in the
-    # 213-245 Angstrom gap and distort the band edges.
+    # The bands are interpolated separately: EIS has two detectors with
+    # independent calibrations, and one curve through both would put a
+    # meaningless area in the 213-245 Angstrom gap and distort the band edges.
     _check_method(method)
     if date is None:
         if method in TIME_DEPENDENT_CALIBRATIONS:
@@ -585,7 +564,7 @@ def effective_area(wavelengths_aa, date=None, method="ground") -> np.ndarray:
             out[mask] = _interpolator(method, date_str, band)(wavelengths[mask])
             bands.append(band)
 
-    # Every call says so, once however many bands it spans.
+    # Warn on every call, once per message however many bands it spans.
     if date_str:
         for concerned, message in _beyond_the_fit(method, date_str):
             if set(concerned) & set(bands):

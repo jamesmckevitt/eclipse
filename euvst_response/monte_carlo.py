@@ -23,7 +23,7 @@ from .utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offc
 def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
                  units: list, signal: NDCube, rest_wavelength: u.Quantity,
                  fit_config) -> dict:
-    """Statistics of one signal's fits, and a line saying how many failed."""
+    """Statistics of one signal's fits, printing how many fits failed."""
     results = summarise_fits(fit_data, failed, units,
                              spectral_pixel_width(signal), rest_wavelength,
                              fit_config)
@@ -44,10 +44,12 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
 
 def _with_photon_wavelength(cube: NDCube) -> NDCube:
     """
-    *cube*, with the wavelengths of the mean and the root mean square
-    energies of each pixel's photons in its ``meta["photon_wavelength"]``
-    and ``meta["photon_rms_wavelength"]``: its own, or else each pixel's
-    wavelength, for photons of one energy.
+    Cube with its photon wavelengths in the meta.
+
+    `meta["photon_wavelength"]` and `meta["photon_rms_wavelength"]` are the
+    wavelengths of the mean and root mean square energies of each pixel's
+    photons. The cube's own are kept; otherwise each pixel's wavelength is
+    used, as for photons of one energy.
     """
     meta = dict(cube.meta or {})
     if "photon_wavelength" not in meta:
@@ -64,21 +66,21 @@ def _with_photon_wavelength(cube: NDCube) -> NDCube:
 def _photon_wavelengths(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                         offchip_bin_slit: int, uniform_mode: bool) -> tuple:
     """
-    The wavelengths of the mean and the root mean square energies of the
-    photons in each pixel, as the DN are binned, for `dn_variance`.
+    Wavelengths of the mean and root mean square photon energies in each
+    pixel, binned as the DN are, for `dn_variance`.
     """
     photons = _photons_on_the_detector(I_cube, t_exp, det, tel, sim, uniform_mode)[-1]
     return binned_photon_wavelengths(photons, offchip_bin_slit)
 
 
 def _weighted(fit_config) -> bool:
-    """Whether the fits are weighted: by default, and unless the fitting block says not."""
+    """Whether to weight the fits: yes by default, otherwise as the fitting block says."""
     return fit_config is None or fit_config.weighted
 
 
 def _visible_electrons(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                        offchip_bin_slit: int) -> np.ndarray:
-    """The mean electrons visible light adds to each pixel, summed as the DN are binned."""
+    """Mean electrons from visible light in each pixel, binned as the DN are."""
     nothing = NDCube(np.zeros(I_cube.data.shape), wcs=I_cube.wcs,
                      unit=u.electron / u.pixel, meta=I_cube.meta)
     visible = add_visible_stray_light(nothing, t_exp, det, sim, tel, noise=False)
@@ -89,38 +91,37 @@ def _visible_electrons(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
 def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                             offchip_bin_slit: int = 1, uniform_mode: bool = False) -> np.ndarray:
     """
-    The uncertainty each pixel's DN has on average: that of the signal it holds with no noise.
+    Expected uncertainty of each pixel's DN, from the noise-free signal.
 
-    The measured spectra are weighted by uncertainties worked out from their
-    own signal (`dn_variance`). The ground truth, fitted to the spectra with
-    no noise, is weighted by these, so that it is the same fit of the same
-    line, and a measurement's difference from it is the noise's doing.
+    The measured spectra are weighted by uncertainties estimated from their
+    own signal (`dn_variance`). The ground truth, a fit to the noise-free
+    spectra, is weighted by these instead, so it is the same fit of the
+    same line and its difference from a measurement is due to the noise.
 
     Parameters
     ----------
     I_cube : NDCube
-        The spectral radiance on the detector's pixels, per second, as the
-        Monte Carlo observes it.
+        Spectral radiance on the detector's pixels, per second, as given to
+        the Monte Carlo.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
     det, tel, sim
-        The detector, telescope and simulation settings.
+        Detector, telescope and simulation settings.
     offchip_bin_slit : int, optional
-        How many pixels along the slit are added together after read-out.
-        Default 1.
+        Number of pixels along the slit summed after read-out. Default 1.
     uniform_mode : bool, optional
         As for `simulate_once`. Default False.
 
     Returns
     -------
     np.ndarray
-        The uncertainty in DN, shaped as the binned DN.
+        Uncertainty in DN, same shape as the binned DN.
     """
     quiet = dataclasses.replace(sim, noise=False)
     steps = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
     electrons = steps[8]
-    # Clipped at the digitiser's maximum in each pixel, before any are summed,
-    # as to_dn clips the measured DN; not rounded, as the mean is not.
+    # Clip each pixel at the digitiser's maximum before binning, as to_dn
+    # does, but do not round, as the mean DN is not rounded.
     dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
     dn = np.minimum(dn, det.max_dn.value)
     dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
@@ -134,18 +135,18 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
 def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                              uniform_mode: bool = False) -> Tuple[NDCube, ...]:
     """
-    The cubes of `simulate_once` up to the photons reaching the detector, which no noise touches.
+    Noise-free cubes of `simulate_once`, up to the photons at the detector.
 
-    They are the radiance over the exposure, the photons, those the
-    telescope collects, those per pixel, those after the PSF, and those with
-    the pinholes' light.
+    Returns the radiance over the exposure, the photons, the photons
+    collected by the telescope, the photons per pixel, those after the PSF,
+    and those with the pinholes' light.
     """
     # Apply exposure time
     intensity_exp = apply_exposure(I_cube, t_exp)
 
-    # Convert to total photons, each pixel's at its own wavelength unless the
-    # cube gives the wavelength of the mean energy of its photons, which it
-    # does once laid onto the pixels through the telescope.
+    # Convert to total photons at each pixel's wavelength, or at the
+    # wavelength of the photons' mean energy if the cube gives it, as it does
+    # once laid onto the pixels through the telescope.
     photons_total = _with_photon_wavelength(intensity_to_photons(intensity_exp))
 
     # Apply telescope optical throughput
@@ -156,11 +157,11 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                                              det.plate_scale_length,
                                              angle_to_distance(sim.slit_width))
 
-    # The pinholes let through the light the filter blocked from each photon,
-    # which has to be known before a blur mixes the photons of different
-    # pixels. A cube laid onto the pixels through the telescope with the
-    # pinholes on gives it at each photon's own wavelength; photons counted
-    # at their pixel's wavelength passed the filter there.
+    # The pinholes pass the light the filter blocked from each photon, which
+    # must be known before a blur mixes pixels. A cube laid onto the pixels
+    # through the telescope with the pinholes on gives it at each photon's
+    # own wavelength. Photons counted at their pixel's wavelength passed the
+    # filter at that wavelength.
     meta = I_cube.meta or {}
     if _pinholes_on(sim) and "photon_filter_transmission" not in meta:
         if "photon_wavelength" in meta:
@@ -171,9 +172,9 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
                 "and a simulation with the pinholes on.")
         photons_pixels = _with_filter_transmission(photons_pixels, tel)
 
-    # Apply focusing optics PSF (primary mirror + diffraction grating), unless
-    # the cube was laid onto the pixels through it (rebin_atmosphere with a
-    # telescope), which is exact where blurring the pixels is not.
+    # Apply focusing optics PSF (primary mirror + diffraction grating),
+    # unless the cube was laid onto the pixels through it (rebin_atmosphere
+    # with a telescope). That is exact; blurring the pixels is not.
     if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
         photons_focused = apply_focusing_optics_psf(
             photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
@@ -203,29 +204,28 @@ def simulate_once(
     dark_current_inverse_transform: bool = False,
 ) -> Tuple[NDCube, ...]:
     """
-    Simulate one observation of a cube of spectra, with its noise, without fitting it.
+    Simulate one observation of a cube of spectra, with noise, without fitting.
 
-    The spectra go through each step of the instrument in turn: the
-    exposure, the telescope, the pixels, the PSF, the pinholes, the arrival
-    of photons, the detector, the stray light and the digitiser.
+    The steps, in order, are the exposure, telescope, pixels, PSF, pinholes,
+    photon arrivals, detector, stray light and digitiser.
 
     Parameters
     ----------
     I_cube : NDCube
-        The spectral radiance on the detector's pixels, per second, such as
-        `create_uniform_intensity_cube` makes, with the line's rest
-        wavelength as ``meta["rest_wav"]``.
+        Spectral radiance on the detector's pixels, per second, e.g. from
+        `create_uniform_intensity_cube`, with the line's rest wavelength in
+        `meta["rest_wav"]`.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope.
+        Telescope.
     sim : Simulation
-        The simulation's settings.
+        Simulation settings.
     uniform_mode : bool, optional
-        The cube is the same all along the slit, so the PSF blurs it in
-        wavelength only. Default False.
+        If True, the cube is the same all along the slit, so the PSF blurs it
+        in wavelength only. Default False.
     photon_shot_inverse_transform : bool, optional
         Draw the photons by inverse-transform sampling, for common random
         numbers between runs that differ in photon flux. Default False.
@@ -236,19 +236,17 @@ def simulate_once(
     Returns
     -------
     tuple of NDCube
-        The cube after each step: the radiance over the exposure, the photons,
-        the photons collected by the telescope, the photons per pixel, those
-        after the PSF, the photons that arrive, the electrons, the electrons
-        with the stray light, those with the pinholes' visible light, and the
-        DN.
+        Cube after each step: radiance over the exposure, photons, photons
+        collected by the telescope, photons per pixel, photons after the PSF,
+        photons arriving, electrons, electrons with stray light, electrons
+        with the pinholes' visible light, and DN.
     """
     (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
      photons_euv_pinholes) = _photons_on_the_detector(I_cube, t_exp, det, tel, sim,
                                                       uniform_mode)
 
-    # Every random draw below is controlled by this one flag, so a run with
-    # sim.noise False returns the signal the instrument would measure on
-    # average rather than one realisation of it.
+    # This flag controls every random draw below. With sim.noise False the
+    # run returns the mean measured signal rather than one realisation.
     noise = getattr(sim, "noise", True)
 
     # Sample discrete photon arrivals (photon shot noise)
@@ -287,12 +285,12 @@ def simulate_once(
 
 def _own_stream(rank: int) -> None:
     """
-    Give this MPI rank draws of its own, from the state NumPy's generator is in and the rank.
+    Reseed NumPy's generator from its current state and the MPI rank.
 
-    Seeded alike on every rank, as the docs' recipe for comparing runs does,
-    the ranks would repeat one another's iterations, and the spread would
-    come out narrower by the square root of their number. The state each rank
-    starts from is combined with its rank, so a run repeats with the same
+    With the same seed on every rank, as in the docs' recipe for comparing
+    runs, the ranks would repeat each other's iterations and the spread
+    would come out too narrow by the square root of the number of ranks.
+    Mixing in the rank avoids this, and a run still repeats with the same
     seed and number of ranks.
     """
     entropy = int(np.random.randint(0, 2**31 - 1))
@@ -308,37 +306,37 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     """
     Simulate an observation many times, each with new noise, and fit every one.
 
-    This is what `eclipse` runs for each combination of settings. Under MPI
-    the iterations are shared between the ranks, and the results collected
-    on the first.
+    `eclipse` runs this for each combination of settings. Under MPI the
+    iterations are split between the ranks and the results gathered on the
+    first.
 
     Parameters
     ----------
     I_cube : NDCube
-        The spectral radiance on the detector's pixels, per second, as for
+        Spectral radiance on the detector's pixels, per second, as for
         `simulate_once`.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope.
+        Telescope.
     sim : Simulation
-        The simulation's settings.
+        Simulation settings.
     n_iter : int, optional
-        How many iterations to run. Default 5.
+        Number of iterations. Default 5.
     fit_config : FitConfig, optional
-        How to fit. Default one Gaussian.
+        Fit settings. Default one Gaussian.
     offchip_bin_slit : int, optional
-        How many pixels along the slit to add together after read-out, each
-        with its own noise. Default 1.
+        Number of pixels along the slit summed after read-out, each with its
+        own noise. Default 1.
     fit_signals : str, optional
-        Which signals to fit: ``"both"`` (default), ``"dn"`` or ``"photon"``.
+        Which signals to fit: `"both"` (default), `"dn"` or `"photon"`.
         Fitting only one takes about half the time.
     uniform_mode : bool, optional
-        The cube is a single line of known intensity, as
-        `create_uniform_intensity_cube` makes it, with ``offchip_bin_slit``
-        pixels along the slit. Default False.
+        If True, the cube is a single line of known intensity, as made by
+        `create_uniform_intensity_cube`, with `offchip_bin_slit` pixels along
+        the slit. Default False.
     photon_shot_inverse_transform : bool, optional
         Draw the photons by inverse-transform sampling, for common random
         numbers between runs that differ in photon flux. Default False.
@@ -349,20 +347,19 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     Returns
     -------
     first_dn_signal : NDCube
-        The first iteration's signal, in DN.
+        First iteration's signal, in DN.
     dn_fit_results : dict or None
-        The fits to the DN signal, or None if they were not fitted. For each
-        fitted component, by name, under ``"components"``, it holds the
-        intensity, velocity and width, each as ``"first"``, ``"mean"`` and
-        ``"std"`` maps. ``"primary_component"`` names the primary component,
-        and ``"failed_fits"`` counts the failed fits in each pixel.
+        Fits to the DN signal, or None if not fitted. `"components"` holds,
+        for each fitted component by name, the intensity, velocity and
+        width, each as `"first"`, `"mean"` and `"std"` maps.
+        `"primary_component"` names the primary component, and
+        `"failed_fits"` counts the failed fits in each pixel.
     first_photon_signal : NDCube
-        The first iteration's photons arriving at the detector.
+        First iteration's photons arriving at the detector.
     photon_fit_results : dict or None
-        The fits to the photons, as for the DN, or None.
+        Fits to the photons, as for the DN, or None.
 
-    Under MPI, only the first rank gets these; every other rank gets four
-    Nones.
+    Under MPI only the first rank gets these; the other ranks get four Nones.
     """
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")
@@ -371,14 +368,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     do_photon = fit_signals in ("both", "photon")
     rest_wavelength = I_cube.meta["rest_wav"]
 
-    # Each DN spectrum is weighted by its pixels' uncertainties, worked out
-    # from their own signal, with the visible light's share of it known. The
-    # photons, with no read noise, would give a pixel with none no
-    # uncertainty; they are fitted by their Poisson likelihood instead.
+    # DN spectra are weighted by uncertainties estimated from their own
+    # signal, with the visible light's share of it known. Photons have no
+    # read noise, so a pixel with no photons would have no uncertainty; they
+    # are fitted by their Poisson likelihood instead.
     visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
                if do_dn and _weighted(fit_config) else None)
-    # Each photon frees electrons by its own energy, so the DN of a pixel
-    # vary as its photons' mean and root mean square energies say.
+    # Each photon frees electrons according to its energy, so a pixel's DN
+    # vary with the mean and root mean square energies of its photons.
     photon_wavelengths = (None if visible is None else _photon_wavelengths(
         I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
 

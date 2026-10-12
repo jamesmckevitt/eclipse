@@ -1,24 +1,13 @@
 """
-The continuum under the lines: free-free, free-bound and two-photon emission.
+Continuum under the lines: free-free, free-bound and two-photon emission.
 
-ECLIPSE's synthesis adds up the lines named for a run. The continuum is the
-light the plasma gives at every wavelength, not only at its lines: free-free
-emission, from electrons passing ions, free-bound emission, from electrons
-captured by them, and the two-photon emission of hydrogen- and helium-like
-ions. It is worked out from CHIANTI through fiasco, for every element CHIANTI
-holds, with the abundances and ionisation fractions the lines use.
-
-Like a line's contribution function, the continuum here multiplies an
-emission measure of n_e^2 dh. fiasco gives it per n_e n_H and over all
-directions, so it is multiplied by n_H / n_e and divided by 4 pi. Free-free
-and free-bound emission do not depend on the density; two-photon emission
-does, so it is worked out on the same grid of densities as the lines.
-
-In a synthesis file, the continuum of each group of overlapping spectral
-windows is one entry, beside the lines, on evenly spaced wavelengths that
-cover the windows. When the instrument simulation observes a window, it adds
-up every entry that reaches it, so the continuum is added once, and the
-lines' own spectra stay those of the lines.
+Computed from CHIANTI through fiasco for every element, with the same
+abundances and ionisation fractions as the lines. Like a contribution
+function, it multiplies an emission measure of n_e^2 dh, so fiasco's values
+are multiplied by n_H / n_e and divided by 4 pi. Only two-photon emission
+depends on density. In a synthesis file, each group of overlapping windows
+gets one continuum entry, which the instrument run adds to every window it
+reaches.
 """
 
 from __future__ import annotations
@@ -29,41 +18,40 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import astropy.units as u
 
-# What a continuum entry of a synthesis file is named: this, then the
-# wavelengths in Angstrom that its window group runs between.
+# Name prefix of a continuum entry in a synthesis file, followed by the
+# wavelength range of its window group in Angstrom.
 CONTINUUM_PREFIX = "continuum"
-# The continuum's unit per emission measure: the spectral radiance per
-# n_e^2 dh, with wavelengths in cm, as ECLIPSE's line spectra are.
+# Unit of the continuum per emission measure: spectral radiance per
+# n_e^2 dh, with wavelengths in cm, as for ECLIPSE's line spectra.
 EMISSIVITY_UNIT = u.erg * u.cm**3 / (u.s * u.sr * u.cm)
 
 
 def is_continuum(name: str) -> bool:
-    """Whether a synthesis file's entry *name* is the continuum rather than a line."""
+    """Whether synthesis file entry `name` is the continuum rather than a line."""
     return name.startswith(CONTINUUM_PREFIX + "_")
 
 
 def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity]:
     """
-    The wavelengths of the continuum entries that cover a set of spectral windows.
+    Wavelengths of the continuum entries covering a set of spectral windows.
 
-    Each wavelength of a window stands for the bin halfway to its
-    neighbours, and the end ones for a bin as wide again beyond them.
-    Windows whose bins overlap are grouped, and each group gets one grid of
-    evenly spaced wavelengths, with the smallest spacing any of them has,
-    whose own bins cover all of theirs. Groups do not overlap, so no
-    wavelength is in two entries.
+    Each window wavelength covers the bin halfway to its neighbours. The
+    bins of the end wavelengths extend the same distance outward. Windows
+    whose bins overlap are grouped. Each group gets one evenly spaced grid,
+    at the smallest spacing of its windows, whose bins cover all of theirs.
+    Groups do not overlap, so no wavelength is in two entries.
 
     Parameters
     ----------
     wavelengths : sequence of u.Quantity
-        The wavelengths of each line, increasing, as `synthesise_spectra`
-        gives them in ``wl_grid``.
+        Wavelengths of each line, increasing, as in `wl_grid` from
+        `synthesise_spectra`.
 
     Returns
     -------
     dict
-        For each group, by its entry's name, such as
-        ``"continuum_194.9248-195.3757"``, its wavelengths in cm.
+        Wavelengths in cm for each group, keyed by entry name such as
+        `"continuum_194.9248-195.3757"`.
     """
     windows = []
     for grid in wavelengths:
@@ -79,7 +67,7 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
                         float(np.min(spacing))))
 
     def bins(low, high, step):
-        """How many bins of *step* reach from *low* to *high*."""
+        """Number of bins of width `step` needed to reach from `low` to `high`."""
         return int(np.ceil((high - low) / step * (1 - 1e-12)))
 
     windows.sort()
@@ -98,7 +86,7 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         # Bins of this spacing from the group's first bin edge to past its last.
         grid = low + (np.arange(bins(low, high, step)) + 0.5) * step
         name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.4f}-{grid[-1] * 1e8:.4f}"
-        # Windows far narrower than any line's could round to one name.
+        # Windows far narrower than any line's could round to the same name.
         if name in grids:
             name = f"{name}_{sum(key.startswith(name) for key in grids) + 1}"
         grids[name] = grid * u.cm
@@ -107,11 +95,12 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
 
 def _element_continuum(args):
     """
-    One element's free-free and free-bound, and two-photon, emission, for a worker process.
+    One element's continuum emission, for a worker process.
 
-    In erg cm3 / (s Angstrom), per n_e n_H, over all directions, as fiasco
-    gives them: free ``(nT, n_wavelength)`` and two-photon ``(nT, nN,
-    n_wavelength)``.
+    Free-free plus free-bound emission, shape `(nT, n_wavelength)`, and
+    two-photon emission, shape `(nT, nN, n_wavelength)`. Both are in
+    erg cm3 / (s Angstrom), per n_e n_H and over all directions, as fiasco
+    gives them.
     """
     symbol, temperature_K, wavelength_aa, densities_cm3, abundance, dbase_root = args
     import logging
@@ -119,8 +108,8 @@ def _element_continuum(args):
     import fiasco
     from fiasco.util.exceptions import MissingDatasetException
 
-    # fiasco leaves out an ion whose data a continuum needs, and logs it; the
-    # ions are collected here and said once, rather than a line each.
+    # fiasco skips and logs each ion lacking data for a continuum; collect
+    # them to report once, rather than a line each.
     left_out = []
 
     class _LeftOut(logging.Handler):
@@ -163,7 +152,7 @@ def _element_continuum(args):
             try:
                 abundance_of = u.Quantity(ion.abundance).to_value(u.dimensionless_unscaled)
             except MissingDatasetException:
-                # An abundance set that leaves the element out has none of it.
+                # An element missing from the abundance set has zero abundance.
                 continue
             share = (abundance_of
                      * u.Quantity(ion.ionization_fraction).to_value(u.dimensionless_unscaled))
@@ -183,14 +172,14 @@ def _beyond_the_rates(error: ValueError) -> bool:
 def _two_photon(ion, wavelength, density, unit, single_ion: list, ion_kwargs: dict,
                 abundance: str) -> np.ndarray:
     """
-    One ion's two-photon emission, shaped (nT, nN, n_wavelength), in *unit*.
+    One ion's two-photon emission, shape (nT, nN, n_wavelength), in `unit`.
 
-    fiasco is asked for one density at a time: given several, version 0.8
-    fails to arrange its result. It works out the level populations with
-    the recombination and ionisation rates of each level, which CHIANTI
-    tabulates only up to some temperature for some ions. Above it, fiasco's
-    single-ion model is used, as it is for ions that have no such rates at
-    all, and the ion and the temperatures are added to *single_ion*.
+    fiasco is called one density at a time, since version 0.8 fails to
+    arrange its result for several. Its level populations use level-resolved
+    recombination and ionisation rates, which for some ions CHIANTI
+    tabulates only up to some temperature. Above that, fiasco's single-ion
+    model is used, as for ions with no such rates at all, and the ion and
+    temperatures are added to `single_ion`.
     """
     import fiasco
 
@@ -211,7 +200,7 @@ def _two_photon(ion, wavelength, density, unit, single_ion: list, ion_kwargs: di
         except ValueError as error:
             if not _beyond_the_rates(error) or len(ions) > 1:
                 raise
-        # The first temperature the rates do not reach, found once.
+        # First temperature beyond the rates, found once.
         first = None
         for index, temperature in enumerate(ion.temperature):
             one = fiasco.Ion(ion.ion_name, temperature[np.newaxis], abundance=abundance,
@@ -247,39 +236,39 @@ def compute_continuum_fiasco(
     elements: Optional[Sequence[str]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    The continuum per emission measure, from CHIANTI through fiasco.
+    Continuum per emission measure, from CHIANTI through fiasco.
 
     Parameters
     ----------
     wavelength : u.Quantity
-        The wavelengths to work it out at.
+        Wavelengths to compute it at.
     logT_grid : np.ndarray
-        The temperatures, as log10(T / K), as the lines' contribution
-        functions have them.
+        Temperatures as log10(T / K), as for the lines' contribution
+        functions.
     logN_grid : np.ndarray
-        The densities, as log10(n_e / cm-3), as the lines' contribution
-        functions have them, for the two-photon emission.
+        Densities as log10(n_e / cm-3), as for the lines' contribution
+        functions, for the two-photon emission.
     abundance : str, optional
-        The CHIANTI abundance set, as for the lines. Default
-        ``"sun_coronal_2021_chianti"``.
+        CHIANTI abundance set, as for the lines. Default
+        `"sun_coronal_2021_chianti"`.
     n_workers : int, optional
-        How many processes to compute the elements with. Default 0, which
-        uses every CPU this process may use, up to one per element. The
-        workers are spawned, so a script calling this needs an
-        ``if __name__ == "__main__":`` guard.
+        Number of processes for the elements. Default 0 uses every CPU
+        available to this process, up to one per element. The workers are
+        spawned, so a calling script needs an `if __name__ == "__main__":`
+        guard.
     hdf5_dbase_root : str or Path, optional
-        The CHIANTI database to read. Default fiasco's own.
+        CHIANTI database to read. Default fiasco's own.
     elements : sequence of str, optional
-        The elements, by symbol. Default every element CHIANTI holds.
+        Elements by symbol. Default every element in CHIANTI.
 
     Returns
     -------
     free : np.ndarray
-        Free-free and free-bound emission, shaped (nT, n_wavelength), in
-        erg cm3 / (s sr cm): the spectral radiance per n_e^2 dh.
+        Free-free and free-bound emission, shape (nT, n_wavelength), in
+        erg cm3 / (s sr cm): spectral radiance per n_e^2 dh.
     two_photon : np.ndarray
-        Two-photon emission, shaped (nN, nT, n_wavelength), in the same unit,
-        on the densities of *logN_grid*, as a line's ``g_tn`` is.
+        Two-photon emission, shape (nN, nT, n_wavelength), in the same unit,
+        on the `logN_grid` densities, like a line's `g_tn`.
     """
     import fiasco
 
@@ -331,8 +320,8 @@ def compute_continuum_fiasco(
         free += element_free
         two_photon += element_two_photon
 
-    # fiasco's continuum is per n_e n_H and over all directions; the emission
-    # measure is of n_e^2, and the radiance per steradian, per cm.
+    # Convert fiasco's continuum, per n_e n_H, over all directions and per
+    # Angstrom, to per n_e^2, per steradian and per cm.
     kwargs = {} if dbase_root is None else {"hdf5_dbase_root": dbase_root}
     hydrogen = fiasco.Ion("H 1", temperature_K * u.K, abundance=abundance, **kwargs)
     ratio = np.asarray(hydrogen.proton_electron_ratio.to_value(u.dimensionless_unscaled))
@@ -351,33 +340,32 @@ def continuum_spectra(
     two_photon: np.ndarray,
 ) -> np.ndarray:
     """
-    The continuum's spectral radiance in every pixel.
+    Continuum spectral radiance in every pixel.
 
     Parameters
     ----------
     emission_measure : np.ndarray
-        The emission measure, n_e^2 dh, in each temperature bin of each
-        pixel, in cm^-5, shaped (rows, columns, nT): a DEM times its bins'
-        widths. ECLIPSE's synthesis takes its own DEM, which, unlike
-        ``em_tv``, keeps the plasma moving faster than the velocity grid
-        reaches.
+        Emission measure n_e^2 dh in each temperature bin of each pixel, in
+        cm^-5, shape (rows, columns, nT): a DEM times its bin widths.
+        ECLIPSE's synthesis uses its own DEM, which, unlike `em_tv`, keeps
+        plasma moving faster than the velocity grid reaches.
     electron_density : np.ndarray or float
-        The electron density, in cm^-3, at each pixel and temperature,
-        shaped as *emission_measure*, or one density for all. ECLIPSE's own
+        Electron density in cm^-3 at each pixel and temperature, same shape
+        as `emission_measure`, or one density for all. ECLIPSE's own
         synthesis gives the mean weighted by emission measure.
     logN_grid : np.ndarray
-        The densities *two_photon* is tabulated on, as log10(n_e / cm-3).
+        Densities `two_photon` is tabulated on, as log10(n_e / cm-3).
     free, two_photon : np.ndarray
-        As `compute_continuum_fiasco` gives them, on the temperatures of the
-        emission measure.
+        From `compute_continuum_fiasco`, on the temperatures of the emission
+        measure.
 
     Returns
     -------
     np.ndarray
-        The spectral radiance, (rows, columns, n_wavelength), in
-        erg / (s cm2 sr cm). The two-photon emission is interpolated linearly
-        in log10 n_e, as the lines' contribution functions are, and is zero at
-        densities off the grid, as they are.
+        Spectral radiance, shape (rows, columns, n_wavelength), in
+        erg / (s cm2 sr cm). Two-photon emission is interpolated linearly in
+        log10 n_e and is zero at densities off the grid, as for the lines'
+        contribution functions.
     """
     em = np.asarray(emission_measure, dtype=float)
     rows, columns, n_t = em.shape
@@ -406,7 +394,7 @@ def continuum_spectra(
 
 
 def _ion_list(ions: Sequence[str]) -> str:
-    """Ions such as ``["Fe 1", "Fe 2", "Fe 27"]`` as ``"Fe 1-2, 27"``, element by element."""
+    """Ions such as `["Fe 1", "Fe 2", "Fe 27"]` written as `"Fe 1-2, 27"`, element by element."""
     stages: Dict[str, List[int]] = {}
     for ion in ions:
         symbol, stage = ion.split()

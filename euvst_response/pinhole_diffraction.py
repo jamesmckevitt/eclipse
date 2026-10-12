@@ -17,23 +17,23 @@ from typing import List, Tuple
 def airy_disk_pattern(r: np.ndarray, wavelength: u.Quantity, pinhole_diameter: u.Quantity, 
                      distance: u.Quantity) -> np.ndarray:
     """
-    The Airy pattern of light through a circular pinhole, on a screen some distance behind it.
+    Airy pattern of a circular pinhole on a screen some distance behind it.
 
     Parameters
     ----------
     r : np.ndarray
-        Distances from the pattern's centre on the screen, in metres.
+        Distances from the pattern centre on the screen, in metres.
     wavelength : u.Quantity
-        The light's wavelength.
+        Wavelength of the light.
     pinhole_diameter : u.Quantity
-        The pinhole's diameter.
+        Pinhole diameter.
     distance : u.Quantity
-        The distance from the pinhole to the screen.
+        Distance from the pinhole to the screen.
 
     Returns
     -------
     np.ndarray
-        The pattern's brightness at each distance, 1 at the centre.
+        Brightness at each distance, 1 at the centre.
     """
     # Calculate the exact sine of the diffraction angle
     # sin(theta) = r / sqrt(r^2 + distance^2)
@@ -61,34 +61,34 @@ def airy_peak_fraction_per_pixel(
     pixel_size: u.Quantity,
 ) -> float:
     """
-    Fraction of a pinhole's transmitted photons that land in the single
-    brightest detector pixel.
+    Fraction of a pinhole's transmitted photons in the brightest detector pixel.
 
-    This is the ABSOLUTE normalisation of the Airy pattern, which
-    ``calculate_pinhole_diffraction_pattern`` deliberately does not carry (it
-    returns a pattern normalised to a peak of 1.0).  For a circular aperture
-    of area A at distance L, the on-axis irradiance is
+    This is the absolute normalisation of the Airy pattern, which
+    `calculate_pinhole_diffraction_pattern` leaves out (its pattern peaks at
+    1.0). For a circular aperture of area A at distance L, the on-axis
+    irradiance is
 
         E_0 = P_total * A / (lambda^2 L^2)
 
     (integrating (2*J1(u)/u)^2 over the plane gives 4*lambda^2*L^2/(pi*D^2),
-    which recovers P_total), so the fraction of the transmitted power falling
-    on one pixel of area a is ``A * a / (lambda L)^2``.
+    which recovers P_total), so the fraction of the transmitted power on one
+    pixel of area a is `A * a / (lambda L)^2`.
 
-    Why this matters: a pattern normalised by its sum over the detector array
-    implicitly forces every pinhole photon onto the detector.  For a small
-    pinhole the Airy disc is far larger than the detector - a 1 micron hole at
-    250 mm has its first minimum at 183 mm, against a detector tens of mm
-    across - so most of the light misses the detector entirely and must not be
-    redistributed onto it.  Use this function when absolute photon numbers
-    matter, e.g. deriving a pinhole budget.
+    Normalising the pattern by its sum over the detector would force every
+    pinhole photon onto the detector. For a small pinhole the Airy disc is
+    far larger than the detector: a 1 micron hole at 250 mm has its first
+    minimum at 183 mm, against a detector tens of mm across, so most of the
+    light misses the detector and must not be redistributed onto it. Use
+    this function when absolute photon numbers matter, e.g. for a pinhole
+    budget.
 
     Returns
     -------
     float
-        Fraction of transmitted photons in the brightest pixel, capped at 1.0
-        (the cap only binds for holes so large that the geometric image is
-        smaller than a pixel, where Fraunhofer diffraction no longer applies).
+        Fraction of transmitted photons in the brightest pixel, capped at
+        1.0. The cap only binds for holes so large that the geometric image
+        is smaller than a pixel, where Fraunhofer diffraction no longer
+        applies.
     """
     area = np.pi * (pinhole_diameter.to(u.m).value / 2.0) ** 2
     pix = pixel_size.to(u.m).value
@@ -129,19 +129,18 @@ def calculate_pinhole_diffraction_pattern(
     wavelength : u.Quantity
         Wavelength of light
     pinhole_position_spectral : float, optional
-        Position along the SPECTRAL axis as a fraction (0.0 to 1.0) of the
-        detector width.  ``None`` (the default) reproduces the previous
-        behaviour of projecting every pinhole to the centre of the spectral
-        window.  On a slit-scan spectrograph the spectral axis is wavelength,
-        so this fraction decides which emission lines a given pinhole
-        contaminates - the centre-only assumption cannot answer that.
+        Position along the spectral axis as a fraction (0.0 to 1.0) of the
+        detector width. The default, None, puts every pinhole at the centre
+        of the spectral window. On a slit-scan spectrograph the spectral
+        axis is wavelength, so this sets which emission lines a pinhole
+        contaminates.
 
     Returns
     -------
     np.ndarray
-        2D diffraction pattern normalized to peak intensity of 1.0.  This
-        carries no absolute normalisation; see ``airy_peak_fraction_per_pixel``
-        when photon numbers matter.
+        2D diffraction pattern normalized to a peak of 1.0, with no absolute
+        normalisation; see `airy_peak_fraction_per_pixel` when photon
+        numbers matter.
     """
     n_slit, n_spectral = detector_shape
     
@@ -152,9 +151,8 @@ def calculate_pinhole_diffraction_pattern(
     # Convert pinhole position from slit fraction to pixel coordinate
     pinhole_pixel_slit = pinhole_position_slit * (n_slit - 1)
     
-    # Calculate distances from pinhole position on detector.  Without an
-    # explicit spectral position, fall back to the centre of the spectral
-    # window (the historical assumption).
+    # Pinhole position on the detector. Without a spectral position, use the
+    # centre of the spectral window.
     if pinhole_position_spectral is None:
         pinhole_pixel_spectral = n_spectral // 2
     else:
@@ -189,16 +187,17 @@ def calculate_pinhole_diffraction_pattern(
 
 
 def _pinholes_on(sim) -> bool:
-    """Whether *sim* has pinholes that do anything."""
+    """Whether `sim` has pinholes enabled and at least one given."""
     return bool(sim.enable_pinholes and len(sim.pinhole_sizes) > 0)
 
 
 def _filter_transmission(tel, wavelength: u.Quantity) -> np.ndarray:
     """
-    The share of the EUV the filter passes at each of *wavelength*, for the
-    pinholes, which work out the light it blocks from the light it passes:
-    where it passes none, that is lost, so a filter that passes none at a
-    wavelength its tables reach is refused.
+    Share of the EUV the filter passes at each `wavelength`, for the pinholes.
+
+    The pinholes work out the light the filter blocks from the light it
+    passes, which cannot be done where it passes none. A filter that passes
+    no EUV at a wavelength its tables cover is therefore refused.
     """
     wavelength = u.Quantity(wavelength)
     passed = tel.filter.total_throughput(wavelength).to_value(u.dimensionless_unscaled)
@@ -215,10 +214,10 @@ def _filter_transmission(tel, wavelength: u.Quantity) -> np.ndarray:
 
 def _with_filter_transmission(photon_counts: NDCube, tel) -> NDCube:
     """
-    *photon_counts*, photons counted at each pixel's own wavelength, with the
-    share of their light the filter passed there, and the light it blocked
-    at the same wavelength, in its ``meta``, as
-    :func:`apply_euv_pinhole_diffraction` takes them.
+    `photon_counts` with the `meta` that :func:`apply_euv_pinhole_diffraction`
+    needs, for photons counted at each pixel's own wavelength: the share of
+    their light the filter passed there, and the light it blocked, at the
+    same wavelength.
     """
     meta = dict(photon_counts.meta or {})
     own = photon_counts.axis_world_coords_values(2)[0]
@@ -238,39 +237,38 @@ def apply_euv_pinhole_diffraction(
     tel
 ) -> NDCube:
     """
-    Add the EUV light that passes through pinholes in the filter without its attenuation.
+    Add the unattenuated EUV light that passes through pinholes in the filter.
 
-    Where a pinhole is, the filtered light is replaced by the unattenuated
-    light through the pinhole, spread in its diffraction pattern. The filter
-    is behind the mirror and the grating, so this comes after the PSF. It
-    does nothing unless ``sim.enable_pinholes`` is set and there are
-    pinholes.
+    At each pinhole the filtered light is replaced by the unattenuated light
+    through the pinhole, spread in its diffraction pattern. The filter is
+    behind the mirror and the grating, so this comes after the PSF. It does
+    nothing unless `sim.enable_pinholes` is set and there are pinholes.
 
-    The light the filter blocked is each photon's own, at its own
-    wavelength: the cube's ``meta`` gives the share of its photons' light
-    the filter passed, ``photon_filter_transmission``, as `rebin_atmosphere`
-    and `rebin_spectra` give it with the pinholes on. Without it, each
-    pixel's photons are taken to have passed the filter at the pixel's own
-    wavelength, as photons counted there have. The pinholes' photons are of
-    the energies of the light the filter blocked, which the wavelengths of
-    the photons' mean and root mean square energies in ``meta`` take in.
+    The light the filter blocked is worked out at each photon's own
+    wavelength, from `photon_filter_transmission` in the cube's `meta`, the
+    share of the photons' light the filter passed, which `rebin_atmosphere`
+    and `rebin_spectra` set with the pinholes on. Without it, each pixel's
+    photons are taken to have passed the filter at the pixel's own
+    wavelength, as photons counted there have. The pinholes' photons have
+    the energies of the blocked light, and the wavelengths of the mean and
+    RMS photon energies in `meta` include them.
 
     Parameters
     ----------
     photon_counts : NDCube
-        The EUV photons in each pixel, after the filter and the PSF.
+        EUV photons in each pixel, after the filter and the PSF.
     det : Detector_SWC
-        EUVST-SW's detector, whose ``filter_distance`` sets the diffraction.
+        EUVST-SW detector, whose `filter_distance` sets the diffraction.
     sim : Simulation
-        The simulation, with the pinholes.
+        Simulation, with the pinholes.
     tel : Telescope_EUVST
-        The telescope, whose filter's transmission is taken out where the
-        pinholes are.
+        Telescope, whose filter transmission is taken out where the pinholes
+        are.
 
     Returns
     -------
     NDCube
-        The photons in each pixel, with the pinholes' light.
+        Photons in each pixel, including the pinholes' light.
     """
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return photon_counts  # No pinholes enabled
@@ -288,17 +286,16 @@ def apply_euv_pinhole_diffraction(
     # Initialize additional photon contributions
     additional_photons = np.zeros_like(photon_counts.data)
     
-    # The light the filter blocked from each pixel's photons, each photon's
-    # at its own wavelength.
+    # Light the filter blocked from each pixel's photons, at each photon's
+    # own wavelength.
     counts = (photon_counts if "photon_filter_transmission" in (photon_counts.meta or {})
               else _with_filter_transmission(photon_counts, tel))
     data = np.asarray(photon_counts.data, dtype=float)
     passed = np.asarray(counts.meta["photon_filter_transmission"], dtype=float)
     blocked = data * np.divide(1.0 - passed, passed, out=np.zeros(data.shape), where=passed > 0)
 
-    # Spectral positions are optional here for the same reason as in the
-    # visible path: without them every pinhole projects to the centre of the
-    # spectral window, as it always did.
+    # Spectral positions are optional, as in the visible path: without them
+    # every pinhole projects to the centre of the spectral window.
     spectral_positions = (list(sim.pinhole_positions_spectral)
                           or [None] * len(sim.pinhole_sizes))
 
@@ -307,12 +304,10 @@ def apply_euv_pinhole_diffraction(
         # Calculate pinhole area
         pinhole_area = np.pi * (pinhole_diameter / 2)**2
 
-        # === Physics Correction for EUV ===
-        # Current photon_counts already have filter attenuation applied
-        # We need to:
-        # 1. Back-calculate what the unfiltered signal would be
-        # 2. Apply pinhole diffraction to that unfiltered signal  
-        # 3. Subtract the over-counted filtered signal in pinhole regions
+        # photon_counts already have the filter attenuation, so:
+        # 1. Work out the unfiltered signal.
+        # 2. Apply the pinhole diffraction to it.
+        # 3. Subtract the filtered signal already counted in the pinhole regions.
 
         area_ratio = (pinhole_area / pixel_area).to(u.dimensionless_unscaled).value
         
@@ -334,18 +329,16 @@ def apply_euv_pinhole_diffraction(
             pinhole_position_spectral=pinhole_spectral,
         )
         
-        # Scale the pattern by its absolute normalisation, exactly as the
-        # visible path does.  Dividing by the sum over the detector array would
-        # force every photon through the pinhole onto the detector: the array
-        # would sum to 1 by construction whatever the geometry.  The EUV Airy
-        # pattern is about thirty times smaller than the visible one at the
-        # same diameter, but not small enough for that to be harmless - a
-        # 1 micron hole at 195 Angstrom still has its first minimum 5.95 mm out
-        # against a detector a few mm across, so most of its light misses and
-        # must be lost rather than redistributed.  euv_pattern peaks at 1.0, so
-        # multiplying by the peak per-pixel fraction gives the correct fraction
-        # everywhere and the array sums to less than 1 when light falls off the
-        # detector.
+        # Scale the pattern by its absolute normalisation, as the visible path
+        # does. Dividing by its sum over the detector would force every photon
+        # through the pinhole onto the detector, whatever the geometry. The EUV
+        # Airy pattern is about thirty times smaller than the visible one at
+        # the same diameter, but a 1 micron hole at 195 Angstrom still has its
+        # first minimum 5.95 mm out, against a detector a few mm across, so
+        # most of its light misses and must be lost, not redistributed.
+        # euv_pattern peaks at 1.0, so multiplying by the peak per-pixel
+        # fraction gives the right fraction everywhere, summing to less than 1
+        # when light falls off the detector.
         peak_fraction = airy_peak_fraction_per_pixel(
             pinhole_diameter=pinhole_diameter,
             distance=det.filter_distance,
@@ -360,35 +353,31 @@ def apply_euv_pinhole_diffraction(
             # Current filtered signal at this scan position
             filtered_signal = photon_counts.data[:, i, :]  # Shape: (n_slit, n_spectral)
             
-            # The unfiltered signal (before filter attenuation): the
-            # filtered signal and the light the filter blocked from it
+            # Unfiltered signal: the filtered signal plus the light the filter
+            # blocked from it.
             unfiltered_signal = filtered_signal + blocked[:, i, :]
             
-            # Calculate what would come through pinhole (unattenuated).
-            # unfiltered_signal * area_ratio is the light collected over the
-            # pinhole's area; the scaled pattern says what fraction of it
-            # reaches each pixel, and does not have to add up to all of it.
+            # Unattenuated light through the pinhole. unfiltered_signal *
+            # area_ratio is the light collected over the pinhole's area, and
+            # the scaled pattern gives the fraction of it reaching each pixel,
+            # which need not sum to 1.
             pinhole_signal = unfiltered_signal * area_ratio * euv_pattern_normalized
             
             # The filtered light already counted in the pinhole regions
             # (filtered signal weighted by diffraction pattern and area ratio)
             overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
             
-            # Net correction: add unfiltered pinhole signal, subtract overcounted filtered signal
-            # This simplifies to: blocked * area_ratio * pattern
-            # Physical meaning:
-            # - unfiltered * area_ratio * pattern = total light through pinhole
-            # - filtered * area_ratio * pattern = filtered light already counted there
-            # - difference = net additional light from pinhole
+            # Net extra light from the pinhole: its total light less the
+            # filtered light already counted there, which is
+            # blocked * area_ratio * pattern.
             correction = (pinhole_signal - overcounted_filtered)
             additional_photons[:, i, :] += correction
 
     # Create new photon counts with EUV pinhole contributions
     new_data = photon_counts.data + additional_photons
 
-    # The pinholes' photons are of the energies of the light the filter
-    # blocked. What the meta says of the filter no longer holds for the
-    # photons with them, so it goes.
+    # The pinholes' photons have the energies of the blocked light. The
+    # filter entries in meta no longer hold once they are added, so drop them.
     meta = {key: value for key, value in counts.meta.items() if key not in _FILTER_KEYS}
     if "photon_wavelength" in meta:
         mean = u.Quantity(meta["photon_wavelength"])
@@ -415,6 +404,6 @@ def apply_euv_pinhole_diffraction(
     )
 
 
-# What a cube's meta says of the filter, which the pinholes need.
+# Filter entries in a cube's meta, which the pinholes need.
 _FILTER_KEYS = ("photon_filter_transmission", "blocked_photon_wavelength",
                 "blocked_photon_rms_wavelength")

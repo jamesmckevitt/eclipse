@@ -1,12 +1,7 @@
-"""A line cube's coordinates are those of the atmosphere it came from, whatever its size.
+"""A line cube has the coordinates of its source atmosphere, at any size.
 
-create_line_cube puts the reference pixel of each centred axis at the middle
-of that axis. With an even number of pixels the middle lies between two
-pixels, and the reference value used to be the coordinate of the pixel
-below it, so every position along that axis was half a cell off; the
-wavelength axis took the rest wavelength as its reference value, which is
-only right when the velocity grid is symmetric about zero. Both now take the
-value the grid has at the reference pixel.
+With an even number of pixels the reference pixel lies between two pixels,
+and each axis takes the grid's value there.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -31,13 +26,13 @@ def _wavelengths(velocities):
 @pytest.mark.parametrize("nx, ny", [(4, 6), (5, 7), (4, 7)])
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
 def test_the_image_axes_carry_the_atmospheres_coordinates(nx, ny, axis):
-    """Even and odd sizes alike, each image axis reads back the reference cube's coordinates."""
+    """For even and odd sizes, each image axis has the reference cube's coordinates."""
     nz = 3
     reference = create_atmosphere_ndcube(np.zeros((nz, ny, nx)) * u.K,
                                          voxel_dx=1.5 * u.Mm, voxel_dy=2.5 * u.Mm,
                                          voxel_dz=0.5 * u.Mm)
-    # The volume is (z, y, x); the view along one axis keeps the other two as
-    # (row, column) in the order create_line_cube lays them out.
+    # The volume is (z, y, x); viewed along one axis, the other two become
+    # (row, column) in create_line_cube's order.
     shape = {"x": (nz, ny), "y": (nz, nx), "z": (ny, nx)}[axis]
     volume_axes = {"x": (0, 1), "y": (0, 2), "z": (1, 2)}[axis]
     wl_grid = _wavelengths(np.linspace(-300, 300, 121) * u.km / u.s)
@@ -68,7 +63,7 @@ def test_the_wavelength_axis_carries_the_grid_it_was_built_on(velocities):
 
 
 def test_the_wavelength_step_is_the_grids_one_spacing_not_its_first():
-    """A grid rounded to single precision steps unevenly; its first step would misplace the far end."""
+    """A single-precision grid steps unevenly, so its first step would misplace the far end."""
     wl_grid = _wavelengths(np.linspace(-300, 300, 121) * u.km / u.s)
     rounded = wl_grid.value.astype(np.float32).astype(float) * u.cm
     step = (rounded[-1] - rounded[0]).value / (rounded.size - 1)

@@ -1,11 +1,4 @@
-"""The instrument simulation writes its results file, and reads back what it wrote.
-
-The unit tests in test_results_file.py check the encoder against objects built for
-the purpose. These run the real thing end to end, which is the only way to
-find out whether the tree ECLIPSE actually produces survives the trip: each
-run keeps what it saved, and what comes back from the file is compared with
-it entry by entry.
-"""
+"""Results files written by full instrument runs read back unchanged."""
 import dataclasses
 import gc
 import importlib
@@ -34,7 +27,7 @@ STEP = (5 * u.km / u.s / const.c * REST).to(u.AA)
 
 
 def _synthesis_file(path, time=None, scale=1.0):
-    """A Gaussian line whose Doppler shift changes from pixel to pixel."""
+    """Write a synthesis file of a Gaussian line, Doppler shifted differently in each pixel."""
     offsets = (np.arange(N_WAVE) - N_WAVE // 2) * STEP
     shifts = np.linspace(-30, 30, NY * NX).reshape(NY, NX, 1) * u.km / u.s
     centres = (shifts / const.c * REST).to(u.AA)
@@ -48,7 +41,7 @@ def _synthesis_file(path, time=None, scale=1.0):
 
 
 def _run(tmp_path, monkeypatch, name, **config):
-    """Run the instrument simulation, and return what it saved and where."""
+    """Run the instrument simulation and return the saved payload and its path."""
     main_module = importlib.import_module("euvst_response.main")
 
     saved = {}
@@ -69,8 +62,8 @@ def _run(tmp_path, monkeypatch, name, **config):
 
 
 def _same_wcs(got, expected, where):
-    # On copies: astropy puts a WCS into SI units in place the first time it
-    # works anything out with it, and the payload shares WCSs between cubes.
+    # Compare copies: astropy converts a WCS to SI units in place the first
+    # time it is used, and the payload shares WCSs between cubes.
     got, expected = got.deepcopy().wcs, expected.deepcopy().wcs
     assert list(got.ctype) == list(expected.ctype), where
     assert [str(c) for c in got.cunit] == [str(c) for c in expected.cunit], where
@@ -81,11 +74,12 @@ def _same_wcs(got, expected, where):
 
 def _same(got, expected, where="payload", _memo=None):
     """
-    That *got* is what *expected* was, entry by entry.
+    Assert that `got` equals `expected`, entry by entry.
 
-    What the file writes as a dataset or group is also checked to come back
-    as one object wherever the results held one object, as the ground truth
-    combinations share is, and as distinct objects wherever they were.
+    Sharing is checked too, for whatever the file writes as a dataset or
+    group: one object in the results, such as the ground truth the
+    combinations share, must come back as one object, and distinct objects
+    must stay distinct.
     """
     memo = {} if _memo is None else _memo
     if _holds_array(expected):
@@ -116,7 +110,7 @@ def _same(got, expected, where="payload", _memo=None):
         assert np.array_equal(got, expected, equal_nan=expected.dtype.kind == "f"), where
     elif isinstance(expected, dict):
         assert isinstance(got, dict) and list(got) == list(expected), where
-        # The keys too, as a NumPy number in one is not a Python number.
+        # Check the keys too: a NumPy number is not a Python number.
         for got_key, key in zip(got, expected):
             _same(got_key, key, f"{where} key {key!r}", {})
         for key in expected:
@@ -132,8 +126,8 @@ def _same(got, expected, where="payload", _memo=None):
     elif isinstance(expected, u.UnitBase):
         assert got == expected, f"{where}: {got!r} != {expected!r}"
     else:
-        # Of the same type too, so that a flag coming back as 1 is caught, or
-        # a NumPy number as a Python one.
+        # Check the type too, to catch a flag coming back as 1, or a NumPy
+        # number as a Python one.
         assert type(got) is type(expected) and got == expected, f"{where}: {got!r} != {expected!r}"
 
 
@@ -153,7 +147,7 @@ def test_a_synthesis_file_run_reads_back_what_it_saved(tmp_path, monkeypatch):
     loaded = load_results(path)
     _same(loaded, payload)
 
-    # And the analysis reads it as it read a pickle.
+    # The analysis functions read it as they read a pickle.
     results = load_instrument_response_results(path)
     combination = next(iter(results["results"]["all_combinations"].values()))
     signal = combination["first_dn_signal"]
@@ -176,7 +170,7 @@ def test_a_synthesis_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
 
 
 def test_an_atmosphere_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
-    """With its synthesis settings, whose precision is a NumPy type."""
+    """Including the synthesis settings, whose precision is a NumPy type."""
     from euvst_response import raster as raster_module
     from euvst_response.atmosphere import Atmosphere, write_atmosphere
     from euvst_response.utils import angle_to_distance
@@ -206,7 +200,7 @@ def test_an_atmosphere_series_run_reads_back_what_it_saved(tmp_path, monkeypatch
 
 
 def test_an_eis_run_reads_back_what_it_saved(tmp_path, monkeypatch):
-    """With the calibration date as YAML reads an unquoted one, a datetime.date."""
+    """Including the calibration date, which YAML reads as a datetime.date when unquoted."""
     import datetime
 
     payload, path = _run(tmp_path, monkeypatch, "eis", instrument="EIS",
@@ -218,7 +212,7 @@ def test_an_eis_run_reads_back_what_it_saved(tmp_path, monkeypatch):
 
 
 def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
-    """Results that older versions pickled read with a warning, and convert to a results file."""
+    """Pickled results from older versions load with a warning and convert to a results file."""
     import dill
 
     payload, path = _run(tmp_path, monkeypatch, "uniform",
@@ -233,16 +227,16 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
 
     converted = convert_results_pickle(old)
     assert converted == tmp_path / "old.h5" and is_results_file(converted)
-    # What the pickle holds, whose WCSs astropy pickled as headers, to 14 digits.
+    # Compare with what the pickle holds: astropy pickles a WCS as a header, to 14 digits.
     with open(old, "rb") as f:
         _same(load_results(converted), dill.load(f))
     with pytest.raises(ValueError, match="already an HDF5 file"):
         convert_results_pickle(converted)
-    # A file already there, and the pickle itself, are left alone.
+    # An existing file and the pickle itself are left alone.
     with pytest.raises(FileExistsError, match="overwrite=True"):
         convert_results_pickle(old)
     assert convert_results_pickle(old, overwrite=True) == converted
-    # One that cannot be read back leaves the file there as it was.
+    # A conversion that cannot be read back leaves the existing file unchanged.
     from euvst_response import results_file
 
     before, real = converted.read_bytes(), results_file.load_results
@@ -260,17 +254,17 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     misnamed.write_bytes(old.read_bytes())
     with pytest.raises(ValueError, match="the pickle itself"):
         convert_results_pickle(misnamed)
-    # A pickle of something else, as a synthesis pickle is, is not results.
+    # A pickle of something else, such as a synthesis, is refused.
     with open(tmp_path / "synthesis.pkl", "wb") as f:
         dill.dump({"line_cubes": {}}, f)
     with pytest.raises(ValueError, match="convert_synthesis_pickle"):
         convert_results_pickle(tmp_path / "synthesis.pkl")
     assert not (tmp_path / "synthesis.h5").exists()
-    # Nor is a file that is not a pickle at all.
+    # So is a file that is not a pickle at all.
     (tmp_path / "empty.pkl").write_bytes(b"")
     with pytest.raises(ValueError, match="is not a pickle"):
         convert_results_pickle(tmp_path / "empty.pkl")
-    # A directory is not a file to write, and a link is written through.
+    # A directory cannot be the output, and a symlink is written through.
     with pytest.raises(IsADirectoryError):
         convert_results_pickle(old, tmp_path)
     real, link = tmp_path / "elsewhere" / "real.h5", tmp_path / "link.h5"
@@ -279,12 +273,12 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     link.symlink_to(real)
     assert convert_results_pickle(old, link, overwrite=True) == link
     assert link.is_symlink() and load_results(real)["instrument"] == "SWC"
-    # A home directory is where the user's is.
+    # `~` expands to the user's home directory.
     monkeypatch.setenv("HOME", str(tmp_path))
     assert convert_results_pickle("~/old.pkl", "~/home.h5") == tmp_path / "home.h5"
 
-    # A configuration object from before one of its settings existed, as in
-    # a 0.8.0 pickle, gets today's default for it.
+    # A configuration object missing a later setting, as in a 0.8.0 pickle,
+    # gets the current default for it.
     from euvst_response.config import Simulation
     simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
     del simulation.__dict__["pinhole_positions_spectral"]
@@ -295,8 +289,8 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     restored = load_results(converted)["simulation"]
     assert restored.pinhole_positions_spectral == [] and restored.slit_width == 0.4 * u.arcsec
 
-    # And one from another version, with a setting this version lacks, says
-    # the setting is left out rather than losing it unsaid.
+    # A setting from another version that this version lacks is dropped with
+    # a warning, not silently.
     simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
     simulation.__dict__["allow_nonflight_slit"] = True
     with open(tmp_path / "branch.pkl", "wb") as f:
@@ -313,8 +307,8 @@ def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, m
         results = load_instrument_response_results("run/result/uniform.pkl")
     assert results["instrument"] == "SWC"
 
-    # A pickle that is there is the one read, and the warning says when the
-    # .h5 beside it is newer, the results of a later run.
+    # An existing pickle is the one read, and the warning says when the .h5
+    # beside it is newer (the results of a later run).
     import dill
 
     old = Path("run/result/uniform.pkl")
@@ -331,7 +325,7 @@ def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, m
 
 
 def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsys):
-    """As a rerun replaced it when results were pickles, so a script naming it reads the new results."""
+    """So a script naming the pickle reads the new results, as when reruns overwrote it."""
     import dill
 
     stale = tmp_path / "run" / "result" / "uniform.pkl"
@@ -341,7 +335,7 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
     config = {"uniform_intensity": "5000 erg / (s cm2 sr)",
               "simulation": {"slit_width": "0.2 arcsec", "expos": "5 s"}}
 
-    # Only once the results are saved: a run that fails to save leaves it.
+    # The pickle is moved only after the results are saved, so a failed save leaves it.
     main_module = importlib.import_module("euvst_response.main")
     real = main_module.save_results
 
@@ -359,11 +353,11 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
     assert not stale.exists() and moved.is_file()
     with pytest.warns(FutureWarning, match="does not exist"):
         assert load_instrument_response_results(stale)["instrument"] == "SWC"
-    # And what was moved aside still reads, as the pickle it is.
+    # The moved pickle still loads as a pickle.
     with pytest.warns(FutureWarning, match="results pickle"):
         assert load_results(moved)["instrument"] == "EIS"
 
-    # Another from an older version goes beside it, rather than over it.
+    # A second old pickle is moved beside the first, not over it.
     with open(stale, "wb") as f:
         dill.dump({"instrument": "EIS", "second": True}, f)
     _run(tmp_path, monkeypatch, "uniform", **config)
@@ -372,7 +366,7 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
     with pytest.warns(FutureWarning, match="results pickle"):
         assert load_results(stale.parent / "uniform.pkl.old.1")["second"]
 
-    # One that cannot be moved aside is left, said so, and the run still succeeds.
+    # A pickle that cannot be moved is left with a message, and the run still succeeds.
     with open(stale, "wb") as f:
         dill.dump({"instrument": "EIS"}, f)
     real_replace = os.replace
@@ -390,14 +384,14 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
 
 
 def test_a_config_the_results_file_cannot_hold_is_refused_before_the_run(tmp_path, monkeypatch):
-    """As a YAML alias inside itself, which would otherwise fail only when the results are saved."""
+    """For example a YAML alias inside itself, which would otherwise fail only at the save."""
     loop = ["x"]
     loop.append(loop)
     main_module = importlib.import_module("euvst_response.main")
     monkeypatch.setattr(main_module, "monte_carlo", lambda *args, **kwargs: pytest.fail("ran"))
     # The loop is found by recursing until Python runs out of stack. Garbage
-    # collected there, from earlier tests, cannot run its finalisers, which
-    # pytest then reports as unraisable; so none is left to collect.
+    # from earlier tests collected there cannot run its finalisers, which
+    # pytest reports as unraisable, so collect it first.
     gc.collect()
     gc.disable()
     try:

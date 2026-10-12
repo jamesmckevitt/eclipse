@@ -1,10 +1,4 @@
-"""The pinhole config lists are paired, and a half-specified one now raises.
-
-pinhole_sizes and pinhole_positions carry one entry per pinhole, so a config
-holding one without the other describes no pinhole at all. That used to run to
-completion with no pinholes and no warning, which looks exactly like a run
-where the pinholes were simulated and turned out not to matter.
-"""
+"""Pinhole sizes and positions are paired, and a half-given pair is refused."""
 import sys
 
 import astropy.units as u
@@ -31,7 +25,7 @@ def test_no_pinhole_keys_at_all_is_accepted():
 
 
 def test_positions_without_sizes_raises():
-    """The case from the issue: this used to run and produce no pinholes."""
+    """The case from the issue, which must raise rather than run with no pinholes."""
     with pytest.raises(ValueError, match="paired list"):
         _parse_pinhole_config({"pinhole_positions": [0.1, 0.2, 0.3]})
 
@@ -48,7 +42,7 @@ def test_mismatched_lengths_raise_and_say_both_lengths():
 
 
 def test_a_single_pinhole_may_be_written_unwrapped():
-    """YAML scalars, not lists, are how a one-pinhole config usually reads."""
+    """A one-pinhole config is usually written with YAML scalars, not lists."""
     sizes, positions, _ = _parse_pinhole_config(
         {"pinhole_sizes": "20 um", "pinhole_positions": 0.5})
     assert [s.to_value(u.um) for s in sizes] == [20.0]
@@ -96,8 +90,8 @@ def test_a_fully_specified_config_survives():
 
 
 def test_quoted_numbers_reach_the_pipeline_as_floats():
-    """A quoted '0.3' passed the range check but stayed a string, which the
-    diffraction code cannot do arithmetic with."""
+    """A quoted '0.3' must become a float, since the diffraction code cannot
+    do arithmetic with a string."""
     config = dict(VALID, pinhole_positions=["0.3", "0.7"],
                   pinhole_positions_spectral=["0.1", "0.8"])
     _, positions, spectral = _parse_pinhole_config(config)
@@ -139,8 +133,8 @@ def test_simulation_converts_quoted_positions_to_floats():
 
 # --- the EIS guard, exercised through main() ---------------------------------
 #
-# EIS has no aluminium filter, so it has no pinholes to model. The guard used
-# to test the sizes only, so an EIS config carrying positions alone passed it.
+# EIS has no aluminium filter, so it has no pinholes to model. The guard must
+# catch an EIS config with positions alone, not only one with sizes.
 
 EIS_UNIFORM = """
 instrument: EIS
@@ -150,7 +144,7 @@ n_iter: 1
 
 
 def _run_main(tmp_path, monkeypatch, extra):
-    """Run main() on a uniform-intensity EIS config plus *extra* YAML.
+    """Run main() on a uniform-intensity EIS config plus `extra` YAML.
 
     Uniform-intensity mode needs no synthesis file, and every case here is
     rejected during configuration, so nothing is simulated.
@@ -177,6 +171,6 @@ def test_eis_rejects_enable_pinholes(tmp_path, monkeypatch):
 
 
 def test_eis_rejects_positions_alone(tmp_path, monkeypatch):
-    """The issue's config. Previously ran to completion with no pinholes."""
+    """The config from the issue, which must not run with no pinholes."""
     with pytest.raises(ValueError):
         _run_main(tmp_path, monkeypatch, "pinhole_positions: [0.1, 0.2, 0.3]\n")

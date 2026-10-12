@@ -1,10 +1,7 @@
 """Each detector pixel holds the mean of the scene over its footprint, through the PSF.
 
-A single snapshot was sampled bilinearly at the pixel centres, so structure
-finer than a pixel came out wherever the centres happened to fall; and the
-PSF was applied to the pixels, which drags a line narrower than a pixel
-toward the middle of the pixel it is in. The scene now goes onto the pixels
-through the PSF in one step, from its own cells.
+The scene goes onto the pixels through the PSF in one step, from its own
+cells, so structure finer than a pixel keeps its place.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -29,7 +26,7 @@ C = const.c.to_value(u.km / u.s)
 
 
 def _blurred_means(cells, pixels, sigma, width):
-    """The weights by brute force: each cell blurred on a fine grid, then averaged over each pixel."""
+    """Brute-force weights: each cell blurred on a fine grid, then averaged over each pixel."""
     step = min(sigma if sigma else np.inf, width if width else np.inf,
                np.diff(cells).min(), np.diff(pixels).min()) / 400
     reach = 12 * sigma + width
@@ -82,7 +79,7 @@ def test_a_scene_that_goes_on_past_its_edges_is_as_bright_at_them():
 
 
 def _scene(data, cell, wavelength_step=0.0169 * u.AA / 10):
-    """A cube as the synthesis writes it, with square cells *cell* across."""
+    """A cube in the synthesis layout, with square cells `cell` across."""
     ny, nx, nl = data.shape
     size = angle_to_distance(cell).to_value(u.Mm)
     wcs = WCS(naxis=3)
@@ -95,7 +92,7 @@ def _scene(data, cell, wavelength_step=0.0169 * u.AA / 10):
 
 
 def test_structure_finer_than_a_pixel_is_averaged_over_it():
-    """Columns alternately dark and twice as bright, four to a 0.4 arcsec slit: every slit sees the mean."""
+    """Alternate columns of 0 and 2, four to a 0.4 arcsec slit: every slit sees the mean."""
     ny, nx = 32, 64
     data = np.ones((ny, nx, 21))
     data[:, ::2] = 0.0
@@ -107,7 +104,7 @@ def test_structure_finer_than_a_pixel_is_averaged_over_it():
 
 
 def _narrow_line(offset_pixels, sigma_pixels=0.28, n_fine=301):
-    """A line narrower than a pixel, off the middle of one by a known amount, in every cell."""
+    """A line narrower than a pixel, `offset_pixels` off a pixel's middle, in every cell."""
     pixel = 0.0169 * u.AA
     step = pixel / 10
     wavelength = REST + (np.arange(n_fine) - (n_fine - 1) / 2) * step
@@ -123,7 +120,7 @@ def _fitted_velocity(cube):
 
 
 def test_a_narrow_line_keeps_its_place_through_the_psf():
-    """Blurred on the pixels, a line 0.28 pixels wide came out 2 km/s from where it was."""
+    """Blurring on the pixels moved a line 0.28 pixels wide by 2 km/s."""
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1, psf=True)
     scene, truth = _narrow_line(0.3)
@@ -135,7 +132,11 @@ def test_a_narrow_line_keeps_its_place_through_the_psf():
 
 
 def test_the_psf_moves_light_but_counts_its_photons_at_its_own_wavelength():
-    """The run counts a pixel's photons at the pixel's wavelength; the light the PSF brings there keeps its own."""
+    """Light the PSF moves keeps the photon count of its own wavelength.
+
+    The run counts a pixel's photons at the pixel's wavelength, so the total
+    must still match the photons emitted.
+    """
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=1.6 * u.arcsec, ncpu=1, psf=True)
     scene, _ = _narrow_line(0.3)
@@ -192,7 +193,7 @@ def test_the_telescopes_blur_across_the_slit_brings_in_light_from_beside_it():
 
 
 def test_a_sweep_over_the_filter_observes_each_through_its_own_throughput(tmp_path, monkeypatch):
-    """The cube laid on the detector carries the telescope's throughput, so each filter gets its own."""
+    """The detector cube includes the telescope throughput, so each filter gets its own."""
     import importlib
     import sys
 

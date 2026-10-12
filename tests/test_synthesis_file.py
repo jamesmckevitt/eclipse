@@ -1,12 +1,4 @@
-"""The synthesis file: spectra from ECLIPSE's synthesis or any other code, as HDF5 (issue #107).
-
-A synthesis file holds the spectral radiance leaving the Sun at each pixel
-of an image, line by line, whoever synthesised it. These check the file and
-what goes with it, the units the spectra may be in, the flux-conserving
-resampling from a grid that is not evenly spaced, and that an instrument
-run observes a synthesis file exactly as it observed the pickles of older
-versions holding the same line cubes.
-"""
+"""The synthesis file: HDF5 spectra from ECLIPSE or any other code (issue #107)."""
 import os
 import sys
 import warnings
@@ -57,7 +49,10 @@ def _grid(rest=REST):
 
 
 def _lines(ny=NY, nx=NX, rest=REST, scale=1.0):
-    """A Gaussian line whose Doppler shift changes from pixel to pixel, (ny, nx, N_WAVE) in erg / (s cm2 sr cm)."""
+    """Gaussian line with a different Doppler shift in each pixel.
+
+    Shape (ny, nx, N_WAVE), in erg / (s cm2 sr cm).
+    """
     offsets = ((np.arange(N_WAVE) - N_WAVE // 2) * STEP).to_value(u.cm)
     sigma = (20 * u.km / u.s / const.c * rest).to_value(u.cm)
     shifts = np.linspace(-30, 30, ny * nx).reshape(ny, nx, 1)
@@ -89,7 +84,7 @@ def test_a_synthesis_file_round_trips(tmp_path):
                                     _grid(184.537 * u.AA), 184.537 * u.AA)}
     synthesis = _synthesis(lines, source="another code, snapshot 12", time=1250 * u.s)
     read = read_synthesis(write_synthesis(synthesis, tmp_path / "synthesis.h5"))
-    # The lines keep the order they were written in, not HDF5's by name.
+    # The lines keep their written order, not HDF5's order by name.
     assert list(read.lines) == [LINE, BLEND, "Fe10_184.5370"]
     for name, line in synthesis.lines.items():
         for field in ("intensity", "wavelength", "rest_wavelength"):
@@ -131,23 +126,23 @@ def test_only_the_lines_that_reach_the_window_are_read(tmp_path):
     with pytest.raises(ValueError, match="is not in"):
         read_synthesis(path, reference_line="Fe99_100.0000")
 
-    # A line on a coarse grid whose wavelengths all lie beyond the window,
-    # but whose first bin reaches back into it, adds what lies inside.
+    # A line on a coarse grid with all its wavelengths beyond the window, but
+    # whose first bin reaches back into it, adds the part inside.
     coarse = REST + np.array([61.0, 64.0]) * STEP
     edge = SpectralLine(intensity=np.ones((NY, NX, 2)) * 1e13 * RADIANCE_UNIT,
                         wavelength=coarse, rest_wavelength=coarse[0])
     path = write_synthesis(_synthesis({LINE: _line(), "edge": edge}), tmp_path / "edge.h5")
     synthesis = read_synthesis(path, reference_line=LINE)
     assert list(synthesis.lines) == [LINE, "edge"]
-    # Its first bin runs from 59.5 steps out; the window's last from 59.5 to
-    # 60.5. The edges agree to the rounding of wavelengths in Angstrom, about
-    # a part in 1e11 of a step.
+    # Its first bin starts 59.5 steps out, and the window's last bin runs
+    # from 59.5 to 60.5. The edges agree to within the rounding of
+    # wavelengths in Angstrom, about 1e-11 of a step.
     added = synthesis.summed(LINE).value - _line().radiance().value
     assert added[..., -1] == pytest.approx(np.full((NY, NX), 1e13), rel=1e-9)
     assert np.abs(added[..., :-1]).max() <= 1e-9 * 1e13
 
-    # A blend whose wavelengths could not be read is refused rather than
-    # passed over as outside the window.
+    # A blend with unreadable wavelengths is refused, not skipped as outside
+    # the window.
     path = write_synthesis(_synthesis({LINE: _line(), BLEND: _line(rest_wavelength=BLEND_REST)}),
                            tmp_path / "broken.h5")
     for broken, match in ((_grid().to_value(u.AA)[::-1], "must increase"),
@@ -181,10 +176,10 @@ def test_the_products_come_back_as_they_went_in(tmp_path):
     assert read["dynamic_mode"]["slit_width"] == 0.4 * u.arcsec
     assert read["config"]["vel_res"] == 5 * u.km / u.s
     assert read["config"]["crop_params"] == {"crop_x": None}
-    # The instrument run reads only what it needs, named alone or in a list.
+    # The instrument run reads only the keys it needs, given alone or in a list.
     assert set(read_synthesis_products(path, keys=("dynamic_mode",))) == {"dynamic_mode"}
     assert set(read_synthesis_products(path, keys="dynamic_mode")) == {"dynamic_mode"}
-    # The lines keep their order, as the pickles kept it.
+    # The lines keep their order, as in the pickles.
     goft = {name: {"g_tn": np.ones((2, 4)), "atom": 26, "ion": 12}
             for name in ("Fe12_195.1190", "Fe09_171.0730", "Fe24_192.0280")}
     path = write_synthesis(_synthesis(), tmp_path / "ordered.h5", products={"goft": goft})
@@ -192,7 +187,7 @@ def test_the_products_come_back_as_they_went_in(tmp_path):
 
 
 def test_the_intensity_may_be_per_frequency_or_in_photons():
-    """Converted at each wavelength, as I_lambda = I_nu c / lambda^2 and E = h c / lambda."""
+    """Converted at each wavelength with I_lambda = I_nu c / lambda^2 and E = h c / lambda."""
     wavelength = _grid()
     per_wavelength = _lines() * RADIANCE_UNIT
     lam = wavelength.to_value(u.cm)
@@ -209,7 +204,7 @@ def test_the_intensity_may_be_per_frequency_or_in_photons():
         radiance = _line(given, wavelength).radiance()
         assert radiance.unit == RADIANCE_UNIT
         assert np.allclose(radiance.value, per_wavelength.value, rtol=1e-12, atol=0)
-        # And a line cube, on a wavelength axis, is in it too.
+        # Line cubes, on a wavelength axis, are in RADIANCE_UNIT too.
         cube = _synthesis({LINE: _line(given, wavelength)}).line_cube(LINE)
         assert cube.unit == RADIANCE_UNIT
         assert np.allclose(cube.data, per_wavelength.value, rtol=1e-12, atol=0)
@@ -283,7 +278,7 @@ def _line_cubes():
 
 
 def _keeps_meta(got, expected):
-    """Whether *got* has every entry of *expected*, the same."""
+    """Assert that `got` has every entry of `expected`, with the same value."""
     for key, value in expected.items():
         assert key in got, key
         if isinstance(value, u.Quantity):
@@ -310,7 +305,7 @@ def test_line_cubes_become_a_synthesis_file_that_sums_as_they_did(tmp_path):
 
 
 def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
-    """A view along x reloads with the image axes of a view along x, however the file was written."""
+    """A view along x reloads with the image axes of a view along x, however it was written."""
     cubes = {LINE: _line_cube(_lines(), view="x"),
              BLEND: _line_cube(_lines(rest=BLEND_REST, scale=0.1), BLEND_REST, view="x")}
     path = write_line_cubes(cubes, tmp_path / "along_x.h5")
@@ -326,7 +321,7 @@ def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
     converted = convert_synthesis_pickle(tmp_path / "along_x.pkl", tmp_path / "converted.h5")
     assert read_synthesis(converted).integration_axis == "x"
 
-    # Another code's file names no view, and is taken as seen along z.
+    # A file from another code names no view, and is taken as seen along z.
     path = write_synthesis(_synthesis(), tmp_path / "other_code.h5")
     assert read_synthesis(path).integration_axis is None
     assert list(load_synthesis(path)["line_cubes"][LINE].wcs.wcs.ctype) == ["WAVE", "SOLX", "SOLY"]
@@ -341,8 +336,7 @@ def test_line_cubes_come_back_seen_along_the_axis_they_were(tmp_path):
     with pytest.raises(ValueError, match="integration_axis must be one of"):
         _synthesis(integration_axis="w")
 
-    # A view from the other side keeps its sign; one named with the side the
-    # axis alone gives is recorded as the axis alone.
+    # A view from the minus side keeps its sign, and "+x" is recorded as "x".
     path = write_synthesis(_synthesis(integration_axis="-x"), tmp_path / "from_minus_x.h5")
     assert read_synthesis(path).integration_axis == "-x"
     assert list(load_synthesis(path)["line_cubes"][LINE].wcs.wcs.ctype) == ["WAVE", "SOLY", "SOLZ"]
@@ -369,7 +363,7 @@ def test_each_line_keeps_its_atom_and_ion(tmp_path):
 
 
 def test_line_cubes_must_share_one_image(tmp_path):
-    """Every line is written onto the first one's pixels, so a cube laid elsewhere is refused."""
+    """Every line is written on the first line's pixels, so a cube on other pixels is refused."""
     cubes = _line_cubes()
     cubes[BLEND].wcs.wcs.crval[1] += 0.5 * PIXEL.to_value(u.Mm)
     with pytest.raises(ValueError, match="other pixel positions along x"):
@@ -395,11 +389,11 @@ def test_blends_keep_their_flux_on_the_reference_wavelengths():
     """A narrow blend between two of the reference line's wavelengths is added, not lost."""
     from euvst_response.utils import onto_wavelength_bins
 
-    # By hand: samples standing for 0.5-1.5, 1.5-2.5 and 2.5-3.5, averaged
-    # over bins 0.5-2.5 and 2.5-4.5, with nothing beyond 3.5.
+    # By hand: samples covering 0.5-1.5, 1.5-2.5 and 2.5-3.5, averaged over
+    # bins 0.5-2.5 and 2.5-4.5, with zero beyond 3.5.
     assert onto_wavelength_bins(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]),
                                 np.array([1.5, 3.5])) == pytest.approx([1.5, 1.5])
-    # A sample that is not a number spoils only the bins it overlaps.
+    # A NaN sample spoils only the bins it overlaps.
     spoilt = onto_wavelength_bins(np.array([1.0, np.nan, 3.0, 4.0, 5.0, 6.0]),
                                   np.arange(1.0, 7.0), np.array([1.5, 3.5, 5.5]))
     assert np.isnan(spoilt[0]) and np.all(np.isfinite(spoilt[1:]))
@@ -407,8 +401,8 @@ def test_blends_keep_their_flux_on_the_reference_wavelengths():
     assert np.array_equal(onto_wavelength_bins(same, np.array([1.0, 2.0, 3.0]),
                                                np.array([1.0, 2.0, 3.0])), same)
 
-    # A reference line sampled every 0.05 Angstrom, and a blend 0.005
-    # Angstrom wide, sampled finely, centred between two of its wavelengths.
+    # A reference line sampled every 0.05 Angstrom, and a finely sampled
+    # blend 0.005 Angstrom wide centred between two of its wavelengths.
     coarse = REST + np.arange(-0.3, 0.3001, 0.05) * u.AA
     fine = REST + 0.025 * u.AA + np.arange(-0.05, 0.0501, 0.001) * u.AA
     ref_profile = np.exp(-0.5 * ((coarse - REST) / (0.04 * u.AA)).decompose().value ** 2)
@@ -425,8 +419,8 @@ def test_blends_keep_their_flux_on_the_reference_wavelengths():
     added = ((together - alone) * widths).sum(-1)
     blend_flux = (blend_profile * np.diff(edges_from_centres(fine)).value).sum()
     assert added == pytest.approx(np.full((NY, NX), blend_flux), rel=1e-12)
-    # Interpolating the blend onto the reference wavelengths, which fall
-    # 5 of its widths from its centre, would have kept almost none of it.
+    # Interpolation onto the reference wavelengths, 5 blend widths from its
+    # centre, would keep almost none of it.
     interpolated = np.interp(coarse.value, fine.value, blend_profile, left=0.0, right=0.0)
     assert (interpolated * widths).sum() < 1e-4 * blend_flux
 
@@ -441,12 +435,12 @@ def test_an_old_pickle_converts_with_everything_it_held(tmp_path):
                    "atmosphere": {"source": "a simulation", "time": 42.0 * u.s},
                    "dynamic_mode": {"enabled": False}}, f)
     loaded = load_synthesis(convert_synthesis_pickle(tmp_path / "old.pkl", tmp_path / "new.h5"))
-    # The snapshot's time goes with the spectra, as the synthesis now writes it.
+    # The snapshot time is stored with the spectra, as the synthesis writes it.
     assert read_synthesis(tmp_path / "new.h5").time == 42.0 * u.s
     assert list(loaded["line_cubes"]) == [LINE, BLEND]
     assert np.array_equal(loaded["line_cubes"][LINE].data, cubes[LINE].data)
     assert np.array_equal(loaded["dem_map"], np.ones((NY, NX, 3)))
-    # The spectra are the lines themselves, so they are not kept twice.
+    # The spectra are the line cubes themselves, so they are not kept twice.
     assert set(loaded["goft"][LINE]) == {"g_tn"}
     assert loaded["config"]["vel_res"] == 5 * u.km / u.s
 
@@ -459,7 +453,7 @@ def test_an_old_pickle_converts_with_everything_it_held(tmp_path):
 
 
 def _flat_goft(lines, **kwargs):
-    """A contribution function the same at every temperature and density, in place of fiasco."""
+    """Stand-in for fiasco: a contribution function constant in temperature and density."""
     logT_grid, logN_grid = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
     return ({name: {"wl0": REST.to(u.cm), "g_tn": np.full((21, 21), 1e-24), "atom": 26,
                     "ion": 12, "hdf5_dbase_root": None} for name in lines},
@@ -483,7 +477,7 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
             with pytest.warns(FutureWarning, match="Writing one is deprecated"):
                 synthesis.main()
         elif name == "plain":
-            # Any other name got a pickle from older versions, so it is told.
+            # Older versions wrote a pickle for any other name, so the user is warned.
             with pytest.warns(UserWarning, match="gets a synthesis file, which is HDF5"):
                 synthesis.main()
             assert h5py.is_hdf5(tmp_path / "plain")
@@ -495,14 +489,14 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
     assert list(saved) == ["line_cubes", "dem_map", "em_tv", "electron_density", "logT_grid",
                            "vel_grid", "logN_grid", "goft", "voxel_sizes", "dynamic_mode",
                            "atmosphere", "config"]
-    # Contribution functions and all, as older versions kept them.
+    # Including the contribution functions, as older versions kept them.
     assert {"si", "wl_grid"} <= set(saved["goft"][LINE])
     assert np.array_equal(saved["line_cubes"][LINE].data,
                           load_synthesis(tmp_path / "new.h5")["line_cubes"][LINE].data)
 
 
 def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch):
-    """With no synthesis_file, a pickle where older versions wrote it is observed, with a warning."""
+    """With no `synthesis_file`, a pickle at the old default path is observed, with a warning."""
     (tmp_path / "run" / "input").mkdir(parents=True)
     with open(tmp_path / "run" / "input" / "synthesised_spectra.pkl", "wb") as f:
         dill.dump({"line_cubes": _line_cubes()}, f)
@@ -514,8 +508,8 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
     for key, expected in named["cube_reb_dict"].items():
         assert np.array_equal(by_default["cube_reb_dict"][key].data, expected.data)
 
-    # Once there is a synthesis file where the synthesis now writes it, that
-    # is the one, and the run says which it chose.
+    # Once a synthesis file exists at the new default path, it is used, and
+    # the run says which file it chose.
     convert_synthesis_pickle(tmp_path / "run" / "input" / "synthesised_spectra.pkl",
                              tmp_path / "run" / "input" / "synthesised_spectra.h5")
     with pytest.warns(UserWarning, match="observing ./run/input/synthesised_spectra.h5") as seen:
@@ -527,10 +521,13 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
 # Onto the detector
 # ----------------------------------------------------------------------
 def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
-    """Each input wavelength stands for the interval halfway to its neighbours, as in a synthesis, out to the outermost."""
+    """Each input wavelength covers the interval halfway to its neighbours.
+
+    This is as in a synthesis, and holds for the outermost wavelengths too.
+    """
     rng = np.random.default_rng(107)
-    # Dense in the middle and, at the ends, coarser than the detector's
-    # pixels, with intensity all the way out.
+    # Dense in the middle and coarser than the detector pixels at the ends,
+    # with intensity all the way out.
     wavelength = np.concatenate([[194.80, 194.86], np.sort(194.9 + 0.4 * rng.random(300)),
                                  [195.34, 195.40]]) * u.AA
     intensity = 1e13 * rng.random(wavelength.size)
@@ -541,27 +538,27 @@ def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
     resampled, grid = resample_spectra(intensity[np.newaxis], wavelength, pitch)
     assert np.allclose(np.diff(grid.value), pitch.value)
     assert np.sum(resampled) * pitch.value == pytest.approx(given, rel=1e-12)
-    # The grid still steps from the first wavelength, and reaches past it by
-    # whole pixels only as far as the outermost intervals need.
+    # The grid steps from the first wavelength, extended by whole pixels only
+    # as far as the outermost intervals need.
     steps = (grid.value - wavelength[0].value) / pitch.value
     assert steps == pytest.approx(np.round(steps), abs=1e-6)
     assert grid.value[0] - pitch.value / 2 <= edges[0] < grid.value[0] + pitch.value / 2
     assert grid.value[-1] - pitch.value / 2 < edges[-1] <= grid.value[-1] + pitch.value / 2
 
-    # A grid finer than the pixels, as ECLIPSE's own is, needs none added.
+    # A grid finer than the pixels, like ECLIPSE's own, needs no extra pixels.
     _, fine = resample_spectra(_lines(), _grid(), pitch)
     assert fine[0] == _grid()[0].to(u.AA)
 
 
 @pytest.mark.parametrize("spacing", ["even", "dense in the core"])
 def test_each_detector_pixel_gets_the_mean_of_the_line_over_it(spacing):
-    """A finely sampled Gaussian, resampled, gives each pixel the Gaussian's exact mean over it."""
+    """Resampling a finely sampled Gaussian gives each pixel its exact mean over the pixel."""
     from scipy.special import erf
 
     centre, sigma, pitch = REST.value + 0.0117, 0.03, 0.0223  # Angstrom
     t = np.linspace(-1.0, 1.0, 3001)
-    # Out to 10 sigma either side, evenly or, as another code might, from
-    # 0.00006 Angstrom apart in the core to 0.0006 in the wings.
+    # Out to 10 sigma either side, spaced evenly or, as another code might
+    # do, from 0.00006 Angstrom in the core to 0.0006 in the wings.
     wavelength = REST.value + (0.3 * t if spacing == "even" else 0.3 * np.sinh(3 * t) / np.sinh(3))
     intensity = np.exp(-0.5 * ((wavelength - centre) / sigma) ** 2)
 
@@ -573,7 +570,7 @@ def test_each_detector_pixel_gets_the_mean_of_the_line_over_it(spacing):
                                                - erf((lower - centre) / scale))
 
     exact = integral(grid.value - pitch / 2, grid.value + pitch / 2) / pitch
-    # What is left is the sampling of the Gaussian, 2e-6 of its peak;
+    # The remaining error is from sampling the Gaussian, 2e-6 of its peak;
     # pixels labelled one sample off would be out by 1e-3 or more.
     assert resampled[0] == pytest.approx(exact, rel=0, abs=1e-4)
     assert grid.value[np.argmax(resampled[0])] == pytest.approx(centre, abs=pitch / 2)
@@ -588,15 +585,15 @@ def test_angles_give_the_same_cube_as_the_lengths_they_stand_for():
                             y_edges=angle_to_distance(_edges(NY, angle)))
     a = rebin_spectra(in_angles, LINE, det, sim)
     b = rebin_spectra(in_lengths, LINE, det, sim)
-    # A field exactly 5 slit widths across keeps all 5, whichever side of 5
-    # the conversion to a length and back rounds it; 1.5 arcsec along the
-    # slit holds 9 whole pixels of 0.159 arcsec.
+    # A field exactly 5 slit widths across keeps all 5, whichever way the
+    # conversion to a length and back rounds it. 1.5 arcsec along the slit
+    # holds 9 whole pixels of 0.159 arcsec.
     assert a.data.shape[:2] == b.data.shape[:2] == (9, 5)
-    # The same to within the curvature of the conversion at 1 AU, which the
-    # lengths' uneven edges carry and the angles' pixel size does not.
+    # Equal to within the curvature of the conversion at 1 AU, which makes
+    # the edges in length uneven but not the pixel size in angle.
     assert np.allclose(a.data, b.data, rtol=1e-9, atol=0)
     assert np.allclose(a.wcs.wcs.cdelt, b.wcs.wcs.cdelt, rtol=1e-9)
-    # Across the slit by the slit width, along it by the plate scale.
+    # Pixel size: the slit width across the slit, the plate scale along it.
     pitch = [(a.wcs.wcs.cdelt[i] * u.Unit(a.wcs.wcs.cunit[i])).to_value(u.arcsec) for i in (1, 2)]
     assert np.allclose(pitch, [0.2, 0.159])
     assert a.meta["rest_wav"] == REST
@@ -622,7 +619,7 @@ def _run(tmp_path, monkeypatch, name, **inputs):
 
 
 def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch):
-    """Both runs start from the same unpickled cubes, so they see the same numbers, and describe them alike."""
+    """Both runs start from the same unpickled cubes, so their numbers and metadata match."""
     cubes = _line_cubes()
     for cube in cubes.values():
         cube.meta.update(atom=26, ion=12)
@@ -650,13 +647,13 @@ def test_a_converted_pickle_is_observed_as_the_pickle_was(tmp_path, monkeypatch)
         assert np.array_equal(got["first_dn_signal_data"], expected["first_dn_signal_data"])
         assert np.array_equal(got["ground_truth"]["fit_truth_data"],
                               expected["ground_truth"]["fit_truth_data"], equal_nan=True)
-    # The spectra the instrument observed are kept, as they were from a pickle.
+    # The observed spectra are kept, as they were from a pickle.
     assert np.array_equal(from_file["cube_sim"].data, from_pickle["cube_sim"].data)
     _keeps_meta(from_file["cube_sim"].meta, from_pickle["cube_sim"].meta)
 
 
 def test_a_uniform_intensity_run_says_it_ignores_a_synthesis_file(tmp_path, monkeypatch):
-    """The uniform intensity is what is observed, as it always was, but not silently."""
+    """The uniform intensity is observed, with a warning that the file is ignored."""
     with pytest.warns(UserWarning, match="'synthesis_file' is ignored"):
         results = _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
                        synthesis_file=str(tmp_path / "nowhere.h5"))
@@ -678,7 +675,7 @@ def test_a_file_of_several_lines_needs_the_reference_line_it_lacks(tmp_path, mon
     write_synthesis(_synthesis(lines), tmp_path / "two.h5")
     with pytest.raises(ValueError, match="no 'reference_line' says which to observe"):
         _run(tmp_path, monkeypatch, "unsaid", synthesis_file=str(tmp_path / "two.h5"))
-    # Left empty, it is the first line, as older versions took it.
+    # Left empty, it defaults to the first line, as in older versions.
     results = _run(tmp_path, monkeypatch, "empty", synthesis_file=str(tmp_path / "two.h5"),
                    reference_line=None)
     assert results["cube_sim"].meta["line_name"] == "Fe10_184.5370"
@@ -695,8 +692,8 @@ def test_load_atmosphere_reads_a_synthesis_file_as_it_read_the_pickle(tmp_path):
         got, mode = load_atmosphere(tmp_path / "synthesis.h5", line)
         assert mode == expected_mode == {"enabled": False}
         assert np.array_equal(got.data, expected.data)
-        # The WCS is built again from the file's wavelengths, so the same
-        # axes but for rounding.
+        # The WCS is rebuilt from the file's wavelengths, so the axes match
+        # to rounding.
         assert list(got.wcs.wcs.ctype) == list(expected.wcs.wcs.ctype)
         for axis, n in enumerate(got.data.shape[::-1]):
             pixels = np.zeros((n, 3))
@@ -725,7 +722,7 @@ def test_an_instrument_run_names_a_line_the_file_lacks(tmp_path, monkeypatch):
     ("synthesis_file:read_synthesis_products", "synthesis"),
 ])
 def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind):
-    """h5py said only that the file signature was not found."""
+    """Not just h5py's message that the file signature was not found."""
     import importlib
 
     module, name = reader.split(":")
@@ -738,7 +735,7 @@ def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind
 
 
 def test_a_write_cut_short_leaves_the_synthesis_file_that_was_there(tmp_path, monkeypatch):
-    """As when a job is killed or the disk fills while the synthesis is written."""
+    """For example when a job is killed or the disk fills during the write."""
     import euvst_response.synthesis_file as synthesis_file
 
     path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
@@ -787,7 +784,7 @@ def test_a_read_only_file_is_not_written_over(tmp_path):
 
 def test_a_file_that_is_neither_a_synthesis_file_nor_a_pickle_is_called_neither(
         tmp_path, monkeypatch):
-    """It was called an ECLIPSE synthesis pickle, then failed to unpickle."""
+    """Rather than being called an ECLIPSE synthesis pickle and then failing to unpickle."""
     from euvst_response.data_processing import load_atmosphere
 
     (tmp_path / "spectra.fits").write_bytes(b"SIMPLE  =                    T")
@@ -799,7 +796,7 @@ def test_a_file_that_is_neither_a_synthesis_file_nor_a_pickle_is_called_neither(
 
 
 def test_a_pickle_is_not_converted_over_itself(tmp_path):
-    """Written over the pickle, the synthesis file took its place, and the pickle was gone."""
+    """Writing over the pickle would replace it with the synthesis file, losing the pickle."""
     pickle_path = tmp_path / "synthesis.pkl"
     with open(pickle_path, "wb") as f:
         dill.dump({"line_cubes": _line_cubes()}, f)

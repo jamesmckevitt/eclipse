@@ -1,8 +1,7 @@
-"""Maps carry an observation date and a stated vantage point.
+"""Maps carry an observation date and an observer position.
 
-Without them sunpy stamps every map with the time the code happened to run
-and assumes an Earth-based observer, both silently. The date one is the
-serious one: it makes two runs of the same analysis produce different maps.
+Without them, sunpy stamps maps with the time the code ran and assumes an
+Earth-based observer.
 """
 import warnings
 
@@ -25,7 +24,7 @@ WHEN = "2024-03-20T09:30:00"
 
 
 def _combination_results(telescope=None):
-    """A minimal results dict of the shape create_sunpy_maps_from_combo wants."""
+    """Minimal results dict in the form create_sunpy_maps_from_combo expects."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
@@ -86,20 +85,20 @@ def test_the_observer_survives_into_the_coordinate_frame():
 
 
 def test_no_sunpy_metadata_warnings_are_raised():
-    """The warnings were the visible symptom, so they are worth asserting on."""
+    """The warnings are the visible symptom of missing metadata."""
     maps = _make(date_obs=WHEN)
     with warnings.catch_warnings(), sunpy.log.log_to_list() as messages:
         warnings.simplefilter("error", SunpyMetadataWarning)
         for map_obj in maps.values():
-            # sunpy only looks for the date, observer and solar radius when
-            # something reads them, as plotting does, so building the maps
-            # alone would pass even with the keywords missing.
+            # sunpy only checks the date, observer and solar radius when they
+            # are read, as in plotting, so building the maps alone would pass
+            # even without them.
             map_obj.wcs
     assert [m.getMessage() for m in messages] == []
 
 
 def test_two_runs_produce_the_same_date():
-    """The point of the change: the maps stop depending on the clock."""
+    """The maps must not depend on the clock."""
     first = _make(date_obs=WHEN)["total_dn"].meta["date-obs"]
     second = _make(date_obs=WHEN)["total_dn"].meta["date-obs"]
     assert first == second
@@ -133,7 +132,7 @@ def test_no_date_anywhere_raises_rather_than_inventing_one():
 
 
 def test_units_are_still_attached():
-    """The header rewrite must not lose what the maps are measured in."""
+    """The header rewrite must keep the map units."""
     maps = _make(date_obs=WHEN)
     assert maps["total_dn"].meta["bunit"] == "DN"
     assert maps["velocity_mean"].meta["bunit"] == "km / s"
@@ -150,7 +149,7 @@ def test_the_wcs_still_describes_the_same_pixels():
 
 
 def test_the_exposure_time_map_holds_the_exposure_times_in_seconds():
-    """It held each exposure's index under a unit of seconds, so a saved map read 0, 1, 2."""
+    """The map holds exposure times, not each exposure's index (0, 1, 2) labelled as seconds."""
     runs = []
     # Pixel (0, 0) meets 2 km/s from 1 s, (0, 1) from 2 s, (0, 2) from 5 s,
     # and the rest not at all.

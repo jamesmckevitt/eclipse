@@ -1,10 +1,7 @@
-"""With photon_shot_inverse_transform, runs that differ only in photon flux share their random numbers.
+"""Runs differing only in photon flux share random numbers in every iteration.
 
-The photon draws of the first Monte Carlo iteration were shared, but the
-quantum efficiency was a binomial draw, whose sampler uses a number of random
-values that depends on the photon count, and the Fano spread was drawn for
-the pixels with photons only, how many depending on the flux. After the first
-iteration the two runs were out of step, and their noise no longer cancelled.
+With `photon_shot_inverse_transform`, the quantum efficiency and the Fano
+spread use a fixed number of random values whatever the flux.
 """
 import astropy.units as u
 import numpy as np
@@ -29,7 +26,7 @@ def _photons(mean, shape=(40, 5, 30)):
 
 
 def _iterations(mean, n_iter=4):
-    """The electrons of each Monte Carlo iteration, from one seed."""
+    """Electrons in each Monte Carlo iteration, from one seed."""
     det = Detector_SWC()
     np.random.seed(11)
     electrons = []
@@ -41,7 +38,7 @@ def _iterations(mean, n_iter=4):
 
 
 def test_runs_differing_in_flux_stay_in_step_in_every_iteration():
-    """At two photons a pixel, which pixels have photons at all changes with the flux."""
+    """At two photons per pixel, which pixels get any photons depends on the flux."""
     for low, high in zip(_iterations(2.0), _iterations(2.4)):
         assert np.corrcoef(low, high)[0, 1] > 0.9
 

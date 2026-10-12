@@ -1,27 +1,14 @@
 """
-Every line in a wavelength band: the contribution functions a full-CCD frame needs.
+Contribution functions of every line in a band, for full-CCD frames.
 
-ECLIPSE's synthesis works out the lines named for a run. A frame of a whole
-detector holds every line in its band, which in CHIANTI is tens of thousands
-of transitions of almost two hundred ions. This works out the contribution
-function, G(T, n_e), of each of them, on the grids of temperature and
-density a synthesis uses, in ECLIPSE's convention: G includes n_H / n_e, so
-that it multiplies an emission measure of n_e^2 dh.
-
-An ion is solved only at the temperatures where CHIANTI's ionisation
-equilibrium holds some of it; elsewhere its G is zero, so nothing is lost.
-In CHIANTI 10.1, a few ions, such as N IV, have levels that nothing
-populates, which leaves their equations with no single solution. Those
-levels hold nothing in a steady state, so they are left out and the others
-solved exactly. An ion that still cannot be solved stops the run. For some
-ions, CHIANTI's recombination and ionisation rates of each level stop short
-of the hottest temperatures; there, fiasco's single-ion model is used, as
-it is for ions that have no such rates at all, and the run says so. An ion
-whose data, or abundance, CHIANTI does not have is left out, and the run
-names it.
-
-The result is written to a file, as the whole SW band takes about two hours
-on 32 cores and serves every frame on the same grids.
+G(T, n_e) of every CHIANTI line in the band, on a synthesis's temperature
+and density grids, with n_H / n_e included as elsewhere in ECLIPSE. Levels
+that nothing populates, as in a few ions such as N IV in CHIANTI 10.1, are
+left out and the rest solved exactly. Where an ion's level-resolved
+recombination and ionisation rates stop short of the hottest temperatures,
+or it has none, fiasco's single-ion model is used. Ions without data or an
+abundance are skipped and named. The whole SW band takes about two hours on
+32 cores, so the result is written to a file.
 """
 
 from __future__ import annotations
@@ -49,20 +36,20 @@ class IonLines:
     Parameters
     ----------
     name : str
-        The ion, such as ``"Fe 12"``.
+        Ion, such as `"Fe 12"`.
     atom, stage : int
-        The atomic number and the ionisation stage, 26 and 12 for Fe XII.
+        Atomic number and ionisation stage, 26 and 12 for Fe XII.
     mass : float
-        The ion's mass, in atomic mass units, for its lines' thermal width.
+        Ion mass in atomic mass units, for the thermal width of its lines.
     wavelength : np.ndarray
-        Each line's wavelength in CHIANTI, in Angstrom, observed where
-        CHIANTI has one and theoretical otherwise.
+        Wavelength of each line in Angstrom: CHIANTI's observed value where
+        it has one, and the theoretical value otherwise.
     observed : np.ndarray of bool
         Whether each wavelength is observed.
     temperatures : np.ndarray of int
-        The indices of the temperatures of the grid where the ion exists.
+        Indices of the grid temperatures where the ion exists.
     g : np.ndarray
-        G at those temperatures and every density of the grid, shaped
+        G at those temperatures and every grid density, shape
         (n_lines, nN, n_temperatures), in erg cm3 / s.
     """
 
@@ -79,20 +66,20 @@ class IonLines:
 @dataclass(frozen=True)
 class BandLines:
     """
-    Every line in a band, ion by ion, on one grid of temperatures and densities.
+    Every line in a band, ion by ion, on one temperature and density grid.
 
     Parameters
     ----------
     band : tuple of float
-        The band, in Angstrom.
+        Band edges in Angstrom.
     logT_grid, logN_grid : np.ndarray
-        The grids, as log10(T / K) and log10(n_e / cm-3).
+        Grids as log10(T / K) and log10(n_e / cm-3).
     abundance : str
-        The CHIANTI abundance set.
+        CHIANTI abundance set.
     hdf5_dbase_root : str
-        The CHIANTI database the lines came from.
+        CHIANTI database the lines came from.
     ions : list of IonLines
-        The ions with lines in the band.
+        Ions with lines in the band.
     """
 
     band: Tuple[float, float]
@@ -109,18 +96,18 @@ class BandLines:
 
 def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[np.ndarray, int]:
     """
-    Solve one ion's level populations with the levels nothing populates left out.
+    One ion's level populations, solved without the levels nothing populates.
 
-    fiasco gives the rate matrix with the rate from level j into level i at
-    [i, j], each column adding up to zero, and its last row replaced by
-    ones, for the populations to add up to one. A level whose row holds no
-    rate from any other level gains nothing, so in a steady state it holds
-    nothing. It is left out, the others solved exactly, and its population
-    set to zero. The ground level is always kept.
+    In fiasco's rate matrix, element [i, j] is the rate from level j into
+    level i, and each column sums to zero. The last row is replaced by ones
+    so that the populations sum to one. A level whose row has no rate from
+    any other level gains nothing, so it is empty in a steady state. Such
+    levels are left out, the rest solved exactly, and the left-out
+    populations set to zero. The ground level is always kept.
     """
     matrix = np.asarray(matrix, dtype=float)
-    # The last level's row, which the ones replaced, back from each column
-    # adding up to zero, with what the sums' rounding leaves taken as zero.
+    # Rebuild the last row, which the ones replaced, from each column summing
+    # to zero; values within the rounding error of the sums are taken as zero.
     rebuilt = -matrix[:-1].sum(axis=0)
     rounding = matrix.shape[0] * np.finfo(float).eps * np.abs(matrix[:-1]).sum(axis=0)
     rebuilt[np.abs(rebuilt) <= rounding] = 0.0
@@ -145,13 +132,13 @@ def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[n
 @contextlib.contextmanager
 def _unfed_levels_dropped(dropped: Dict[int, int]):
     """
-    While active, a level population solve that is singular drops the levels nothing populates.
+    Context in which a singular level-population solve drops the levels nothing populates.
 
-    fiasco solves every temperature at once with numpy's solve; this stands
-    in for it, solving each matrix as numpy would and falling back to
-    :func:`_solve_dropping_unfed_levels` for one that is singular. *dropped*
-    collects how many levels were left out, by the index of the matrix.
-    numpy's own solve is back once it ends.
+    fiasco solves all temperatures at once with numpy's solve. This replaces
+    it, solving each matrix as numpy would and falling back to
+    :func:`_solve_dropping_unfed_levels` for a singular one. `dropped`
+    collects the number of levels left out, keyed by matrix index. numpy's
+    solve is restored on exit.
     """
     from unittest import mock
 
@@ -166,8 +153,8 @@ def _unfed_levels_dropped(dropped: Dict[int, int]):
         stacked = a.ndim == 3
         solutions = []
         for k, matrix in enumerate(a if stacked else [a]):
-            # One right-hand side for every matrix, as fiasco 0.6 gives it, or
-            # one for each, (n_temperature, n_levels, 1) as fiasco 0.8 gives it.
+            # fiasco 0.6 gives one right-hand side for every matrix, fiasco 0.8
+            # one for each, shaped (n_temperature, n_levels, 1).
             rhs = b[k] if stacked and b.ndim > 1 else b
             try:
                 solutions.append(original(matrix, rhs))
@@ -188,7 +175,7 @@ def _beyond_the_rates(error: ValueError) -> bool:
 
 def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):
     """
-    fiasco's contribution function of an ion, with the levels nothing populates left out if need be.
+    fiasco's contribution function of an ion, leaving out levels nothing populates if needed.
     """
     try:
         return ion.contribution_function(density, **kwargs)
@@ -207,12 +194,12 @@ def _ion_band_lines(args):
     """One ion's lines in the band, for a worker process; None if it has none there."""
     import logging
 
-    # fiasco makes its own logger when it is first imported, so it is
-    # imported before its logger is looked up.
+    # fiasco creates its logger on first import, so import it before looking
+    # the logger up.
     import fiasco  # noqa: F401
 
-    # fiasco warns once a density for what it falls back on, which the run
-    # reports once instead.
+    # fiasco warns about its fallbacks once per density; the run reports them
+    # once instead.
     fiasco_logger = logging.getLogger("fiasco")
     previous = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
@@ -259,9 +246,9 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
         except ValueError as error:
             if not _beyond_the_rates(error):
                 raise
-            # CHIANTI's recombination and ionisation rates of each level stop
-            # short of the hottest temperatures for some ions: there, fiasco's
-            # single-ion model, as for ions that have no such rates at all.
+            # For some ions CHIANTI's level-resolved recombination and
+            # ionisation rates stop short of the hottest temperatures. Use
+            # fiasco's single-ion model there, as for ions with no such rates.
             first = None
             for index, temperature in enumerate(present.temperature):
                 one = fiasco.Ion((atom, stage), temperature[np.newaxis], abundance=abundance,
@@ -275,8 +262,8 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
                     break
             if first is None:
                 raise
-            # The levels dropped are counted afresh, by the index of each
-            # temperature in the whole, without the attempt that stopped.
+            # Recount the dropped levels, keyed by temperature index in the
+            # full array, without those of the failed attempt.
             dropped.clear()
             parts = []
             if first > 0:
@@ -293,10 +280,10 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
             single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
         g = g * present.proton_electron_ratio[:, np.newaxis, np.newaxis]
     except MissingDatasetException as error:
-        # Data the lines need that CHIANTI, or the abundance set, does not have.
+        # CHIANTI or the abundance set lacks data the lines need.
         return {"skipped": f"{ion.ion_name} ({error})"}
-    # (temperature, density, transition) to (line, density, temperature), as
-    # compute_goft_fiasco keeps G, with what fiasco cannot give taken as zero.
+    # Reorder (temperature, density, transition) to (line, density,
+    # temperature), as in compute_goft_fiasco, with non-finite values set to 0.
     g = np.nan_to_num(g.to_value(G_UNIT)[..., columns], nan=0.0, posinf=0.0, neginf=0.0)
     return {"atom": atom, "stage": stage, "name": present.ion_name,
             "mass": float(ion.mass.to_value(u.u)),
@@ -316,28 +303,27 @@ def band_contribution_functions(
     elements: Optional[Sequence[str]] = None,
 ) -> BandLines:
     """
-    The contribution function of every CHIANTI line in a band.
+    Contribution function of every CHIANTI line in a band.
 
     Parameters
     ----------
     band : sequence of two floats
-        The band, in Angstrom. For a frame, leave room beyond the detector's
-        own for Doppler shifts and the spectral PSF.
+        Band edges in Angstrom. For a frame, leave room beyond the detector's
+        own range for Doppler shifts and the spectral PSF.
     logT_grid, logN_grid : np.ndarray
-        The grids of the synthesis, as log10(T / K) and log10(n_e / cm-3).
+        Synthesis grids as log10(T / K) and log10(n_e / cm-3).
     abundance : str, optional
-        The CHIANTI abundance set. Default ``"sun_coronal_2021_chianti"``.
+        CHIANTI abundance set. Default `"sun_coronal_2021_chianti"`.
     n_workers : int, optional
-        How many processes to work out the ions with, one ion each at a
-        time. Default 0, which uses every CPU this process may use. The
-        workers are spawned, so a script calling this needs an
-        ``if __name__ == "__main__":`` guard. The whole SW band on 32
-        workers needs about 150 GB of memory in all; where there is less,
-        give fewer workers.
+        Number of processes, each working on one ion at a time. Default 0
+        uses every CPU available to this process. The workers are spawned,
+        so a calling script needs an `if __name__ == "__main__":` guard. The
+        whole SW band on 32 workers needs about 150 GB of memory in total;
+        use fewer workers where there is less.
     hdf5_dbase_root : str or Path, optional
-        The CHIANTI database to read. Default fiasco's own.
+        CHIANTI database to read. Default fiasco's own.
     elements : sequence of str, optional
-        The elements, by symbol. Default every element CHIANTI holds.
+        Elements by symbol. Default every element in CHIANTI.
 
     Returns
     -------
@@ -374,7 +360,7 @@ def band_contribution_functions(
     if n_workers > 1 and len(jobs) > 1:
         import multiprocessing as mp
 
-        # A new worker for each ion, so that each gives its memory back.
+        # A new worker for each ion, so its memory is freed afterwards.
         with mp.get_context("spawn").Pool(min(n_workers, len(jobs)), maxtasksperchild=1) as pool:
             results = pool.map(_ion_band_lines, jobs, chunksize=1)
     else:
@@ -410,7 +396,7 @@ def band_contribution_functions(
               f"{'; '.join(skipped)}")
     ions.sort(key=lambda ion: (ion.atom, ion.stage))
     if used is None:
-        # No ion was worked out: the database that was asked.
+        # No ion was computed, so record the requested database.
         used = str(fiasco.defaults["hdf5_dbase_root"] if dbase_root is None else dbase_root)
     return BandLines(band=(low, high), logT_grid=logT_grid, logN_grid=logN_grid,
                      abundance=abundance, hdf5_dbase_root=used, ions=ions)
@@ -418,19 +404,19 @@ def band_contribution_functions(
 
 def write_band_lines(lines: BandLines, path: str | Path) -> Path:
     """
-    Write a band's lines to an HDF5 file, to read back with `read_band_lines`.
+    Write a band's lines to an HDF5 file readable by `read_band_lines`.
 
     Parameters
     ----------
     lines : BandLines
-        The lines.
+        Lines to write.
     path : str or Path
-        The file to write. An existing file is replaced.
+        Output file. An existing file is replaced.
 
     Returns
     -------
     Path
-        The file written.
+        File written.
     """
     from .atmosphere import _replacing
 
@@ -460,12 +446,12 @@ def write_band_lines(lines: BandLines, path: str | Path) -> Path:
 
 def read_band_lines(path: str | Path) -> BandLines:
     """
-    Read a band's lines from a file `write_band_lines` wrote.
+    Read a band's lines from a file written by `write_band_lines`.
 
     Parameters
     ----------
     path : str or Path
-        The file.
+        File to read.
 
     Returns
     -------

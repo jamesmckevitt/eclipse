@@ -1,10 +1,7 @@
-"""Fits that converge, and fits that cannot have measured a line counted as failed.
+"""Fits converge, and fits that cannot have measured a line count as failed.
 
-The multi-component scipy fit stopped at tolerances of 1e-4, which for
-centres some 195 Angstrom from zero left a blend's velocities over a km/s
-short of where the fit converges. A spectrum with no line in it, a width
-wider than the window, or a component outside the window came back as a
-successful fit with no spread, which reads as a perfect measurement.
+A spectrum with no line, a width wider than the window or a component
+outside it must not come back as a successful fit.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -23,7 +20,7 @@ CENTRE = 195.149 * u.Angstrom
 
 
 def _cube(profile):
-    """*profile* in every pixel of a (2, 3, N_WAVE) cube."""
+    """`profile` in every pixel of a (2, 3, N_WAVE) cube."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
@@ -50,8 +47,8 @@ def test_a_noiseless_blend_is_fitted_to_where_it_is(backend, positive):
     """
     The default scipy lm stopped over 4 km/s short on this untied pair.
 
-    Bounding the amplitudes positive fits with trf instead, whose
-    tolerances changed too.
+    Bounding the amplitudes positive switches the fit to trf, so its
+    tolerances are checked too.
     """
     velocity = 10 * u.km / u.s
     sigma = 0.03 * u.Angstrom
@@ -70,7 +67,7 @@ def test_a_noiseless_blend_is_fitted_to_where_it_is(backend, positive):
 
 
 def test_a_spectrum_with_no_line_is_a_failed_fit_not_a_perfect_one():
-    """As a photon spectrum with no photons in it is."""
+    """A spectrum with no line fails, as one with no photons does."""
     profile = _gaussian(50.0, REST, 0.03 * u.Angstrom)
     cube = _cube(profile)
     cube.data[0, 1] = 0.0
@@ -90,7 +87,7 @@ def test_widths_are_positive_and_one_wider_than_the_window_fails():
 
 
 def test_a_component_outside_the_window_is_refused():
-    """It came back at its guess with no spread, as a perfect measurement."""
+    """Otherwise it comes back at its guess with no spread, like a perfect measurement."""
     profile = _gaussian(1000.0, REST, 0.03 * u.Angstrom) + 10.0
     config = FitConfig(components=[FitComponent(159.119 * u.Angstrom), FitComponent(BLEND)])
     with pytest.raises(ValueError, match=r"fitting.components\[0\] is at 159.119 Angstrom, "
