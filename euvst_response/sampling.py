@@ -18,25 +18,225 @@ the pixels and the blur, and a narrow line keeps its place within a pixel.
 from __future__ import annotations
 
 import numpy as np
+from scipy import sparse
 from scipy.special import erfc
 
 # A Gaussian's weight beyond this many sigma is below a part in 1e30 of it.
 _REACH_IN_SIGMA = 12.0
 
 
-def _antiderivative(u: np.ndarray, sigma: float, order: int) -> np.ndarray:
+def _antiderivative(u, sigma, order: int) -> np.ndarray:
     """
-    The *order*-th antiderivative, 2 or 3, of a unit Gaussian of *sigma*,
-    vanishing at minus infinity; with *sigma* 0, of a unit spike.
+    The *order*-th antiderivative, 1 (the cumulative distribution), 2 or 3,
+    of a unit Gaussian of *sigma*, vanishing at minus infinity; where *sigma*
+    is 0, of a unit spike. *sigma* is one value, or one for each of *u*.
     """
-    if sigma == 0.0:
+    u = np.asarray(u, dtype=float)
+    sigma = np.broadcast_to(np.asarray(sigma, dtype=float), u.shape)
+    spike = sigma == 0.0
+    s = np.where(spike, 1.0, sigma)
+    cdf = 0.5 * erfc(-u / (np.sqrt(2.0) * s))
+    if order == 1:
+        smooth = cdf
+        sharp = np.where(u > 0, 1.0, np.where(u == 0, 0.5, 0.0))
+    else:
+        density = np.exp(-0.5 * (u / s) ** 2) / (np.sqrt(2.0 * np.pi) * s)
         positive = np.maximum(u, 0.0)
-        return positive if order == 2 else positive**2 / 2
-    cdf = 0.5 * erfc(-u / (np.sqrt(2.0) * sigma))
-    density = np.exp(-0.5 * (u / sigma) ** 2) / (np.sqrt(2.0 * np.pi) * sigma)
-    if order == 2:
-        return u * cdf + sigma**2 * density
-    return (u**2 + sigma**2) / 2 * cdf + sigma**2 * u / 2 * density
+        if order == 2:
+            smooth = u * cdf + s**2 * density
+            sharp = positive
+        else:
+            smooth = (u**2 + s**2) / 2 * cdf + s**2 * u / 2 * density
+            sharp = positive**2 / 2
+    return np.where(spike, sharp, smooth) if spike.any() else smooth
+
+
+def _blurred_antiderivative(u, sigma, width, order: int) -> np.ndarray:
+    """
+    :func:`_antiderivative` of the Gaussian convolved with a rectangle
+    *width* wide, such as a slit's image, where *width* is above 0. *sigma*
+    and *width* are each one value, or one for each of *u*.
+    """
+    u = np.asarray(u, dtype=float)
+    width = np.broadcast_to(np.asarray(width, dtype=float), u.shape)
+    plain = _antiderivative(u, sigma, order)
+    boxed = width > 0
+    if not boxed.any():
+        return plain
+    w = np.where(boxed, width, 1.0)
+    within = (_antiderivative(u + w / 2, sigma, order + 1)
+              - _antiderivative(u - w / 2, sigma, order + 1)) / w
+    return np.where(boxed, within, plain)
+
+
+def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
+                      width=0.0) -> sparse.csr_matrix:
+    """
+    The share of each cell's light that each pixel records, once blurred.
+
+    Each cell's light is spread evenly from *cell_low* to *cell_high* and
+    blurred by a Gaussian of *sigma* convolved with a rectangle *width*
+    wide. The shares are the exact integrals of the blur over the cell and
+    the pixel, and only the pixels the blur reaches from a cell are worked
+    out. The cells may overlap and leave gaps; the pixels are contiguous.
+
+    Parameters
+    ----------
+    cell_low, cell_high : array
+        The ends of each cell, in one unit.
+    pixel_edges : array
+        The edges of the pixels, increasing, in that unit.
+    sigma, width : float or array
+        The blur, one value or one for each cell, in that unit; 0 for none.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        ``(n_pixels, n_cells)``. A cell whose light all lands within the
+        pixels has shares adding up to 1.
+    """
+    low = np.atleast_1d(np.asarray(cell_low, dtype=float))
+    high = np.atleast_1d(np.asarray(cell_high, dtype=float))
+    edges = np.asarray(pixel_edges, dtype=float)
+    sigma = np.broadcast_to(np.asarray(sigma, dtype=float), low.shape)
+    width = np.broadcast_to(np.asarray(width, dtype=float), low.shape)
+    reach = _REACH_IN_SIGMA * sigma + width
+    # The first pixel that ends above where a cell's blurred light starts,
+    # and the pixels before the first that starts above where it ends.
+    first = np.searchsorted(edges[1:], low - reach, side="right")
+    last = np.searchsorted(edges[:-1], high + reach, side="left")
+    count = np.maximum(last - first, 0)
+    cell = np.repeat(np.arange(low.size), count)
+    pixel = first[cell] + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    p_low, p_high = edges[pixel], edges[pixel + 1]
+    b_low, b_high = low[cell], high[cell]
+    s, w = sigma[cell], width[cell]
+
+    def corner(p, b):
+        return _blurred_antiderivative(p - b, s, w, 2)
+
+    total = (corner(p_high, b_low) - corner(p_high, b_high)
+             - corner(p_low, b_low) + corner(p_low, b_high))
+    # The closed forms cancel to rounding error where the true share is 0.
+    share = np.maximum(total, 0.0) / (b_high - b_low)
+    return sparse.csr_matrix((share, (pixel, cell)), shape=(edges.size - 1, low.size))
+
+
+def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_matrix:
+    """
+    The share of the light of each point that each pixel records, once blurred.
+
+    This is :func:`light_onto_pixels` for light all at one place, such as a
+    line at its centre blurred by its own width.
+
+    Parameters
+    ----------
+    position : array
+        Where each point is, in one unit.
+    pixel_edges : array
+        The edges of the pixels, increasing, in that unit.
+    sigma, width : float or array
+        The blur, a Gaussian of *sigma* convolved with a rectangle *width*
+        wide, one value or one for each point, in that unit. *sigma* is above
+        0 where *width* is 0.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        ``(n_pixels, n_points)``.
+    """
+    position = np.atleast_1d(np.asarray(position, dtype=float))
+    edges = np.asarray(pixel_edges, dtype=float)
+    sigma = np.broadcast_to(np.asarray(sigma, dtype=float), position.shape)
+    width = np.broadcast_to(np.asarray(width, dtype=float), position.shape)
+    reach = _REACH_IN_SIGMA * sigma + width
+    first = np.searchsorted(edges[1:], position - reach, side="right")
+    last = np.searchsorted(edges[:-1], position + reach, side="left")
+    count = np.maximum(last - first, 0)
+    point = np.repeat(np.arange(position.size), count)
+    pixel = first[point] + np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    x, s, w = position[point], sigma[point], width[point]
+    share = (_blurred_antiderivative(edges[pixel + 1] - x, s, w, 1)
+             - _blurred_antiderivative(edges[pixel] - x, s, w, 1))
+    return sparse.csr_matrix((np.maximum(share, 0.0), (pixel, point)),
+                             shape=(edges.size - 1, position.size))
+
+
+def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
+                        wavelength: np.ndarray) -> tuple:
+    """
+    Photons in cells laid onto pixels, and the wavelengths of the mean and the root mean square energies of each pixel's photons.
+
+    Parameters
+    ----------
+    share : scipy.sparse matrix
+        Each cell's share in each pixel, from :func:`light_onto_pixels`.
+    photons : np.ndarray
+        The photons in each cell, any number of spectra with the cells on
+        the last axis.
+    wavelength : np.ndarray
+        The wavelength of each cell's photons.
+
+    Returns
+    -------
+    tuple
+        ``(on_pixels, photon_wavelength, rms_wavelength)``, all with the
+        pixels on the last axis. A photon frees electrons in a detector by
+        its energy, so the second, in the unit of *wavelength*, is the
+        wavelength whose energy is the mean of the photons a pixel receives,
+        and the third the wavelength whose energy is their root mean square,
+        which sets how far their electrons spread. Both are NaN where none
+        arrive.
+    """
+    photons = np.asarray(photons, dtype=float)
+    flat = photons.reshape(-1, photons.shape[-1])
+    wavelength = np.asarray(wavelength, dtype=float)
+    on, photon_wavelength, rms_wavelength = _carry_photon_wavelengths(
+        lambda cells: np.asarray(share @ cells.T).T, flat, wavelength, wavelength, np.nan)
+    shape = photons.shape[:-1] + (share.shape[0],)
+    return on.reshape(shape), photon_wavelength.reshape(shape), rms_wavelength.reshape(shape)
+
+
+def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
+    """
+    Photons moved by *carry*, and the wavelengths of the mean and the root
+    mean square energies of the photons wherever they land.
+
+    A photon's energy goes as one over its wavelength. Photons whose mean
+    energy is that of wavelength *mean*, and whose root mean square energy
+    is that of *rms*, hold an energy that goes as photons / mean, and a
+    square energy that goes as photons / rms**2. Both add up as the photons
+    do, so *carry*, any linear map of the photons, moves them as it moves
+    the photons.
+
+    Parameters
+    ----------
+    carry : callable
+        A linear map, from an array shaped as *photons* to where they land.
+    photons : np.ndarray
+        The photons.
+    mean, rms : np.ndarray
+        The wavelengths of the mean and the root mean square energies of
+        *photons*, broadcasting against them.
+    fill : float or np.ndarray
+        The wavelength of both where no photons land, broadcasting against
+        where they land.
+
+    Returns
+    -------
+    tuple
+        ``(moved, mean, rms)``.
+    """
+    photons = np.asarray(photons, dtype=float)
+    mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
+    rms = np.broadcast_to(np.asarray(rms, dtype=float), photons.shape)
+    moved = carry(photons)
+    energy = carry(np.divide(photons, mean, out=np.zeros(photons.shape), where=mean > 0))
+    square = carry(np.divide(photons, rms**2, out=np.zeros(photons.shape), where=rms > 0))
+    empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
+    moved_mean = np.divide(moved, energy, out=np.array(empty), where=energy > 0)
+    moved_rms = np.sqrt(np.divide(moved, square, out=np.array(empty) ** 2, where=square > 0))
+    return moved, moved_mean, moved_rms
 
 
 def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.0,
@@ -74,32 +274,11 @@ def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.
         cells[0] = min(cells[0], pixels[0]) - beyond
         cells[-1] = max(cells[-1], pixels[-1]) + beyond
 
-    low, high = pixels[:-1, np.newaxis], pixels[1:, np.newaxis]
-    first, last = cells[np.newaxis, :-1], cells[np.newaxis, 1:]
-    # Only the pairs the blur can join; the rest are nothing, where the
-    # closed forms would leave rounding error.
-    near = (low - reach < last) & (first < high + reach)
-    weights = np.zeros(near.shape)
-    rows, columns = np.nonzero(near)
-    p_low, p_high = pixels[:-1][rows], pixels[1:][rows]
-    b_low, b_high = cells[:-1][columns], cells[1:][columns]
-
-    if width == 0.0:
-        def corners(p, b):
-            return _antiderivative(p - b, sigma, 2)
-        total = (corners(p_high, b_low) - corners(p_high, b_high)
-                 - corners(p_low, b_low) + corners(p_low, b_high))
-    else:
-        half = width / 2
-
-        def corners(p, b):
-            return (_antiderivative(p - b + half, sigma, 3)
-                    - _antiderivative(p - b - half, sigma, 3)) / width
-        total = (corners(p_high, b_low) - corners(p_high, b_high)
-                 - corners(p_low, b_low) + corners(p_low, b_high))
-    # The closed forms cancel to rounding error where the true weight is 0.
-    weights[rows, columns] = np.maximum(total, 0.0) / (p_high - p_low)
-    return weights
+    # Each cell's share of its light in a pixel, as the mean over the pixel
+    # of the cell's light per unit length.
+    share = light_onto_pixels(cells[:-1], cells[1:], pixels, sigma, width)
+    weights = sparse.diags(1.0 / np.diff(pixels)) @ share @ sparse.diags(np.diff(cells))
+    return weights.toarray()
 
 
 def centred_edges(n: int, pitch: float, centre: float = 0.0) -> np.ndarray:

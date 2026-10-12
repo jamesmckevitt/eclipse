@@ -14,9 +14,10 @@ from .radiometric import (
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light, dn_variance
 )
-from .pinhole_diffraction import apply_euv_pinhole_diffraction
+from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
+                                  apply_euv_pinhole_diffraction)
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
-from .utils import angle_to_distance, rebin_slit_offchip, _get_mpi_info
+from .utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip, _get_mpi_info
 
 
 def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
@@ -39,6 +40,35 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
         line = f"  {label} fits: none of {failed.size} failed"
     print(line)
     return results
+
+
+def _with_photon_wavelength(cube: NDCube) -> NDCube:
+    """
+    *cube*, with the wavelengths of the mean and the root mean square
+    energies of each pixel's photons in its ``meta["photon_wavelength"]``
+    and ``meta["photon_rms_wavelength"]``: its own, or else each pixel's
+    wavelength, for photons of one energy.
+    """
+    meta = dict(cube.meta or {})
+    if "photon_wavelength" not in meta:
+        meta["photon_wavelength"] = np.broadcast_to(cube.axis_world_coords_values(2)[0],
+                                                    cube.data.shape, subok=True)
+    meta.setdefault("photon_rms_wavelength", meta["photon_wavelength"])
+    for key in ("photon_wavelength", "photon_rms_wavelength"):
+        if np.shape(meta[key]) != cube.data.shape:
+            raise ValueError(f"The cube's {key} is shaped {np.shape(meta[key])}, not as its "
+                             f"data, {cube.data.shape}.")
+    return NDCube(cube.data, wcs=cube.wcs, unit=cube.unit, meta=meta)
+
+
+def _photon_wavelengths(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                        offchip_bin_slit: int, uniform_mode: bool) -> tuple:
+    """
+    The wavelengths of the mean and the root mean square energies of the
+    photons in each pixel, as the DN are binned, for `dn_variance`.
+    """
+    photons = _photons_on_the_detector(I_cube, t_exp, det, tel, sim, uniform_mode)[-1]
+    return binned_photon_wavelengths(photons, offchip_bin_slit)
 
 
 def _weighted(fit_config) -> bool:
@@ -87,7 +117,8 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         The uncertainty in DN, shaped as the binned DN.
     """
     quiet = dataclasses.replace(sim, noise=False)
-    electrons = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)[8]
+    steps = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
+    electrons = steps[8]
     # Clipped at the digitiser's maximum in each pixel, before any are summed,
     # as to_dn clips the measured DN; not rounded, as the mean is not.
     dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
@@ -95,8 +126,69 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
                             offchip_bin_slit).data
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
-    return np.sqrt(dn_variance(dn, I_cube.meta["rest_wav"], t_exp, det, visible,
-                               offchip_bin_slit))
+    mean, rms = binned_photon_wavelengths(steps[5], offchip_bin_slit)
+    return np.sqrt(dn_variance(dn, mean, t_exp, det, visible, offchip_bin_slit,
+                               rms_wavelength=rms))
+
+
+def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
+                             uniform_mode: bool = False) -> Tuple[NDCube, ...]:
+    """
+    The cubes of `simulate_once` up to the photons reaching the detector, which no noise touches.
+
+    They are the radiance over the exposure, the photons, those the
+    telescope collects, those per pixel, those after the PSF, and those with
+    the pinholes' light.
+    """
+    # Apply exposure time
+    intensity_exp = apply_exposure(I_cube, t_exp)
+
+    # Convert to total photons, each pixel's at its own wavelength unless the
+    # cube gives the wavelength of the mean energy of its photons, which it
+    # does once laid onto the pixels through the telescope.
+    photons_total = _with_photon_wavelength(intensity_to_photons(intensity_exp))
+
+    # Apply telescope optical throughput
+    photons_throughput = add_telescope_throughput(photons_total, tel)
+
+    # Convert to pixel counts
+    photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res,
+                                             det.plate_scale_length,
+                                             angle_to_distance(sim.slit_width))
+
+    # The pinholes let through the light the filter blocked from each photon,
+    # which has to be known before a blur mixes the photons of different
+    # pixels. A cube laid onto the pixels through the telescope with the
+    # pinholes on gives it at each photon's own wavelength; photons counted
+    # at their pixel's wavelength passed the filter there.
+    meta = I_cube.meta or {}
+    if _pinholes_on(sim) and "photon_filter_transmission" not in meta:
+        if "photon_wavelength" in meta:
+            raise ValueError(
+                "The cube's photons were counted at their own wavelengths, but it does not say "
+                "how much of their light the filter passed, which the pinholes need. Lay it "
+                "onto the pixels with rebin_atmosphere or rebin_spectra, given the telescope "
+                "and a simulation with the pinholes on.")
+        photons_pixels = _with_filter_transmission(photons_pixels, tel)
+
+    # Apply focusing optics PSF (primary mirror + diffraction grating), unless
+    # the cube was laid onto the pixels through it (rebin_atmosphere with a
+    # telescope), which is exact where blurring the pixels is not.
+    if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
+        photons_focused = apply_focusing_optics_psf(
+            photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
+            boundary=getattr(sim, "psf_boundary", "replicate"),
+        )
+    else:
+        photons_focused = photons_pixels
+
+    # Apply EUV pinhole diffraction effects (after focusing optics, if enabled)
+    if _pinholes_on(sim):
+        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
+    else:
+        photons_euv_pinholes = photons_focused
+    return (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
+            photons_euv_pinholes)
 
 
 def simulate_once(
@@ -150,34 +242,9 @@ def simulate_once(
         with the stray light, those with the pinholes' visible light, and the
         DN.
     """
-    # Apply exposure time
-    intensity_exp = apply_exposure(I_cube, t_exp)
-    
-    # Convert to total photons
-    photons_total = intensity_to_photons(intensity_exp)
-    
-    # Apply telescope optical throughput
-    photons_throughput = add_telescope_throughput(photons_total, tel)
-    
-    # Convert to pixel counts
-    photons_pixels = photons_to_pixel_counts(photons_throughput, det.wvl_res, det.plate_scale_length, angle_to_distance(sim.slit_width))
-
-    # Apply focusing optics PSF (primary mirror + diffraction grating), unless
-    # the cube was laid onto the pixels through it (rebin_atmosphere with a
-    # telescope), which is exact where blurring the pixels is not.
-    if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
-        photons_focused = apply_focusing_optics_psf(
-            photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
-            boundary=getattr(sim, "psf_boundary", "replicate"),
-        )
-    else:
-        photons_focused = photons_pixels
-    
-    # Apply EUV pinhole diffraction effects (after focusing optics, if enabled)
-    if sim.enable_pinholes and len(sim.pinhole_sizes) > 0:
-        photons_euv_pinholes = apply_euv_pinhole_diffraction(photons_focused, det, sim, tel)
-    else:
-        photons_euv_pinholes = photons_focused
+    (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
+     photons_euv_pinholes) = _photons_on_the_detector(I_cube, t_exp, det, tel, sim,
+                                                      uniform_mode)
 
     # Every random draw below is controlled by this one flag, so a run with
     # sim.noise False returns the signal the instrument would measure on
@@ -310,12 +377,17 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # uncertainty; they are fitted by their Poisson likelihood instead.
     visible = (_visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
                if do_dn and _weighted(fit_config) else None)
+    # Each photon frees electrons by its own energy, so the DN of a pixel
+    # vary as its photons' mean and root mean square energies say.
+    photon_wavelengths = (None if visible is None else _photon_wavelengths(
+        I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
 
     def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
         if visible is None:
             return None
-        return np.sqrt(dn_variance(dn_data, rest_wavelength, t_exp, det, visible,
-                                   offchip_bin_slit))
+        mean, rms = photon_wavelengths
+        return np.sqrt(dn_variance(dn_data, mean, t_exp, det, visible, offchip_bin_slit,
+                                   rms_wavelength=rms))
 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()

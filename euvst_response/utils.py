@@ -443,8 +443,55 @@ def rebin_slit_offchip(cube, n_bin: int):
         new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
     ) / n_bin + 0.5
 
-    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit,
-                  meta=cube.meta)
+    # What the cube says of each pixel's photons is not carried here: a
+    # binned pixel's photon wavelengths come from its rows' photons, which
+    # binned_photon_wavelengths takes.
+    meta = cube.meta
+    carried = ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
+               "blocked_photon_wavelength", "blocked_photon_rms_wavelength")
+    if isinstance(meta, dict) and any(key in meta for key in carried):
+        meta = {key: value for key, value in meta.items() if key not in carried}
+    return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit, meta=meta)
+
+
+def binned_photon_wavelengths(photons, n_bin: int) -> tuple:
+    """
+    The wavelengths of the mean and the root mean square energies of the photons in each pixel once binned off the chip.
+
+    Parameters
+    ----------
+    photons : NDCube
+        The photons in each pixel, with the wavelengths of the mean and the
+        root mean square energies of each pixel's photons in
+        ``meta["photon_wavelength"]`` and ``meta["photon_rms_wavelength"]``,
+        as `simulate_once` gives them. Without the second, each pixel's
+        photons are taken to be of one energy.
+    n_bin : int
+        How many pixels along the slit are added together, as
+        :func:`rebin_slit_offchip` adds them.
+
+    Returns
+    -------
+    tuple of u.Quantity
+        ``(mean, rms)``, each shaped as the binned pixels. A binned pixel no
+        photons reach takes the wavelength of the mean energy of its first
+        row for both.
+    """
+    from ndcube import NDCube
+    from .sampling import _carry_photon_wavelengths
+
+    mean = u.Quantity(photons.meta["photon_wavelength"])
+    rms = u.Quantity(photons.meta.get("photon_rms_wavelength", mean)).to(mean.unit)
+    if n_bin == 1:
+        return mean, rms
+    n_keep = (photons.data.shape[0] // n_bin) * n_bin
+
+    def binned(values):
+        return rebin_slit_offchip(NDCube(values, wcs=photons.wcs), n_bin).data
+
+    _, binned_mean, binned_rms = _carry_photon_wavelengths(
+        binned, photons.data, mean.value, rms.value, mean.value[:n_keep:n_bin])
+    return binned_mean * mean.unit, binned_rms * mean.unit
 
 
 def distance_to_angle(distance: u.Quantity) -> u.Quantity:
