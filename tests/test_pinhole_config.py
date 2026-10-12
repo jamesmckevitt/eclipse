@@ -1,10 +1,4 @@
-"""The pinhole config lists are paired, and a half-specified pair raises.
-
-pinhole_sizes and pinhole_positions have one entry per pinhole, so a config
-with one but not the other describes no pinhole at all. Running it with no
-pinholes and no warning would look exactly like a run where the pinholes were
-simulated and made no difference.
-"""
+"""Pinhole sizes and positions are paired, and a half-given pair is refused."""
 import sys
 
 import astropy.units as u

@@ -1,11 +1,7 @@
 """The rebinned spectral axis has the right wavelengths for any number of pixels.
 
-Rebinning onto the detector pixels puts the WCS reference at the centre of
-the axis. With an even number of pixels that centre lies between two
-pixels. The reference value was once the wavelength of the pixel below it,
-so the axis was labelled half a pixel low and every fitted velocity came out
-half a pixel blue: 13 km/s at 195 Angstrom, 15 at 171. Whether a run was
-affected depended only on how many pixels the synthesis window spanned.
+With an even number of pixels the WCS reference lies between two pixels,
+and taking the pixel below it would put every velocity half a pixel blue.
 """
 import astropy.constants as const
 import astropy.units as u

@@ -1,23 +1,15 @@
-"""Check the SW read-out model: where each row sits, and what it collects.
+"""The SW read-out model: where each row sits, and what it collects.
 
-The first part tests the geometry: the wavelength each CCD row records. The
-two CCDs are butted along the dispersion, with their registers on the outer
-edges. Expected wavelengths come from the optical design for the focal plane
-edges and the key lines, so a failure means the row map changed, not that
-two versions of the same polynomial disagree.
-
-The second part tests the smear a frame collects when the chip is lit while
-it is cleared and read. Expected values are written out from the clocking,
-not taken from the module:
-
-    a packet read out of row r sits at row r - k while image row k - 1 is in
-    the serial register, so it collects rate[r - k] * dwell[k], where
+Row wavelengths are checked against the optical design. The smear is
+checked against values written out from the clocking: a packet read out of
+row r sits at row r - k while image row k - 1 is in the serial register, so
+it collects rate[r - k] * dwell[k], where
 
     dwell[k] = row_transfer_time + line_read_time if row k - 1 is read
              = row_transfer_time                  otherwise
 
-Before the exposure, the packet that ends the clear at row r is clocked down
-from row r + dump_rows, collecting one row transfer at each row it crosses.
+Before the exposure, the packet that ends the clear at row r collects one
+row transfer at each row from r + dump_rows down.
 """
 import astropy.units as u
 import numpy as np

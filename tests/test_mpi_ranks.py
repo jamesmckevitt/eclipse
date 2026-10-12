@@ -1,12 +1,7 @@
 """What each MPI rank draws, runs on, and does when one fails.
 
-Ranks seeded alike, as the docs suggest for comparing runs, must still draw
-different numbers, or eight iterations on four ranks are two iterations four
-times. Each rank must run on the job's CPUs, not on CPUs 0 to n, which on a
-node shared with another job need not be the job's. A failing rank must
-report the error and end the run. Otherwise the other ranks wait in the
-gather until the job's time runs out, and a rank other than the first fails
-silently, since its output is suppressed.
+Ranks seeded alike draw different numbers and run on the job's CPUs, and a
+failing rank ends the run rather than leaving the others waiting.
 """
 import importlib
 import sys

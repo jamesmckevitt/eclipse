@@ -1,9 +1,4 @@
-"""Results survive a round trip through the results file, and old pickles still load.
-
-The key tests compare the result field by field with the object saved,
-because a format change that loses something fails silently: the file still
-opens and the numbers still look like numbers.
-"""
+"""Results survive a round trip through the results file, and old pickles still load."""
 import dataclasses
 import datetime
 import json

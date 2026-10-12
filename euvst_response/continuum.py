@@ -1,24 +1,13 @@
 """
 Continuum under the lines: free-free, free-bound and two-photon emission.
 
-The synthesis sums the lines named for a run. The continuum is emitted at
-every wavelength, not only at the lines: free-free emission from electrons
-passing ions, free-bound emission from electrons captured by ions, and
-two-photon emission from hydrogen- and helium-like ions. It is computed
-from CHIANTI through fiasco for every element in CHIANTI, with the same
-abundances and ionisation fractions as the lines.
-
-Like a line's contribution function, the continuum here multiplies an
-emission measure of n_e^2 dh. fiasco gives it per n_e n_H and over all
-directions, so it is multiplied by n_H / n_e and divided by 4 pi. Free-free
-and free-bound emission do not depend on density. Two-photon emission does,
-so it is computed on the same density grid as the lines.
-
-In a synthesis file, the continuum of each group of overlapping spectral
-windows is one entry alongside the lines, on evenly spaced wavelengths
-covering the windows. When the instrument simulation observes a window, it
-sums every entry that reaches it. The continuum is thus added once, and the
-line spectra hold only the lines.
+Computed from CHIANTI through fiasco for every element, with the same
+abundances and ionisation fractions as the lines. Like a contribution
+function, it multiplies an emission measure of n_e^2 dh, so fiasco's values
+are multiplied by n_H / n_e and divided by 4 pi. Only two-photon emission
+depends on density. In a synthesis file, each group of overlapping windows
+gets one continuum entry, which the instrument run adds to every window it
+reaches.
 """
 
 from __future__ import annotations

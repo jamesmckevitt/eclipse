@@ -1,13 +1,7 @@
-"""--goft-temperature-chunk must change only the memory fiasco needs.
+"""--goft-temperature-chunk changes only the memory fiasco needs.
 
-fiasco solves the level populations for all its temperatures at once, so its
-memory grows with their number. Passing the temperature grid in chunks lowers
-the peak, and the contribution functions must match those from the whole grid
-in one call, value for value and in the same order.
-
-A stand-in for fiasco, with a contribution function that depends on
-temperature, density and transition, lets the tests run without the CHIANTI
-database.
+Contribution functions from chunks of the temperature grid must match those
+from the whole grid. A stand-in for fiasco removes the need for CHIANTI.
 """
 import sys
 import types

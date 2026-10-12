@@ -1,14 +1,8 @@
-"""Tests for finding a combination, dating a map and reading fit_cube_gauss output.
+"""Finding a combination, dating a map and reading fit_cube_gauss output.
 
-These cover earlier bugs:
-
-- A combination was found by its SI values to 1e-8 of at least one, so any
-  two lengths under 10 nm matched, and units were dropped, so 5 m matched
-  5 s.
-- A date with an offset stamped the maps with the time they were made.
-- The exposure-time map held the exposure's index with a unit of seconds.
-- The velocity and width helpers failed on the plain array returned by
-  fit_cube_gauss.
+A combination is matched with its units, a date keeps its offset, the
+exposure-time map holds seconds, and the velocity and width helpers take
+fit_cube_gauss's plain array.
 """
 import astropy.units as u
 import numpy as np

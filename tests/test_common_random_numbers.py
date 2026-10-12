@@ -1,11 +1,7 @@
-"""Runs differing only in photon flux share random numbers.
+"""Runs differing only in photon flux share random numbers in every iteration.
 
-This holds with `photon_shot_inverse_transform` in every Monte Carlo
-iteration, not only the first. A binomial sampler for the quantum efficiency
-uses a number of random values that depends on the photon count. Drawing
-the Fano spread only for pixels with photons uses a number that depends on
-the flux. Either puts the runs out of step after the first iteration, so
-their noise no longer cancels.
+With `photon_shot_inverse_transform`, the quantum efficiency and the Fano
+spread use a fixed number of random values whatever the flux.
 """
 import astropy.units as u
 import numpy as np

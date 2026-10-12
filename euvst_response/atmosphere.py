@@ -1,38 +1,10 @@
 """
 Atmosphere input for the synthesis, and its HDF5 file.
 
-ECLIPSE needs only the temperature and density of every cell, the velocity
-along the line of sight, and the cell positions. This module holds these in
-one object, whatever code produced them, reads and writes them as HDF5, and
-converts mass density to electron density with the abundances used by the
-synthesis. Any code that can write HDF5 can then feed ECLIPSE, without
-ECLIPSE knowing that code's output format.
-
-File layout, version 1
-----------------------
-Root attributes:
-
-- `format`: `"eclipse-atmosphere"`
-- `version`: `1`
-- `source`: free text naming the simulation, optional
-
-Datasets, each with a `unit` attribute that astropy can parse. The cubes are
-`(nz, ny, nx)` in C order, so `cube[k]` is a horizontal slice indexed
-`[y, x]`:
-
-- `x_edges`, `y_edges`, `z_edges`: cell boundaries along each axis, 1D and
-  increasing, one longer than the cubes along that axis. A code that knows
-  only its cell centres can place the edges halfway between them with
-  :func:`edges_from_centres`.
-- `temperature`: `(nz, ny, nx)`
-- `mass_density` and/or `electron_density`: `(nz, ny, nx)`
-- `velocity_x`, `velocity_y`, `velocity_z`: `(nz, ny, nx)`, positive
-  towards increasing coordinate; only the one along the line of sight is
-  needed
-- `time`: scalar, optional; only a time series needs it
-
-The two image axes must be evenly spaced. The line-of-sight axis may be
-stretched, since it is integrated cell by cell.
+An `Atmosphere` holds the temperature, density and velocity of every cell
+and the cell edges, from any simulation code. This module reads and writes
+it, and converts mass density to electron density with the synthesis's
+abundances. The file layout is described on the Files page of the docs.
 """
 
 from __future__ import annotations

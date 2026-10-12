@@ -1,54 +1,11 @@
 """
-Synthesis files: the spectra the instrument simulation observes.
+Synthesis files: the spectra the instrument simulation observes, as HDF5.
 
-A synthesis file holds the spectral radiance leaving the Sun at each pixel
-of an image, line by line, as HDF5. ECLIPSE's own synthesis writes one, and
-so can any other code, optically thin or thick. The instrument run reads
-the lines near the one it measures and puts them on the detector grid with
-:func:`euvst_response.data_processing.rebin_spectra`.
-
-File layout, version 1
-----------------------
-Root attributes:
-
-- `format`: `"eclipse-synthesis"`
-- `version`: `1`
-- `source`: free text naming the code and the model, optional.
-- `integration_axis`: the view, optional. `"x"`, `"y"` or `"z"` is the
-  simulation axis the image was seen along, from +x, -y or above; `"-x"`,
-  `"+y"` or `"-z"` is the view from the other side. It names the image
-  axes of the cubes made from the file, as ECLIPSE's own synthesis records
-  it. A file without it is taken as seen along z. From the other side the
-  image is mirrored left to right, so `x_edges` are the simulation
-  coordinates with their sign changed.
-
-Datasets (each with a `unit` attribute astropy can parse) and groups:
-
-- `x_edges`, `y_edges`: pixel boundaries of the image, 1D, increasing and
-  evenly spaced. Lengths on the Sun, or angles seen from 1 AU. x runs
-  across the slit, the direction a raster steps, and y along it.
-- `time`: scalar time of the snapshot, optional. A time series of
-  synthesis files needs it to place each file.
-- `lines/<name>`: one group per line, named as `reference_line` names it in
-  the instrument configuration, holding:
-
-  - `intensity`: `(ny, nx, n_wavelength)`, the spectral radiance. Any unit
-    of spectral radiance will do, per wavelength or per frequency, in
-    energy or in photons, such as `erg / (s cm2 sr Angstrom)` or
-    `W / (m2 sr Hz)`.
-  - `wavelength`: `(n_wavelength,)`, increasing, not necessarily evenly
-    spaced.
-  - `rest_wavelength`: scalar wavelength the line's Doppler shifts are
-    measured from.
-  - `atom`, `ion`: attributes, optional. Atomic number and ionisation stage
-    of the emitting ion, e.g. 26 and 12 for Fe XII.
-
-  A group can hold a whole spectral window, blends included, as other codes
-  often give it. The instrument run adds up all lines that reach the window
-  of the line it measures.
-- `synthesis`: optional group of intermediate products from ECLIPSE's own
-  synthesis, not read by the instrument run; see
-  :func:`read_synthesis_products`.
+The layout is described on the Files page of the docs. The view is
+`integration_axis`, `"x"`, `"y"` or `"z"` seen from +x, -y or above, or
+`"-x"`, `"+y"` or `"-z"` from the other side, where the image is mirrored
+left to right and `x_edges` change sign. A file without it is taken as
+seen along z.
 """
 
 from __future__ import annotations

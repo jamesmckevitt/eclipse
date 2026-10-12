@@ -1,12 +1,7 @@
 """DN fits are weighted by pixel uncertainty; photon fits use the Poisson likelihood.
 
-An unweighted fit counts every pixel the same, though pixels at a line's
-peak are noisier than those on its wings, which fix the line position. A
-Gaussian line's velocity then scatters by 1.24 times the minimum its photons
-allow. Like eispac, the DN fits weight each pixel by an uncertainty
-estimated from its own signal. Photons, a Poisson count with no read noise,
-are fitted by their Poisson likelihood, which needs no uncertainty and
-reaches the minimum scatter.
+Unweighted, a Gaussian line's velocity scatters 1.24 times more than its
+photons allow.
 """
 import astropy.units as u
 import numpy as np

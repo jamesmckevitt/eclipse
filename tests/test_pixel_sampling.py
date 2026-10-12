@@ -1,9 +1,7 @@
 """Each detector pixel holds the mean of the scene over its footprint, through the PSF.
 
-Bilinear sampling at the pixel centres would make structure finer than a
-pixel depend on where the centres fall. Applying the PSF to the pixels drags
-a line narrower than a pixel toward the middle of its pixel. So the scene
-goes onto the pixels through the PSF in one step, from its own cells.
+The scene goes onto the pixels through the PSF in one step, from its own
+cells, so structure finer than a pixel keeps its place.
 """
 import astropy.constants as const
 import astropy.units as u

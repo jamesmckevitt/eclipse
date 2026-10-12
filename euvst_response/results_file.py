@@ -2,73 +2,39 @@
 Results file: the instrument simulation's results as HDF5.
 
 `eclipse --config run.yaml` writes `run/result/run.h5`, which
-:func:`euvst_response.load_instrument_response_results` reads back. The
-atmosphere and synthesis files are HDF5 too. Reading one unpickles nothing,
-so it runs no code from the file, and any language can read it.
+:func:`euvst_response.load_instrument_response_results` reads. Reading a
+file runs no code from it, and any language can read it.
 
 File layout, version 1
 ----------------------
 Root attributes `format` (`"eclipse-results"`) and `version` (`1`). The
-results are a tree of mappings, with the root group at the top:
+results are a tree. An array with dimensions is a dataset, with a `unit`
+attribute if it is a quantity; a cube, or a mapping, list or tuple holding
+such arrays, is a group; anything else is a JSON attribute of its group.
 
-- An array of numbers or booleans with dimensions is a dataset, with a
-  `unit` attribute if it is a quantity.
-- A cube, or a mapping, list or tuple holding such arrays, is a group.
-- Anything else is a JSON attribute of its group.
+A mapping keyed by names lists them in order, as JSON, in `eclipse_order`.
+Other groups have an `eclipse_type` (plain text, as are `eclipse_length`,
+`target` and `unit`):
 
-A group for a mapping keyed by names lists the names in order, as JSON, in
-an `eclipse_order` attribute. Other groups are tagged by an `eclipse_type`
-attribute. This, `eclipse_length`, `target` and a dataset's `unit` are
-plain text or numbers, not JSON:
+- `ndcube`: an NDCube's `data` with its `unit`, `wcs` and `meta`.
+- `map`: a mapping whose keys cannot name members, such as results keyed
+  by parameter tuples; the keys as JSON in `eclipse_keys`, the values as
+  members `0`, `1`, ...
+- `list`, `tuple`: the length in `eclipse_length`, the items as members.
+- `ref`: a value found in more than one place, written once and elsewhere
+  as a group whose `target` is the path it was written at.
 
-`ndcube`
-    An NDCube: its `data` with the cube's `unit`, its `wcs` and its `meta`.
+Values JSON cannot hold are objects with an `__eclipse__` entry naming the
+kind: `float` (not finite), `numpy`, `quantity`, `array`, `unit`, `tuple`,
+`map`, `date`, `datetime`, `set`, `frozenset`, `bytes` (base 64), `path`,
+`resource` (a path inside the installed package), `numpy_type`, `wcs` (a
+FITS header plus the unrounded `cunit`, `crpix`, `crval`, and `cdelt` and
+`pc` or `crota`, or `cd`) and `dataclass` (a configuration object's
+`class`, `fields` and `derived` values). Only the classes in
+:func:`_dataclass_registry` are rebuilt.
 
-`map`
-    A mapping whose keys cannot name members, such as the results of each
-    combination, keyed by the tuple of parameters that produced them. The
-    keys are JSON in `eclipse_keys`, and the values are members `0`, `1`,
-    ...
-
-`list`, `tuple`
-    A sequence holding arrays: its length in `eclipse_length`, and its
-    items as members `0`, `1`, ...
-
-`ref`
-    A value holding arrays that appears in more than one place in the
-    results, such as a ground truth shared by several combinations. It is
-    written once, and elsewhere as a `ref` group whose `target` is the path
-    it was written at, so it reads back as one object, as in a pickle.
-
-The JSON is plain except for values it has no form for. These are objects
-with an `__eclipse__` entry naming the kind:
-
-- `float`: a number that is not finite, as `nan`, `inf` or `-inf`.
-- `numpy`: a NumPy number with its `dtype`, such as a key of a cube's
-  sampling.
-- `quantity` (`value` and `unit`), `array` (`dtype`, `shape` and
-  `value`), and `unit`, given with its whole scale.
-- `tuple` and `map` (`items`; for a map, key and value pairs).
-- `date` and `datetime` in ISO 8601, `set` and `frozenset` (`items`), and
-  `bytes` in base 64.
-- `path`, and `resource`: a path inside the installed package, such as a
-  throughput table, written relative to the package so that it names the
-  reader's copy rather than the writer's.
-- `numpy_type`, such as the precision a time series is synthesised in.
-- `wcs`: a FITS `header`, plus the WCS's `cunit`, `crpix`, `crval`, and
-  `cdelt` and `pc` or `crota`, or `cd`, unchanged, since a header gives
-  them in SI units and to 14 digits. The axes, frame, time and observer
-  are read back; a distortion is not written.
-- `dataclass`: a configuration object, given by its `class`, the `fields`
-  it was made with and what it `derived` from them, such as a detector's
-  dark current. Only the classes in :func:`_dataclass_registry` are
-  written or rebuilt, so a file cannot have anything else constructed.
-  One that a later version would not make as stored is rebuilt
-  unchecked, with a warning.
-
-Older versions wrote results as pickles. These still load, with a warning,
-unless named as an HDF5 file, until a future release stops reading them.
-:func:`convert_results_pickle` rewrites one as a results file.
+Results pickles from older versions still load, with a warning, and
+:func:`convert_results_pickle` converts one.
 """
 
 from __future__ import annotations

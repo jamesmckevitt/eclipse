@@ -1,14 +1,9 @@
-"""Pin down the cube axis conventions.
+"""Cube axis conventions.
 
 Observation cubes are (row, column, wavelength), with rows along the slit
-(image vertical) and columns along the raster scan (image horizontal). Their
-WCS FITS axes are (WAVE, HPLN, HPLT). Simulation volumes are (z, y, x) with
-WCS axes (SOLX, SOLY, SOLZ), so a horizontal slice is also an image.
-
-Every check here would pass if the spatial axes were swapped consistently
-throughout, so each test ties one end of the chain to something absolute:
-where a known feature lands in the array, which WCS entry a physical pitch
-is written to, or which way up a map comes out.
+and WCS axes (WAVE, HPLN, HPLT); simulation volumes are (z, y, x) with
+(SOLX, SOLY, SOLZ). Each test ties the chain to something absolute, as a
+consistent swap of the spatial axes would pass everything else.
 """
 import warnings
 

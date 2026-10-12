@@ -1,11 +1,7 @@
 """A line cube has the coordinates of its source atmosphere, at any size.
 
-create_line_cube puts the reference pixel of each centred axis at the middle
-of that axis. With an even number of pixels the middle lies between two
-pixels, so the coordinate of the pixel below it would put every position
-along that axis half a cell off. For the wavelength axis, the rest
-wavelength is only right when the velocity grid is symmetric about zero.
-Both axes take the grid's value at the reference pixel.
+With an even number of pixels the reference pixel lies between two pixels,
+and each axis takes the grid's value there.
 """
 import astropy.constants as const
 import astropy.units as u

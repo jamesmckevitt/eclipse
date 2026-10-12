@@ -1,18 +1,7 @@
-"""Tests for the atmosphere file, the one HDF5 input the synthesis reads.
+"""The atmosphere file, the HDF5 input the synthesis reads.
 
-The synthesis needs temperature, density, line-of-sight velocity and cell
-sizes. An ECLIPSE atmosphere file holds these with units, so a simulation
-from any code can be used without a reader for it. These tests check that:
-
-- The file round-trips and is validated.
-- MURaM's own files, still read by the deprecated route, synthesise the
-  same as the same values in a file.
-- An electron density is used as given, and otherwise derived from the
-  abundances.
-- A stretched line of sight integrates the true size of every cell.
-
-The synthesis runs use a flat contribution function in place of fiasco, so
-the intensity of a cell is just its emission measure.
+A flat contribution function replaces fiasco, so a cell's intensity is its
+emission measure.
 """
 import sys
 import types

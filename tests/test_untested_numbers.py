@@ -1,12 +1,4 @@
-"""Values that no test pinned down.
-
-Each of these could change by a large factor with every test still passing:
-the variance of each detector noise term, the rounding of electrons to DN,
-the brightness and width of a synthesised line, the filter's attenuation of
-the visible stray light, the row edges of a shifted or tilted focal plane,
-the effective area, the dark current, and the contribution function itself.
-Each is checked here against an independently derived value.
-"""
+"""Values no other test pinned down, each checked against an independent value."""
 
 import astropy.constants as const
 import astropy.units as u

@@ -1,11 +1,7 @@
-"""Emission measure is shared between the bins either side of a cell's temperature and velocity.
+"""Emission measure is shared between the two nearest temperature and velocity bins.
 
-With all of it in the nearest bin, a uniform 2.4 km/s flow on the default
-5 km/s grid would be synthesised at rest and a 2.6 km/s one at 5 km/s, and
-the contribution function would be taken from a temperature up to 0.025 dex
-away. Sharing it linearly between the two bins keeps the line's mean
-velocity at the cell's, and interpolates the contribution function between
-the two temperatures.
+A 2.4 km/s flow on the 5 km/s grid then keeps its mean velocity, and the
+contribution function is interpolated between temperatures.
 """
 import astropy.units as u
 import numpy as np

@@ -1,30 +1,13 @@
 """
-Slit observations of a time series of atmospheres or of their spectra.
+Slit observations of a time series of atmospheres or synthesis files.
 
-A slit spectrograph sees one strip of the Sun at a time. In a raster each
-exposure sees a different strip at a later time; in a sit-and-stare it sees
-the same strip repeatedly. Given a series of atmosphere files, each with
-its time, this module synthesises only the columns under the slit for each
-exposure, from the snapshots that overlap it. A long series then costs
-about one snapshot's worth of columns rather than every snapshot in full.
-Given a series of synthesis files instead, from ECLIPSE or another code, it
-reads those columns' spectra.
-
-The observing plan is a :class:`RasterPlan`: the start time of the first
-exposure, the number of slit positions per raster and their spacing, the
-exposure cadence, and the number of rasters. Each raster is observed
-separately, as one cube whose columns are its slit positions. A
-sit-and-stare is a raster of one position, so each of its exposures is a
-one-column cube. The slit width and exposure time are instrument settings
-that can be swept, so the cubes are built for each combination inside the
-instrument run, and the columns already obtained from each snapshot are
-kept for the next combination.
-
-An exposure spanning more than one snapshot gets the average of their
-spectra, weighted by the fraction of the exposure each covers. A snapshot
-represents the atmosphere from its time until the next snapshot's time, and
-the last one for as long again as the gap before it. An exposure outside
-that range raises an error rather than using the nearest snapshot.
+For each exposure of a :class:`RasterPlan`, only the columns under the slit
+are synthesised, or read from synthesis files, from the snapshots the
+exposure overlaps, weighted by the share of the exposure each covers. A
+snapshot stands for the atmosphere until the next one's time, and the last
+for as long again as the gap before it; an exposure outside that range is
+an error. Each raster is one cube, and a sit-and-stare is a raster of one
+slit position.
 """
 
 from __future__ import annotations

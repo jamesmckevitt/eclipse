@@ -1,17 +1,8 @@
 """Rasters of a time series: each strip of the box is seen when it is exposed.
 
-The observing plan is in the instrument configuration, and the atmosphere
-is a series of files, each with its time. Each exposure is synthesised from
-the columns under the slit and the snapshots that overlap it.
-
-The tests build small series with known temperature, density and velocity,
-so the expected signal of an exposure can be worked out by hand. A flat
-contribution function replaces fiasco, so a column's intensity is its
-emission measure.
-
-A series of synthesis files, written by ECLIPSE or another code, is
-observed the same way, with each column's spectra read instead of
-synthesised.
+Small series with known plasma and a flat contribution function let each
+exposure's signal be worked out by hand. Series of synthesis files are
+observed the same way.
 """
 import subprocess
 import sys

@@ -1,11 +1,7 @@
-"""Chains of ties and of amplitude orderings in a multi-component fit.
+"""Chains of ties and amplitude orderings in a multi-component fit.
 
-A tie to a component that is itself tied must read a value the fit has
-already set. Otherwise scipy reads uninitialised memory and mpfit lags a
-step behind. An amplitude held below one that is itself held below another
-must fit in any listing order, rather than being capped or never fitted. A
-primary held fainter than another must start inside its bounds, or every
-fit fails. Loops, which no fit can satisfy, are refused.
+Tied and ordered components fit in any listing order, a primary held
+fainter than another starts inside its bounds, and loops are refused.
 """
 import astropy.constants as const
 import astropy.units as u

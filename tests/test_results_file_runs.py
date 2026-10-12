@@ -1,10 +1,4 @@
-"""Results files written by full instrument simulation runs read back unchanged.
-
-test_results_file.py tests the encoder on objects built for the purpose.
-These tests run the simulation end to end, to check that the results ECLIPSE
-actually produces survive the round trip. Each run keeps what it saved, and
-the file read back is compared with it entry by entry.
-"""
+"""Results files written by full instrument runs read back unchanged."""
 import dataclasses
 import gc
 import importlib

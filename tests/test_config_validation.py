@@ -1,9 +1,7 @@
-"""Config keys ECLIPSE does not read are rejected, not ignored.
+"""Configuration keys ECLIPSE does not read are refused, not ignored.
 
-A key at the wrong depth is the dangerous case. It is a real parameter name,
-so it looks right, but nothing reads it and the run silently uses the default.
-A sweep written that way returns a full set of results that are identical
-across every combination.
+A real parameter name at the wrong depth would otherwise be ignored, and a
+sweep written that way would give the same results for every combination.
 """
 import sys
 

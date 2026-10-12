@@ -1,8 +1,6 @@
-"""Validate the radiometric chain against the standard equations.
+"""The radiometric chain against the standard equation.
 
-The pipeline converts spectral radiance into photons per pixel in four steps,
-one per function. As one equation, for a pixel at wavelength `lam` viewing a
-source of spectral radiance `I`:
+For a pixel at wavelength `lam` viewing a spectral radiance `I`:
 
     N = (I * t_exp / E_ph) * A_eff * Omega_pix * dlam_pix
 
@@ -10,12 +8,8 @@ source of spectral radiance `I`:
     Omega_pix = (w_slit * w_pix) / au^2           sr, the patch of Sun a pixel sees
     dlam_pix  = det.wvl_res                       cm per pixel
 
-Expected values are built from this equation with the physical constants
-written as literals, so a failure means the pipeline changed, not that two
-versions of the same helper disagree. A stub telescope holds the effective
-area constant where only the chain arithmetic is tested; the real
-wavelength- and date-dependent areas are checked against IDL in
-test_eis_effective_area.py.
+Expected values use literal constants and, where only the arithmetic is
+tested, a stub telescope with a constant effective area.
 """
 import inspect
 

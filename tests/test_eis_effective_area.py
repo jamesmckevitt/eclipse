@@ -1,16 +1,8 @@
 """
-Tests for the Hinode/EIS effective area.
+Hinode/EIS effective area.
 
-The reference values are from IDL: eis_ea.pro on the pre-flight tables gives
-0.301803 cm^2 at 195 Angstrom and 0.0413185 cm^2 at 284 Angstrom. These two
-values check three things: the short- and long-wavelength tables go to the
-right channels, the interpolation is a natural cubic spline through log(EA)
-rather than linear, and the quantum efficiency is handled as the tables
-assume.
-
-The other tests are structural: the epoch changes the result, the two bands
-stay separate, and the quantum efficiency is divided out exactly once before
-ECLIPSE's radiometric chain.
+The reference values are from IDL's eis_ea.pro on the pre-flight tables:
+0.301803 cm^2 at 195 Angstrom and 0.0413185 cm^2 at 284 Angstrom.
 """
 
 import re

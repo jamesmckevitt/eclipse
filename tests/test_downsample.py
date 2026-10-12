@@ -1,14 +1,8 @@
-"""--downsample must describe the same Sun as a full-resolution run.
+"""--downsample describes the same Sun as a full-resolution run (issue #72).
 
-Downsampling keeps one cell in every `downsample` along each axis, so each
-kept cell stands for that many simulation cells. The voxel sizes must grow by
-the factor exactly once: in the WCS, in the path length for the emission
-measure, and in the synthesis file. Applying it in both main() and every
-load_cube call, in place, compounded it across the cubes (issue #72).
-
-The tests run the real synthesis on a small uniform atmosphere, with a flat
-contribution function in place of fiasco, so a uniform column must give the
-same intensity at any downsampling.
+Each kept cell stands for `downsample` cells along each axis, so the cell
+sizes grow by that factor once: in the WCS, in the emission measure's path
+length and in the synthesis file.
 """
 import sys
 

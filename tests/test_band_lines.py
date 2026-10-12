@@ -1,10 +1,4 @@
-"""Every line in a band for a full-CCD frame, and the density the synthesis keeps.
-
-A full-detector frame holds every line in its band, not only the lines named
-for a run. Their contribution functions are computed in ECLIPSE's
-convention on the synthesis grids. The synthesis file keeps the density at
-each temperature of each pixel, which is where they are evaluated.
-"""
+"""Every line in a band, and the density the synthesis keeps for each pixel."""
 import logging
 import sys
 

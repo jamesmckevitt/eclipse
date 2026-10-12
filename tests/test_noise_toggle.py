@@ -1,8 +1,7 @@
-"""With noise off, the chain returns the mean signal the instrument measures.
+"""With noise off, the chain returns the mean signal.
 
-Every random draw is replaced by its mean, so two runs agree exactly and the
-result sits at the centre of the noisy realisations. DN are still rounded and
-still clip at the full well, because that is detector behaviour, not noise.
+Every random draw is replaced by its mean. DN are still rounded and
+clipped, as that is detector behaviour, not noise.
 """
 import astropy.units as u
 import numpy as np

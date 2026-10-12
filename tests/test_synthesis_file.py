@@ -1,12 +1,4 @@
-"""The synthesis file: HDF5 spectra from ECLIPSE or any other code (issue #107).
-
-A synthesis file holds the spectral radiance leaving the Sun at each pixel
-of an image, line by line, from any synthesis code. These tests check the
-file and the functions that go with it, the units the spectra may be in,
-flux-conserving resampling from an unevenly spaced grid, and that an
-instrument run observes a synthesis file exactly as it observed an older
-version's pickle of the same line cubes.
-"""
+"""The synthesis file: HDF5 spectra from ECLIPSE or any other code (issue #107)."""
 import os
 import sys
 import warnings

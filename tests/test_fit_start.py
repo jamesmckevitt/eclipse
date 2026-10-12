@@ -1,13 +1,4 @@
-"""Starting values for a single-Gaussian fit that noise does not mislead.
-
-A simple start is misled by noise. The minimum sits below the background by
-the largest noise excursion. The brightest pixel can be a noisy one far from
-the line. The span from the first to the last pixel above half maximum
-anywhere in the window is stretched several times over by noise far from the
-line. From such a start, at a peak of a few times the noise, fits ended
-hundreds of km/s away twice as often, and scattered twice as far, as from a
-good start.
-"""
+"""Starting values for a single-Gaussian fit that noise does not mislead."""
 import numpy as np
 import pytest
 

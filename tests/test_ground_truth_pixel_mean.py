@@ -1,9 +1,7 @@
 """The ground truth is the line whose pixel means match the noiseless cube.
 
-Fitting the Gaussian at each pixel's centre, as for the noisy spectra, pulls
-the centre of a line not much wider than a pixel toward the middle of its
-pixel and widens it, by up to 0.9 km/s at a sigma of 0.28 pixels. Measured
-against such a truth, the same error in the noisy fits would cancel out.
+Fitting the Gaussian at pixel centres instead pulls a narrow line toward the
+middle of its pixel, by up to 0.9 km/s at a sigma of 0.28 pixels.
 """
 import astropy.constants as const
 import astropy.units as u

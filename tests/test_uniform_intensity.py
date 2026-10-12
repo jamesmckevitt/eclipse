@@ -1,16 +1,9 @@
 """The uniform-intensity line is integrated across each detector pixel.
 
-create_uniform_intensity_cube once evaluated the Gaussian at the pixel
-centres, with the line centred on one of them, and took each pixel as that
-value times the pixel width. This sums to the line intensity only when the
-line sigma is more than about half a pixel. Several science case lines are
-narrower at their formation temperature: Fe IX 171.07 (sigma 0.35 SWC
-pixels) came out 19 per cent too bright, and Fe VIII 185.21 (0.30 pixels)
-35 per cent.
-
-The expected photon count below is the radiometric equation written out
-with literal constants, as in test_radiometric_chain.py, so a failure means
-the pipeline changed, not that two versions of one helper disagree.
+Taken at pixel centres instead, lines narrower than about half a pixel come
+out too bright, such as Fe IX 171.07 (sigma 0.35 SWC pixels) by 19 per
+cent. The expected photon count is the radiometric equation with literal
+constants.
 """
 import astropy.units as u
 import numpy as np

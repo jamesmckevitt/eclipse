@@ -1,11 +1,4 @@
-"""The velocity and wavelength grids must be uniform, and other grids are refused.
-
-ECLIPSE uses one spacing for every bin edge of the velocity grid, and sets
-the output cube's wavelength CDELT from it. Both are right for a uniform
-grid and silently wrong otherwise. These tests check the right answer for a
-uniform grid, and a refusal, not a plausible number, for every way a grid
-can fail to be uniform.
-"""
+"""Velocity and wavelength grids must be uniform, and others are refused."""
 import warnings
 
 import astropy.constants as const

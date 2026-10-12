@@ -1,26 +1,14 @@
 """
-Contribution functions of every line in a wavelength band, for full-CCD frames.
+Contribution functions of every line in a band, for full-CCD frames.
 
-The synthesis computes only the lines named for a run. A frame of a whole
-detector holds every line in its band: in CHIANTI, tens of thousands of
-transitions from almost two hundred ions. This module computes the
-contribution function G(T, n_e) of each, on the temperature and density
-grids of a synthesis. As elsewhere in ECLIPSE, G includes n_H / n_e, so it
-multiplies an emission measure of n_e^2 dh.
-
-An ion is solved only at temperatures where CHIANTI's ionisation
-equilibrium gives it a nonzero fraction. Elsewhere its G is zero, so
-nothing is lost. In CHIANTI 10.1 a few ions, such as N IV, have levels that
-nothing populates, so their level equations have no unique solution. These
-levels are empty in a steady state, so they are left out and the rest
-solved exactly. An ion that still cannot be solved stops the run. For some
-ions, CHIANTI's level-resolved recombination and ionisation rates stop
-short of the hottest temperatures. There fiasco's single-ion model is used,
-as for ions with no such rates at all, and the run reports it. An ion whose
-data or abundance CHIANTI lacks is left out, and the run names it.
-
-The result is written to a file, since the whole SW band takes about two
-hours on 32 cores and serves every frame on the same grids.
+G(T, n_e) of every CHIANTI line in the band, on a synthesis's temperature
+and density grids, with n_H / n_e included as elsewhere in ECLIPSE. Levels
+that nothing populates, as in a few ions such as N IV in CHIANTI 10.1, are
+left out and the rest solved exactly. Where an ion's level-resolved
+recombination and ionisation rates stop short of the hottest temperatures,
+or it has none, fiasco's single-ion model is used. Ions without data or an
+abundance are skipped and named. The whole SW band takes about two hours on
+32 cores, so the result is written to a file.
 """
 
 from __future__ import annotations

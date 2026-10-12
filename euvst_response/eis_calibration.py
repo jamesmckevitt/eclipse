@@ -1,43 +1,25 @@
 """
-Hinode/EIS effective area as a function of wavelength and observation date.
+Hinode/EIS effective area as a function of wavelength and date.
 
-EIS is a reference instrument in ECLIPSE, so its throughput must be as
-accurate as the EUVST one. The effective area depends strongly on
-wavelength: in the ground calibration it is 0.30 cm^2 at Fe XII 195 and
-0.029 cm^2 at Ca XV 181.9, a factor of ten within the short-wavelength
-channel alone. It has also fallen since launch, by up to a factor of seven
-in parts of the long-wavelength channel by 2022 in the dz2025 calibration.
-Comparing photon statistics between lines or between epochs depends on
-both.
-
-Four calibrations are available, matching the `calib=` keywords of
-`eis_get_fitdata.pro`:
+Four calibrations, as the `calib=` keywords of `eis_get_fitdata.pro`:
 
 `ground`
-    Pre-flight MSSL calibration, April 2007. No time dependence.
+    Pre-flight MSSL calibration, April 2007, with no time dependence.
     Port of `eis_ea.pro`.
 `dz2013`
     Del Zanna (2013). Port of `eis_ltds.pro`. The long-wavelength channel
-    has a polynomial degradation, clamped after 2012-09-14 where the
-    original fit ends; the short-wavelength channel is time-independent.
+    degrades as a polynomial, held constant after 2012-09-14 where the fit
+    ends; the short-wavelength channel does not change.
 `warren2014`
-    Warren, Ugarte-Urra & Landi (2014). Exponential decay per spline knot,
-    from `nrl_ea_coeff_v1.3.genx`.
+    Warren, Ugarte-Urra & Landi (2014). Exponential decay at each spline
+    knot, from `nrl_ea_coeff_v1.3.genx`.
 `dz2025`
-    Del Zanna et al. (2025), the current recommendation. Time- and
-    wavelength-dependent areas fitted to 2007-2022 EIS spectra. Port of
-    `interpol_eis_ea.pro`.
+    Del Zanna et al. (2025), the current recommendation, fitted to EIS
+    spectra from 2007 to 2022. Port of `interpol_eis_ea.pro`.
 
-All four include the CCD quantum efficiency (0.64) in the effective area,
-as the tables are quoted that way and the EIS radiometric calibration
-formula uses it. Callers that apply the quantum efficiency separately must
-divide it out. `config.Telescope_EIS` does so, since ECLIPSE draws detected
-photons binomially later in the chain.
-
-This module covers only the effective area. Converting measured DN back to
-physical units is a data-analysis step with its own conventions (per
-spectral pixel, per arcsec^2, exposure time excluded), and is out of scope
-for a forward-modelling package.
+All four include the CCD quantum efficiency of 0.64, as the tables do.
+`config.Telescope_EIS` divides it out, as ECLIPSE applies the quantum
+efficiency in the detector.
 
 References
 ----------

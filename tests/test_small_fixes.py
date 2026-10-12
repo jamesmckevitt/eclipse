@@ -1,18 +1,8 @@
 """Small fixes around the edges.
 
-Bugs fixed include:
-
-- Command line: hid the type of error that stopped a run, printed a syntax
-  warning from its logo, and pointed to a folder that is not there.
-- --debug opened on a frame outside ECLIPSE.
-- Recorded git commit: could be that of the user's own project.
-- atmosphere info: described files it could not read, and refused files
-  written the IDL way.
-- A script's old option name was ignored.
-- Science-case tool: wrote configurations the run refuses, and shared their
-  lists.
-- Deprecated dynamic mode: mixed its snapshots along the line of sight, and
-  crashed on a crop one cell wide.
+The command line, --debug, the recorded git commit, `atmosphere info`, a
+script's old option name, the science-case tool and the deprecated dynamic
+mode.
 """
 import argparse
 import subprocess

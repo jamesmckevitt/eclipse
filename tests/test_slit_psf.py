@@ -1,14 +1,9 @@
 """The spectral PSF depends on the slit width (issue #31).
 
-The spectral resolution in ECLIPSE, 43.00 mA or 2.54 SWC pixels, is the
-RSC-2022021C value for the 0.2 arcsec slit: the optics FWHM after the slit,
-0.352 arcsec at 212.3 A, added in quadrature to the slit width, giving
-0.405 arcsec. Wider slits add more, but were given the 0.2 arcsec value.
-
-By default the PSF is a Gaussian whose FWHM adds the slit in quadrature, as
-in the document. `spectral_psf: convolution` instead convolves the optics
-Gaussian with the rectangular slit image, which is how the document defines
-the line profile.
+ECLIPSE's 43.00 mA (2.54 SWC pixels) is the RSC-2022021C value for the
+0.2 arcsec slit: the 0.352 arcsec optics FWHM at 212.3 A and the slit in
+quadrature, 0.405 arcsec. `spectral_psf: convolution` convolves the optics
+Gaussian with the slit's image instead.
 """
 import sys
 

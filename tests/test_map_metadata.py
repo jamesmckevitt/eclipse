@@ -1,8 +1,7 @@
 """Maps carry an observation date and an observer position.
 
-Without them, sunpy silently stamps every map with the time the code ran and
-assumes an Earth-based observer. The date matters more, because without it
-two runs of the same analysis give different maps.
+Without them, sunpy stamps maps with the time the code ran and assumes an
+Earth-based observer.
 """
 import warnings
 

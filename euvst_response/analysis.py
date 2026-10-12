@@ -1,8 +1,5 @@
 """
 Result analysis functions for ECLIPSE instrument response simulations.
-
-This module provides functions for loading, analyzing, and visualizing
-instrument response simulation results.
 """
 
 import warnings

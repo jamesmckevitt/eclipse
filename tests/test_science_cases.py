@@ -1,10 +1,4 @@
-"""The science case table and the configurations written from it.
-
-The cases test changes to the instrument or to ECLIPSE against a fixed set of
-observations. The table must read cleanly, each configuration must carry the
-numbers the cases were analysed with, and every configuration must be valid
-for the current ECLIPSE.
-"""
+"""The science case table and the configurations written from it."""
 import sys
 
 import astropy.units as u

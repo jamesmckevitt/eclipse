@@ -1,10 +1,7 @@
 """Fits converge, and fits that cannot have measured a line count as failed.
 
-With centres some 195 Angstrom from zero, stopping the multi-component scipy
-fit at tolerances of 1e-4 left a blend's velocities over a km/s short of
-convergence. A spectrum with no line, a width wider than the window, or a
-component outside the window must not come back as a successful fit with no
-spread, which reads as a perfect measurement.
+A spectrum with no line, a width wider than the window or a component
+outside it must not come back as a successful fit.
 """
 import astropy.constants as const
 import astropy.units as u

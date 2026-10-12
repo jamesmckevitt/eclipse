@@ -1,7 +1,6 @@
 """A fitting block without components configures the single-Gaussian fit.
 
-This lets max_iter and the backend be set for a single Gaussian. A block
-with exactly one component is refused rather than ignored (issue #70).
+A block with exactly one component is refused (issue #70).
 """
 import astropy.units as u
 import numpy as np

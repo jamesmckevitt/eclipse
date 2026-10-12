@@ -1,15 +1,8 @@
-"""A simulated flow has the Doppler shift seen by the observer of the synthesised map.
+"""A simulated flow has the Doppler shift its observer sees.
 
-Simulation velocities are positive towards increasing coordinate, so an upflow
-has a positive vz. Seen from above, it moves towards the observer and is
-blueshifted. ECLIPSE 0.8.0 and earlier used the velocity along the integration
-axis directly as the line-of-sight velocity. For views along z and x this has
-the opposite sign to the velocity away from the observer. For views along y,
-whose observer is at -y, the two agree.
-
-These tests run the real synthesis on small uniform atmospheres, with a flat
-contribution function in place of fiasco, and measure where each line sits in
-wavelength.
+Simulation velocities are positive towards increasing coordinate, so an
+upflow seen from above is blueshifted. The synthesis runs on small uniform
+atmospheres with a flat contribution function.
 """
 import sys
 import warnings

@@ -1,13 +1,8 @@
-"""A configuration that cannot be run is refused before anything runs.
+"""A configuration that cannot run is refused before anything runs.
 
-Each of these once either ran to completion with meaningless results, or
-failed part-way through a sweep and lost the earlier results:
-
-- A quantity with no unit, or of the wrong kind.
-- A value outside its physical range.
-- A repeated YAML key, where PyYAML keeps the last one.
-- An empty value.
-- A sweep value that could not be run, found only when its turn came.
+That includes a quantity without a unit or of the wrong kind, a value
+outside its range, a repeated YAML key, an empty value, and a sweep value
+that cannot run.
 """
 import sys
 

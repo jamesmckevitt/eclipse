@@ -1,8 +1,7 @@
 """The continuum under the lines: free-free, free-bound and two-photon emission.
 
-The continuum is computed from the same emission measure as the lines named
-for a run. It is stored in the synthesis file as separate entries, one per
-group of overlapping windows, so that each observed window adds it once.
+It is stored once per group of overlapping windows, so each observed window
+adds it once.
 """
 import dataclasses
 import sys

@@ -1,9 +1,7 @@
-"""Boundary handling of the spatial PSF along the slit.
+"""Edges of the spatial PSF along the slit.
 
-convolve2d(..., mode="same") fills everything beyond the array with zeros.
-That is right along wavelength, where the grid runs several sigma past the
-line. It is wrong along the slit: the Sun carries on beyond the raster, so
-the rows near the edge get PSF light from emission that zero fill drops.
+Zero fill beyond the array is right along wavelength, but along the slit
+the Sun carries on beyond the raster.
 """
 import astropy.units as u
 import numpy as np

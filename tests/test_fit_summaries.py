@@ -1,10 +1,4 @@
-"""Fitted components are stored by name, with statistics for each.
-
-The results hold intensity, velocity and width for every component under its
-own name, not only the primary component. Failed fits are left out of the
-statistics and counted, a small-sample correction is optional, and the
-analysis picks the component by name.
-"""
+"""Fitted components are stored by name, with statistics for each."""
 import sys
 import warnings
 

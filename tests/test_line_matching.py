@@ -1,12 +1,8 @@
 """A line name matches the line at its wavelength, or else the nearest observed line.
 
-CHIANTI lists theoretical wavelengths as well as observed ones, many for
-weak transitions within a few mA of strong lines. Matching a name to the
-nearest of all of them can turn a name a little off the observed wavelength
-into a line up to 1e12 times fainter. A theoretical line named at its own
-wavelength is still synthesised. The first tests use a stand-in for fiasco
-with such lines; those against CHIANTI need fiasco's database and are
-skipped without it.
+Matching the nearest of all CHIANTI's lines, theoretical ones included, can
+pick a line up to 1e12 times fainter. Tests against CHIANTI are skipped
+without its database.
 """
 import sys
 import types
