@@ -1,10 +1,4 @@
-"""Every line in a band, for a full-CCD frame, and the density a synthesis keeps for it.
-
-A frame of a whole detector holds every line in its band, not only the lines
-named for a run. Their contribution functions are worked out in ECLIPSE's
-convention, on a synthesis's own grids, and the synthesis file now keeps the
-density at each temperature of each pixel, which they are taken at.
-"""
+"""Every line in a band, and the density the synthesis keeps for each pixel."""
 import logging
 import sys
 
@@ -22,7 +16,7 @@ from euvst_response.synthesis_file import read_synthesis_products
 
 
 def _rates_with_an_unfed_level():
-    """A three-level ion whose level 2 nothing populates, normalised as fiasco gives it."""
+    """Rates for a three-level ion with nothing populating level 2, normalised as in fiasco."""
     matrix = np.array([[-2.0, 3.0, 0.0],
                        [2.0, -3.0, 0.0],
                        [1.0, 1.0, 1.0]])
@@ -41,9 +35,9 @@ def test_a_level_nothing_populates_is_left_out_and_the_rest_solved_exactly():
 
 
 def test_a_level_nothing_leaves_but_something_feeds_is_kept():
-    # Level 1 decays to the ground at 3 and to level 2 at 1, and the ground is
-    # excited to level 1 at 2. Level 2 holds what reaches it, and level 3 is
-    # reached by nothing, which leaves the matrix singular.
+    # Level 1 decays to the ground at rate 3 and to level 2 at rate 1, and the
+    # ground is excited to level 1 at rate 2. Level 2 keeps what reaches it,
+    # and nothing reaches level 3, which makes the matrix singular.
     matrix = np.array([[-2.0, 3.0, 0.0, 0.0],
                        [2.0, -4.0, 0.0, 0.0],
                        [0.0, 1.0, 0.0, 0.0],
@@ -78,7 +72,7 @@ def test_the_fallback_solves_each_matrix_and_leaves_the_others_alone():
         columns = np.linalg.solve(np.stack([plain, unfed]), np.stack([rhs, rhs])[..., np.newaxis])
     assert dropped == {1: 1} and columns.shape == (2, 3, 1)
     assert np.allclose(columns[..., 0], solutions)
-    # Outside it, numpy's own solve is back.
+    # Outside the context, numpy's own solve is restored.
     with pytest.raises(np.linalg.LinAlgError):
         np.linalg.solve(np.zeros((2, 2)), np.ones(2))
 
@@ -132,7 +126,7 @@ def test_a_synthesis_file_keeps_the_density_at_each_temperature(tmp_path, monkey
 def test_a_line_of_the_band_has_the_contribution_function_the_synthesis_gives_it():
     logT = np.linspace(5.8, 6.6, 9)
     logN = np.array([8.5, 9.5])
-    # In worker processes of their own, as a run works them out.
+    # In separate worker processes, as in a real run.
     band = band_contribution_functions((195.10, 195.13), logT, logN, elements=["Fe"],
                                        n_workers=2)
     (fe12,) = [ion for ion in band.ions if ion.name == "Fe 12"]
@@ -160,7 +154,7 @@ def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys
     band = band_contribution_functions((195.10, 195.13), np.linspace(5.8, 6.6, 9),
                                        np.array([9.0]), elements=["Fe"], n_workers=1)
     assert band.ions == []
-    # Worked out in this process, fiasco's warnings are back on after.
+    # With the work done in this process, fiasco's warnings are restored afterwards.
     assert logger.level == logging.INFO
     assert "Fe 12 (no such data)" in capsys.readouterr().out
 
@@ -187,7 +181,7 @@ def test_levels_dropped_on_both_sides_of_where_the_rates_stop_are_all_counted(mo
         temperature = ion.temperature.to_value(u.K)
         two_ion = kwargs.get("use_two_ion_model", True)
         if two_ion and temperature.max() >= end:
-            # A level left out before the rates run out, as a whole run would.
+            # A level dropped before the rates run out, as in a whole run.
             dropped[0] = 1
             raise ValueError("A value in x_new is above the interpolation range.")
         for k in range(temperature.size):

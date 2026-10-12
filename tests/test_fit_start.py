@@ -1,13 +1,4 @@
-"""Where a single-Gaussian fit starts, read from the spectrum so that the noise does not lead it.
-
-The background was the minimum, which sits below the background by the noise's
-largest excursion, the centre the brightest pixel, which a noisy pixel far from
-the line can be, and the width the span from the first to the last pixel above
-half maximum anywhere in the window, which noise far from the line stretched
-several times over. At a peak of a few times the noise the fits then ended
-hundreds of km/s away twice as often, and scattered twice as far, as from a
-good start.
-"""
+"""Starting values for a single-Gaussian fit that noise does not mislead."""
 import numpy as np
 import pytest
 
@@ -28,7 +19,7 @@ def test_a_clean_line_starts_at_its_centre_width_and_background():
 
 
 def test_a_single_bright_pixel_away_from_the_line_does_not_take_it():
-    """The brightest pixel was the start's centre, and a spike brighter than the line took it."""
+    """Starting at the brightest pixel would put the centre on a spike brighter than the line."""
     spectrum = gaussian(WV, 100.0, REST, SIGMA, BACK)
     spectrum[3] += 130.0
     _, centre, _, _ = _guess_params(WV, spectrum)
@@ -36,7 +27,7 @@ def test_a_single_bright_pixel_away_from_the_line_does_not_take_it():
 
 
 def test_noise_above_half_maximum_away_from_the_line_does_not_widen_it():
-    """Every pixel above half maximum counted, so one far from the line stretched the width."""
+    """Counting every pixel above half maximum lets one far from the line stretch the width."""
     spectrum = gaussian(WV, 100.0, REST, SIGMA, BACK)
     spectrum[28] += 60.0
     _, _, sigma, _ = _guess_params(WV, spectrum)
@@ -50,7 +41,7 @@ def test_a_spectrum_with_nothing_above_its_background_starts_as_before():
 
 
 def test_at_a_peak_of_three_times_the_noise_no_fit_ends_far_away():
-    """From the old start, 1 per cent ended more than 300 km/s away, and the rest scattered 37 km/s."""
+    """From a simple start, 1 per cent ended over 300 km/s away; the rest scattered 37 km/s."""
     rng = np.random.default_rng(7)
     spectra = gaussian(WV, 30.0, REST, SIGMA, BACK) + 10.0 * rng.standard_normal((500, WV.size))
     fits = [_fit_one(WV, spectrum) for spectrum in spectra]

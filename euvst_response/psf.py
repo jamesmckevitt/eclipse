@@ -1,5 +1,5 @@
 """
-PSF handling functions for telescope and detector point spread functions.
+Telescope and detector point spread functions (PSFs).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def _resample_psf(psf: np.ndarray, res_in: u.Quantity, res_out: u.Quantity) -> n
 
 
 def _combine_psfs(psf_focus: np.ndarray, psf_mesh: np.ndarray, crop: float = 0.99, size: int | None = None) -> np.ndarray:
-    """Convolve focus and mesh PSF and crop to given energy or size."""
+    """Convolve the focus and mesh PSFs and crop to an energy fraction or size."""
     psf = convolve2d(psf_focus, psf_mesh, mode="same")
     if size is not None:
         if size % 2 == 0:

@@ -1,9 +1,9 @@
 """
 Science cases from the Concept Study Report, and ECLIPSE configurations for them.
 
-``data/science_cases.yaml`` holds every case with every line.  The functions
+`data/science_cases.yaml` holds every case with all its lines. The functions
 here turn the lines ECLIPSE can currently simulate into uniform-intensity
-configurations, and the ``eclipse-science-cases`` command writes them to files.
+configurations, and the `eclipse-science-cases` command writes them to files.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ import yaml
 from .config import Telescope_EUVST, _load_throughput_table
 from .utils import element_data, load_yaml_config
 
-# What every configuration gets unless the base settings say otherwise: the
-# settings the cases were run with for the NASA PDR analysis.
+# Defaults for every configuration unless the base settings override them:
+# the settings the cases were run with for the NASA PDR analysis.
 DEFAULT_SETTINGS = {
     "n_iter": 512,
     "ncpu": -1,
@@ -38,12 +38,12 @@ DEFAULT_SETTINGS = {
 _LINE_KEYS = ("instrument", "uniform_intensity", "rest_wavelength",
               "thermal_width", "synthesis_file", "reference_line")
 
-# Keys of a time series, which a configuration observing one line's intensity
-# cannot have.
+# Time-series keys, not allowed in a configuration observing one line's
+# intensity.
 _SERIES_KEYS = ("atmosphere_series", "synthesis_series", "raster", "synthesis")
 
 # Two table entries for the same line can be written to different precision,
-# e.g. 195.119 and 195.12, so a wavelength picks lines within this.
+# e.g. 195.119 and 195.12, so a wavelength matches lines within this.
 _WAVELENGTH_MATCH = 0.01 * u.AA
 
 _ROMAN = {numeral: value for value, numeral in enumerate(
@@ -53,14 +53,14 @@ _ROMAN = {numeral: value for value, numeral in enumerate(
 
 @dataclass
 class ScienceCaseConfig:
-    """The ECLIPSE configuration for one line of one science case."""
+    """ECLIPSE configuration for one line of one science case."""
     name: str
     case: dict
     line: dict
     config: dict
 
     def to_yaml(self) -> str:
-        """The configuration as a file, with a header saying where it came from."""
+        """Configuration as YAML text, with a header giving its source."""
         header = (
             f"# Science case {self.case['task']} ({self.case['name']}): "
             f"{self.case['description']}\n"
@@ -80,7 +80,7 @@ def load_science_cases(path: str | Path | None = None) -> list[dict]:
     Parameters
     ----------
     path : str or Path, optional
-        A table to read instead of the one ECLIPSE includes.
+        Table to read instead of the one included with ECLIPSE.
 
     Returns
     -------
@@ -95,19 +95,19 @@ def load_science_cases(path: str | Path | None = None) -> list[dict]:
 
 
 def line_label(line: dict) -> str:
-    """A line as written in the table, e.g. ``Fe XII 195.119``."""
+    """A line as written in the table, e.g. `Fe XII 195.119`."""
     return f"{line['ion']} {line['wavelength'].split()[0]}"
 
 
 def line_id(line: dict) -> str:
-    """A line as used in file names, e.g. ``fe12_195119``."""
+    """A line as used in file names, e.g. `fe12_195119`."""
     symbol, numeral = line["ion"].split()
     wavelength = u.Quantity(line["wavelength"]).to_value(u.AA)
     return f"{symbol.lower()}{_ROMAN[numeral]:02d}_{wavelength:.3f}".replace(".", "")
 
 
 def thermal_width(line: dict) -> u.Quantity:
-    """The 1-sigma thermal velocity, sqrt(k T / m), at the line's T_max."""
+    """1-sigma thermal velocity, sqrt(k T / m), at the line's T_max."""
     mass = element_data(line["ion"].split()[0])[1] * const.u
     temperature = 10.0 ** float(line["log_t_max"]) * u.K
     return np.sqrt(const.k_B * temperature / mass).to(u.km / u.s)
@@ -116,10 +116,10 @@ def thermal_width(line: dict) -> u.Quantity:
 @lru_cache(maxsize=None)
 def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
     """
-    The wavelengths ECLIPSE can simulate in the short wavelength channel.
+    Wavelength range ECLIPSE can simulate in the short wavelength channel.
 
-    Where both the primary mirror and the grating efficiency tables have
-    values, since the effective area is undefined outside them.
+    This is where both the primary mirror and grating efficiency tables have
+    values; the effective area is undefined outside them.
     """
     telescope = Telescope_EUVST()
     tables = [_load_throughput_table(table)[0]
@@ -129,13 +129,13 @@ def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
 
 
 def instrument_for(line: dict) -> str | None:
-    """The ECLIPSE instrument that can simulate *line*, or None if there is none yet."""
+    """ECLIPSE instrument that can simulate `line`, or None if there is none yet."""
     low, high = short_wavelength_range()
     return "SWC" if low <= u.Quantity(line["wavelength"]) <= high else None
 
 
 def _line_matches(line: dict, selector: str) -> bool:
-    """Whether *selector*, an ion or an ion and a wavelength, picks *line*."""
+    """Whether `selector`, an ion or an ion and wavelength, matches `line`."""
     tokens = selector.split()
     if len(tokens) not in (2, 3):
         raise ValueError(
@@ -167,7 +167,7 @@ def _select_cases(table: list[dict], selectors: list[str] | None) -> list[dict]:
 
 def _chosen_lines(table: list[dict], cases: list[str] | None,
                   lines: list[str] | None) -> list[tuple[dict, dict]]:
-    """The chosen ``(case, line)`` pairs, refusing a line choice that matches none."""
+    """Chosen `(case, line)` pairs; a line selector that matches none raises ValueError."""
     chosen, matched = [], set()
     for case in _select_cases(table, cases):
         for line in case["lines"]:
@@ -186,8 +186,8 @@ def _chosen_lines(table: list[dict], cases: list[str] | None,
 def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     """One line's configuration: defaults, then the case, then the base settings."""
     value, unit = line["intensity"].split(maxsplit=1)
-    # In decimal, so the configuration has every digit of the table and no
-    # binary rounding, e.g. 823 x 0.2 is 164.6, not 164.60000000000002.
+    # Decimal keeps every digit of the table without binary rounding,
+    # e.g. 823 x 0.2 is 164.6, not 164.60000000000002.
     intensity = Decimal(value) * Decimal(str(case["filling_factor"]))
 
     settings = {**DEFAULT_SETTINGS, **base}
@@ -204,8 +204,8 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     }
     config.update({k: v for k, v in settings.items()
                    if isinstance(v, dict) and k != "simulation"})
-    # Its own copy of every list and section, which the defaults and the
-    # other configurations would otherwise share with it.
+    # Deep copy, so no list or section is shared with the defaults or the
+    # other configurations.
     return copy.deepcopy(config)
 
 
@@ -224,27 +224,26 @@ def science_case_configs(cases: list[str] | None = None,
     Parameters
     ----------
     cases : list of str, optional
-        Cases to include, by task (``I-1-1``) or name
-        (``1.1.1-nanoflares_events``).  Default: every case.
+        Cases to include, by task (`I-1-1`) or name
+        (`1.1.1-nanoflares_events`). Default: every case.
     lines : list of str, optional
-        Lines to include, by ion (``Fe XII``) or by ion and wavelength in
-        Angstrom (``Fe XII 195.119``, matched to 0.01 Angstrom).  Default:
+        Lines to include, by ion (`Fe XII`) or by ion and wavelength in
+        Angstrom (`Fe XII 195.119`, matched to 0.01 Angstrom). Default:
         every line.
     base : dict, optional
-        Settings for every configuration, as in a configuration file.  They
-        replace the defaults (512 iterations on every CPU, the PSF on, and
-        off-chip binning of 1 and 2) and, where they set them, the case's
-        exposure time and slit width.  They cannot set the instrument or the
-        line.
+        Settings for every configuration, as in a configuration file. These
+        override the defaults (512 iterations on every CPU, PSF on, off-chip
+        binning of 1 and 2) and, where given, the case's exposure time and
+        slit width. They cannot set the instrument or the line.
     table : list of dict, optional
-        Science cases to use instead of the table ECLIPSE includes.
+        Science cases to use instead of the table included with ECLIPSE.
 
     Returns
     -------
     configs : list of ScienceCaseConfig
         One per chosen line that ECLIPSE can simulate.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet, as ``<task> <line>``.
+        Chosen lines ECLIPSE cannot simulate yet, as `<task> <line>`.
     """
     from .main import _require_mapping, _validate_config_keys
 
@@ -263,8 +262,8 @@ def science_case_configs(cases: list[str] | None = None,
                 f"observes its line's intensity, not a time series."
             )
 
-    # Merged with each case's settings, so it is checked here; the other
-    # sections are checked with the whole configuration.
+    # The simulation section is merged with each case's settings, so check it
+    # here; the other sections are checked with the whole configuration.
     if "simulation" in base:
         _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 
@@ -289,15 +288,15 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
     Parameters
     ----------
     out_dir : str or Path
-        Folder to write to.  Each file is named after its case and line, so
-        the results are too.
+        Folder to write to. Each file is named after its case and line, and
+        so are the results of running it.
     **kwargs
         Passed to :func:`science_case_configs`.
 
     Returns
     -------
     paths : list of Path
-        The files written.
+        Files written.
     skipped : list of str
         Chosen lines ECLIPSE cannot simulate yet.
     """
@@ -313,7 +312,7 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Command line entry point for ``eclipse-science-cases``."""
+    """Command line entry point for `eclipse-science-cases`."""
     parser = argparse.ArgumentParser(
         prog="eclipse-science-cases",
         description="Write ECLIPSE configurations for the science cases in "

@@ -1,8 +1,5 @@
 """
 Result analysis functions for ECLIPSE instrument response simulations.
-
-This module provides functions for loading, analyzing, and visualizing
-instrument response simulation results.
 """
 
 import warnings
@@ -27,11 +24,10 @@ from .utils import has_wrong_velocity_sign
 
 def _to_canonical_scalar(val):
     """
-    Convert a value to a canonical scalar for parameter comparison.
+    Value as a plain scalar, for comparing parameters.
 
-    Quantities are reduced to their SI value so comparisons are unit-agnostic
-    (e.g. ``40 * u.s`` and ``40000 * u.ms`` both give ``40.0``).
-    Offset-unit quantities (e.g. Celsius) are converted to Kelvin first.
+    Quantities become their SI value, so `40 * u.s` and `40000 * u.ms` both
+    give 40.0. Offset units such as Celsius are converted to Kelvin first.
     """
     if not hasattr(val, "unit"):
         return val
@@ -48,27 +44,27 @@ def load_instrument_response_results(filepath: str | Path,
                                      allow_wrong_velocity_sign: bool = False,
                                      ) -> Dict[str, Any]:
     """
-    Read a results file that `eclipse` wrote.
+    Read a results file written by `eclipse`.
 
     Parameters
     ----------
     filepath : str or Path
-        The results file, ``run/result/<config name>.h5``. A results pickle
-        from ECLIPSE 0.11.0 and earlier is read too, with a warning, and a
-        ``.pkl`` name that no longer exists reads the ``.h5`` beside it.
-        Reading a pickle runs whatever code it holds, so only read pickles
-        you trust.
+        Results file, `run/result/<config name>.h5`. Results pickles from
+        ECLIPSE 0.11.0 and earlier are also read, with a warning, and a
+        `.pkl` name that no longer exists reads the `.h5` file beside it.
+        Reading a pickle runs any code it holds, so only read pickles you
+        trust.
     allow_wrong_velocity_sign : bool, optional
-        Read, with a warning instead of an error, results made from a
-        synthesis that an older ECLIPSE wrote for a view along x or z, under
-        the older velocity convention. Their velocities are opposite in sign
-        to this version's. Default False.
+        Warn instead of raising for results made from a synthesis that an
+        older ECLIPSE wrote, under the older velocity convention, for a view
+        along x or z. Their velocities have the opposite sign to this
+        version's. Default False.
 
     Returns
     -------
     dict
-        The results. ``results["results"]["all_combinations"]`` holds each
-        combination's; `get_results_for_combination` picks one out.
+        Results. `results["results"]["all_combinations"]` holds those of
+        each combination, and `get_results_for_combination` picks one out.
     """
     data = load_results(filepath, _stacklevel=3)
     # An old pickle can hold anything.
@@ -76,8 +72,8 @@ def load_instrument_response_results(filepath: str | Path,
         raise ValueError(f"{filepath} does not hold the results of an instrument simulation.")
 
     # Refuse results made from synthesis files written under the older
-    # velocity convention, for the views whose sign it changed.  Uniform
-    # intensity runs have no synthesis file and no velocities, so they are
+    # velocity convention, for the views whose sign it changed. Uniform
+    # intensity runs have no synthesis file and no velocities, so are
     # unaffected.
     cube_sim = data.get("cube_sim")
     if cube_sim is not None and has_wrong_velocity_sign(cube_sim.meta):
@@ -98,17 +94,16 @@ def load_instrument_response_results(filepath: str | Path,
             )
         warnings.warn(message, stacklevel=2)
 
-    # A file that is not what the simulation writes is refused naming the
-    # file. A signal's unit has to be a unit, as two arrays could multiply to
-    # far more than either, and a signal the file holds once is multiplied
-    # once, however many combinations share it.
+    # A malformed file is refused with an error naming it. A signal's unit
+    # must be a unit, since two arrays could multiply to far more than
+    # either. A signal shared by several combinations is multiplied once.
     signals = {}
     try:
         combinations = data["results"]["all_combinations"]
         for param_key, combination_results in tqdm(combinations.items(), desc="Reconstructing results", leave=False):
             # Refuse files written before the cube axis order changed (issue
-            # #12).  Those store signals as (x, y, wavelength) with an HPLT-first
-            # WCS; the maps made from one here would come out transposed.
+            # #12). They store signals as (x, y, wavelength) with an HPLT-first
+            # WCS, so their maps would come out transposed.
             wcs_ctype = combination_results["first_signal_wcs"].wcs.ctype
             if str(wcs_ctype[1]).startswith("HPLT"):
                 raise ValueError(
@@ -137,18 +132,18 @@ def load_instrument_response_results(filepath: str | Path,
 
 def get_parameter_combinations(results: Dict[str, Any]) -> List[Dict]:
     """
-    The settings of every combination the run simulated.
+    Settings of every simulated combination.
 
     Parameters
     ----------
     results : dict
-        The results, as `load_instrument_response_results` reads them.
+        Results from `load_instrument_response_results`.
 
     Returns
     -------
     list of dict
-        One dict for each combination, of its settings by section and key,
-        such as ``"simulation.expos"``.
+        One dict per combination, of its settings keyed by section and key,
+        such as `"simulation.expos"`.
     """
     return [combo["parameters"] for combo in results["results"]["all_combinations"].values()]
 
@@ -163,7 +158,7 @@ _UNNAMED_FITS = (
 
 
 def _get_fit_stats(combination_results: Dict[str, Any], data_type: str) -> Dict[str, Any]:
-    """The fit statistics of one signal, or a clear error if there are none."""
+    """Fit statistics of one signal; raises ValueError if there are none."""
     fit_stats_key = f"{data_type}_fit_stats"
     if fit_stats_key not in combination_results:
         raise ValueError(f"No {fit_stats_key} found in combination results")
@@ -179,21 +174,20 @@ def _get_fit_stats(combination_results: Dict[str, Any], data_type: str) -> Dict[
 def list_fit_components(combination_results: Dict[str, Any],
                         data_type: str = "dn") -> List[str]:
     """
-    The names of the fitted components, in the order they were fitted.
+    Names of the fitted components, in the order they were fitted.
 
     Parameters
     ----------
     combination_results : dict
-        One combination's results, as `get_results_for_combination` gives
-        them.
+        Results of one combination, from `get_results_for_combination`.
     data_type : str, optional
-        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
-        ``"photon"``.
+        Fits to use: `"dn"` for the signal in DN (default), or `"photon"`
+        for the photons.
 
     Returns
     -------
     list of str
-        The names, to give as ``component`` to `analyse_fit_statistics` and
+        Names to pass as `component` to `analyse_fit_statistics` and
         `create_sunpy_maps_from_combo`.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
@@ -210,45 +204,42 @@ def analyse_fit_statistics(
     component: str | None = None,
 ) -> Dict[str, Any]:
     """
-    How precisely one fitted line's velocity, width and intensity were measured, pixel by pixel.
+    Per-pixel precision of one fitted line's velocity, width and intensity.
 
     Parameters
     ----------
     combination_results : dict
-        One combination's results, as `get_results_for_combination` gives
-        them.
+        Results of one combination, from `get_results_for_combination`.
     rest_wavelength : u.Quantity, optional
-        The rest wavelength velocities are measured from. Results files keep
-        each component's own, so this is only needed for files from before
-        the components were kept by name. If given, it must match.
+        Rest wavelength the velocities are measured from. Results files store
+        each component's own, so this is only needed for files written
+        before components were stored by name. If given, it must match.
     data_type : str, optional
-        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
-        ``"photon"``.
+        Fits to use: `"dn"` for the signal in DN (default), or `"photon"`
+        for the photons.
     fit_config : FitConfig, optional
-        Only needed for files from before the components were kept by name.
+        Only needed for files written before components were stored by name.
     component : str, optional
-        The component, by a name from `list_fit_components`. Default the
-        primary component.
+        Component name, from `list_fit_components`. Default the primary
+        component.
 
     Returns
     -------
     dict
-        Mostly maps, with one value per pixel. ``v_first``, ``w_first`` and
-        ``i_first``:
-        the velocity, width and intensity of the first Monte Carlo iteration.
-        ``v_mean``, ``w_mean`` and ``i_mean``: their means over the
-        iterations. ``v_std``, ``w_std`` and ``i_std``: their standard
-        deviations. ``v_true`` and ``w_true``: the true velocity and width.
-        ``v_err``: the true velocity minus the mean. ``failed_fits`` and
-        ``n_iterations``: the number of fits that failed, and of iterations.
-        The width is the Gaussian's sigma, and the intensity the fitted
-        line's counts. ``component``, ``rest_wavelength`` and ``tied`` name
-        the component, give its rest wavelength and say what it is tied to.
-        ``fit_stats``, ``fit_truth_data`` and ``fit_truth_units`` are the fit
-        statistics and the fit to the truth as the results hold them. Files
-        from before the components were kept by name give only ``v_first``,
-        ``v_mean``, ``v_std``, ``v_true``, ``v_err``, ``w_first``, ``w_mean``,
-        ``w_std``, ``fit_stats``, ``fit_truth_data`` and ``fit_truth_units``.
+        Mostly maps, with one value per pixel. `v_first`, `w_first` and
+        `i_first`: velocity, width and intensity from the first Monte Carlo
+        iteration. `v_mean`, `w_mean` and `i_mean`: their means over the
+        iterations. `v_std`, `w_std` and `i_std`: their standard deviations.
+        `v_true` and `w_true`: true velocity and width. `v_err`: true
+        velocity minus the mean. `failed_fits` and `n_iterations`: number of
+        failed fits, and of iterations. `component`, `rest_wavelength` and
+        `tied`: component name, its rest wavelength and what it is tied to.
+        `fit_stats`, `fit_truth_data` and `fit_truth_units`: fit statistics
+        and fit to the truth, as stored in the results. The width is the
+        Gaussian sigma and the intensity the fitted line's counts. Files
+        written before components were stored by name give only `v_first`,
+        `v_mean`, `v_std`, `v_true`, `v_err`, `w_first`, `w_mean`, `w_std`,
+        `fit_stats`, `fit_truth_data` and `fit_truth_units`.
     """
     fit_stats = _get_fit_stats(combination_results, data_type)
     ground_truth = combination_results["ground_truth"]
@@ -362,14 +353,15 @@ def analyse_fit_statistics(
 
 def _same_parameter(name: str, asked, stored) -> bool:
     """
-    Whether *asked* is the value of parameter *name* that a combination was run with, *stored*.
+    Whether the value `asked` for parameter `name` matches the `stored` one.
 
-    Compared in the stored value's own unit, to a part in 1e9 of its size:
-    compared in SI to 1e-8 of at least one, every length under 10 nm, a
-    microroughness or a thickness, was the same as every other. A quantity
-    of another kind is refused rather than matched, as 5 m matched 5 s, and
-    so is one with a unit for a setting run as a number without one. A
-    number with no unit is compared with the stored value in SI, as before.
+    Quantities are compared in the stored value's unit, to a part in 1e9.
+    Compared in SI to 1e-8 of at least one, every length under 10 nm, such
+    as a microroughness or a thickness, would equal every other. A quantity
+    of a different kind raises ValueError rather than matching (5 m would
+    otherwise match 5 s), as does a quantity with a unit for a setting run
+    as a plain number. A number with no unit is compared with the stored
+    value in SI.
     """
     numbers = (int, float, np.integer, np.floating)
     if isinstance(asked, u.Quantity) and isinstance(stored, (bool, np.bool_)):
@@ -396,11 +388,10 @@ def _same_parameter(name: str, asked, stored) -> bool:
 
 def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     """
-    Pick out one combination's results, by its settings.
+    Results of one combination, selected by its settings.
 
-    Settings are named by their section and key, as `summary_table` prints
-    them. Python keyword arguments can't have a dot in them, so give them as
-    a dictionary:
+    Settings are named by section and key, as `summary_table` prints them.
+    Keyword arguments cannot contain a dot, so pass them as a dictionary:
 
         get_results_for_combination(results, **{"simulation.expos": 40 * u.s,
                                                  "simulation.slit_width": 0.2 * u.arcsec})
@@ -408,15 +399,15 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
     Parameters
     ----------
     results : dict
-        The results, as `load_instrument_response_results` reads them.
+        Results from `load_instrument_response_results`.
     **kwargs
-        The settings to match, with their units where they have them. With a
-        single combination, none are needed.
+        Settings to match, with units where they have them. Not needed if
+        there is only one combination.
 
     Returns
     -------
     dict
-        The combination's results.
+        Results of the matching combination.
 
     Raises
     ------
@@ -460,18 +451,18 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     """
     Deprecated: no version of ECLIPSE wrote the DEM into the results.
 
-    The DEM and the emission measure are in the synthesis file. Read them
-    with ``read_synthesis_products(path, keys=["dem_map", "em_tv"])``.
+    The DEM and emission measure are in the synthesis file. Read them with
+    `read_synthesis_products(path, keys=["dem_map", "em_tv"])`.
 
     Parameters
     ----------
     results : dict
-        The results, as `load_instrument_response_results` reads them.
+        Results from `load_instrument_response_results`.
 
     Raises
     ------
     KeyError
-        If the results hold no DEM, as results from `eclipse` never do.
+        If the results hold no DEM; results from `eclipse` never do.
     """
     warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
                   "release: no released version wrote DEM data into the results. The DEM is "
@@ -490,16 +481,16 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 def summary_table(results: Dict[str, Any]) -> None:
     """
-    Print what the results hold.
+    Print a summary of the results.
 
-    It prints the version of ECLIPSE and the git commit that made the
-    results, the settings of every combination, which settings were swept,
-    and the names of the fitted components.
+    Prints the ECLIPSE version and git commit that made the results, the
+    settings of every combination, the swept settings and the names of the
+    fitted components.
 
     Parameters
     ----------
     results : dict
-        The results, as `load_instrument_response_results` reads them.
+        Results from `load_instrument_response_results`.
     """
     all_combinations = results["results"]["all_combinations"]
 
@@ -561,11 +552,11 @@ def summary_table(results: Dict[str, Any]) -> None:
 
 def _utc_date(value, what: str) -> str:
     """
-    *value* as an ISO date and time in UTC, which sunpy reads.
+    `value` as an ISO date and time in UTC, a form sunpy can read.
 
-    A date with an offset, as YAML gives an unquoted time ending in Z, was
-    written as it came; sunpy could not read it and stamped the maps with
-    the time they were made instead, different on every call.
+    sunpy cannot read a date with an offset, such as YAML gives for an
+    unquoted time ending in Z, and would stamp the maps with the time they
+    were made instead, different on every call.
     """
     if isinstance(value, datetime):
         moment = value
@@ -585,25 +576,25 @@ def _utc_date(value, what: str) -> str:
 
 def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
     """
-    Settle on the observation date to write into the maps.
+    Observation date to write into the maps.
 
-    A synthetic scene has no intrinsic date, so there are only two honest
-    sources: one the caller gives, or the date an EIS run was calibrated
-    against, which is a real observing date the user already chose.  Without
-    either, sunpy would fall back to the current time, which makes the maps
-    different on every run and silently wrong to anything that uses the date.
+    A synthetic scene has no date of its own. The date is either given by
+    the caller or taken from the calibration date of an EIS run, a real
+    observing date the user chose. Without either, sunpy would use the
+    current time, making the maps differ on every run and silently wrong
+    for anything that uses the date.
 
     Parameters
     ----------
     combination_results : dict
         Results for one parameter combination.
     date_obs : str, datetime.datetime, datetime.date or None
-        The caller's date, if any.
+        Date given by the caller, if any.
 
     Returns
     -------
     str
-        An ISO-8601 date string for the ``DATE-OBS`` keyword.
+        ISO-8601 date string for the `DATE-OBS` keyword.
     """
     if date_obs is not None:
         return _utc_date(date_obs, "date_obs")
@@ -625,20 +616,20 @@ def _resolve_date_obs(combination_results: Dict[str, Any], date_obs) -> str:
 
 def _map_header(wcs_2d, date_obs: str, bunit: str):
     """
-    FITS header for one output map: the WCS, the unit, and the vantage point.
+    FITS header for one map: WCS, unit and observer position.
 
-    The observer keywords are not a guess.  The whole radiometric chain works
-    at exactly one astronomical unit (``photons_to_pixel_counts`` divides the
-    pixel area by ``const.au ** 2``), and the cubes are laid out about disc
-    centre, so that is the vantage point the data already describes.  Writing
-    it down stops sunpy assuming an Earth-based observer, which is close for a
-    low-Earth-orbit mission but is an assumption sunpy makes silently and
-    which no longer matches the data if the chain's distance ever changes.
+    The radiometric chain works at exactly one astronomical unit
+    (`photons_to_pixel_counts` divides the pixel area by `const.au ** 2`),
+    and the cubes are centred on disc centre, so that is the observer
+    position the data describe. Writing it in the header stops sunpy from
+    silently assuming an Earth-based observer. That is close for a
+    low-Earth-orbit mission, but would not match the data if the chain's
+    distance changed.
 
     Parameters
     ----------
     wcs_2d : astropy.wcs.WCS
-        The 2D celestial WCS for the map.
+        2D celestial WCS of the map.
     date_obs : str
         Observation date, from :func:`_resolve_date_obs`.
     bunit : str
@@ -651,11 +642,11 @@ def _map_header(wcs_2d, date_obs: str, bunit: str):
     header = wcs_2d.to_header()
     header["DATE-OBS"] = date_obs
     header["BUNIT"] = bunit
-    # Heliographic Stonyhurst position of the observer: on the Sun-disc-centre
-    # line, one au from the emitting surface, as the radiometric chain has
-    # it, so one au and a solar radius from the Sun's centre, which is what
-    # DSUN_OBS measures. Latitude and longitude are zero for the same reason
-    # the WCS reference is disc centre - ECLIPSE models no B0 angle.
+    # Observer in Heliographic Stonyhurst coordinates, on the line through
+    # disc centre. The radiometric chain puts it one au from the emitting
+    # surface, so DSUN_OBS, measured from the Sun's centre, is one au plus a
+    # solar radius. Latitude and longitude are zero, and the WCS reference
+    # is disc centre, because ECLIPSE models no B0 angle.
     header["HGLN_OBS"] = 0.0
     header["HGLT_OBS"] = 0.0
     header["DSUN_OBS"] = (const.au + const.R_sun).to_value(u.m)
@@ -680,49 +671,47 @@ def create_sunpy_maps_from_combo(
     Parameters
     ----------
     combination_results : dict
-        One combination's results, as `get_results_for_combination` gives
-        them.
+        Results of one combination, from `get_results_for_combination`.
     cube_reb : NDCube, optional
-        A cube whose coordinates to give the maps. Default the coordinates
-        kept in the results.
+        Cube whose coordinates the maps take. Default the coordinates stored
+        in the results.
     rest_wavelength : u.Quantity, optional
-        The rest wavelength velocities are measured from. Only needed for
-        files from before the components were kept by name. If given, it must
-        match.
+        Rest wavelength the velocities are measured from. Only needed for
+        files written before components were stored by name. If given, it
+        must match.
     data_type : str, optional
-        The fits to the signal in DN, ``"dn"`` (default), or to the photons,
-        ``"photon"``.
+        Fits to use: `"dn"` for the signal in DN (default), or `"photon"`
+        for the photons.
     precision_requirement : u.Quantity, optional
-        The velocity precision for the ``exposure_time`` map. Default 2 km/s.
+        Velocity precision for the `exposure_time` map. Default 2 km/s.
     exposure_time_results : list of dict, optional
-        The combinations at each exposure time. Given these, the maps include
-        ``exposure_time``: the shortest of those exposures at which each
-        pixel's velocity is measured to within ``precision_requirement``.
+        Combinations at each exposure time. If given, the maps include
+        `exposure_time`: the shortest of these exposures at which each
+        pixel's velocity is measured to within `precision_requirement`.
     fit_config : FitConfig, optional
-        Only needed for files from before the components were kept by name.
+        Only needed for files written before components were stored by name.
     date_obs : str or datetime, optional
-        The date to give the maps. A synthesised scene has no date of its
+        Observation date of the maps. A synthesised scene has no date of its
         own, so this is needed, except for an EIS run with a dated
         calibration, whose date is used.
     component : str, optional
-        The component to map, by a name from `list_fit_components`. Default
-        the primary component.
+        Component to map, by name from `list_fit_components`. Default the
+        primary component.
 
     Returns
     -------
     dict
-        The maps, by name. ``total_dn`` and ``total_photons``: the first
-        iteration's signal, summed over wavelength. ``velocity_from_fit``,
-        ``line_width_from_fit`` and ``intensity_from_fit``: the first
-        iteration's fit. ``velocity_mean``, ``line_width_mean`` and
-        ``intensity_mean``: the means over the iterations.
-        ``velocity_std``, ``line_width_std`` and ``intensity_std``: the
-        standard deviations. ``velocity_true`` and ``velocity_err``: the true
-        velocity, and the true velocity minus the mean. ``failed_fits``: the
-        number of fits that failed in each pixel. ``exposure_time``: the
-        shortest exposure to reach ``precision_requirement``, when
-        ``exposure_time_results`` is given. Files from before the components
-        were kept by name have no intensity maps and no ``failed_fits``.
+        Maps by name. `total_dn` and `total_photons`: first iteration's
+        signal, summed over wavelength. `velocity_from_fit`,
+        `line_width_from_fit` and `intensity_from_fit`: first iteration's
+        fit. `velocity_mean`, `line_width_mean` and `intensity_mean`: means
+        over the iterations. `velocity_std`, `line_width_std` and
+        `intensity_std`: standard deviations. `velocity_true` and
+        `velocity_err`: true velocity, and true velocity minus the mean.
+        `failed_fits`: number of failed fits in each pixel. `exposure_time`:
+        shortest exposure that reaches `precision_requirement`, if
+        `exposure_time_results` is given. Files written before components
+        were stored by name have no intensity maps and no `failed_fits`.
     """
     
     date_obs = _resolve_date_obs(combination_results, date_obs)
@@ -747,16 +736,15 @@ def create_sunpy_maps_from_combo(
     else:
         analysis_per_exp = None
     
-    # Extract 2D helioprojective WCS from the cube or stored signal WCS.
-    # The cubes are (ny, nx, nwave) against a (WAVE, HPLN, HPLT) WCS, so the
-    # celestial part is already in SunPy's (HPLN, HPLT) order and the data
-    # can go into the maps as it is.
+    # 2D helioprojective WCS from the cube or the stored signal WCS. The cubes
+    # are (ny, nx, nwave) with a (WAVE, HPLN, HPLT) WCS, so the celestial part
+    # is already in SunPy's (HPLN, HPLT) order and the data need no transpose.
     if cube_reb is not None:
         wcs_2d = cube_reb.wcs.celestial
     else:
         wcs_2d = combination_results["first_signal_wcs"].celestial
 
-    # Get the data arrays - now only first iteration is saved
+    # Get the data arrays; only the first iteration is saved
     first_photon_signal = combination_results["first_photon_signal"]  # Shape: (ny, nx, nwave)
     first_dn_signal = combination_results["first_dn_signal"]         # Shape: (ny, nx, nwave)
     maps = {}
@@ -809,17 +797,15 @@ def create_sunpy_maps_from_combo(
         shape = next(iter(analysis_per_exp.values()))["v_std"].shape
         best_exp = np.full(shape, np.nan)
 
-        # The shortest exposure time, in seconds, that meets the precision
-        # requirement in each pixel. It held the exposure's index instead,
-        # under a unit of seconds, so that a saved map, or one read without
-        # the colorbar helper, gave 0, 1, 2 for the exposures.
+        # Shortest exposure time, in seconds, that meets the precision
+        # requirement in each pixel.
         for s in exp_times:
             vstd = analysis_per_exp[s]["v_std"].to_value(u.km / u.s)
             msk = (vstd <= precision_requirement.to_value(u.km / u.s)) & np.isnan(best_exp)
             best_exp[msk] = s
 
-        # Pixels that don't meet the precision requirement even at the
-        # longest exposure need longer than any run: above the scale.
+        # Pixels that miss the requirement even at the longest exposure need
+        # longer than any run, so they go above the scale.
         best_exp[np.isnan(best_exp)] = np.inf
 
         # One colour per exposure time, each spanning halfway to the next.
@@ -878,19 +864,19 @@ def create_sunpy_maps_from_combo(
 
 def format_exposure_time_colorbar(map_obj, colorbar, precision_requirement: u.Quantity = 2.0 * u.km / u.s):
     """
-    Format the colorbar for an exposure time map with proper tick labels.
-    
+    Label the colorbar of an exposure time map with its exposure times.
+
     Parameters
     ----------
     map_obj : sunpy.map.Map
-        The exposure time map object (should have _exposure_times attribute).
+        Exposure time map, with an `_exposure_times` attribute.
     colorbar : matplotlib.colorbar.Colorbar
-        The colorbar object to format.
+        Colorbar to format.
     precision_requirement : u.Quantity, optional
-        Velocity precision requirement for the title (default: 2.0 km/s).
+        Velocity precision requirement for the colorbar label. Default 2.0 km/s.
     """
-    # A tick at each exposure time, in the middle of its colour, written as
-    # given, so that 0.25 s reads as 0.25.
+    # One tick per exposure time, in the middle of its colour, labelled as
+    # given so that 0.25 s reads as 0.25.
     tick_positions = list(map_obj._exposure_times)
     tick_labels = [f"{exp_time:g}" for exp_time in map_obj._exposure_times]
     

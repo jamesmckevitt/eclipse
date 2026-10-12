@@ -1,16 +1,9 @@
 """The uniform-intensity line is integrated across each detector pixel.
 
-create_uniform_intensity_cube evaluated the Gaussian at the pixel centres,
-with the line centred on one of them, and each pixel then stood for that value
-times the pixel width. That adds up to the line's intensity only when the line
-is more than about half a pixel wide (sigma). Several science case lines are
-narrower at their formation temperature: Fe IX 171.07 has a sigma of 0.35 SWC
-pixels and came out 19 per cent above its intensity, Fe VIII 185.21 at 0.30 pixels 35
-per cent.
-
-The expected photon count below is the radiometric equation written out from
-literal constants, as in test_radiometric_chain.py, so a failure means the
-pipeline moved rather than that two spellings of one helper disagree.
+Taken at pixel centres instead, lines narrower than about half a pixel come
+out too bright, such as Fe IX 171.07 (sigma 0.35 SWC pixels) by 19 per
+cent. The expected photon count is the radiometric equation with literal
+constants.
 """
 import astropy.units as u
 import numpy as np
@@ -36,10 +29,10 @@ WIDTHS = [3, 8, 15, 30, 60]  # km/s
 
 
 class FlatTelescope(Telescope_EUVST):
-    """The EUVST telescope with an effective area that does not change with wavelength.
+    """EUVST telescope with an effective area constant in wavelength.
 
-    So that the photon count of a line depends only on how much of it reaches
-    the detector, not on where the effective area curve bends.
+    The photon count of a line then depends only on how much of it reaches
+    the detector, not on the shape of the effective area curve.
     """
 
     def ea_and_throughput(self, wl0):
@@ -60,7 +53,7 @@ def _sigma_pixels(width):
 
 
 def _gaussian_between(sigma, lo, hi):
-    """The part of a unit Gaussian of this sigma between lo and hi, by numerical integration."""
+    """Integral of a unit Gaussian of width `sigma` from `lo` to `hi`, done numerically."""
     def gaussian(x):
         return np.exp(-0.5 * (x / sigma) ** 2) / (sigma * np.sqrt(2.0 * np.pi))
 
@@ -78,7 +71,7 @@ def test_the_pixels_add_up_to_the_line_intensity_whatever_its_width(width):
 
 @pytest.mark.parametrize("width", WIDTHS)
 def test_each_pixel_holds_the_gaussian_integrated_across_it(width):
-    """Pixel by pixel against a numerical integral, with the line on the middle pixel."""
+    """Compared pixel by pixel with a numerical integral, with the line on the middle pixel."""
     cube = _cube(width)
     n = cube.data.shape[-1]
     offsets = np.arange(n) - n // 2
@@ -120,7 +113,7 @@ def test_the_detector_receives_the_photons_the_radiometric_equation_gives(width,
 
 
 def test_a_grid_cut_short_holds_exactly_the_part_of_the_line_on_it():
-    """n_sigma_extent can put the ends of the grid inside the line, and the tails beyond are left out."""
+    """A small `n_sigma_extent` ends the grid inside the line, leaving out the tails beyond."""
     width = 60  # km/s, two pixels
     cube = create_uniform_intensity_cube(
         total_intensity=INTENSITY, rest_wavelength=REST,

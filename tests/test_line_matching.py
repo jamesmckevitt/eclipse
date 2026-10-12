@@ -1,12 +1,8 @@
-"""A line name is matched to the line at its wavelength, or failing one to the nearest observed line.
+"""A line name matches the line at its wavelength, or else the nearest observed line.
 
-CHIANTI lists theoretical wavelengths as well as observed ones, many of them
-for weak transitions within a few mA of strong lines, and matching a name to
-the nearest of all of them turned a name a little off the observed
-wavelength into a line up to 1e12 times fainter. A theoretical line named at
-its own wavelength is still synthesised. The first tests use a stand-in for
-fiasco with such lines; those against CHIANTI itself need fiasco's
-database, and are skipped without it.
+Matching the nearest of all CHIANTI's lines, theoretical ones included, can
+pick a line up to 1e12 times fainter. Tests against CHIANTI are skipped
+without its database.
 """
 import sys
 import types
@@ -27,8 +23,8 @@ GRID = {"nT": 3, "logT_min": 5.6, "logT_max": 6.4, "nN": 2, "logN_min": 9.0,
 # ---------------------------------------------------------------------------
 class _Transitions:
     """
-    A strong observed line and a weak theoretical one 1.5 mA from it, and two theoretical
-    transitions at one wavelength, the second the brighter.
+    A strong observed line, a weak theoretical one 1.5 mA away, and two
+    theoretical transitions at one wavelength, the second brighter.
     """
 
     def __init__(self, any_observed):
@@ -58,16 +54,15 @@ class _Ion:
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):
-    # The real fiasco is imported first, so that the logger it names after
-    # itself is its own. Made first by the synthesis, under the stand-in, it
-    # is a plain one, which the real fiasco fails to set up when a later test
-    # imports it.
+    # Import the real fiasco first so that it creates its own "fiasco" logger.
+    # Created by the synthesis under the stand-in, it would be a plain logger,
+    # which the real fiasco fails to set up when a later test imports it.
     import fiasco  # noqa: F401
     module = types.ModuleType("fiasco")
     module.Ion = _Ion
     (tmp_path / "chianti_dbase.h5").touch()
     module.defaults = {"hdf5_dbase_root": str(tmp_path / "chianti_dbase.h5")}
-    # The database is there, so the offer to build it asks nothing.
+    # The database exists, so there is no prompt to build it.
     util = types.ModuleType("fiasco.util")
     util.check_database = lambda hdf5_dbase_root, **kwargs: None
     module.util = util
@@ -95,7 +90,7 @@ def test_of_two_transitions_at_one_wavelength_the_brighter_is_taken(fake_fiasco)
 
 
 def test_a_name_off_every_line_gets_the_nearest_observed_with_a_warning(fake_fiasco):
-    """195.125 is nearer the theoretical 195.1205, as a literature wavelength off CHIANTI's can be."""
+    """195.125, like a literature wavelength off CHIANTI's, is nearer the theoretical 195.1205."""
     with pytest.warns(UserWarning, match="nearest line CHIANTI has observed .* 195.1190"):
         goft, _, _ = compute_goft_fiasco(["Fe12_195.125"], **GRID)
     assert goft["Fe12_195.125"]["transition"] == 0
@@ -127,7 +122,7 @@ def test_a_name_to_fewer_digits_gets_the_observed_line_it_names():
     short, _, _ = compute_goft_fiasco(["Fe09_177.59"], **GRID)
     exact, _, _ = compute_goft_fiasco(["Fe09_177.5920"], **GRID)
     assert np.array_equal(short["Fe09_177.59"]["g_tn"], exact["Fe09_177.5920"]["g_tn"])
-    # The line is synthesised where CHIANTI has it, whatever the name's digits.
+    # The line is synthesised at CHIANTI's wavelength, not the name's.
     assert short["Fe09_177.59"]["wl0"].to_value(u.AA) == pytest.approx(177.592)
 
 
@@ -142,7 +137,7 @@ def test_a_name_off_the_observed_wavelength_gets_it_with_a_warning():
 
 @chianti
 def test_a_theoretical_line_of_chianti_is_synthesised_where_it_is_named():
-    """Fe XII has a theoretical transition at 193.526, 2e-26 at its brightest, beside the observed 193.509."""
+    """Fe XII has a theoretical line at 193.526, at most 2e-26, beside the observed 193.509."""
     goft, _, _ = compute_goft_fiasco(["Fe12_193.526", "Fe12_195.12"], **GRID)
     assert goft["Fe12_193.526"]["wl0"].to_value(u.AA) == pytest.approx(193.526)
     assert goft["Fe12_195.12"]["wl0"].to_value(u.AA) == pytest.approx(195.119)

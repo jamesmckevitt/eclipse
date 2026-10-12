@@ -1,7 +1,7 @@
 """
 ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 
-This package provides tools for modeling the performance of the EUV spectrograph EUVST, on SOLAR-C.
+Tools for modeling the performance of EUVST, the EUV spectrograph on SOLAR-C.
 """
 
 __version__ = "0.12.1"
