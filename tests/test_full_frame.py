@@ -1,9 +1,4 @@
-"""A full-CCD frame of the SW camera, from a synthesis and every line in the band.
-
-The frame lays each line onto the rows as `frame.photons_from_lines` does,
-with each detector column seeing the emission measure under the slit at its
-place along it, and reads the frame out with its prescan and overscan.
-"""
+"""The full-CCD frame of the SW camera, from a synthesis and every line in the band."""
 import sys
 
 import astropy.constants as const
@@ -35,7 +30,7 @@ def _flat_goft(lines, **kwargs):
 
 @pytest.fixture(scope="module")
 def uniform_synthesis(tmp_path_factory):
-    """A uniform corona at 1 MK and 1e9 cm^-3, 6 arcsec along the slit, at rest."""
+    """Synthesis of a uniform corona at 1 MK and 1e9 cm^-3, 6 arcsec along the slit, at rest."""
     tmp_path = tmp_path_factory.mktemp("frame")
     nz, ny, nx = 4, 44, 6
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
@@ -63,7 +58,7 @@ def _one_line(products, logN=None, g_off_the_synthesis=None):
                    observed=np.array([True]), temperatures=np.arange(logT.size),
                    g=np.full((1, logN.size, logT.size), G0))
     if g_off_the_synthesis is not None:
-        # Densities the synthesis does not have get another G, which must not
+        # Densities the synthesis lacks get a different G, which must not
         # reach the frame.
         off = ~np.isin(np.round(logN, 6), np.round(products["logN_grid"], 6))
         ion.g[:, off, :] = g_off_the_synthesis
@@ -80,7 +75,7 @@ def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesi
     det, tel = Detector_SWC(), Telescope_EUVST()
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
-    # all of it at 1 MK and at rest.
+    # all at 1 MK and at rest.
     em = products["em_tv"][0, 0]                                     # (nT, nv)
     temperature = 10 ** products["logT_grid"]
     width = (REST * np.sqrt(const.k_B * temperature * u.K / (55.845 * const.u)) / const.c
@@ -92,7 +87,7 @@ def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesi
                            spectral_psf="quadrature" if psf else None).to_value(1 / u.s)
         for t in range(temperature.size) if em[t].sum() > 0)
     middle = focal_plane.n_columns // 2
-    # The far wings, where one integral gives 1e-20 and the other 0, aside.
+    # atol allows for the far wings, where one integral gives 1e-20 and the other 0.
     assert np.allclose(frame.rate["left"][:, middle], expected, rtol=1e-9,
                        atol=1e-12 * expected.max())
     assert expected.sum() > 0
@@ -191,7 +186,7 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
 
     products = read_synthesis_products(uniform_synthesis)
     det, tel = Detector_SWC(), Telescope_EUVST()
-    # A long exposure, so that the read-out's smear brings in little light.
+    # Long exposure, so the read-out smear adds little light.
     frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
                            noise=False, n_workers=1)
     focal_plane = FocalPlane_SWC.from_detector(det)
@@ -207,8 +202,8 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     psf, _ = _response(focal_plane, "left", None, tel, det, 0.2 * u.arcsec, "quadrature",
                        np.array([REST]))
     total = np.hypot(thermal, psf[0])
-    # The row three away gets the photons the blur brings from the line, the
-    # more of them from its nearer side: their mean wavelength is the line's,
+    # The row three away gets the photons the blur brings from the line,
+    # more of them from its nearer side. Their mean wavelength is the line's,
     # moved toward the row by the thermal share of the line's spread.
     a, b = (low - REST) / total, (high - REST) / total
     landed = REST + total * (norm.pdf(a) - norm.pdf(b)) / (norm.cdf(b) - norm.cdf(a))
@@ -217,9 +212,9 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     assert frame.wavelength["left"][row].to_value(u.AA) == pytest.approx((low + high) / 2)
     assert reaching == pytest.approx(expected, abs=0.01 * abs(expected - REST))
     assert abs(reaching - REST) < 0.5 * abs((low + high) / 2 - REST)
-    # Their wavelengths spread by the thermal share of the blur's, and by
-    # how the place they land in the row moves their mean, which is what
-    # the root mean square energy gives, beside the mean energy.
+    # The root mean square energy gives the spread of their wavelengths: the
+    # thermal share of the blur's spread, plus how the place they land in
+    # the row moves their mean.
     z = norm.cdf(b) - norm.cdf(a)
     landing = total**2 * (1 + (a * norm.pdf(a) - b * norm.pdf(b)) / z
                           - ((norm.pdf(a) - norm.pdf(b)) / z) ** 2)
