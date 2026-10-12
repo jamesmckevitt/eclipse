@@ -237,10 +237,8 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     scale = np.max(mean, initial=0.0, where=np.isfinite(mean))
     scale = scale if scale > 0 else 1.0
     moved = carry(photons)
-    energy = carry(np.divide(photons * scale, mean, out=np.zeros(photons.shape),
-                             where=mean > 0))
-    square = carry(np.divide(photons * scale**2, rms**2, out=np.zeros(photons.shape),
-                             where=rms > 0))
+    energy = carry(photons * np.divide(scale, mean, out=np.zeros(photons.shape), where=mean > 0))
+    square = carry(photons * np.divide(scale, rms, out=np.zeros(photons.shape), where=rms > 0)**2)
     empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
     tiny = np.finfo(float).tiny
     with_mean = (moved >= tiny) & (energy >= tiny)

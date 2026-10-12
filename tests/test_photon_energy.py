@@ -67,17 +67,18 @@ def test_a_pixel_whose_photons_vanish_keeps_its_own_wavelength():
     from euvst_response.sampling import _carry_photon_wavelengths
 
     wavelength = 1.95e-6  # cm
-    photons = np.array([[1.0, 1e-322, 1e-310]])
+    # Photons just above the smallest normal float keep their wavelength.
+    photons = np.array([[1.0, 1e-322, 1e-310, 1.1 * np.finfo(float).tiny]])
 
     def carry(cells):
-        return cells * np.array([1.0, 0.01, 1.0])
+        return cells * np.array([1.0, 0.01, 1.0, 1.0])
 
-    own = np.array([1.9e-6, 2e-6, 2.1e-6])
+    own = np.array([1.9e-6, 2e-6, 2.1e-6, 2.2e-6])
     moved, mean, rms = _carry_photon_wavelengths(carry, photons, wavelength, wavelength, own)
     assert moved[0, 1] == 0.0 and 0.0 < moved[0, 2] < np.finfo(float).tiny
-    assert mean[0, 0] == pytest.approx(wavelength, rel=1e-15)
-    assert rms[0, 0] == pytest.approx(wavelength, rel=1e-15)
-    assert list(mean[0, 1:]) == list(own[1:]) and list(rms[0, 1:]) == list(own[1:])
+    assert mean[0, [0, 3]] == pytest.approx(wavelength, rel=1e-15)
+    assert rms[0, [0, 3]] == pytest.approx(wavelength, rel=1e-15)
+    assert list(mean[0, 1:3]) == list(own[1:3]) and list(rms[0, 1:3]) == list(own[1:3])
 
 
 def test_a_blur_can_differ_from_cell_to_cell_and_be_none():
