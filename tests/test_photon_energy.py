@@ -57,6 +57,29 @@ def test_a_pixel_holds_its_cells_photons_and_the_wavelengths_of_their_mean_and_r
     assert np.isnan(mean[1]) and np.isnan(rms[1])
 
 
+def test_a_pixel_whose_photons_vanish_keeps_its_own_wavelength():
+    """
+    In a line's far wings the photons can round to zero, or to below the
+    smallest normal float, where the photons over their wavelengths, in cm,
+    do not. Such pixels keep their own wavelength, not 0 or a ratio of
+    rounding errors.
+    """
+    from euvst_response.sampling import _carry_photon_wavelengths
+
+    wavelength = 1.95e-6  # cm
+    photons = np.array([[1.0, 1e-322, 1e-310]])
+
+    def carry(cells):
+        return cells * np.array([1.0, 0.01, 1.0])
+
+    own = np.array([1.9e-6, 2e-6, 2.1e-6])
+    moved, mean, rms = _carry_photon_wavelengths(carry, photons, wavelength, wavelength, own)
+    assert moved[0, 1] == 0.0 and 0.0 < moved[0, 2] < np.finfo(float).tiny
+    assert mean[0, 0] == pytest.approx(wavelength, rel=1e-15)
+    assert rms[0, 0] == pytest.approx(wavelength, rel=1e-15)
+    assert list(mean[0, 1:]) == list(own[1:]) and list(rms[0, 1:]) == list(own[1:])
+
+
 def test_a_blur_can_differ_from_cell_to_cell_and_be_none():
     edges = np.linspace(0.0, 10.0, 41)
     share = light_onto_pixels([4.0, 6.0], [4.1, 6.1], edges, sigma=[0.0, 0.3],
