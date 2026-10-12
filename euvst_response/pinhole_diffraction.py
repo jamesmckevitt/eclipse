@@ -188,6 +188,49 @@ def calculate_pinhole_diffraction_pattern(
     return pattern
 
 
+def _pinholes_on(sim) -> bool:
+    """Whether *sim* has pinholes that do anything."""
+    return bool(sim.enable_pinholes and len(sim.pinhole_sizes) > 0)
+
+
+def _filter_transmission(tel, wavelength: u.Quantity) -> np.ndarray:
+    """
+    The share of the EUV the filter passes at each of *wavelength*, for the
+    pinholes, which work out the light it blocks from the light it passes:
+    where it passes none, that is lost, so a filter that passes none at a
+    wavelength its tables reach is refused.
+    """
+    wavelength = u.Quantity(wavelength)
+    passed = tel.filter.total_throughput(wavelength).to_value(u.dimensionless_unscaled)
+    opaque = np.isfinite(passed) & (passed <= 0)
+    if opaque.any():
+        where = np.broadcast_to(wavelength, passed.shape, subok=True)[opaque].to(u.AA)
+        raise ValueError(
+            f"The filter passes no EUV from {where.min():.3f} to {where.max():.3f}, so the "
+            f"light the pinholes let through there cannot be worked out from the light it "
+            f"passes. Model the pinholes with a filter that passes some EUV at every "
+            f"wavelength.")
+    return passed
+
+
+def _with_filter_transmission(photon_counts: NDCube, tel) -> NDCube:
+    """
+    *photon_counts*, photons counted at each pixel's own wavelength, with the
+    share of their light the filter passed there, and the light it blocked
+    at the same wavelength, in its ``meta``, as
+    :func:`apply_euv_pinhole_diffraction` takes them.
+    """
+    meta = dict(photon_counts.meta or {})
+    own = photon_counts.axis_world_coords_values(2)[0]
+    shape = photon_counts.data.shape
+    meta["photon_filter_transmission"] = np.broadcast_to(_filter_transmission(tel, own), shape)
+    meta["blocked_photon_wavelength"] = meta.get("photon_wavelength",
+                                                 np.broadcast_to(own, shape, subok=True))
+    meta["blocked_photon_rms_wavelength"] = meta.get("photon_rms_wavelength",
+                                                     meta["blocked_photon_wavelength"])
+    return NDCube(photon_counts.data, wcs=photon_counts.wcs, unit=photon_counts.unit, meta=meta)
+
+
 def apply_euv_pinhole_diffraction(
     photon_counts: NDCube,
     det,
@@ -202,6 +245,15 @@ def apply_euv_pinhole_diffraction(
     is behind the mirror and the grating, so this comes after the PSF. It
     does nothing unless ``sim.enable_pinholes`` is set and there are
     pinholes.
+
+    The light the filter blocked is each photon's own, at its own
+    wavelength: the cube's ``meta`` gives the share of its photons' light
+    the filter passed, ``photon_filter_transmission``, as `rebin_atmosphere`
+    and `rebin_spectra` give it with the pinholes on. Without it, each
+    pixel's photons are taken to have passed the filter at the pixel's own
+    wavelength, as photons counted there have. The pinholes' photons are of
+    the energies of the light the filter blocked, which the wavelengths of
+    the photons' mean and root mean square energies in ``meta`` take in.
 
     Parameters
     ----------
@@ -236,12 +288,14 @@ def apply_euv_pinhole_diffraction(
     # Initialize additional photon contributions
     additional_photons = np.zeros_like(photon_counts.data)
     
-    # Get the wavelength axis and calculate filter throughput for EUV
-    wl_axis = photon_counts.axis_world_coords_values(2)[0]
-    
-    # Calculate filter throughput at each wavelength
-    filter_throughput_spectrum = np.array([tel.filter.total_throughput(wl) for wl in wl_axis])
-    
+    # The light the filter blocked from each pixel's photons, each photon's
+    # at its own wavelength.
+    counts = (photon_counts if "photon_filter_transmission" in (photon_counts.meta or {})
+              else _with_filter_transmission(photon_counts, tel))
+    data = np.asarray(photon_counts.data, dtype=float)
+    passed = np.asarray(counts.meta["photon_filter_transmission"], dtype=float)
+    blocked = data * np.divide(1.0 - passed, passed, out=np.zeros(data.shape), where=passed > 0)
+
     # Spectral positions are optional here for the same reason as in the
     # visible path: without them every pinhole projects to the centre of the
     # spectral window, as it always did.
@@ -306,10 +360,9 @@ def apply_euv_pinhole_diffraction(
             # Current filtered signal at this scan position
             filtered_signal = photon_counts.data[:, i, :]  # Shape: (n_slit, n_spectral)
             
-            # Back-calculate unfiltered signal (before filter attenuation)
-            # filtered_signal = unfiltered_signal * filter_throughput
-            # So: unfiltered_signal = filtered_signal / filter_throughput
-            unfiltered_signal = filtered_signal / filter_throughput_spectrum[np.newaxis, :]
+            # The unfiltered signal (before filter attenuation): the
+            # filtered signal and the light the filter blocked from it
+            unfiltered_signal = filtered_signal + blocked[:, i, :]
             
             # Calculate what would come through pinhole (unattenuated).
             # unfiltered_signal * area_ratio is the light collected over the
@@ -322,23 +375,46 @@ def apply_euv_pinhole_diffraction(
             overcounted_filtered = filtered_signal * area_ratio * euv_pattern_normalized
             
             # Net correction: add unfiltered pinhole signal, subtract overcounted filtered signal
-            # This simplifies to: filtered_signal * area_ratio * pattern * (1/filter_throughput - 1)
-            # Physical meaning: 
+            # This simplifies to: blocked * area_ratio * pattern
+            # Physical meaning:
             # - unfiltered * area_ratio * pattern = total light through pinhole
             # - filtered * area_ratio * pattern = filtered light already counted there
             # - difference = net additional light from pinhole
             correction = (pinhole_signal - overcounted_filtered)
-            
-            # Equivalent simplified form (more efficient):
-            # correction = filtered_signal * area_ratio * euv_pattern * (1/filter_throughput_spectrum[np.newaxis, :] - 1)
             additional_photons[:, i, :] += correction
-    
+
     # Create new photon counts with EUV pinhole contributions
     new_data = photon_counts.data + additional_photons
-    
+
+    # The pinholes' photons are of the energies of the light the filter
+    # blocked. What the meta says of the filter no longer holds for the
+    # photons with them, so it goes.
+    meta = {key: value for key, value in counts.meta.items() if key not in _FILTER_KEYS}
+    if "photon_wavelength" in meta:
+        mean = u.Quantity(meta["photon_wavelength"])
+        unit = mean.unit
+        rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to_value(unit)
+        blocked_mean = u.Quantity(counts.meta["blocked_photon_wavelength"]).to_value(unit)
+        blocked_rms = u.Quantity(counts.meta["blocked_photon_rms_wavelength"]).to_value(unit)
+
+        def over(photons, wavelength):
+            return np.divide(photons, wavelength, out=np.zeros(data.shape), where=wavelength > 0)
+
+        energy = over(data, mean.value) + over(additional_photons, blocked_mean)
+        square = over(data, rms**2) + over(additional_photons, blocked_rms**2)
+        meta["photon_wavelength"] = np.divide(new_data, energy, out=np.array(mean.value, dtype=float),
+                                              where=energy > 0) * unit
+        meta["photon_rms_wavelength"] = np.sqrt(np.divide(
+            new_data, square, out=np.array(rms, dtype=float) ** 2, where=square > 0)) * unit
+
     return NDCube(
         data=new_data,
         wcs=photon_counts.wcs.deepcopy(),
         unit=photon_counts.unit,
-        meta=photon_counts.meta,
+        meta=meta,
     )
+
+
+# What a cube's meta says of the filter, which the pinholes need.
+_FILTER_KEYS = ("photon_filter_transmission", "blocked_photon_wavelength",
+                "blocked_photon_rms_wavelength")

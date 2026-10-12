@@ -596,10 +596,10 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
         The mean photons per pixel, shaped
         ``(n_rows + parallel_overscan_rows, n_columns)``. Without a shutter a
         pixel holds photons from every row its charge crossed, so for a frame
-        :func:`euvst_response.frame.expose_with_wavelength` gives these with
-        the wavelength that carries each pixel's mean photon energy. Drawn as
-        whole photons, a Poisson draw of each pixel, they go to
-        :func:`euvst_response.frame.detect` with that wavelength and
+        :func:`euvst_response.frame.expose_with_wavelengths` gives these with
+        the wavelengths of each pixel's mean and root mean square photon
+        energies. Drawn as whole photons, a Poisson draw of each pixel, they
+        go to :func:`euvst_response.frame.detect` with those wavelengths and
         :func:`dark_current_time`; or the means go with ``noise=False``, for
         the frame's mean.
     """
