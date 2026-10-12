@@ -28,14 +28,12 @@ def _flat_goft(lines, **kwargs):
             logT_grid, logN_grid)
 
 
-@pytest.fixture(scope="module")
-def uniform_synthesis(tmp_path_factory):
-    """Synthesis of a uniform corona at 1 MK and 1e9 cm^-3, 6 arcsec along the slit, at rest."""
-    tmp_path = tmp_path_factory.mktemp("frame")
-    nz, ny, nx = 4, 44, 6
+def _synthesise(tmp_path, temperature):
+    """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, at rest."""
+    nz, ny, nx = temperature.size, 44, 6
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
     atmosphere = Atmosphere(
-        temperature=np.full((nz, ny, nx), 1e6) * u.K,
+        temperature=np.broadcast_to(temperature[:, None, None], (nz, ny, nx)).copy() * u.K,
         mass_density=np.full((nz, ny, nx), density.value) * density.unit,
         velocity_z=np.zeros((nz, ny, nx)) * u.km / u.s,
         x_edges=np.arange(nx + 1) * 0.1 * u.Mm, y_edges=np.arange(ny + 1) * 0.1 * u.Mm,
@@ -44,11 +42,24 @@ def uniform_synthesis(tmp_path_factory):
     patch = pytest.MonkeyPatch()
     patch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
-        "--output-name", "uniform.h5", "--mass-per-electron", "1.2", "--lines", "Fe12_195.1190"])
+        "--output-name", "synthesis.h5", "--mass-per-electron", "1.2", "--lines",
+        "Fe12_195.1190"])
     patch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
     patch.undo()
-    return tmp_path / "uniform.h5"
+    return tmp_path / "synthesis.h5"
+
+
+@pytest.fixture(scope="module")
+def uniform_synthesis(tmp_path_factory):
+    """Uniform corona at 1 MK."""
+    return _synthesise(tmp_path_factory.mktemp("frame"), np.full(4, 1e6))
+
+
+@pytest.fixture(scope="module")
+def two_temperature_synthesis(tmp_path_factory):
+    """Corona at 1 MK in front and 2 MK behind, so the workers have temperatures to share."""
+    return _synthesise(tmp_path_factory.mktemp("frame2"), np.array([1e6, 1e6, 2e6, 2e6]))
 
 
 def _one_line(products, logN=None, g_off_the_synthesis=None):
@@ -173,6 +184,11 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
     with pytest.raises(ValueError, match="work it out on the band's grids"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=continuum,
                        n_workers=1)
+    descending = (wavelength[::-1], np.zeros((lines.logT_grid.size, 11)),
+                  np.zeros((lines.logN_grid.size, lines.logT_grid.size, 11)))
+    with pytest.raises(ValueError, match="finite and increase"):
+        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=descending,
+                       n_workers=1)
     tilted = FocalPlane_SWC.from_detector(Detector_SWC(), slit_image_tilt=(0.5, 0.0))
     with pytest.raises(ValueError, match="tilted"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=tilted,
@@ -221,3 +237,65 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     spread = (thermal * psf[0] / total) ** 2 + (thermal / total) ** 4 * landing
     rms = frame.photon_rms_wavelength["left"][row, middle].to_value(u.AA)
     assert 1 / rms**2 - 1 / reaching**2 == pytest.approx(spread / expected**4, rel=2e-2)
+
+
+@pytest.mark.parametrize("psf", [False, True])
+def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(uniform_synthesis,
+                                                                           psf):
+    from euvst_response.frame import photons_from_spectrum
+
+    products = read_synthesis_products(uniform_synthesis)
+    grid = products["logN_grid"]
+    step = grid[1] - grid[0]
+    wider = np.concatenate([grid[0] - step * np.arange(3, 0, -1), grid,
+                            grid[-1] + step * np.arange(1, 4)])
+    lines = _one_line(products, wider)
+    lines.ions[0].g[:] = 0.0
+    wavelength = np.linspace(194.0, 196.0, 801)
+    n_t = lines.logT_grid.size
+    free = np.tile(1e-30 * wavelength / REST, (n_t, 1))
+    # Two-photon emission differs at each density of the band's grid, so only
+    # the synthesis's own density gives the expected frame.
+    two_photon = (1e-30 * (1 + np.arange(wider.size))[:, None, None]
+                  * (REST / wavelength) ** 2 * np.ones((1, n_t, 1)))
+    frame = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, psf=psf,
+                           continuum=(wavelength * u.AA, free, two_photon), noise=False,
+                           n_workers=1)
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    focal_plane = FocalPlane_SWC.from_detector(det)
+    # A column in the middle of the scene sees one pixel's emission measure,
+    # all at 1e9 cm^-3. The continuum is per unit emission measure and per cm.
+    em = products["em_tv"][0, 0].sum(axis=-1)                       # (nT,)
+    density = int(np.argmin(np.abs(wider - 9.0)))
+    radiance = (em[:, None] * (free + two_photon[density])).sum(axis=0) * 1e-8
+    expected = photons_from_spectrum(
+        focal_plane, "left", tel, 0.2 * u.arcsec, wavelength * u.AA,
+        radiance * u.erg / (u.s * u.cm**2 * u.sr * u.AA), det=det,
+        spectral_psf="quadrature" if psf else None).to_value(1 / u.s)
+    middle = focal_plane.n_columns // 2
+    assert np.allclose(frame.rate["left"][:, middle], expected, rtol=1e-9,
+                       atol=1e-12 * expected.max())
+    assert expected.sum() > 0
+
+
+def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis, monkeypatch):
+    import multiprocessing
+
+    products = read_synthesis_products(two_temperature_synthesis)
+    lines = _one_line(products)
+    settings = {"psf": False, "noise": False}
+    one = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s, n_workers=1,
+                         **settings)
+    two = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s, n_workers=2,
+                         **settings)
+    assert np.count_nonzero(products["em_tv"][0, 0].sum(axis=-1)) > 1
+    assert one.rate["left"].any()
+    for name in ("rate", "photon_wavelength", "photon_rms_wavelength"):
+        assert np.array_equal(u.Quantity(getattr(two, name)["left"]).value,
+                              u.Quantity(getattr(one, name)["left"]).value)
+    # Where processes cannot be forked, one process computes every temperature.
+    monkeypatch.setattr(multiprocessing, "get_all_start_methods", lambda: ["spawn"])
+    with pytest.warns(UserWarning, match="cannot be forked"):
+        alone = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s,
+                               n_workers=2, **settings)
+    assert np.array_equal(alone.rate["left"], one.rate["left"])

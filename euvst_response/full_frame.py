@@ -9,10 +9,12 @@ line in the band (`euvst_response.band`).
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -235,27 +237,28 @@ def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, teles
     wavelength, thermal : np.ndarray
         Rest wavelength and thermal width of each line, in Angstrom.
     g : np.ndarray
-        Contribution function of each line at this temperature, (n_lines, nN).
+        Contribution function of each line at this temperature, at the
+        densities to compute, (n_lines, n_densities).
     velocity : np.ndarray
         Velocity bin centres, in cm/s.
     bins : np.ndarray
-        Velocity bins with emission measure. Only these are computed.
+        Indices of the velocity bins to compute.
 
     Returns
     -------
     photons, per_wavelength, per_square : np.ndarray
-        `(nN, nv, n_rows)`: photons per second per pixel per cm^-5, and the
-        same with each photon divided by its wavelength in Angstrom and by
-        its square. These give the mean and root mean square energies of a
-        pixel's photons.
+        `(n_densities, bins.size, n_rows)`: photons per second per pixel per
+        cm^-5, and the same with each photon divided by its wavelength in
+        Angstrom and by its square. These give the mean and root mean square
+        energies of a pixel's photons.
     """
     n_rows = layout.edges.size - 1
-    photons = np.zeros((g.shape[1], velocity.size, n_rows))
+    photons = np.zeros((g.shape[1], bins.size, n_rows))
     per_wavelength = np.zeros_like(photons)
     per_square = np.zeros_like(photons)
     masses = points_onto_pixels(wavelength, layout.cells, thermal)          # (cells, lines)
-    at_rest = masses @ g                                                     # (cells, nN)
-    for v in bins:
+    at_rest = masses @ g                                                     # (cells, densities)
+    for i, v in enumerate(bins):
         factor = 1.0 + velocity[v] / C_CM_S
         centre = wavelength * factor
         at_centre = solid_angle / (4.0 * np.pi) * np.nan_to_num(
@@ -285,9 +288,9 @@ def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, teles
         rows += layout.onto_rows[v] @ change
         rows_per += layout.onto_rows[v] @ change_per
         rows_square += layout.onto_rows[v] @ change_square
-        photons[:, v, layout.order] = rows.T
-        per_wavelength[:, v, layout.order] = rows_per.T
-        per_square[:, v, layout.order] = rows_square.T
+        photons[:, i, layout.order] = rows.T
+        per_wavelength[:, i, layout.order] = rows_per.T
+        per_square[:, i, layout.order] = rows_square.T
     first, last = layout.lit
     for array in (photons, per_wavelength, per_square):
         array[..., :first] = 0.0
@@ -295,20 +298,29 @@ def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, teles
     return photons, per_wavelength, per_square
 
 
-# Data shared by the workers of `full_ccd_frame`, set before they are forked.
-_CONTEXT: Optional[dict] = None
+# Data shared by the workers of one `full_ccd_frame` call, set in each worker
+# as it starts.
+_WORKER_CONTEXT: Optional[dict] = None
 
 
-def _rates_at(temperatures: Sequence[int]):
+def _set_worker_context(context: dict) -> None:
+    global _WORKER_CONTEXT
+    _WORKER_CONTEXT = context
+
+
+def _rates_in_worker(t: int):
+    return _rates_at(t, _WORKER_CONTEXT)
+
+
+def _rates_at(t: int, context: dict):
     """
-    Photons per second in each pixel of both CCDs from the plasma at some
-    temperatures (indices into the temperature grid).
+    Photons per second in each pixel of both CCDs from the plasma at one
+    temperature (an index into the temperature grid).
 
     Returns three dicts by CCD, each array (n_columns, n_rows): the photons,
     and the same with each photon divided by its wavelength in Angstrom and
     by its square.
     """
-    context = _CONTEXT
     scene, lines, along = context["scene"], context["lines"], context["along"]
     focal_plane, telescope, det = context["focal_plane"], context["telescope"], context["det"]
     slit_width, blur, continuum = context["slit_width"], context["blur"], context["continuum"]
@@ -319,61 +331,62 @@ def _rates_at(temperatures: Sequence[int]):
     rate = {ccd: np.zeros(shape) for ccd in CCDS}
     per_wavelength = {ccd: np.zeros(shape) for ccd in CCDS}
     per_square = {ccd: np.zeros(shape) for ccd in CCDS}
-    for t in temperatures:
-        em = scene.emission_measure[:, t]                              # (image rows, nN, nv)
-        em_columns = along @ em.reshape(em.shape[0], -1)               # (columns, nN * nv)
-        bins = np.flatnonzero(em_columns.reshape(-1, n_n, n_v).any(axis=(0, 1)))
-        present = [ion for ion in lines.ions if t in ion.temperatures]
-        if present and bins.size:
-            g = np.concatenate([ion.g[:, density_index, np.searchsorted(ion.temperatures, t)]
-                                for ion in present])
-            wavelength = np.concatenate([ion.wavelength for ion in present])
-            mass = np.concatenate([np.full(ion.wavelength.size, ion.mass) for ion in present])
-            thermal = (wavelength * np.sqrt(K_B * 10.0 ** scene.logT_grid[t] / (mass * AMU_G))
-                       / C_CM_S)
-            for ccd in CCDS:
-                layout = layouts[ccd]
-                # Lines whose light can reach the cells.
-                near = ((wavelength + _REACH_IN_SIGMA * thermal >= layout.cells[0])
-                        & (wavelength - _REACH_IN_SIGMA * thermal <= layout.cells[-1]))
-                if not near.any():
-                    continue
-                photons, per, square = _lines_on_rows(
-                    layout, focal_plane, ccd, telescope, det, slit_width, blur,
-                    wavelength[near], thermal[near], g[near], scene.velocity, bins,
-                    solid_angle)
-                rate[ccd] += em_columns @ photons.reshape(n_n * n_v, -1)
-                per_wavelength[ccd] += em_columns @ per.reshape(n_n * n_v, -1)
-                per_square[ccd] += em_columns @ square.reshape(n_n * n_v, -1)
-        if continuum is not None:
-            wavelength, free, two_photon = continuum
-            em_density = em_columns.reshape(-1, n_n, n_v).sum(axis=-1)   # (columns, nN)
-            for ccd in CCDS:
-                onto_rows, at_samples = layouts[ccd].continuum
-                order = layouts[ccd].order
-                # Photons per second per pixel per Angstrom at each sample, per
-                # unit emission measure at each density.
-                spectrum = (free[t][np.newaxis, :] + two_photon[density_index, t]) * 1e-8
-                density = spectrum * at_samples
-                step = np.diff(wavelength)
-                light = step * (density[:, 1:] + density[:, :-1]) / 2
-                per_sample = density / wavelength
-                light_per = step * (per_sample[:, 1:] + per_sample[:, :-1]) / 2
-                square_sample = per_sample / wavelength
-                light_square = step * (square_sample[:, 1:] + square_sample[:, :-1]) / 2
-                rows = np.zeros((n_n, focal_plane.n_rows))
-                rows_per = np.zeros_like(rows)
-                rows_square = np.zeros_like(rows)
-                rows[:, order] = (onto_rows @ light.T).T
-                rows_per[:, order] = (onto_rows @ light_per.T).T
-                rows_square[:, order] = (onto_rows @ light_square.T).T
-                first, last = layouts[ccd].lit
-                for array in (rows, rows_per, rows_square):
-                    array[:, :first] = 0.0
-                    array[:, last + 1:] = 0.0
-                rate[ccd] += em_density @ rows
-                per_wavelength[ccd] += em_density @ rows_per
-                per_square[ccd] += em_density @ rows_square
+    em = scene.emission_measure[:, t]                                  # (image rows, nN, nv)
+    em_columns = (along @ em.reshape(em.shape[0], -1)).reshape(-1, n_n, n_v)
+    # Only the densities and velocity bins with emission measure are computed.
+    densities = np.flatnonzero(em_columns.any(axis=(0, 2)))
+    bins = np.flatnonzero(em_columns.any(axis=(0, 1)))
+    present = [ion for ion in lines.ions if t in ion.temperatures]
+    if present and bins.size:
+        g = np.concatenate([ion.g[:, density_index[densities],
+                                  np.searchsorted(ion.temperatures, t)] for ion in present])
+        wavelength = np.concatenate([ion.wavelength for ion in present])
+        mass = np.concatenate([np.full(ion.wavelength.size, ion.mass) for ion in present])
+        thermal = (wavelength * np.sqrt(K_B * 10.0 ** scene.logT_grid[t] / (mass * AMU_G))
+                   / C_CM_S)
+        em_used = em_columns[:, densities][:, :, bins].reshape(shape[0], -1)
+        for ccd in CCDS:
+            layout = layouts[ccd]
+            # Lines whose light can reach the cells.
+            near = ((wavelength + _REACH_IN_SIGMA * thermal >= layout.cells[0])
+                    & (wavelength - _REACH_IN_SIGMA * thermal <= layout.cells[-1]))
+            if not near.any():
+                continue
+            photons, per, square = _lines_on_rows(
+                layout, focal_plane, ccd, telescope, det, slit_width, blur,
+                wavelength[near], thermal[near], g[near], scene.velocity, bins, solid_angle)
+            rate[ccd] += em_used @ photons.reshape(em_used.shape[1], -1)
+            per_wavelength[ccd] += em_used @ per.reshape(em_used.shape[1], -1)
+            per_square[ccd] += em_used @ square.reshape(em_used.shape[1], -1)
+    if continuum is not None:
+        wavelength, free, two_photon = continuum
+        em_density = em_columns[:, densities].sum(axis=-1)            # (columns, densities)
+        for ccd in CCDS:
+            onto_rows, at_samples = layouts[ccd].continuum
+            order = layouts[ccd].order
+            # Photons per second per pixel per Angstrom at each sample, per
+            # unit emission measure at each density.
+            spectrum = (free[t][np.newaxis, :] + two_photon[density_index[densities], t]) * 1e-8
+            density = spectrum * at_samples
+            step = np.diff(wavelength)
+            light = step * (density[:, 1:] + density[:, :-1]) / 2
+            per_sample = density / wavelength
+            light_per = step * (per_sample[:, 1:] + per_sample[:, :-1]) / 2
+            square_sample = per_sample / wavelength
+            light_square = step * (square_sample[:, 1:] + square_sample[:, :-1]) / 2
+            rows = np.zeros((densities.size, focal_plane.n_rows))
+            rows_per = np.zeros_like(rows)
+            rows_square = np.zeros_like(rows)
+            rows[:, order] = (onto_rows @ light.T).T
+            rows_per[:, order] = (onto_rows @ light_per.T).T
+            rows_square[:, order] = (onto_rows @ light_square.T).T
+            first, last = layouts[ccd].lit
+            for array in (rows, rows_per, rows_square):
+                array[:, :first] = 0.0
+                array[:, last + 1:] = 0.0
+            rate[ccd] += em_density @ rows
+            per_wavelength[ccd] += em_density @ rows_per
+            per_square[ccd] += em_density @ rows_square
     return rate, per_wavelength, per_square
 
 
@@ -486,7 +499,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         If False, every random draw is replaced by its mean. Default True.
     n_workers : int, optional
         Number of processes to compute the temperatures with. Default 0 uses
-        every CPU this process may use.
+        every CPU this process may use. Where processes cannot be forked, as
+        on Windows, one process is used.
 
     Returns
     -------
@@ -527,6 +541,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
             raise ValueError(
                 f"The continuum is shaped {np.shape(free)} and {np.shape(two_photon)}, not "
                 f"{expected[1:]} and {expected}: work it out on the band's grids.")
+        grid = u.Quantity(wavelength).to_value(u.Angstrom)
+        if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
+            raise ValueError("The continuum's wavelengths must be finite and increase.")
 
     # Along the slit: weight of each image row in each detector column.
     columns = np.arange(focal_plane.n_columns + 1) - 0.5
@@ -556,24 +573,31 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
                      else os.cpu_count() or 1)
     n_workers = max(1, min(n_workers, len(temperatures)))
-    shares = [temperatures[k::n_workers] for k in range(n_workers)]
-    global _CONTEXT
-    _CONTEXT = context
-    try:
-        if n_workers > 1:
-            import multiprocessing as mp
+    if n_workers > 1 and "fork" not in mp.get_all_start_methods():
+        warnings.warn("Processes cannot be forked here, so the temperatures are computed in "
+                      "one process.", stacklevel=2)
+        n_workers = 1
+    shape = (focal_plane.n_columns, focal_plane.n_rows)
+    totals = tuple({ccd: np.zeros(shape) for ccd in CCDS} for _ in range(3))
 
-            # Fork, so the workers share the scene and lines rather than
-            # being sent them.
-            with mp.get_context("fork").Pool(n_workers) as pool:
-                parts = pool.map(_rates_at, shares)
-        else:
-            parts = [_rates_at(share) for share in shares]
-    finally:
-        _CONTEXT = None
-    rate = {ccd: sum(part[0][ccd] for part in parts) for ccd in CCDS}
-    per_wavelength = {ccd: sum(part[1][ccd] for part in parts) for ccd in CCDS}
-    per_square = {ccd: sum(part[2][ccd] for part in parts) for ccd in CCDS}
+    def add(part):
+        for total, rates in zip(totals, part):
+            for ccd in CCDS:
+                total[ccd] += rates[ccd]
+
+    if n_workers > 1:
+        # Fork, so the workers share the scene and lines rather than being
+        # sent them. Each worker takes the next temperature when it is free,
+        # and the temperatures are added in order, so the frame does not
+        # depend on the number of workers.
+        with mp.get_context("fork").Pool(n_workers, initializer=_set_worker_context,
+                                         initargs=(context,)) as pool:
+            for part in pool.imap(_rates_in_worker, temperatures):
+                add(part)
+    else:
+        for t in temperatures:
+            add(_rates_at(t, context))
+    rate, per_wavelength, per_square = totals
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
