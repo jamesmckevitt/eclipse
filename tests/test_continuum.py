@@ -1,9 +1,7 @@
 """The continuum under the lines: free-free, free-bound and two-photon emission.
 
-ECLIPSE synthesised only the lines named for a run. The continuum is now
-worked out too, from the same emission measure, and kept in the synthesis
-file as entries of its own, one for each group of overlapping windows, so
-that a window observed adds it once.
+It is stored once per group of overlapping windows, so each observed window
+adds it once.
 """
 import dataclasses
 import sys
@@ -38,7 +36,7 @@ def test_overlapping_windows_share_one_continuum_and_others_have_their_own():
     steps = np.diff(blend.to_value(u.AA))
     assert np.allclose(steps, steps[0], rtol=1e-9)
     assert steps[0] == pytest.approx(np.min(np.diff(_window(195.119).value)))
-    # Its bins cover the windows' bins, each half a spacing beyond its ends.
+    # Its bins cover the windows' bins, which reach half a spacing past the end samples.
     first, last = _window(195.119).to_value(u.AA), _window(195.179).to_value(u.AA)
     edges = blend.to_value(u.AA)
     assert edges[0] - steps[0] / 2 <= first[0] - (first[1] - first[0]) / 2 + 1e-12
@@ -46,7 +44,7 @@ def test_overlapping_windows_share_one_continuum_and_others_have_their_own():
 
 
 def test_a_window_just_past_a_groups_last_bin_shares_no_wavelength_with_it():
-    """The group's bins of its finest spacing can run past its windows; a window there joins it."""
+    """Bins at the group's finest spacing can run past its windows; a window there joins it."""
     coarse = np.arange(0.0, 11.0, 1.0) * u.AA + 170 * u.AA       # bins 169.5 to 180.5
     fine = np.arange(5.0, 6.05, 0.3) * u.AA + 170 * u.AA         # spacing 0.3 within it
     beyond = np.arange(10.6, 11.6, 0.1) * u.AA + 170 * u.AA      # bins from 180.55
@@ -78,9 +76,9 @@ def test_the_continuum_takes_each_pixels_emission_measure_and_density():
     spectra = continuum_spectra(em, density, logN, free, two_photon)
     assert spectra.shape == (1, 2, 2)
     assert np.allclose(spectra[0, 0], free[0])
-    # Half way between 10^9 and 10^10 in log10 n_e, the two-photon table is half way too.
+    # At log10 n_e = 9.5, halfway between grid points, the two-photon value is halfway too.
     assert np.allclose(spectra[0, 1], 2.0 * (free[1] + np.array([30.0, 0.0])))
-    # Off the grid of densities, as for the lines, the two-photon emission is zero.
+    # Outside the density grid, the two-photon emission is zero, as for the lines.
     off = continuum_spectra(em, np.full(em.shape, 1e12), logN, free, two_photon)
     assert np.allclose(off[0, 1], 2.0 * free[1])
 
@@ -106,7 +104,7 @@ def synthesis_unit():
 
 
 def _flat_goft(lines, **kwargs):
-    """A contribution function of 1 everywhere, in place of fiasco."""
+    """Contribution function of 1 everywhere, in place of fiasco."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(8.0, 10.0, 21)
     goft = {name: {"wl0": (float(name.split("_")[1]) * u.AA).to(u.cm),
@@ -119,7 +117,7 @@ FLAT = 1e-30  # erg cm3 / (s sr cm) per n_e^2 dh, at every temperature and wavel
 
 
 def _flat_continuum(wavelength, logT_grid, logN_grid, **kwargs):
-    """A continuum of FLAT everywhere, with no two-photon part, in place of fiasco."""
+    """Continuum of FLAT everywhere, with no two-photon part, in place of fiasco."""
     n = np.atleast_1d(wavelength).size
     return (np.full((len(logT_grid), n), FLAT),
             np.zeros((len(logN_grid), len(logT_grid), n)))
@@ -155,20 +153,20 @@ def test_a_synthesis_with_the_continuum_keeps_it_beside_the_lines(tmp_path, monk
     assert len(entries) == 2 and set(synthesis_read.lines) == set(lines) | set(entries)
     products = read_synthesis_products(path)
     assert set(products["goft"]) == set(lines) and products["config"]["continuum"] is True
-    # The continuum of each pixel is its emission measure, whatever its
-    # temperature and velocity, times the flat continuum.
+    # Each pixel's continuum is its emission measure, summed over all
+    # temperatures and velocities, times the flat continuum.
     em = products["em_tv"].sum(axis=(-1, -2))
     for name in entries:
         radiance = synthesis_read.lines[name].radiance().to_value(synthesis_unit())
         assert np.allclose(radiance, (em * FLAT)[..., np.newaxis], rtol=1e-6)
-    # A window adds it once: with the lines' own spectra set to zero, what is
-    # left of the window is the continuum.
+    # A window adds the continuum once: with the line spectra set to zero,
+    # what remains is the continuum.
     only = {name: line if is_continuum(name)
             else dataclasses.replace(line, intensity=0 * line.intensity)
             for name, line in synthesis_read.lines.items()}
     added = dataclasses.replace(synthesis_read, lines=only).summed("Fe12_195.1190")
     assert np.allclose(added.to_value(synthesis_unit()), (em * FLAT)[..., np.newaxis], rtol=1e-9)
-    # The lines' own spectra are as without it.
+    # The line spectra are the same as without the continuum.
     without = read_synthesis(_synthesise(tmp_path / "plain", monkeypatch, lines, continuum=False))
     for name in lines:
         assert np.array_equal(synthesis_read.lines[name].intensity, without.lines[name].intensity)
@@ -206,7 +204,7 @@ def test_the_continuum_is_fiascos_per_emission_measure_and_per_steradian():
 
 
 def test_the_continuum_counts_plasma_moving_faster_than_the_velocity_grid(tmp_path, monkeypatch):
-    """It is not Doppler shifted, so the plasma em_tv leaves out still gives it."""
+    """The continuum is not Doppler shifted, so plasma left out of em_tv still adds to it."""
     nz, ny, nx = 4, 3, 2
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
     atmosphere = Atmosphere(
@@ -235,7 +233,7 @@ def test_the_continuum_counts_plasma_moving_faster_than_the_velocity_grid(tmp_pa
 
 
 class _FakeIon:
-    """An ion whose two-photon emission fiasco's two-ion model gives only up to log T 6.25."""
+    """Fake ion whose two-photon emission in fiasco's two-ion model stops at log T 6.25."""
 
     limit = 10 ** 6.25
 

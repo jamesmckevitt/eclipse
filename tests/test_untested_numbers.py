@@ -1,12 +1,4 @@
-"""The sizes of things no test pinned down.
-
-Each of these could change by a large factor with every test still passing:
-the variance of each detector noise term, the rounding of electrons to DN,
-the brightness and width of a synthesised line, the filter's attenuation of
-the visible stray light, the row edges of a shifted or tilted focal plane,
-the effective area and the dark current, and the contribution function
-itself. Each is checked here against a value worked out independently.
-"""
+"""Values no other test pinned down, each checked against an independent value."""
 
 import astropy.constants as const
 import astropy.units as u
@@ -49,8 +41,8 @@ def _variance(photons, det):
     return to_electrons(_photons(photons), 1 * u.s, det).data.var(ddof=1)
 
 
-# A million pixels measure a variance to 0.14 per cent; each term below is
-# checked to 1.5 per cent, so a noise term off by a tenth of itself fails.
+# A million pixels measure a variance to 0.14 per cent. Each term below is
+# checked to 1.5 per cent, so a noise term 10 per cent off fails.
 def test_the_fano_spread_of_each_photons_electrons():
     det = _detector(qe=1.0)
     expected = 1000 * det.si_fano * ELECTRONS_PER_PHOTON
@@ -70,7 +62,7 @@ def test_the_dark_current_is_a_poisson_draw_and_the_read_noise_adds_its_square()
 
 
 def test_electrons_are_rounded_to_the_nearest_dn():
-    """Electrons that were whole multiples of the gain could not tell rounding from truncating."""
+    """Whole multiples of the gain would not tell rounding from truncation."""
     det = Detector_SWC()
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
     electrons = NDCube(np.array([0.4, 1.4, 1.6, 2.6]).reshape(1, 1, 4) * gain,
@@ -103,7 +95,7 @@ def test_a_synthesised_line_has_the_brightness_and_the_thermal_width_it_should()
 
 
 def test_the_filter_attenuates_the_visible_stray_light():
-    """The only test of it left the telescope out, and so the filter."""
+    """The earlier test of it left out the telescope, and so the filter."""
     det = Detector_SWC()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec,
                      vis_sl=1.0e12 * u.photon / (u.s * u.cm**2))
@@ -158,7 +150,7 @@ def test_the_dark_current_at_the_operating_temperature():
 
 
 # ---------------------------------------------------------------------------
-# The contribution function itself, where the CHIANTI database is there
+# The contribution function itself, where the CHIANTI database is available
 # ---------------------------------------------------------------------------
 fiasco = pytest.importorskip("fiasco")
 
@@ -168,7 +160,7 @@ chianti = pytest.mark.chianti
 
 @chianti
 def test_the_contribution_function_is_fiascos_times_the_proton_electron_ratio():
-    """G(T, n) for the line, as fiasco gives it per n_e^2, with n_H / n_e, on the right axes."""
+    """fiasco's G(T, n) per n_e^2 for the line, times n_H / n_e, on the right axes."""
     from euvst_response.synthesis import compute_goft_fiasco
 
     temperature = 10 ** np.array([6.1, 6.3]) * u.K

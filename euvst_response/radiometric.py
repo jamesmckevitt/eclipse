@@ -11,6 +11,7 @@ from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.special import erf
 from scipy.stats import binom, poisson
+from .sampling import _carry_photon_wavelengths
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
 
@@ -18,20 +19,19 @@ def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
     """
     Draw Poisson counts by inverse-transform (quantile) sampling.
 
-    One uniform draw per element is passed through the Poisson inverse-CDF.
-    The marginal distribution is identical to ``np.random.poisson``, but this
-    consumes a fixed number of RNG draws per element, where the rejection
-    sampling in ``np.random.poisson`` consumes a variable number.  That keeps
-    the random stream synchronised across runs whose only difference is the
-    Poisson mean, which is what makes common-random-number variance reduction
-    possible.
+    Each element takes one uniform draw through the Poisson inverse CDF. The
+    distribution is the same as `np.random.poisson`, but each element uses a
+    fixed number of random draws, where its rejection sampling uses a
+    variable number. This keeps the random stream synchronised across runs
+    that differ only in the Poisson mean, which common-random-number
+    variance reduction needs.
 
     Parameters
     ----------
     mean_counts : float or np.ndarray
-        Poisson mean, either scalar or per element.
+        Poisson mean, scalar or per element.
     size : tuple of int, optional
-        Shape to draw.  Defaults to the shape of *mean_counts*.
+        Shape to draw. Defaults to the shape of `mean_counts`.
 
     Returns
     -------
@@ -42,9 +42,9 @@ def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
         size = np.shape(mean_counts)
 
     u_draw = np.random.random(size=size)
-    # np.random.random() draws from [0, 1) and scipy's ppf returns -1 at
-    # exactly 0, which would give a negative count.  Clamp to the smallest
-    # positive double, which leaves the CRN property intact.
+    # np.random.random() draws from [0, 1), and scipy's ppf gives -1 at
+    # exactly 0, a negative count. Clamping to the smallest positive double
+    # keeps the CRN property.
     np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
 
     return poisson.ppf(u_draw, mean_counts).astype(np.int64)
@@ -54,10 +54,10 @@ def _binomial_inverse_transform(trials, probability: float) -> np.ndarray:
     """
     Draw binomial counts by inverse-transform sampling, one uniform per element.
 
-    As :func:`_poisson_inverse_transform` for the Poisson: the distribution
-    is ``np.random.binomial``'s, but the number of random values used does
-    not depend on the number of trials, so runs that differ only in photon
-    flux stay in step through the quantum efficiency.
+    As in :func:`_poisson_inverse_transform`, the distribution is that of
+    `np.random.binomial`, but the number of random draws does not depend on
+    the number of trials. Runs that differ only in photon flux then use the
+    same random numbers for the quantum efficiency.
     """
     u_draw = np.random.random(size=np.shape(trials))
     np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
@@ -66,22 +66,22 @@ def _binomial_inverse_transform(trials, probability: float) -> np.ndarray:
 
 def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     """
-    The mean number of electrons a detected photon frees in the detector's silicon.
+    Mean number of electrons a detected photon frees in the detector silicon.
 
-    It is the photon's energy over the energy that makes each electron-hole
-    pair, which depends on the CCD's temperature.
+    This is the photon energy over the energy per electron-hole pair, which
+    depends on the CCD temperature.
 
     Parameters
     ----------
     rest_wavelength : u.Quantity
-        The photons' wavelength: one value, or an array.
+        Photon wavelength, one value or an array.
     det : Detector_SWC or Detector_EIS
-        The detector, with its ``ccd_temperature``.
+        Detector, with its `ccd_temperature`.
 
     Returns
     -------
     np.ndarray
-        The electrons per photon, shaped as *rest_wavelength*.
+        Electrons per photon, same shape as `rest_wavelength`.
     """
     if not hasattr(det, 'ccd_temperature'):
         raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
@@ -91,51 +91,55 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     return np.asarray(photon_energy_ev / w_T, dtype=float)
 
 
-def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, det,
-                visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1) -> np.ndarray:
+def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
+                visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1, *,
+                rms_wavelength: u.Quantity | None = None) -> np.ndarray:
     """
-    The variance of each pixel's DN, worked out from the DN itself, as an observer would.
+    Variance of each pixel's DN estimated from the DN.
 
-    The pixel's signal is shared between its sources by their means: the
-    dark current and the visible light are known, and the rest is the EUV
-    line. Each source's variance follows from how `to_electrons`,
-    `add_visible_stray_light` and `to_dn` draw it:
+    The dark current and visible light are known, and the rest of the
+    signal is taken as EUV. The variance is the sum of:
 
-    - the EUV photons: each detected photon frees *m* electrons
-      (`electrons_per_photon`), with a Fano spread of ``si_fano * m``. With
-      the photons a Poisson count, their electrons vary by *m* + ``si_fano``
-      times their mean.
-    - the dark current and the visible light: one electron each, a Poisson
-      count, which varies by its mean.
-    - the read noise: ``read_noise_rms`` squared.
-    - the rounding to whole DN: 1/12 DN squared.
+    - EUV: (electrons per photon + Fano factor) times the EUV electrons.
+      For photons of different energies, the electrons per photon is the
+      mean of its square over its mean.
+    - Mean dark current and visible light (Poisson).
+    - Read noise: `read_noise_rms` squared.
+    - Rounding to whole DN: 1/12 DN^2.
 
-    A signal at or below the dark current and visible light is taken to hold
-    no EUV electrons. Pixels summed after read-out, ``n_binned`` of them,
-    each bring their own dark current, read noise and rounding.
+    A signal at or below the dark current and visible light is taken to
+    hold no EUV. Each of the `n_binned` pixels summed after read-out adds
+    its own dark current, read noise and rounding.
 
     Parameters
     ----------
     dn : np.ndarray
-        The DN in each pixel, as `to_dn` gives them, or summed over
-        ``n_binned`` pixels along the slit.
-    rest_wavelength : u.Quantity
-        The line's rest wavelength, which sets the electrons per photon.
+        DN in each pixel, or summed over `n_binned` pixels along the slit.
+    wavelength : u.Quantity
+        Wavelength of the mean photon energy in each pixel, same shape as
+        `dn`, or one value for all, such as the line's rest wavelength. For
+        summed pixels, that of all their photons, from
+        `binned_photon_wavelengths`. Sets the electrons per photon.
     t_exp : u.Quantity
-        The exposure time, for the dark current.
+        Exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     visible_electrons : np.ndarray or float, optional
-        The mean electrons from visible light in each pixel, as
-        `add_visible_stray_light` and `add_pinhole_visible_light` add them
-        with ``noise=False``, summed over the same pixels as *dn*. Default 0.
+        Mean electrons from visible light in each pixel, as added by
+        `add_visible_stray_light` and `add_pinhole_visible_light` with
+        `noise=False`, summed over the same pixels as `dn`. Default 0.
     n_binned : int, optional
-        How many pixels each value of *dn* is the sum of. Default 1.
+        Number of pixels summed in each value of `dn`. Default 1.
+    rms_wavelength : u.Quantity, optional
+        Wavelength of the root mean square energy of the same photons, in
+        the same form as `wavelength`. Sets how far the electrons of photons
+        of different energies spread. Default `wavelength` (photons all of
+        one energy).
 
     Returns
     -------
     np.ndarray
-        The variance, in DN squared, shaped as *dn*.
+        Variance in DN^2, same shape as `dn`.
     """
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
     dark = n_binned * (det.dark_current * t_exp).to_value(u.electron / u.pixel)
@@ -143,39 +147,47 @@ def dn_variance(dn: np.ndarray, rest_wavelength: u.Quantity, t_exp: u.Quantity, 
     visible = np.asarray(visible_electrons, dtype=float)
     electrons = np.asarray(dn, dtype=float) * gain
     euv = np.maximum(electrons - dark - visible, 0.0)
-    per_electron = electrons_per_photon(rest_wavelength, det) + det.si_fano
+    mean = electrons_per_photon(wavelength, det)
+    square = mean**2 if rms_wavelength is None else electrons_per_photon(rms_wavelength, det)**2
+    per_electron = square / mean + det.si_fano
     variance_electrons = per_electron * euv + dark + visible + read
     return variance_electrons / gain ** 2 + n_binned / 12.0
 
 
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
-                           *, noise: bool = True, every_pixel: bool = False) -> np.ndarray:
+                           *, noise: bool = True, every_pixel: bool = False,
+                           rms_wavelength: u.Quantity | None = None) -> np.ndarray:
     """
-    Vectorized version of Fano noise calculation for improved performance.
+    Electrons from photon counts with Fano noise, vectorized for speed.
 
     Parameters
     ----------
     photon_counts : np.ndarray
-        Array of photon counts (unitless values)
+        Photon counts (unitless).
     rest_wavelength : u.Quantity
-        Rest wavelength with units
+        Wavelength of the mean energy of each pixel's photons, one value or
+        an array that broadcasts against `photon_counts`.
     det : Detector_SWC or Detector_EIS
-        Detector object with fano noise parameters
+        Detector, with the Fano noise parameters.
     noise : bool, optional
-        When False, return the mean number of electrons each photon liberates
-        rather than drawing around it.  The conversion gain is unchanged; only
-        its spread is dropped.  Default True.
+        If False, each photon frees its mean number of electrons rather
+        than a draw around it. The conversion gain is unchanged; only its
+        spread is dropped. Default True.
     every_pixel : bool, optional
-        Draw the spread from one standard normal for every pixel, photons
-        or none, rather than one for each pixel with photons, so that the
-        random values used do not depend on how many pixels have photons
-        and runs that differ only in photon flux stay in step.  The
-        distribution is the same.  Default False.
+        Draw one standard normal for every pixel, with or without photons,
+        rather than one per pixel with photons. The random numbers then do
+        not depend on how many pixels have photons, so runs that differ only
+        in photon flux use the same ones. Same distribution. Default False.
+    rms_wavelength : u.Quantity, optional
+        Wavelength of the root mean square energy of each pixel's photons,
+        in the same form as `rest_wavelength`. Photons of different energies
+        free different numbers of electrons, which widens a pixel's spread.
+        Default `rest_wavelength` (photons all of one energy).
 
     Returns
     -------
     np.ndarray
-        Array of electron counts with Fano noise applied
+        Electron counts with Fano noise applied.
     """
     # Handle zero or negative photon counts
     mask_positive = photon_counts > 0
@@ -186,28 +198,35 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     if not np.any(mask_positive):
         return electron_counts
     
-    # Mean number of electrons per photon.  The wavelength may be one value
-    # for the whole array, or an array that broadcasts against it (one per
-    # row, say, for a frame that spans the band); either way each pixel gets
-    # its own conversion.
+    # Mean electrons per photon for each pixel. The wavelength may be one
+    # value or an array that broadcasts against the counts, such as one per
+    # row for a frame that spans the band.
     mean_electrons_per_photon = np.broadcast_to(
         electrons_per_photon(rest_wavelength, det), photon_counts.shape)[mask_positive]
 
-    # Fano noise standard deviation per photon
-    sigma_fano_per_photon = np.sqrt(det.si_fano * mean_electrons_per_photon)
+    # Variance per photon: the Fano variance plus, for photons of different
+    # energies, the variance of their mean electrons. That is the mean
+    # square, from the root mean square energy, less the squared mean; it is
+    # zero for one energy, but rounding can take it slightly below.
+    variance_per_photon = det.si_fano * mean_electrons_per_photon
+    if rms_wavelength is not None:
+        rms_electrons_per_photon = np.broadcast_to(
+            electrons_per_photon(rms_wavelength, det), photon_counts.shape)[mask_positive]
+        variance_per_photon = variance_per_photon + np.maximum(
+            rms_electrons_per_photon**2 - mean_electrons_per_photon**2, 0.0)
+    sigma_per_photon = np.sqrt(variance_per_photon)
 
     # Work only with positive photon counts
     positive_photons = photon_counts[mask_positive]
-    
-    # For efficiency, use a simpler approximation for most cases
-    # The exact method is: for each photon, sample from Normal(mean_e, sigma_fano)
-    # Approximation: for N photons, sample from Normal(N*mean_e, sqrt(N)*sigma_fano)
-    # This is mathematically equivalent for large N and much faster
-    
+
+    # Draw the total for N photons from Normal(N*mean_e, sqrt(N)*sigma_per_photon)
+    # rather than each photon's electrons from its own energy. This has the
+    # same mean and variance, is equivalent for large N and is much faster.
+
     mean_total_electrons = positive_photons * mean_electrons_per_photon
 
     if noise:
-        std_total_electrons = np.sqrt(positive_photons) * sigma_fano_per_photon
+        std_total_electrons = np.sqrt(positive_photons) * sigma_per_photon
 
         # Sample total electrons per pixel
         if standard is None:
@@ -229,20 +248,48 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     return electron_counts
 
 
+def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
+    """
+    Photons the telescope collects per erg of incident light, at each wavelength.
+
+    This is the collecting area times the throughput, over the photon
+    energy. ECLIPSE takes it at each photon's own wavelength, before the
+    spectrograph blur, since the blur moves where a photon lands but not
+    its wavelength.
+
+    Parameters
+    ----------
+    tel : Telescope_EUVST or Telescope_EIS
+        Telescope, queried for all wavelengths at once.
+    wavelength : u.Quantity
+        Wavelengths.
+
+    Returns
+    -------
+    u.Quantity
+        In cm2 / erg, one value per wavelength. Beyond the throughput tables
+        EUVST's telescope gives NaN and EIS's raises a ValueError.
+    """
+    wavelength = np.atleast_1d(u.Quantity(wavelength))
+    area = np.broadcast_to(u.Quantity(tel.ea_and_throughput(wavelength)).to(u.cm**2),
+                           wavelength.shape, subok=True)
+    return (area * wavelength / (const.h * const.c)).to(u.cm**2 / u.erg)
+
+
 def intensity_to_photons(I: NDCube) -> NDCube:
     """
-    Turn energy into photons, dividing by the energy of a photon at each wavelength.
+    Convert energy to photons by dividing by the photon energy at each wavelength.
 
     Parameters
     ----------
     I : NDCube
-        The spectral radiance over the exposure, as `apply_exposure` gives it,
-        with wavelength on its last axis.
+        Spectral radiance over the exposure, from `apply_exposure`, with
+        wavelength on the last axis.
 
     Returns
     -------
     NDCube
-        The photons, in photon / (cm2 sr cm).
+        Photons, in photon / (cm2 sr cm).
     """
     wl_axis = I.axis_world_coords_values(2)[0]
     E_ph = (const.h * const.c / wl_axis).to("erg") * (1 / u.photon)
@@ -264,14 +311,14 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
     Parameters
     ----------
     ph_flux : NDCube
-        The photons, as `intensity_to_photons` gives them.
+        Photons, from `intensity_to_photons`.
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope, whose ``ea_and_throughput`` is used.
+        Telescope; its `ea_and_throughput` is used.
 
     Returns
     -------
     NDCube
-        The photons collected, in photon / (sr cm).
+        Photons collected, in photon / (sr cm).
 
     Raises
     ------
@@ -282,10 +329,10 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
     wl0 = ph_flux.meta['rest_wav']
     wl_axis = ph_flux.axis_world_coords_values(2)[0]
     throughput = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
-    # Beyond the throughput tables there is no detector to collect the light,
-    # and a pixel of the window there would be a pixel the instrument does not
-    # have: filled with nothing, it would pull the fit; left as NaN, it spreads
-    # through the blur, or leaves the fit wrong with no warning.
+    # Beyond the throughput tables there is no detector, so a window pixel
+    # there is one the instrument does not have. Filled with zero it would
+    # pull the fit; left as NaN it spreads through the blur, or makes the fit
+    # wrong with no warning.
     outside = ~np.isfinite(throughput.value)
     if outside.any():
         missing = wl_axis[outside].to_value(u.AA)
@@ -306,28 +353,28 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
 
 def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: u.Quantity, slit_width: u.Quantity) -> NDCube:
     """
-    Turn the photons collected into the photons each detector pixel receives.
+    Convert the photons collected to photons per detector pixel.
 
-    Each pixel sees a patch of Sun one pixel along the slit and one slit width
-    across, and one pixel's range of wavelengths.
+    Each pixel sees a patch of Sun one pixel along the slit and one slit
+    width across, over one pixel in wavelength.
 
     Parameters
     ----------
     ph_flux : NDCube
-        The photons collected, as `add_telescope_throughput` gives them.
+        Photons collected, from `add_telescope_throughput`.
     wl_pitch : u.Quantity
-        The wavelength step from one pixel to the next, ``det.wvl_res``.
+        Wavelength step per pixel, `det.wvl_res`.
     plate_scale : u.Quantity
-        The length on the Sun of one pixel along the slit,
-        ``det.plate_scale_length``.
+        Length on the Sun of one pixel along the slit,
+        `det.plate_scale_length`.
     slit_width : u.Quantity
-        The slit's width as a length on the Sun, such as
-        ``angle_to_distance(sim.slit_width)``.
+        Slit width as a length on the Sun, such as
+        `angle_to_distance(sim.slit_width)`.
 
     Returns
     -------
     NDCube
-        The photons per pixel.
+        Photons per pixel.
     """
     pixel_solid_angle = ((plate_scale * u.pixel * slit_width).cgs / const.au.cgs ** 2) * u.sr
     
@@ -343,13 +390,13 @@ def photons_to_pixel_counts(ph_flux: NDCube, wl_pitch: u.Quantity, plate_scale: 
 
 def slit_image_width(slit_width: u.Quantity, det) -> float:
     """
-    The width of the slit's image across the dispersion, in detector pixels.
+    Width of the slit's image along the dispersion, in detector pixels.
 
-    RSC-2022021C measures widths along the dispersion in the same arcsec as
-    along the slit, converting both with the spatial scale (0.0118 arcsec per
-    micron for SW), and adds the slit to the optics in those units. A slit
-    *slit_width* wide therefore covers *slit_width* over the plate scale in
-    spectral pixels, as it would along the slit.
+    RSC-2022021C gives widths along the dispersion in the same arcsec as
+    along the slit, converting both with the spatial scale (0.0118 arcsec
+    per micron for SW), and adds the slit to the optics in those units. A
+    slit `slit_width` wide therefore covers `slit_width` over the plate
+    scale in spectral pixels, as it would along the slit.
     """
     return (slit_width / (det.plate_scale_angle * u.pixel)).to_value(u.dimensionless_unscaled)
 
@@ -358,13 +405,12 @@ def spectral_optics_fwhm(tel, det) -> float:
     """
     FWHM of the optics alone along the dispersion, in detector pixels.
 
-    ``tel.psf_params[1]`` is the spectral FWHM with a slit
-    ``tel.psf_slit_width`` wide, the optics FWHM and the slit width added in
-    quadrature, so the optics part is what is left when the slit is taken
-    out the same way. For the default SWC values that is 2.207 pixels, or
-    0.351 arcsec, where RSC-2022021C gives 0.352 arcsec; the two agree to the
-    rounding of 43.00 mA to 2.54 pixels and of the plate scale to 0.159
-    arcsec per pixel.
+    `tel.psf_params[1]` is the spectral FWHM with a slit `tel.psf_slit_width`
+    wide: the optics FWHM and the slit width added in quadrature. The optics
+    FWHM is what remains when the slit is removed in quadrature. For the
+    default SWC values it is 2.207 pixels, or 0.351 arcsec, against 0.352
+    arcsec in RSC-2022021C; the two agree to the rounding of 43.00 mA to
+    2.54 pixels and of the plate scale to 0.159 arcsec per pixel.
     """
     reference = getattr(tel, "psf_slit_width", None)
     if reference is None:
@@ -386,53 +432,53 @@ def spectral_optics_fwhm(tel, det) -> float:
 
 def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
     """
-    The FWHM of the spectral PSF with a given slit, in detector pixels.
+    FWHM of the spectral PSF for a given slit, in detector pixels.
 
-    The slit's image is part of the spectral PSF, so it widens with the slit.
-    The optics' FWHM and the width of the slit's image add in quadrature, and
-    ``tel.psf_params[1]`` is the FWHM with the slit ``tel.psf_slit_width``.
-    For EUVST-SW's default settings this gives 2.54, 3.35, 5.49 and 10.30
-    pixels for the 0.2, 0.4, 0.8 and 1.6 arcsec slits. A telescope without
-    ``psf_slit_width`` has the same FWHM for every slit.
+    The slit's image is part of the spectral PSF, so the PSF widens with the
+    slit. The optics FWHM and the slit image width add in quadrature, and
+    `tel.psf_params[1]` is the FWHM for the slit `tel.psf_slit_width`. For
+    EUVST-SW's defaults this gives 2.54, 3.35, 5.49 and 10.30 pixels for the
+    0.2, 0.4, 0.8 and 1.6 arcsec slits. A telescope without `psf_slit_width`
+    has the same FWHM for every slit.
 
     Parameters
     ----------
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope.
+        Telescope.
     det : Detector_SWC or Detector_EIS
-        The detector, whose plate scale sets the width of the slit's image.
+        Detector, whose plate scale sets the width of the slit's image.
     slit_width : u.Quantity
-        The slit.
+        Slit width.
 
     Returns
     -------
     float
-        The FWHM, in pixels.
+        FWHM in pixels.
     """
-    # The quadrature sum is FWHM(w)**2 = FWHM(w0)**2 + s(w)**2 - s(w0)**2,
-    # with w0 the reference slit and s its image's width (slit_image_width),
-    # as RSC-2022021C adds them for the spectral resolution it quotes.
+    # In quadrature, FWHM(w)**2 = FWHM(w0)**2 + s(w)**2 - s(w0)**2, with w0
+    # the reference slit and s the slit image width (slit_image_width), as
+    # RSC-2022021C combines them for its quoted spectral resolution.
     measured = tel.psf_params[1].to_value(u.pixel)
     reference = getattr(tel, "psf_slit_width", None)
     if reference is None:
         return measured
-    # Refuses a FWHM that leaves nothing for the optics.
+    # Raises if the FWHM leaves nothing for the optics.
     spectral_optics_fwhm(tel, det)
-    # The difference of squares comes first so that it is exactly zero for
-    # the reference slit, which then gets psf_params[1] to the last bit.
+    # Take the difference of squares first so it is exactly zero for the
+    # reference slit, which then gets psf_params[1] to the last bit.
     difference = slit_image_width(slit_width, det)**2 - slit_image_width(reference, det)**2
     return float(np.sqrt(measured**2 + difference))
 
 
 def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
     """
-    How many pixels either side of its centre the spectral PSF kernel reaches.
+    Pixels the spectral PSF kernel reaches either side of its centre.
 
-    The kernel spans six sigma of the Gaussian of :func:`spectral_psf_fwhm`,
-    rounded up to an odd number of pixels and at least seven, under either
-    ``spectral_psf``. The slit convolved with the optics is no wider than
-    that Gaussian, and the pixels it leaves out hold a few parts in ten
-    thousand of it at most, for the narrowest slit.
+    For either `spectral_psf`, the kernel spans six sigma of the Gaussian of
+    :func:`spectral_psf_fwhm`, rounded up to an odd number of pixels and at
+    least seven. The slit convolved with the optics is no wider than that
+    Gaussian, and the pixels left out hold at most a few parts in ten
+    thousand of it, for the narrowest slit.
     """
     sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width))
     n = max(7, int(np.ceil(6 * sigma)))
@@ -443,14 +489,14 @@ def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
 
 def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
     """
-    How much further than the reference slit's the spectral PSF of a slit reaches, in pixels.
+    Pixels by which the spectral PSF of a slit reaches beyond the reference slit's.
 
-    The wavelength window of a synthesis has whatever margin it has around
-    its lines. A slit wider than ``tel.psf_slit_width`` spreads them
-    further, and what it spreads past the ends of the window is lost, so
-    the window is widened by this many pixels at each end to give every
-    slit the margin the reference slit has. It is zero for the reference
-    slit, and for a telescope whose PSF does not depend on the slit.
+    The wavelength window of a synthesis has some margin around its lines.
+    A slit wider than `tel.psf_slit_width` spreads them further, and light
+    spread past the ends of the window is lost. The window is therefore
+    widened by this many pixels at each end, to give every slit the margin
+    of the reference slit. Zero for the reference slit, and for a telescope
+    whose PSF does not depend on the slit.
     """
     reference = getattr(tel, "psf_slit_width", None)
     if reference is None:
@@ -461,31 +507,31 @@ def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
 
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
-    The spectral PSF as the optics' Gaussian convolved with the slit's image, pixel by pixel.
+    Spectral PSF as the optics Gaussian convolved with the slit's image, per pixel.
 
-    This is the PSF that ``spectral_psf="convolution"`` uses. A wide slit
+    This is the PSF used with `spectral_psf="convolution"`. A wide slit
     gives it a flat top. For the 0.2 arcsec slit it is narrower than the
     Gaussian of `spectral_psf_fwhm`, because a rectangle adds less to a
-    width than a Gaussian of the same FWHM does.
+    width than a Gaussian of the same FWHM.
 
     Parameters
     ----------
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope.
+        Telescope.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     slit_width : u.Quantity
-        The slit.
+        Slit width.
 
     Returns
     -------
     np.ndarray
-        The PSF at whole pixels either side of its centre, summing to one.
+        PSF at whole pixels either side of its centre, summing to one.
     """
-    # RSC-2022021C defines the line spread function as the optics' PSF after
-    # the slit convolved with a rectangle the width of the slit. It is taken
-    # at the centre of each pixel, as the Gaussian kernel is, on the same
-    # pixels (spectral_psf_reach).
+    # RSC-2022021C defines the line spread function as the optics PSF after
+    # the slit, convolved with a rectangle the width of the slit. Like the
+    # Gaussian kernel, it is taken at pixel centres over the same pixels
+    # (spectral_psf_reach).
     sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det))
     half = 0.5 * slit_image_width(slit_width, det)
     reach = spectral_psf_reach(tel, det, slit_width)
@@ -505,56 +551,53 @@ def apply_focusing_optics_psf(
     boundary: str = "replicate",
 ) -> NDCube:
     """
-    Blur a cube already on the detector's pixels with the PSF, along the slit and in wavelength.
+    Blur a cube on the detector pixels with the PSF, along the slit and in wavelength.
 
-    When `eclipse` observes a synthesis file, it blurs the spectra before
-    they are laid onto the pixels, so that a line narrower than a pixel keeps
-    its place within it. This function blurs a cube already on the pixels.
-    `simulate_once` uses it for a cube that has not been blurred yet, such as
-    a single line of known intensity.
+    For a synthesis file, `eclipse` blurs the spectra before laying them
+    onto the pixels, so a line narrower than a pixel keeps its place within
+    it. This function instead blurs a cube already on the pixels.
+    `simulate_once` uses it for a cube not yet blurred, such as a single
+    line of known intensity.
 
-    Along the slit the PSF is a Gaussian with the FWHM ``tel.psf_params[0]``.
-    In wavelength it depends on ``sim.spectral_psf``: a Gaussian of
-    `spectral_psf_fwhm` for ``"quadrature"``, or `spectral_line_spread` for
-    ``"convolution"``.
+    Along the slit the PSF is a Gaussian of FWHM `tel.psf_params[0]`. In
+    wavelength it depends on `sim.spectral_psf`: a Gaussian of
+    `spectral_psf_fwhm` for `"quadrature"`, or `spectral_line_spread` for
+    `"convolution"`.
 
     Parameters
     ----------
     signal : NDCube
-        The cube, shaped (along the slit, slit positions, wavelength).
+        Cube shaped (along the slit, slit positions, wavelength).
     tel : Telescope_EUVST or Telescope_EIS
-        The telescope, with its PSF.
+        Telescope, with its PSF.
     det : Detector_SWC or Detector_EIS
-        The detector, whose plate scale sets the width of the slit's image.
+        Detector, whose plate scale sets the width of the slit's image.
     sim : Simulation
-        The slit width and ``spectral_psf``.
+        Gives the slit width and `spectral_psf`.
     convolve_spatial : bool, optional
-        When False, blur in wavelength only. This is for a scene that is the
-        same all along the slit, where blurring along it would change nothing.
-        Default True.
+        If False, blur in wavelength only, for a scene uniform along the
+        slit, where blurring along it would change nothing. Default True.
     boundary : {"replicate", "zero"}, optional
-        What is beyond the ends of the slit. ``"replicate"`` continues the
-        rows at each end outward. ``"zero"`` takes it as dark, so the rows
-        within a PSF width of an end come out darker. Default ``"replicate"``.
+        What lies beyond the ends of the slit. `"replicate"` extends the end
+        rows outward. `"zero"` takes it as dark, so rows within a PSF width
+        of an end come out darker. Default `"replicate"`.
 
     Returns
     -------
     NDCube
-        The blurred cube, with the same coordinates, unit and metadata.
+        Blurred cube, with the same coordinates, unit and metadata.
     """
-    # A uniform scene is blurred in wavelength only: along the slit the blur
-    # changes nothing with "replicate", and with "zero" it takes light off the
-    # ends of the slit that the scene does have. Zero fill is wrong for a
-    # raster too, since the Sun carries on past the field of view; with the
-    # default SWC PSF, seven rows wide, it costs the end row about a third of
-    # the kernel's weight, the next row 8 per cent, the one after 1 per cent.
+    # A uniform scene is blurred in wavelength only: along the slit,
+    # "replicate" changes nothing and "zero" removes light from the ends that
+    # the scene does have. Zero fill is wrong for a raster too, as the Sun
+    # continues past the field of view. With the default SWC PSF, seven rows
+    # wide, it costs the end row about a third of the kernel's weight, the
+    # next row 8 per cent and the one after 1 per cent.
     if boundary not in ("replicate", "zero"):
         raise ValueError(
             f"boundary must be 'replicate' or 'zero', got {boundary!r}."
         )
-    data_in = signal.data
-    unit = signal.unit
-    n_slit, n_scan, n_lambda = data_in.shape
+    n_slit, n_scan, n_lambda = signal.data.shape
 
     psf_type = tel.psf_type.lower()
     psf_params = tel.psf_params
@@ -597,16 +640,15 @@ def apply_focusing_optics_psf(
         kx = spectral_1d.size
 
     if not convolve_spatial:
-        # Spectral axis only.  Zero padding is correct here: the wavelength
-        # grid extends several sigma past the line, so there is no flux at its
-        # edges to lose.
+        # Spectral axis only. Zero padding is correct here: the wavelength
+        # grid extends several sigma past the line, so no flux is lost at its
+        # edges.
         psf_1d = spectral_1d / spectral_1d.sum()
-        return NDCube(
-            data=convolve1d(data_in, psf_1d, axis=2, mode="constant", cval=0.0),
-            wcs=signal.wcs.deepcopy(),
-            unit=unit,
-            meta=signal.meta,
-        )
+
+        def blur(cube):
+            return convolve1d(cube, psf_1d, axis=2, mode="constant", cval=0.0)
+
+        return _blurred_cube(signal, blur)
 
     if quadrature:
         # Coordinate grids centred at zero
@@ -627,25 +669,79 @@ def apply_focusing_optics_psf(
     # Normalise
     psf /= psf.sum()
 
-    # Convolve each scan position's detector frame (n_slit, n_lambda). Padding
-    # the slit axis by half a kernel is exactly enough for every real row to
-    # see replicated rows rather than the zeros convolve2d assumes outside the
-    # array; the spectral axis is left to zero-fill, which is correct there.
+    # Convolve each scan position's frame (n_slit, n_lambda). Padding the slit
+    # axis by half a kernel is just enough for every real row to see
+    # replicated rows rather than the zeros convolve2d assumes outside the
+    # array. The spectral axis is zero-filled, which is correct there.
     pad = (ky // 2) if boundary == "replicate" else 0
-    blurred = np.empty_like(data_in)
-    for i in range(n_scan):
-        frame = data_in[:, i, :]
-        if pad:
-            frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
-        convolved = convolve2d(frame, psf, mode="same")
-        blurred[:, i, :] = convolved[pad:pad + n_slit, :] if pad else convolved
 
-    return NDCube(
-        data=blurred,
-        wcs=signal.wcs.deepcopy(),
-        unit=unit,
-        meta=signal.meta,
-    )
+    def blur(cube):
+        blurred = np.empty(cube.shape)
+        for i in range(n_scan):
+            frame = cube[:, i, :]
+            if pad:
+                frame = np.pad(frame, ((pad, pad), (0, 0)), mode="edge")
+            convolved = convolve2d(frame, psf, mode="same")
+            blurred[:, i, :] = convolved[pad:pad + n_slit, :] if pad else convolved
+        return blurred
+
+    return _blurred_cube(signal, blur)
+
+
+def _blurred_cube(signal: NDCube, blur) -> NDCube:
+    """
+    `signal`, photons on the pixels, blurred by `blur`, with the per-pixel
+    photon values in its `meta` carried along (:func:`_carry_photon_meta`).
+    """
+    blurred, meta = _carry_photon_meta(blur, signal)
+    return NDCube(data=blurred, wcs=signal.wcs.deepcopy(), unit=signal.unit, meta=meta)
+
+
+def _carry_photon_meta(carry, cube: NDCube) -> tuple:
+    """
+    Photons of `cube` moved by `carry`, and its `meta` with the per-pixel
+    photon values moved with them.
+
+    `carry` is a linear map that keeps the wavelength axis. The values are
+    the wavelengths of the mean and root mean square photon energies,
+    `photon_wavelength` and `photon_rms_wavelength`. For the pinholes they
+    also include the fraction of the light the filter passed,
+    `photon_filter_transmission`, and the wavelengths of the mean and root
+    mean square energies of the light it blocked,
+    `blocked_photon_wavelength` and `blocked_photon_rms_wavelength`.
+
+    The photons and the blocked light are each moved as photons, so these
+    values are exact wherever they land. A pixel no photons reach keeps its
+    own wavelength and blocks nothing.
+
+    Returns `(moved, meta)`.
+    """
+    photons = np.asarray(cube.data, dtype=float)
+    meta = cube.meta
+    if "photon_wavelength" not in (meta or {}):
+        return carry(photons), meta
+    mean = u.Quantity(meta["photon_wavelength"])
+    unit = mean.unit
+    rms = u.Quantity(meta.get("photon_rms_wavelength", mean)).to_value(unit)
+    own = cube.axis_world_coords_values(2)[0].to_value(unit)
+    moved, moved_mean, moved_rms = _carry_photon_wavelengths(carry, photons, mean.value, rms,
+                                                             own)
+    meta = {**meta, "photon_wavelength": moved_mean * unit,
+            "photon_rms_wavelength": moved_rms * unit}
+    if "photon_filter_transmission" in meta:
+        passed = np.asarray(meta["photon_filter_transmission"], dtype=float)
+        blocked = photons * np.divide(1.0 - passed, passed, out=np.zeros(photons.shape),
+                                      where=passed > 0)
+        moved_blocked, blocked_mean, blocked_rms = _carry_photon_wavelengths(
+            carry, blocked, u.Quantity(meta["blocked_photon_wavelength"]).to_value(unit),
+            u.Quantity(meta["blocked_photon_rms_wavelength"]).to_value(unit), own)
+        before = moved + moved_blocked
+        meta.update({
+            "photon_filter_transmission": np.divide(moved, before, out=np.ones(moved.shape),
+                                                    where=before > 0),
+            "blocked_photon_wavelength": blocked_mean * unit,
+            "blocked_photon_rms_wavelength": blocked_rms * unit})
+    return moved, meta
 
 
 def to_electrons(
@@ -658,29 +754,34 @@ def to_electrons(
     photon_shot_inverse_transform: bool = False,
 ) -> NDCube:
     """
-    Turn the photons arriving in each pixel into the electrons the detector reads out.
+    Convert the photons arriving in each pixel to the electrons read out.
 
-    The detector catches each photon with a chance of ``det.qe_euv``, and
-    each caught photon frees a number of electrons that depends on its
-    wavelength, with a spread set by the Fano factor. The dark current and
-    the read noise are added on top. Pixels can come out below zero, as the
-    read noise takes a dark pixel below the bias level as often as above it.
+    Each photon is detected with probability `det.qe_euv` and frees a number
+    of electrons that depends on its wavelength, with a spread set by the
+    Fano factor. Dark current and read noise are then added. Pixels can go
+    below zero, as read noise takes a dark pixel below the bias level as
+    often as above it.
 
     Parameters
     ----------
     photon_counts : NDCube
-        The photons in each pixel, as `sample_photon_arrivals` gives them:
-        whole numbers, or with ``noise=False`` their expected, fractional
-        numbers.
+        Photons in each pixel, from `sample_photon_arrivals`: whole numbers,
+        or with `noise=False` their expected, fractional values. Its
+        `meta["photon_wavelength"]`, the wavelength of the mean energy of
+        each pixel's photons, sets the electrons per photon. Its
+        `meta["photon_rms_wavelength"]`, that of their root mean square
+        energy, sets how far the electrons of photons of different energies
+        spread. Without them, `meta["rest_wav"]` sets both.
     t_exp : u.Quantity
-        The exposure time, for the dark current.
+        Exposure time, for the dark current.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     dark_current_inverse_transform : bool, optional
-        Draw the dark current by inverse-transform sampling, for common random
-        numbers between runs that differ in dark current. Default False.
+        Draw the dark current by inverse-transform sampling, for common
+        random numbers between runs that differ in dark current. Default
+        False.
     noise : bool, optional
-        With False, every random draw is replaced by its mean. Default True.
+        If False, every random draw is replaced by its mean. Default True.
     photon_shot_inverse_transform : bool, optional
         Draw the detected photons by inverse-transform sampling, and the Fano
         spread for every pixel, for common random numbers between runs that
@@ -689,14 +790,21 @@ def to_electrons(
     Returns
     -------
     NDCube
-        The electrons in each pixel.
+        Electrons in each pixel.
     """
-    # Get rest wavelength from metadata (keep as Quantity with units)
-    rest_wavelength = photon_counts.meta['rest_wav']  # Should be a Quantity
+    # Each photon frees electrons by its own energy. The cube gives the
+    # wavelengths of the mean and root mean square photon energies in each
+    # pixel, as kept by `simulate_once`; otherwise the line's rest wavelength
+    # is used for all.
+    meta = photon_counts.meta or {}
+    if "photon_wavelength" in meta:
+        rest_wavelength = meta["photon_wavelength"]
+        rms_wavelength = meta.get("photon_rms_wavelength", rest_wavelength)
+    else:
+        rest_wavelength = rms_wavelength = meta["rest_wav"]
 
-    # Apply quantum efficiency.  With noise on this is a binomial draw over
-    # whole photons; with it off the same expectation, qe * N, without the
-    # cast to integers that a draw would need.
+    # Apply quantum efficiency: a binomial draw over whole photons, or without
+    # noise its expectation qe * N, with no cast to integers.
     incident = photon_counts.to(u.photon / u.pix).data
     if not noise:
         photons_detected = incident * det.qe_euv
@@ -705,10 +813,11 @@ def to_electrons(
     else:
         photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
 
-    # Apply proper Fano noise per pixel using a vectorized approach
+    # Apply Fano noise per pixel, vectorized
     electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
                                              rest_wavelength, det, noise=noise,
-                                             every_pixel=photon_shot_inverse_transform)
+                                             every_pixel=photon_shot_inverse_transform,
+                                             rms_wavelength=rms_wavelength)
 
     e = electron_counts * (u.electron / u.pixel)
 
@@ -725,16 +834,15 @@ def to_electrons(
     dark_current_signal = dark_current_counts * (u.electron / u.pixel)
     e += dark_current_signal
 
-    # Add read noise.  It is zero-mean, so with noise off there is nothing to
-    # add rather than something to average.
+    # Add read noise. It has zero mean, so without noise nothing is added.
     if noise:
         e += np.random.normal(0, det.read_noise_rms.value,
                               photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
 
     # Not clipped at zero: a CCD reads out above a bias level, so read noise
-    # takes a dark pixel below it as often as above, and the bias-subtracted
-    # signal ECLIPSE gives goes negative. Clipping raised the mean of faint
-    # pixels, so that noise on no longer averaged to noise off.
+    # takes a dark pixel below it as often as above, and ECLIPSE's
+    # bias-subtracted signal goes negative. Clipping would raise the mean of
+    # faint pixels, so noise on would no longer average to noise off.
     e = e.to(u.electron / u.pixel)
     e_val = e.value
 
@@ -748,22 +856,22 @@ def to_electrons(
 
 def to_dn(electrons: NDCube, det) -> NDCube:
     """
-    Turn electrons into DN, rounded to the nearest DN and clipped at the digitiser's maximum.
+    Convert electrons to DN, rounded to the nearest DN and clipped at the digitiser maximum.
 
-    Nothing is clipped at the CCD's full well, ``Detector_SWC.full_well``,
-    though it is lower than the digitiser's maximum.
+    Nothing is clipped at the CCD full well, `Detector_SWC.full_well`,
+    though it is lower than the digitiser maximum.
 
     Parameters
     ----------
     electrons : NDCube
-        The electrons in each pixel, as `to_electrons` gives them.
+        Electrons in each pixel, from `to_electrons`.
     det : Detector_SWC or Detector_EIS
-        The detector, with its gain and ``max_dn``.
+        Detector, with its gain and `max_dn`.
 
     Returns
     -------
     NDCube
-        The DN in each pixel.
+        DN in each pixel.
     """
     dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
     dn_q = dn_q.to(det.max_dn.unit)
@@ -786,12 +894,12 @@ def add_poisson(cube: NDCube) -> NDCube:
     Parameters
     ----------
     cube : NDCube
-        The mean in each pixel.
+        Mean in each pixel.
 
     Returns
     -------
     NDCube
-        The draws, with the same coordinates, unit and metadata.
+        Draws, with the same coordinates, unit and metadata.
     """
     noisy = np.random.poisson(cube.data) * cube.unit
     return NDCube(
@@ -809,23 +917,23 @@ def sample_photon_arrivals(
     noise: bool = True,
 ) -> NDCube:
     """
-    Draw the number of photons that arrive in each pixel, a Poisson draw around the expected number.
+    Poisson draw of the photons arriving in each pixel, around the expected number.
 
     Parameters
     ----------
     photon_counts : NDCube
-        The expected photons in each pixel.
+        Expected photons in each pixel.
     photon_shot_inverse_transform : bool, optional
         Draw by inverse-transform sampling, for common random numbers between
         runs that differ in photon flux. Default False.
     noise : bool, optional
-        With False, return the expected numbers instead, not rounded to whole
+        If False, return the expected numbers instead, not rounded to whole
         photons. Default True.
 
     Returns
     -------
     NDCube
-        The photons in each pixel, in photon per pixel.
+        Photons in each pixel, in photon per pixel.
     """
     q = photon_counts.data * photon_counts.unit
 
@@ -834,8 +942,8 @@ def sample_photon_arrivals(
     mean_counts = q.to(canonical_units).value
     mean_counts = np.maximum(mean_counts, 0)
 
-    # Left as floating point without noise: rounding to whole photons would
-    # put quantisation back in where the point was to remove the randomness.
+    # Without noise, keep floats: rounding to whole photons would add back
+    # quantisation where the aim is to remove randomness.
     if not noise:
         return NDCube(
             data=mean_counts,
@@ -864,14 +972,14 @@ def apply_exposure(I: NDCube, t_exp: u.Quantity) -> NDCube:
     Parameters
     ----------
     I : NDCube
-        The spectral radiance, per second.
+        Spectral radiance, per second.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
 
     Returns
     -------
     NDCube
-        The spectral radiance over the exposure.
+        Spectral radiance over the exposure.
     """
     # Convert intensity rate to total intensity over exposure
     total_intensity = (I.data * I.unit * t_exp)
@@ -889,34 +997,34 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
     """
     Add the electrons freed by visible stray light, the same in every pixel.
 
-    ``sim.vis_sl`` photons per second per cm2 arrive. If the telescope has a
-    filter, as EUVST's does, they arrive at the filter, which lets through
-    `AluminiumFilter.visible_light_throughput` of them; otherwise they are
-    the light at the CCD. Each photon that reaches the detector is caught
-    with a chance of ``det.qe_vis``, and frees one electron.
+    `sim.vis_sl` is in photons per second per cm2. If the telescope has a
+    filter, as EUVST does, this is the light at the filter, which passes
+    `AluminiumFilter.visible_light_throughput` of it; otherwise it is the
+    light at the CCD. Each photon reaching the detector is detected with
+    probability `det.qe_vis` and frees one electron.
 
     Parameters
     ----------
     electrons : NDCube
-        The electrons in each pixel, as `to_electrons` gives them.
+        Electrons in each pixel, from `to_electrons`.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
     det : Detector_SWC or Detector_EIS
-        The detector.
+        Detector.
     sim : Simulation
-        The simulation, with ``vis_sl``.
+        Simulation, with `vis_sl`.
     tel : Telescope_EUVST or Telescope_EIS, optional
-        The telescope. Its filter is applied if it has one; EIS's is not, so
-        for EIS ``vis_sl`` is the light that reaches the CCD.
+        Telescope. Its filter is applied if it has one. EIS's is not, so for
+        EIS `vis_sl` is the light reaching the CCD.
     noise : bool, optional
-        With False, add the expected electrons rather than a draw. Default
+        If False, add the expected electrons rather than a draw. Default
         True.
 
     Returns
     -------
     NDCube
-        The electrons in each pixel, with the stray light's added, in electron
-        per pixel.
+        Electrons in each pixel with the stray light added, in electron per
+        pixel.
     """
     # Convert vis_sl from photon/s/cm2 to photon/s/pixel using detector pixel area
     pixel_area = ((det.pix_size*1*u.pix)**2)/u.pix  # cm/pix -> cm2/pixel
@@ -936,9 +1044,9 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
         n_vis_ph = np.full(electrons.data.shape, vis_mean) * (u.photon / u.pixel)
 
     # Apply the quantum efficiency. A visible photon absorbed in silicon frees
-    # exactly one electron: its couple of eV is below the 3.7 eV an EUV photon
-    # spends on each electron-hole pair, so neither the EUV photon's many
-    # electrons nor their Fano spread apply, and that model gave 0.55.
+    # exactly one electron: its couple of eV is below the 3.7 eV per
+    # electron-hole pair, so the EUV model of many electrons with a Fano
+    # spread does not apply (it would give 0.55).
     vis_incident = n_vis_ph.to_value(u.photon / u.pixel)
     if noise:
         vis_photons_detected = np.random.binomial(
@@ -962,33 +1070,33 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
 def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel,
                               *, noise: bool = True) -> NDCube:
     """
-    Add the electrons freed by visible light that passes through pinholes in the filter.
+    Add the electrons freed by visible light through pinholes in the filter.
 
     The light through each pinhole spreads over the detector in the
-    pinhole's diffraction pattern. It does nothing unless
-    ``sim.enable_pinholes`` is set and there are pinholes.
+    pinhole's diffraction pattern. Does nothing unless `sim.enable_pinholes`
+    is set and there are pinholes.
 
     Parameters
     ----------
     electrons : NDCube
-        The electrons in each pixel.
+        Electrons in each pixel.
     t_exp : u.Quantity
-        The exposure time.
+        Exposure time.
     det : Detector_SWC
-        EUVST-SW's detector, whose ``filter_distance`` sets the diffraction.
+        EUVST-SW detector, whose `filter_distance` sets the diffraction.
     sim : Simulation
-        The simulation, with ``vis_sl`` and the pinholes.
+        Simulation, with `vis_sl` and the pinholes.
     tel : Telescope_EUVST
-        The telescope.
+        Telescope.
     noise : bool, optional
-        With False, add the expected electrons rather than a draw. Default
+        If False, add the expected electrons rather than a draw. Default
         True.
 
     Returns
     -------
     NDCube
-        The electrons in each pixel, with the pinholes' added, in electron per
-        pixel.
+        Electrons in each pixel with the pinholes' light added, in electron
+        per pixel.
     """
     if not (sim.enable_pinholes and len(sim.pinhole_sizes) > 0):
         return electrons  # No pinholes enabled
@@ -1007,7 +1115,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
     additional_electrons = np.zeros_like(electrons.data)
 
     # Spectral positions are optional; without them every pinhole projects to
-    # the centre of the spectral window, as it always did.
+    # the centre of the spectral window.
     spectral_positions = (list(sim.pinhole_positions_spectral)
                           or [None] * len(sim.pinhole_sizes))
 
@@ -1022,7 +1130,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
         vis_photons_per_sec_through_pinhole = sim.vis_sl * pinhole_area
         vis_photons_total_through_pinhole = (vis_photons_per_sec_through_pinhole * t_exp).to(u.photon)
         
-        # Calculate visible diffraction pattern - this shows how the pinhole photons spread
+        # Visible diffraction pattern: how the pinhole photons spread
         n_slit, n_scan, n_spectral = data_shape
         vis_pattern = calculate_pinhole_diffraction_pattern(
             detector_shape=(n_slit, n_spectral),
@@ -1036,15 +1144,14 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
             pinhole_position_spectral=pinhole_spectral,
         )
 
-        # Scale the pattern by its ABSOLUTE normalisation rather than by its
-        # sum over the detector array.  Dividing by the array sum forces every
-        # transmitted photon onto the detector, which small pinholes do not do:
-        # a 1 micron hole at 250 mm puts its first Airy minimum
-        # 183 mm out, so nearly all of its light misses a detector tens of mm
-        # across and must be lost, not redistributed.  vis_pattern peaks at
-        # 1.0, so multiplying by the peak per-pixel fraction gives the correct
-        # per-pixel fraction everywhere, and the array simply sums to less
-        # than 1 when light falls off the detector.
+        # Scale the pattern by its absolute normalisation, not its sum over the
+        # detector. Dividing by the sum would put every transmitted photon on
+        # the detector, but a 1 micron hole at 250 mm has its first Airy
+        # minimum 183 mm out, so nearly all its light misses a detector tens
+        # of mm across and must be lost, not redistributed. vis_pattern peaks
+        # at 1.0, so multiplying by the peak per-pixel fraction gives the
+        # right fraction everywhere, and the array sums to less than 1 when
+        # light falls off the detector.
         peak_fraction = airy_peak_fraction_per_pixel(
             pinhole_diameter=pinhole_diameter,
             distance=det.filter_distance,
@@ -1055,8 +1162,8 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
 
         vis_photons_distributed = vis_photons_total_through_pinhole.to(u.photon).value * vis_pattern_normalized
 
-        # The same light at every scan position, as the pinhole does not move,
-        # but each exposure its own photons: drawn for each one.
+        # The pinhole does not move, so the light is the same at every scan
+        # position, but each exposure gets its own draw.
         expected = np.broadcast_to(vis_photons_distributed[:, np.newaxis, :], data_shape)
         if noise:
             vis_photons_detected = np.random.binomial(np.random.poisson(expected), det.qe_vis)

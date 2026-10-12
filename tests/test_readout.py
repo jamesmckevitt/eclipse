@@ -1,30 +1,19 @@
-"""Check the SW read-out model: where each row sits, and what it collects.
+"""The SW read-out model: where each row sits, and what it collects.
 
-Two things are tested here. The first is the geometry: which wavelength a CCD
-row records, given that the two devices are butted along the dispersion with
-their registers on the outer edges. The expected wavelengths are the ones the
-optical design gives for the focal plane edges and for the key lines, so a
-failure means the row map moved rather than that two spellings of the same
-polynomial disagree.
-
-The second is the smear a frame collects when the chip stays illuminated while
-it is cleared and read. Every expected value is written out from the clocking
-rather than taken from the module:
-
-    a packet read out of row r sits at row r - k while image row k - 1 is in
-    the serial register, so it collects rate[r - k] * dwell[k], where
+Row wavelengths are checked against the optical design. The smear is
+checked against values written out from the clocking: a packet read out of
+row r sits at row r - k while image row k - 1 is in the serial register, so
+it collects rate[r - k] * dwell[k], where
 
     dwell[k] = row_transfer_time + line_read_time if row k - 1 is read
              = row_transfer_time                  otherwise
 
-and, before the exposure, the packet that ends the clear at row r has been
-clocked down from row r + dump_rows, collecting one row transfer at each row on
-the way.
+Before the exposure, the packet that ends the clear at row r collects one
+row transfer at each row from r + dump_rows down.
 
-The third is the charge each transfer leaves behind. The expected values come
-from moving the charge one transfer at a time, each transfer keeping a fraction
-cte of every well's charge and leaving the rest for the packet behind, rather
-than from the closed form the module uses.
+Charge transfer is checked against moving the charge one transfer at a time,
+each keeping a fraction `cte` of every well's charge and leaving the rest for
+the packet behind.
 """
 import warnings
 
@@ -45,13 +34,13 @@ from euvst_response.readout import (
     windows_from_wavelengths,
 )
 
-# The design wavelengths at the four imaging-area edges, in Angstrom, from the
-# fit to RSC-2022021C. Rows count from each CCD's serial register, which is on
-# the outer edge, so row 0 is the outermost row and row 2047 is at the butt.
+# Design wavelengths at the four imaging-area edges, in Angstrom, from the fit
+# to RSC-2022021C. Rows count from each CCD's serial register on the outer
+# edge, so row 0 is the outermost row and row 2047 is at the butt.
 LEFT_ROW_0, LEFT_ROW_2047 = 163.5549, 198.2516
 RIGHT_ROW_0, RIGHT_ROW_2047 = 234.0014, 199.5202
 
-# Rows of the lines that matter in a flare, at the centre of the slit.
+# Rows of the key flare lines at the centre of the slit.
 KEY_LINES = {
     "Fe IX 171.073": (171.073, "left", 442.5),
     "Fe XXIV 192.030": (192.030, "left", 1679.0),
@@ -62,13 +51,13 @@ KEY_LINES = {
 }
 
 
-# The small frames here are mostly not cleared, which ECLIPSE warns of; the
-# warning has its own test below.
+# Most small frames here are not cleared, which ECLIPSE warns about; the
+# warning is tested below.
 pytestmark = pytest.mark.filterwarnings("ignore:dump_rows is")
 
 
 def small_sequence(**kwargs):
-    """A short frame, so that a test can write the clocking out by hand."""
+    """Short frame whose clocking a test can write out by hand."""
     defaults = dict(shutter=False, row_transfer_time=15.0 * u.us,
                     pixel_period=500.0 * u.ns, serial_prescan=2,
                     serial_image_pixels=6, serial_overscan=2,
@@ -164,9 +153,9 @@ def test_a_line_lands_on_one_row_all_along_the_slit_by_default():
 
 
 def test_the_slit_image_tilt_drifts_a_line_along_the_dispersion():
-    # Switched on, a line drifts by the measured 0.991 rows of tilt plus 0.605
-    # of curvature at one end of the slit, and by the difference of the two at
-    # the other, which is the two rows end to end the design shows.
+    # With the tilt on, a line moves by the measured 0.991 rows of tilt plus
+    # 0.605 of curvature at one end of the slit, and by their difference at
+    # the other: two rows end to end, as in the design.
     fp = FocalPlane_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT)
     centre_column = (fp.n_columns - 1) / 2
     end_column = centre_column + (140.0 / 0.159)
@@ -186,8 +175,8 @@ def test_the_tilt_leaves_the_centre_of_the_field_alone():
 
 
 def test_charge_from_fe_xii_crosses_the_flare_lines_on_its_way_out():
-    # The reason a flare smears: on the left CCD the register is at the
-    # short-wavelength end, so the packets recording Fe XII 195.119 are clocked
+    # Why a flare smears: on the left CCD the register is at the
+    # short-wavelength end, so packets recording Fe XII 195.119 are clocked
     # through Fe XXIV 192.030 and Ca XVII 192.858.
     fp = FocalPlane_SWC()
     _, fe12 = fp.row_of_wavelength(195.119 * u.Angstrom)
@@ -238,8 +227,8 @@ def test_windows_from_wavelengths_covers_the_line():
     (200.972, 195.119),   # the same, given the other way round
 ])
 def test_a_window_holds_every_row_its_wavelengths_land_on(low, high):
-    # Across the gap, each end of the range runs out to the butted edge, so
-    # the rows it needs reach row 2047 on both CCDs.
+    # A range across the gap runs out to the butted edge on both CCDs, so
+    # the window reaches row 2047.
     fp = FocalPlane_SWC()
     (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
     rows = np.arange(fp.n_rows)
@@ -276,10 +265,9 @@ def test_uniform_light_smears_by_the_time_the_charge_spends_on_the_way_out():
 
 
 def test_clearing_the_image_area_smears_from_the_rows_above():
-    # With an empty register a read costs nothing, so the two contributions can
-    # be written out separately: during the clear row r collects the rows above
-    # it, and during the read-out it collects the rows below it, one transfer
-    # each way.
+    # With an empty register a read takes no time, so the two parts can be
+    # written separately: during the clear row r collects light from the rows
+    # above it, and during the read-out from the rows below, one transfer each.
     rate = np.full((6, 1), 2.0)
     sequence = small_sequence(dump_rows=6, row_transfer_time=10.0 * u.us,
                               serial_prescan=0, serial_image_pixels=0,
@@ -295,7 +283,7 @@ def test_no_clear_means_no_smear_from_the_rows_above():
     rate[4] = 5.0
     sequence = small_sequence(dump_rows=0)
     smear = smear_photons(rate, sequence)
-    # Exactly: the rounding noise of the FFT is not left where no light went.
+    # Exactly zero: no FFT rounding noise is left where no light went.
     assert np.all(smear[:4, 0] == 0.0)
 
 
@@ -351,11 +339,11 @@ def test_smear_is_linear_in_the_light():
 
 
 def test_the_smear_depends_on_which_row_is_being_read_at_the_time():
-    # A packet crossing a bright row picks up that row's light for as long as
-    # the transfer it is in the middle of. The packet read out of row 11 crosses
-    # the bright row 6 while image row 4 is in the register, so reading row 4
-    # costs it a register read and reading row 5 instead does not, even though
-    # the same number of rows is read either way.
+    # A packet crossing a bright row collects its light for the length of the
+    # current transfer. The packet read out of row 11 crosses bright row 6
+    # while image row 4 is in the register, so reading row 4 adds a register
+    # read and reading row 5 instead does not, though the same number of rows
+    # is read either way.
     rate = np.zeros((12, 1))
     rate[6, 0] = 50.0
     reading_row_4 = smear_photons(rate, small_sequence(windows=[(4, 4)], parallel_overscan_rows=0))
@@ -365,9 +353,9 @@ def test_the_smear_depends_on_which_row_is_being_read_at_the_time():
 
 
 def test_a_flare_line_smears_into_the_rows_beyond_it():
-    # The whole point, on the real focal plane: put Fe XXIV 192.030 on the left
-    # CCD and read a window on Fe XII 195.119. The Fe XII rows collect Fe XXIV
-    # light they never saw during the exposure.
+    # On the real focal plane: put Fe XXIV 192.030 on the left CCD and read a
+    # window on Fe XII 195.119. The Fe XII rows collect Fe XXIV light they did
+    # not see during the exposure.
     fp = FocalPlane_SWC()
     _, fe24 = fp.row_of_wavelength(192.030 * u.Angstrom)
     _, fe12 = fp.row_of_wavelength(195.119 * u.Angstrom)
@@ -397,9 +385,9 @@ def test_dark_current_time_grows_down_the_frame():
 @pytest.mark.parametrize("windows", [[], [(2, 3)]])
 @pytest.mark.parametrize("dump_rows", [0, 3, 6, 10])
 def test_a_packet_collects_dark_current_wherever_it_collects_light(windows, dump_rows):
-    # Lit evenly at one photon a second, a packet collects outside the
-    # exposure one photon for each second it spends in the image area then,
-    # which is its dark time less the exposure.
+    # Lit evenly at one photon per second, a packet collects one photon for
+    # each second it spends in the image area outside the exposure, which is
+    # its dark time minus the exposure.
     sequence = small_sequence(windows=windows, dump_rows=dump_rows)
     n_rows, exposure = 6, 2.0
     smear = smear_photons(np.ones((n_rows, 1)), sequence)[:, 0]
@@ -432,13 +420,13 @@ def test_row_of_wavelength_inverts_wavelength_exactly():
     (163.5500, "left", (-0.5, 0.0)),         # the register half of the left CCD's first row
 ])
 def test_the_half_of_an_edge_row_beyond_its_centre_is_on_the_ccd(wavelength, ccd, rows):
-    """Only row centres were looked at, so these were said to be in the gap or off the focal plane."""
+    """Checking only row centres would put these in the gap or off the focal plane."""
     where, row = FocalPlane_SWC().row_of_wavelength(wavelength * u.Angstrom)
     assert where == ccd and rows[0] < row < rows[1]
 
 
 def _rows_overlapping(fp, low, high, column=None):
-    """Every row, on either CCD, whose span between its edges overlaps low to high."""
+    """Rows on either CCD whose span between edges overlaps `low` to `high`."""
     rows = set()
     for ccd in ("left", "right"):
         edges = fp.row_edges(ccd, column).to_value(u.Angstrom)
@@ -450,7 +438,7 @@ def _rows_overlapping(fp, low, high, column=None):
 @pytest.mark.parametrize("low, high", [(194.9, 195.3), (192.0, 192.06), (195.119, 200.972),
                                        (198.0, 198.6), (160.0, 164.0)])
 def test_a_window_is_the_rows_its_wavelengths_land_on_and_no_more(low, high):
-    """Rounding each end outward added a row whenever an end fell in the inner half of its row."""
+    """Rounding each end outward would add a row when an end is in the inner half of its row."""
     fp = FocalPlane_SWC()
     (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
     wanted = _rows_overlapping(fp, low, high)
@@ -458,7 +446,7 @@ def test_a_window_is_the_rows_its_wavelengths_land_on_and_no_more(low, high):
 
 
 def test_a_window_follows_a_tilted_line_along_the_whole_slit():
-    """Placed at the centre of the field, the window missed the row the line reached at one end."""
+    """A window set at the field centre would miss the row the line reaches at one end."""
     fp = FocalPlane_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT)
     low, high = 194.9, 195.3
     (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
@@ -486,12 +474,12 @@ def test_a_partial_clear_is_said_to_leave_out_the_charge_it_leaves():
         warnings.simplefilter("error")
         smear_photons(rate, small_sequence(dump_rows=6))
         dark_current_time(1.0 * u.s, small_sequence(dump_rows=6), 6)
-        # With a shutter the smear is none whatever the clear.
+        # With a shutter there is no smear for any clear.
         smear_photons(rate, small_sequence(dump_rows=2, shutter=True))
 
 
 class _RowsAreWavelengths:
-    """A focal plane of ten rows on the left CCD only, each row at its own wavelength in Angstrom."""
+    """Focal plane of ten rows on the left CCD only, row i at i Angstrom."""
     n_rows = 10
 
     def _extreme_columns(self):
@@ -514,7 +502,7 @@ def test_a_window_is_the_rows_a_range_overlaps(low, high, window):
 
 @pytest.mark.parametrize("low, high", [(-3.0, -0.5), (9.5, 12.0), (-0.5, -0.5), (-3.0, -1.0)])
 def test_a_range_that_only_reaches_the_edge_of_the_ccd_is_not_on_it(low, high):
-    """Reaching row 0's outer edge from below gave the window (-1, -1)."""
+    """Reaching row 0's outer edge from below must not give the window (-1, -1)."""
     with pytest.raises(ValueError, match="is on either CCD"):
         windows_from_wavelengths(_RowsAreWavelengths(), [(low * u.AA, high * u.AA)])
 
@@ -558,8 +546,8 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
     other = ReadoutSequence.from_detector(det, shutter=False, dump_rows=10)
     assert other.shutter is False and other.dump_rows == 10 and other.windows == []
 
-    # An odd number of columns gives one output a pixel more, and a row takes
-    # as long as that output.
+    # With an odd number of columns one output has an extra pixel, and a row
+    # takes as long as that output.
     odd = ReadoutSequence.from_detector(Detector_SWC(n_columns=41, serial_prescan=0,
                                                      serial_overscan=0))
     assert odd.serial_image_pixels == 21
@@ -567,7 +555,7 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
 
 
 def test_the_defaults_are_those_of_the_default_camera():
-    """Made on their own, the two classes describe the camera as Detector_SWC does by default."""
+    """Built on their own, both classes match the default Detector_SWC camera."""
     det = Detector_SWC()
     fp, from_det = FocalPlane_SWC(), FocalPlane_SWC.from_detector(det)
     for name in ("n_rows", "n_columns", "pixel_size", "gap", "plate_scale"):
@@ -577,13 +565,13 @@ def test_the_defaults_are_those_of_the_default_camera():
                  "serial_image_pixels", "serial_overscan", "parallel_overscan_rows",
                  "dump_rows", "windows", "cte_parallel", "cte_serial"):
         assert np.all(getattr(sequence, name) == getattr(from_det, name)), name
-    # The numbers the documents give, so that a change to either class shows.
+    # Values from the documents, so a change to either class is caught.
     assert sequence.line_read_time.to_value(u.us) == pytest.approx(547.0)
     assert fp.pixel_size.to_value(u.um) == pytest.approx(13.5)
 
 
 def _transfer(wells, cte):
-    """One transfer: the front well's charge moved out, and every well keeping what it is left."""
+    """One transfer: charge moved out of the front well, and the wells after it."""
     moved = cte * wells
     left = wells - moved
     after = np.empty_like(wells)
@@ -593,7 +581,7 @@ def _transfer(wells, cte):
 
 
 def _read_one_transfer_at_a_time(rate, exposure, sequence):
-    """The charge each packet brings to the register, moving it one transfer at a time."""
+    """Charge each packet brings to the register, moved one transfer at a time."""
     n_rows = rate.size
     wells = np.zeros(n_rows)
     lit = not sequence.shutter
@@ -612,7 +600,7 @@ def _read_one_transfer_at_a_time(rate, exposure, sequence):
 
 
 def test_transfer_probabilities_count_the_ways_charge_can_be_held_back():
-    """Arriving k packets late after m transfers is m moves and k waits, the last a move."""
+    """Arriving k packets late after m transfers takes m moves and k waits, ending on a move."""
     m, cte = np.array([1, 2, 5]), 0.8
     probability = transfer_probabilities(m, cte)
     assert probability[0] == pytest.approx(cte ** m)
@@ -620,7 +608,7 @@ def test_transfer_probabilities_count_the_ways_charge_can_be_held_back():
     assert probability[2] == pytest.approx(m * (m + 1) / 2 * cte ** m * (1 - cte) ** 2)
     assert probability.sum(axis=0) == pytest.approx(1.0, abs=1e-14)
     assert transfer_probabilities(m, 1.0).tolist() == [[1.0, 1.0, 1.0]]
-    # Stopping at the latest arrival wanted.
+    # `most` stops the terms at the latest arrival wanted.
     assert transfer_probabilities(m, cte, most=2).shape == (3, 3)
     with pytest.raises(ValueError, match="at least one transfer"):
         transfer_probabilities([0], cte)
@@ -632,7 +620,7 @@ def test_transfer_probabilities_count_the_ways_charge_can_be_held_back():
 @pytest.mark.parametrize("cte", [0.99, 0.9])
 def test_charge_left_behind_arrives_as_moving_it_one_transfer_at_a_time(
         shutter, windows, dump_rows, cte):
-    """The clear, the exposure, every read and dumped row, and the packets dumped in the clear."""
+    """`expose` matches moving the charge one transfer at a time, clear and read-out included."""
     rate = np.random.default_rng(1).uniform(0.0, 5.0, 12)
     rate[3] = 200.0
     sequence = ReadoutSequence(shutter=shutter, windows=windows, dump_rows=dump_rows,
@@ -645,7 +633,7 @@ def test_charge_left_behind_arrives_as_moving_it_one_transfer_at_a_time(
 
 
 def test_charge_left_behind_along_the_register_trails_towards_its_middle():
-    """Each half is read from its own end, through the prescan."""
+    """Charge left in the serial register trails toward its middle, each half read from its end."""
     rate = np.random.default_rng(2).uniform(0.0, 3.0, (4, 10))
     rate[1, 2] = 100.0
     sequence = ReadoutSequence(serial_prescan=3, serial_image_pixels=5, parallel_overscan_rows=0,
@@ -666,7 +654,7 @@ def test_charge_left_behind_along_the_register_trails_towards_its_middle():
 
 
 def test_a_perfect_transfer_leaves_the_frame_as_it_was():
-    """The defaults change nothing: the smear and the exposure, as without the transfer."""
+    """With a CTE of 1, the frame is the exposure plus the smear, and the variance as `expose`."""
     rate = np.random.default_rng(3).uniform(0.0, 5.0, (40, 6))
     sequence = ReadoutSequence(shutter=False, windows=[(5, 9)], parallel_overscan_rows=4)
     smear = smear_photons(rate, sequence)
@@ -678,7 +666,7 @@ def test_a_perfect_transfer_leaves_the_frame_as_it_was():
 
 
 def test_a_bright_row_trails_into_the_rows_read_after_it():
-    """What is left behind is picked up by the packets behind, and none of it goes the other way."""
+    """Charge a bright row leaves behind arrives only in later rows, and none is lost."""
     rate = np.zeros((20, 1))
     rate[5] = 1000.0
     sequence = ReadoutSequence(shutter=True, parallel_overscan_rows=0, cte_parallel=0.999)
@@ -690,7 +678,7 @@ def test_a_bright_row_trails_into_the_rows_read_after_it():
 
 
 def test_the_variance_of_charge_left_behind_is_that_of_draws_of_every_electron():
-    """Photons of three electrons each, every electron left behind or not on its own."""
+    """Variance matches draws in which every electron is left behind independently."""
     rng = np.random.default_rng(4)
     rate, cte, per_photon, draws = np.array([4.0, 0.5, 9.0, 1.0, 2.0, 0.2]), 0.8, 3, 40000
     sequence = ReadoutSequence(shutter=False, parallel_overscan_rows=2, cte_parallel=cte,
@@ -718,12 +706,12 @@ def test_the_variance_of_charge_left_behind_is_that_of_draws_of_every_electron()
         wells = collect(wells, dwell[step])
     variance = expose_variance((per_photon ** 2 * rate)[:, np.newaxis],
                                (per_photon * rate)[:, np.newaxis], 0.6 * u.s, sequence)[:, 0]
-    # Each drawn variance is good to about sqrt(2 / draws), 0.7 percent.
+    # Each drawn variance has a relative error of about sqrt(2 / draws), 0.7 percent.
     assert read.var(axis=0) == pytest.approx(variance, rel=0.035)
 
 
 def test_dark_charge_is_left_behind_like_any_other():
-    """The dark current time is that of an even light, with or without a shutter."""
+    """Dark current time equals the exposure of a uniform light, with or without a shutter."""
     sequence = ReadoutSequence(windows=[(10, 19)], parallel_overscan_rows=5, cte_parallel=0.99)
     time = dark_current_time(2.0 * u.s, sequence, 60).to_value(u.s)
     lit = ReadoutSequence(shutter=False, windows=[(10, 19)], parallel_overscan_rows=5,

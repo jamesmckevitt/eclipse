@@ -102,8 +102,8 @@ def main():
         print("\nSimulation interrupted by user.")
         sys.exit(1)
     except Exception as e:
-        # ECLIPSE refuses what it cannot run with a ValueError that says why;
-        # anything else is unexpected, and its traceback says where.
+        # A run ECLIPSE cannot do, or a missing file, raises an error that says why.
+        # Anything else is unexpected, so print its traceback.
         if not isinstance(e, (ValueError, FileNotFoundError)):
             traceback.print_exc()
         _fail(f"Error during simulation: {type(e).__name__}: {e}")
@@ -111,11 +111,12 @@ def main():
 
 def _fail(message: str) -> None:
     """
-    Say *message* and end the run, every MPI rank of it.
+    Print `message` and end the run on every MPI rank.
 
-    A rank other than the first has its output silenced, so its message goes
-    to the stderr it started with, and an MPI run is aborted, since the other
-    ranks would otherwise wait for this one until the job's time runs out.
+    Ranks other than the first have their output silenced, so the message
+    goes to the stderr the rank started with. An MPI run is aborted, as the
+    other ranks would otherwise wait for this one until the job's time runs
+    out.
     """
     from .main import _STARTING_STDERR
     from .utils import _get_mpi_info

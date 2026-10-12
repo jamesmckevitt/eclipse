@@ -5,8 +5,7 @@ from pathlib import Path
 import matplotlib
 import pytest
 
-# The plotting tests draw without a display, whatever backend the
-# environment asks for, since the package imports pyplot.
+# Force a backend that needs no display, since the package imports pyplot.
 matplotlib.use("Agg", force=True)
 
 
@@ -15,7 +14,7 @@ def pytest_configure(config):
 
 
 def _chianti_database():
-    """Where fiasco reads the CHIANTI database, if it has been built there."""
+    """Path to fiasco's CHIANTI database, or None if it is not built."""
     import fiasco
 
     path = Path(fiasco.defaults["hdf5_dbase_root"])
@@ -24,9 +23,11 @@ def _chianti_database():
 
 def pytest_collection_modifyitems(config, items):
     """
-    Skip the tests marked ``chianti`` where the database is not built, as in
-    the main CI jobs, unless ECLIPSE_REQUIRE_CHIANTI is set, as in the job
-    that builds it, where its absence is an error rather than a skip.
+    Skip tests marked `chianti` if the database is not built.
+
+    This is the case in the main CI jobs. If ECLIPSE_REQUIRE_CHIANTI is set,
+    as in the job that builds the database, a missing database is an error
+    instead.
     """
     marked = [item for item in items if item.get_closest_marker("chianti")]
     if not marked or _chianti_database() is not None:

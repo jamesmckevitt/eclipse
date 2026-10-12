@@ -1,13 +1,4 @@
-"""Fitted components are stored by name, with statistics for each of them.
-
-The results used to hold only the mean and standard deviation of every
-fitted parameter in one unlabelled vector, and the analysis only turned the
-primary component's centre and width into a velocity and a width. These tests
-pin down what replaces that: intensity, velocity and width for every
-component under its own name, failed fits left out of the statistics and
-counted, an optional small-sample correction, and analysis that picks the
-component by name.
-"""
+"""Fitted components are stored by name, with statistics for each."""
 import sys
 import warnings
 
@@ -58,7 +49,7 @@ def _blend_units():
 
 
 def _blend_params(v_kms, peak0=100.0, peak1=20.0, sigma=0.03 * u.AA, back=5.0):
-    """One fitted parameter vector of the blend, in the units fit_cube_gauss uses."""
+    """One fitted parameter vector of the blend, in fit_cube_gauss units."""
     shift = 1.0 + v_kms / C_KMS
     return [peak0, (REST0 * shift).to_value(u.cm), sigma.to_value(u.cm),
             peak1, (REST1 * shift).to_value(u.cm), sigma.to_value(u.cm), back]
@@ -178,10 +169,10 @@ def test_bessel_correction_divides_by_n_minus_1():
 
 
 def test_intensity_spread_includes_peak_and_width_moving_together():
-    """The per-parameter spreads cannot give this; the per-fit intensities can.
+    """The spread comes from per-fit intensities, not per-parameter spreads.
 
-    Peak and width vary in opposite directions here so that their product,
-    and so the intensity, is the same in every iteration.
+    Peak and width vary inversely here, so their product, and so the
+    intensity, is the same in every iteration.
     """
     fit_data, failed = _single_run([[10.0], [20.0], [40.0]],
                                    [[0.04], [0.02], [0.01]], [[False]] * 3)
@@ -406,8 +397,8 @@ def _blend_combination():
     fit_data = np.array([[[_blend_params(v, peak1=p1)
                            for v, p1 in zip((4.0, 6.0), (20.0, 30.0))]]
                          for _ in range(3)])
-    # These fits are made up, so give the second component a velocity 2 km/s
-    # above the first, to tell the two apart in the analysis.
+    # The fits are made up: put the second component 2 km/s above the first so
+    # the analysis can tell them apart.
     fit_data[..., 4] = (REST1 * (1.0 + (np.array([4.0, 6.0]) + 2.0) / C_KMS)).to_value(u.cm)
     failed = np.zeros(fit_data.shape[:3], dtype=bool)
     failed[2, 0, 1] = True
@@ -468,8 +459,8 @@ def test_maps_are_made_for_the_chosen_component():
     assert maps["intensity_mean"].unit == u.DN
     assert maps["failed_fits"].unit == u.dimensionless_unscaled
 
-    # The new maps carry the same metadata as the old ones, so reading them
-    # the way plotting does raises no warnings either.
+    # These maps carry the same metadata as the others, so reading their WCS,
+    # as plotting does, raises no warnings.
     with warnings.catch_warnings():
         warnings.simplefilter("error", SunpyMetadataWarning)
         for name in ("intensity_from_fit", "intensity_mean", "intensity_std",
@@ -505,7 +496,7 @@ def test_older_results_files_still_analyse_but_cannot_choose_a_component():
 
 
 def test_every_velocity_and_width_map_holds_its_own_quantity():
-    """With the first fit, the mean and the truth all different, each map shows the one it names."""
+    """With the first fit, mean and truth all different, each map holds its own quantity."""
     fit_config = _blend_config()
     units = _blend_units()
     velocities = np.array([4.0, 6.0])
@@ -548,7 +539,7 @@ def test_every_velocity_and_width_map_holds_its_own_quantity():
              ("v_std", "velocity_std"), ("v_true", "velocity_true"), ("v_err", "velocity_err"),
              ("w_first", "line_width_from_fit"), ("w_mean", "line_width_mean"),
              ("w_std", "line_width_std"))
-    # Each map's values differ from every other's, so a map given another's is caught.
+    # All the maps differ, so a map holding another's values is caught.
     assert len({tuple(np.ravel(analysis[key].value)) for key, _ in pairs}) == len(pairs)
     for key, name in pairs:
         assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name

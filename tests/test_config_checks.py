@@ -1,10 +1,8 @@
-"""A configuration that cannot be run is refused before anything runs.
+"""A configuration that cannot run is refused before anything runs.
 
-Each of these once ran to completion and saved results that meant nothing,
-or failed part-way through a sweep and lost what came before: a quantity
-with no unit, or of the wrong kind; a value out of its physical range; a
-repeated YAML key, which PyYAML lets the last one win; an empty value; a
-sweep value that could not be run, found only when its turn came.
+That includes a quantity without a unit or of the wrong kind, a value
+outside its range, a repeated YAML key, an empty value, and a sweep value
+that cannot run.
 """
 import sys
 
@@ -72,7 +70,7 @@ def test_a_setting_of_the_wrong_kind_or_out_of_range_is_refused(build, message):
 
 
 def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
-    """Named as text, a path failed to parse as a quantity; a table with one header line lost a row."""
+    """A path given as text failed to parse as a quantity, and a one-line header lost a row."""
     rows = "17.0 0.097\n17.2 0.103\n17.4 0.110\n"
     for name, text in (("one.dat", "# reflectance\n" + rows), ("none.dat", rows)):
         (tmp_path / name).write_text(text)
@@ -83,7 +81,7 @@ def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
 
 
 def test_a_table_inside_an_archive_is_read_as_a_packaged_one_may_be(tmp_path):
-    """importlib.resources gives a zipped package's tables as resources that read themselves but are not paths."""
+    """importlib.resources gives a zipped package's tables as readable resources, not paths."""
     import zipfile
 
     with zipfile.ZipFile(tmp_path / "package.zip", "w") as archive:
@@ -95,7 +93,7 @@ def test_a_table_inside_an_archive_is_read_as_a_packaged_one_may_be(tmp_path):
 
 
 def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
-    """Skipped, 0.l03 would have left the curve interpolated across the row it was in."""
+    """Skipping 0.l03 would interpolate the curve across its row."""
     (tmp_path / "slip.dat").write_text("# reflectance\n17.0 0.097\n17.2 0.l03\n17.4 0.110\n")
     with pytest.raises(ValueError, match=r"slip.dat, line 3: '17.2 0.l03' is not a wavelength"):
         _load_throughput_table(tmp_path / "slip.dat")
@@ -106,7 +104,7 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
     with pytest.raises(ValueError, match="has one line of a wavelength and a throughput, and "
                                          "needs two or more"):
         _load_throughput_table(tmp_path / "one.dat")
-    # A column of numbers more is read; a word after the numbers is a slip.
+    # An extra column of numbers is accepted; a word after the numbers is a slip.
     (tmp_path / "three.dat").write_text("17.0 0.097 0.001\n17.2 0.103 0.001\n")
     assert _load_throughput_table(tmp_path / "three.dat")[1].tolist() == [0.097, 0.103]
     (tmp_path / "word.dat").write_text("17.0 0.097\n17.2 0.103 garbage\n")
@@ -117,7 +115,7 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
 @pytest.mark.parametrize("row", ["17.2 10.3", "17.2 -0.1", "17.2 nan", "17.2 inf", "0 0.103",
                                  "-17.2 0.103", "nan 0.103"])
 def test_a_table_row_out_of_range_is_refused(tmp_path, row):
-    """A reflectance in per cent gave a hundred times the signal; a nan, none at all."""
+    """A reflectance in per cent gave 100 times the signal, and a nan gave none."""
     (tmp_path / "range.dat").write_text(f"# reflectance\n17.0 0.097\n{row}\n17.4 0.110\n")
     with pytest.raises(ValueError, match=rf"line 3: '{row}' needs a wavelength above zero, "
                                          rf"in nm, and a throughput from 0 to 1"):
@@ -126,7 +124,7 @@ def test_a_table_row_out_of_range_is_refused(tmp_path, row):
 
 def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as_a_header(
         tmp_path):
-    """It may be the first line of data with a slip in it; the packaged tables' headers are words."""
+    """It may be a first data line with a slip in it; the packaged tables' headers are words."""
     import shutil
     import warnings
     from importlib.resources import files
@@ -159,7 +157,7 @@ def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as
     (lambda: AluminiumFilter(al_table=None), "filter.al_table must be the path of a table"),
 ])
 def test_the_psf_widths_and_the_tables_are_checked_when_built(build, message):
-    """They were set by a default factory, which the checks of other settings pass by."""
+    """They come from a default factory, which bypasses the checks on other settings."""
     with pytest.raises(ValueError, match=message):
         build()
 
@@ -180,7 +178,7 @@ def test_a_table_that_cannot_be_read_is_refused_before_the_first_combination_run
 
 
 def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
-    """A result's parameters leave the tables out, so a sweep would give both tables one key."""
+    """Result parameters omit the tables, so a sweep would give both tables the same key."""
     with pytest.raises(ValueError, match="'telescope.pm_table' names one table"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "telescope": {"pm_table": ["a.dat", "b.dat"]}})
 
@@ -188,7 +186,11 @@ def test_a_list_of_tables_is_refused_rather_than_swept(tmp_path, monkeypatch):
 @pytest.mark.parametrize("shutter", [False, [True, False]], ids=["off", "swept"])
 def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
         tmp_path, monkeypatch, shutter):
-    """A run models the window with the shutter closed while it is read; the smear of the band is the read-out model's."""
+    """
+    A run models the window with the shutter closed during read-out.
+
+    Smear of the band is left to the read-out model.
+    """
     with pytest.raises(ValueError, match="detector.shutter must be true for an instrument run"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"shutter": shutter}})
 
@@ -196,7 +198,7 @@ def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
 @pytest.mark.parametrize("name", ["cte_parallel", "cte_serial"])
 def test_a_run_with_charge_left_behind_is_refused_rather_than_taken_as_without(
         tmp_path, monkeypatch, name):
-    """A run does not model the read-out, so it cannot leave charge behind in it."""
+    """A CTE below 1 is refused, as a run does not model the read-out."""
     with pytest.raises(ValueError, match=f"detector.{name} must be 1 for an instrument run"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 0.99999}})
     _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 1.0}})
@@ -257,7 +259,7 @@ def test_a_top_level_value_that_cannot_be_run_is_refused(tmp_path, monkeypatch, 
 
 def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path, monkeypatch,
                                                                          capsys):
-    """0.3 arcsec is no slit; found when its turn came, it ended the sweep and lost the rest."""
+    """There is no 0.3 arcsec slit; found at its turn, it ended the sweep and lost the rest."""
     with pytest.raises(ValueError, match="slit_width must be 0.2, 0.4, 0.8, or 1.6"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {
             "expos": ["5 s", "10 s"], "slit_width": ["0.2 arcsec", "0.3 arcsec"]}})
@@ -265,8 +267,8 @@ def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path,
 
 
 @pytest.mark.parametrize("config, message", [
-    # At 0.05 arcsec a pixel, the 0.2 arcsec slit psf_params is for is 4
-    # pixels wide, more than its 2.54-pixel spectral FWHM.
+    # At 0.05 arcsec per pixel, the 0.2 arcsec slit that psf_params assumes
+    # is 4 pixels wide, more than its 2.54-pixel spectral FWHM.
     ({**UNIFORM, "detector": {"plate_scale_angle": ["0.159 arcsec / pix", "0.05 arcsec / pix"]}},
      "leaves nothing for the optics"),
     ({**UNIFORM, "instrument": "EIS", "simulation": {
@@ -282,7 +284,7 @@ def test_a_spectral_psf_the_telescope_and_detector_cannot_give_is_refused_before
 
 def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combination_runs(
         tmp_path, monkeypatch, capsys):
-    """A scene one row long can be binned by 1 but not 2; 2 was found only when its turn came."""
+    """A one-row scene can be binned by 1 but not 2; 2 was found only when its turn came."""
     from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
 
     edges = np.arange(3) * 0.1 * u.Mm
@@ -314,7 +316,7 @@ def test_the_line_of_a_uniform_intensity_is_said_to_be_ignored_elsewhere(tmp_pat
 
 
 def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
-    """Such cells were dropped from the synthesis without a word."""
+    """Such cells were silently dropped from the synthesis."""
     edges = {axis: np.arange(3) * u.Mm for axis in ("x_edges", "y_edges", "z_edges")}
     temperature = np.full((2, 2, 2), 1e6) * u.K
     density = np.full((2, 2, 2), 1e9) / u.cm**3

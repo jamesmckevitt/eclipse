@@ -24,6 +24,7 @@ from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_p
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
+from .pinhole_diffraction import _pinholes_on
 from .radiometric import spectral_optics_fwhm, spectral_psf_margin
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
@@ -35,8 +36,8 @@ import dataclasses
 import numpy as np
 
 
-# Every key main() reads. Anything else in the file is not read at all, so it
-# is rejected rather than ignored.
+# Every top-level key main() reads. Any other key is rejected rather than
+# ignored.
 _TOP_LEVEL_KEYS = {
     "instrument", "n_iter", "ncpu",
     "uniform_intensity", "rest_wavelength", "thermal_width",
@@ -47,22 +48,22 @@ _TOP_LEVEL_KEYS = {
     "simulation", "detector", "telescope", "filter", "fitting",
 }
 
-# What a time series of atmosphere files is synthesised with, and how a time
-# series, of atmosphere or of synthesis files, is observed. The synthesis keys
-# are those of synthesise-spectra; the raster keys are the observing plan of
-# euvst_response.raster.RasterPlan.
+# Keys of the 'synthesis:' section, the settings an atmosphere time series is
+# synthesised with (as in synthesise-spectra), and of the 'raster:' section,
+# the observing plan of an atmosphere or synthesis time series
+# (euvst_response.raster.RasterPlan).
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
                    "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
                    "goft_temperature_chunk"}
 _RASTER_KEYS = {"start", "steps", "step", "repeats", "cadence", "centre", "direction"}
 
-# Under MPI, a copy of the stderr a rank other than the first started with,
-# before its output is silenced.
+# Under MPI, a copy of a non-root rank's original stderr, taken before its
+# output is silenced.
 _STARTING_STDERR = None
 
 
 def _cpu_list(text: str) -> list:
-    """The CPUs of a Linux CPU list such as ``0-3,8,10-11``."""
+    """CPU numbers in a Linux CPU list such as `0-3,8,10-11`."""
     cpus = []
     for part in text.strip().split(","):
         if part:
@@ -72,7 +73,7 @@ def _cpu_list(text: str) -> list:
 
 
 def _cpuset():
-    """The CPUs this process's cgroup cpuset allows, or None where there is none to read."""
+    """CPUs allowed by this process's cgroup cpuset, or None if there is none to read."""
     try:
         for line in Path("/proc/self/cgroup").read_text().splitlines():
             hierarchy, controllers, path = line.split(":", 2)
@@ -89,15 +90,15 @@ def _cpuset():
 
 def _allowed_cpus(environ, cpuset, affinity) -> list:
     """
-    The CPUs this job step has on its node, for its ranks to share.
+    CPUs this job step has on its node, for its ranks to share.
 
-    SLURM confines a step to its CPUs with a cpuset, which may be wider than
-    the *affinity* an MPI library narrowed a rank to, so the *cpuset* is
-    taken where it is the step's: no more CPUs than SLURM_CPUS_ON_NODE says
-    the job has there, and holding the affinity. Where SLURM does not
-    confine steps, the cpuset is the whole node, and taking CPUs from it
-    could land on another job's, so the affinity is kept, as it is where
-    there is no cpuset or SLURM does not say.
+    SLURM confines a step with a cpuset, which may be wider than the
+    `affinity` an MPI library gave a rank. The `cpuset` is used when it is
+    the step's: it has no more CPUs than SLURM_CPUS_ON_NODE and contains the
+    affinity. Otherwise the affinity is kept. Where SLURM does not confine
+    steps, the cpuset is the whole node and could include another job's
+    CPUs. The affinity is also kept when there is no cpuset or
+    SLURM_CPUS_ON_NODE is not set.
     """
     on_node = environ.get("SLURM_CPUS_ON_NODE")
     if (cpuset and on_node is not None and on_node.isdigit()
@@ -108,11 +109,12 @@ def _allowed_cpus(environ, cpuset, affinity) -> list:
 
 def _rank_cpus(environ, allowed: list) -> list:
     """
-    This MPI rank's CPUs: SLURM_CPUS_PER_TASK of *allowed*, taken in turn by its local task id.
+    CPUs for this MPI rank: its share of `allowed`, by local task id.
 
-    All of *allowed* where there are not enough for every task on the node
-    to have its own, and none, to leave the affinity alone, where SLURM does
-    not say how many a task has.
+    Each task gets SLURM_CPUS_PER_TASK of `allowed`, in order. All of
+    `allowed` is returned if there are too few for every task on the node
+    to have its own. An empty list, which leaves the affinity alone, is
+    returned if SLURM does not say how many CPUs a task has.
     """
     per_task, local = environ.get("SLURM_CPUS_PER_TASK"), environ.get("SLURM_LOCALID")
     if per_task is None or local is None:
@@ -122,10 +124,10 @@ def _rank_cpus(environ, allowed: list) -> list:
     return share if len(share) == per_task else list(allowed)
 
 
-# The Simulation dataclass has more fields than this, but main() builds its
-# Simulation objects itself and only takes these from the section. The rest
-# (instrument, n_iter, ncpu, and the pinhole lists) are top-level keys, so
-# writing one here would have been parsed and then dropped.
+# main() builds the Simulation objects itself and takes only these keys from
+# the 'simulation:' section. The other Simulation fields (instrument, n_iter,
+# ncpu and the pinhole lists) are top-level keys; one written here would be
+# parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
                     "spectral_psf", "noise", "enable_pinholes"}
 
@@ -159,15 +161,15 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
     """
     Reject any config key ECLIPSE does not read.
 
-    Checked before anything is loaded or computed, so a config written against
-    an older layout fails immediately rather than after an atmosphere load.
+    Called before anything is loaded or computed, so a config written for an
+    older layout fails at once rather than after the atmosphere is loaded.
 
     Parameters
     ----------
     config : dict
-        The whole parsed YAML config.
+        Whole parsed YAML config.
     instrument : str
-        ``"SWC"`` or ``"EIS"``; the two have different detector and telescope
+        `"SWC"` or `"EIS"`, which have different detector and telescope
         parameters.
 
     Raises
@@ -190,11 +192,10 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
     fil_keys = _dataclass_keys(AluminiumFilter)
 
     # 'filter' is a Telescope_EUVST field, but main() builds the filter from
-    # the top-level 'filter:' section and drops whatever is here, so it must
-    # not look settable.
+    # the top-level 'filter:' section and would drop a value given here.
     tel_keys.discard("filter")
     if instrument == "EIS":
-        # Warned about and ignored explicitly further down, so not a surprise.
+        # Allowed here; main() warns about it and ignores it.
         tel_keys.add("microroughness_sigma")
 
     sections = {
@@ -203,16 +204,14 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
         "telescope": tel_keys,
         "filter": fil_keys,
     }
-    # Where else a name could have been meant, used for the suggestions. The
-    # top level is included so that a section key written at the wrong depth
-    # is named as such.
+    # Other places a key could belong, for the suggestions. The top level is
+    # included so a section key written at the wrong depth is reported as such.
     elsewhere = {"": _TOP_LEVEL_KEYS, **sections}
 
     check_config_keys(config, _TOP_LEVEL_KEYS, "top-level", sections)
 
-    # Sections are checked by presence, not value, so that a heading left
-    # empty (which parses to None) gets a message here rather than an
-    # AttributeError further on.
+    # Checked by presence, not value, so an empty heading (which parses to
+    # None) gets a clear message here rather than an AttributeError later.
     for name, allowed in sections.items():
         if name not in config:
             continue
@@ -243,7 +242,7 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
 
 
 def _quantity_or_none(section: dict, key: str, unit, what: str):
-    """A quantity of the kind *unit* from a config section, or None if absent."""
+    """Quantity in units equivalent to `unit` from a config section, or None if absent."""
     if key not in section or section[key] is None:
         return None
     value = parse_yaml_input(section[key])
@@ -254,7 +253,7 @@ def _quantity_or_none(section: dict, key: str, unit, what: str):
 
 
 def _range_or_none(section: dict, key: str, what: str):
-    """A ``[low, high]`` range of lengths from a config section, or None."""
+    """`[low, high]` range of lengths from a config section, or None if absent."""
     if key not in section or section[key] is None:
         return None
     bounds = section[key]
@@ -269,7 +268,7 @@ def _range_or_none(section: dict, key: str, what: str):
 
 
 def _parse_synthesis_settings(config: dict):
-    """The 'synthesis:' section as the settings a time series is synthesised with."""
+    """Synthesis settings for a time series, from the 'synthesis:' section."""
     from .raster import SynthesisSettings
 
     section = config.get("synthesis")
@@ -305,7 +304,8 @@ def _parse_synthesis_settings(config: dict):
         settings["mass_per_electron"] = float(value)
     if section.get("hdf5_dbase_root") is not None:
         settings["hdf5_dbase_root"] = str(section["hdf5_dbase_root"])
-    # Whole numbers, which int() would otherwise make of a fraction.
+    # Require whole numbers rather than calling int(), which would truncate a
+    # fraction.
     for key, least in (("n_workers", 0), ("goft_temperature_chunk", 1)):
         value = section.get(key)
         if value is None:
@@ -318,7 +318,7 @@ def _parse_synthesis_settings(config: dict):
 
 
 def _parse_raster_plan(config: dict):
-    """The 'raster:' section as an observing plan."""
+    """Observing plan from the 'raster:' section."""
     from .raster import RasterPlan
 
     section = config.get("raster")
@@ -342,7 +342,7 @@ def _parse_raster_plan(config: dict):
 
 
 def _series_paths(config: dict, key: str) -> list:
-    """The files of 'atmosphere_series' or 'synthesis_series': a list of paths, or a glob pattern."""
+    """Files of 'atmosphere_series' or 'synthesis_series', given as a list or a glob pattern."""
     import glob
 
     value = config[key]
@@ -361,8 +361,7 @@ def _series_paths(config: dict, key: str) -> list:
                      f"e.g. './data/bifrost/*.h5'.")
 
 
-# The line observed when the configuration names none and the synthesis holds
-# more than one.
+# Line observed when the config names none and the synthesis holds several.
 DEFAULT_REFERENCE_LINE = "Fe12_195.1190"
 
 # Where synthesise-spectra writes by default, and where older versions did.
@@ -372,17 +371,18 @@ LEGACY_SYNTHESIS_FILE = "./run/input/synthesised_spectra.pkl"
 
 def _reference_line(config: dict, synthesis_path) -> str:
     """
-    'reference_line', or the line a synthesis file is observed in without one.
+    Line to observe in a synthesis file.
 
-    Left empty, it is the file's first line, as older versions took it. Not
-    given, it is the file's only line, or else the default line, which the
-    file must then hold.
+    This is 'reference_line' if set. If the key is present but empty, it is
+    the file's first line, as in older versions. If the key is absent, it is
+    the file's only line, or else the default line, which the file must then
+    hold.
     """
     if config.get("reference_line") is not None:
         return config["reference_line"]
     names = synthesis_line_names(synthesis_path)
     if not names:
-        # Refused when the file is read, as holding no lines.
+        # A file with no lines is refused when it is read.
         return DEFAULT_REFERENCE_LINE
     if "reference_line" in config or len(names) == 1:
         return names[0]
@@ -395,20 +395,20 @@ def _reference_line(config: dict, synthesis_path) -> str:
 
 def _parse_pinhole_config(config: dict) -> tuple:
     """
-    Read the pinhole lists from a YAML config and validate them.
+    Read and validate the pinhole lists from a YAML config.
 
-    The lists are paired, one entry per pinhole, so any of them without the
-    sizes describes no pinhole at all and is always a mistake.
+    The lists have one entry per pinhole, so a position list given without
+    the sizes describes no pinhole and is always a mistake.
 
     Parameters
     ----------
     config : dict
-        The whole parsed YAML config.
+        Whole parsed YAML config.
 
     Returns
     -------
     tuple
-        ``(pinhole_sizes, pinhole_positions, pinhole_positions_spectral)``.
+        `(pinhole_sizes, pinhole_positions, pinhole_positions_spectral)`.
     """
     pinhole_sizes = []
     pinhole_positions = []
@@ -418,8 +418,8 @@ def _parse_pinhole_config(config: dict) -> tuple:
         pinhole_positions = ensure_list(config["pinhole_positions"])
 
     # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
-    # the detector's spectral width.  Omit to project every pinhole to the
-    # centre of the spectral window, which is what ECLIPSE always did.
+    # the detector's spectral width. If omitted, every pinhole is projected to
+    # the centre of the spectral window.
     pinhole_positions_spectral = []
     if "pinhole_positions_spectral" in config:
         pinhole_positions_spectral = ensure_list(
@@ -433,21 +433,21 @@ def _parse_pinhole_config(config: dict) -> tuple:
 
 def _parse_fitting_config(config: dict) -> FitConfig | None:
     """
-    Build the fit configuration from the ``fitting:`` block of a YAML config.
+    Fit configuration from the `fitting:` block of a YAML config.
 
-    A block with no components configures the single-Gaussian fit.
-    FitConfig itself checks the values, including that there are either no
-    components or at least two.
+    A block with no components gives the single-Gaussian fit. FitConfig
+    checks the values, including that there are no components or at least
+    two.
 
     Parameters
     ----------
     config : dict
-        The whole parsed YAML config.
+        Whole parsed YAML config.
 
     Returns
     -------
     FitConfig or None
-        None when the config has no ``fitting:`` block.
+        None if the config has no `fitting:` block.
     """
     fitting_cfg = config.get("fitting", None)
     if fitting_cfg is None:
@@ -485,12 +485,12 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
 @debug_on_error
 def main() -> None:
     """
-    Run the simulation that the `eclipse` command runs, with its arguments from ``sys.argv``.
+    Run the `eclipse` simulation with arguments from `sys.argv`.
 
-    The command checks its arguments and handles errors before calling this.
-    It reads the configuration file named by ``--config``, runs every
-    combination of its settings, and writes the results to
-    ``run/result/<config name>.h5``.
+    Reads the config file given by `--config`, runs every combination of its
+    settings, and writes the results to `run/result/<config name>.h5`. The
+    `eclipse` command checks its arguments and handles errors before calling
+    this.
     """
 
     # Suppress noisy astropy WCS warnings
@@ -511,15 +511,15 @@ def main() -> None:
     if args.debug:
         print("Debug mode enabled - will break to IPython on errors")
 
-    # MPI auto-detection: when launched via srun/mpirun with multiple tasks,
-    # Monte Carlo iterations are distributed across ranks automatically.
+    # MPI auto-detection: when launched by srun or mpirun with several tasks,
+    # the Monte Carlo iterations are split across the ranks.
     from .utils import _get_mpi_info
     _comm, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
-        # Intel MPI pins each rank to cores, breaking joblib/loky. Widen it
-        # to this rank's share of the CPUs the job step has on its node,
-        # rather than to CPUs 0 to n, which every rank shared and which, on a
-        # node shared with another job, need not be the job's at all.
+        # Intel MPI pins each rank to cores, which breaks joblib/loky. Widen
+        # the affinity to this rank's share of the job step's CPUs on the
+        # node. CPUs 0 to n would be shared by every rank and, on a node
+        # shared with another job, need not be this job's.
         _cpus = _rank_cpus(os.environ, _allowed_cpus(os.environ, _cpuset(),
                                                      sorted(os.sched_getaffinity(0))))
         if _cpus:
@@ -530,11 +530,10 @@ def main() -> None:
                   f"(MC iterations will be split across ranks)")
         else:
             # Silence stdout and stderr on non-root ranks to avoid duplicated
-            # output. Redirect at the OS file-descriptor level, not
-            # just the Python objects, because SLURM captures fd 1/2 directly
-            # and tqdm can bypass the Python sys.stderr object.
-            # The stderr it started with is kept, for an error that has to be
-            # said before the run is aborted.
+            # output. Redirect the OS file descriptors, not just the Python
+            # objects, because SLURM captures fd 1/2 directly and tqdm can
+            # bypass sys.stderr. The original stderr is kept for an error that
+            # must be reported before the run is aborted.
             global _STARTING_STDERR
             _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
@@ -554,7 +553,7 @@ def main() -> None:
     config = load_yaml_config(config_path.read_text())
 
     # An empty file parses to None, which would otherwise fail later with an
-    # AttributeError rather than saying the config is empty.
+    # AttributeError.
     if config is None:
         raise ValueError(f"Config file is empty: {args.config}")
     if not isinstance(config, dict):
@@ -563,8 +562,8 @@ def main() -> None:
             f"{type(config).__name__}: {args.config}"
         )
     # The config is saved with the results, so a value the results file
-    # cannot hold, such as a YAML alias inside itself, is refused now rather
-    # than once the run is done.
+    # cannot hold, such as a YAML alias that refers to itself, is refused now
+    # rather than after the run.
     try:
         _to_json(config)
     except (TypeError, RecursionError) as error:
@@ -586,27 +585,27 @@ def main() -> None:
         raise ValueError(f"'instrument' must be SWC or EIS, got {instrument!r}.")
     instrument = instrument.upper()
 
-    # Before anything is loaded, so that a config written against an older
-    # layout fails here rather than after the atmosphere load.
+    # Before anything is loaded, so a config written for an older layout fails
+    # here rather than after the atmosphere is loaded.
     _validate_config_keys(config, instrument)
 
     n_iter = config.get("n_iter", 25)
-    # Not left to the run: 0 wrote empty results and said it had finished,
-    # and '1e3', a string to PyYAML, failed after the ground truth was fitted.
+    # Checked now: 0 would write empty results and report success, and '1e3',
+    # a string to PyYAML, would fail only after the ground truth was fitted.
     if isinstance(n_iter, bool) or not isinstance(n_iter, int) or n_iter < 1:
         raise ValueError(f"'n_iter' must be a whole number of iterations, 1 or more, got "
                          f"{n_iter!r}.")
     ncpu = config.get("ncpu", -1)
-    # joblib and reproject both take it, and agree only on these. 0, which
-    # means every CPU to the synthesis's n_workers, failed at the first fit.
+    # joblib and reproject both use ncpu and agree only on these values. 0,
+    # which means every CPU for the synthesis's n_workers, would fail at the
+    # first fit.
     if isinstance(ncpu, bool) or not isinstance(ncpu, int) or (ncpu < 1 and ncpu != -1):
         raise ValueError(f"'ncpu' must be a whole number of CPUs, 1 or more, or -1 for all "
                          f"of them, got {ncpu!r}.")
 
-    # In MPI mode, if a ncpu value specified, cap it to
-    # the CPUs available to this rank so joblib doesn't oversubscribe.
-    # Leave ncpu=-1 alone - joblib handles it natively via the OS affinity
-    # mask (which I_MPI_PIN_DOMAIN=auto sets correctly).
+    # In MPI mode, cap a given ncpu at the CPUs available to this rank so
+    # joblib does not oversubscribe. ncpu=-1 is left alone: joblib uses the
+    # OS affinity mask, which I_MPI_PIN_DOMAIN=auto sets correctly.
     if _mpi_size > 1:
         if ncpu != -1:
             slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
@@ -620,12 +619,13 @@ def main() -> None:
             print(f"MPI: ncpu={ncpu} per rank")
 
     # Simulation mode. A time series is either atmosphere files, synthesised
-    # in this run, or synthesis files, synthesised beforehand.
+    # in this run, or synthesis files made beforehand.
     uniform_intensity_mode = "uniform_intensity" in config
     if uniform_intensity_mode and "synthesis_file" in config:
         warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
                       UserWarning, stacklevel=2)
-    # The line of a uniform intensity; anything else observes the spectra it is given.
+    # These describe the line of a uniform intensity; other modes observe the
+    # spectra they are given.
     for key in ("rest_wavelength", "thermal_width"):
         if key in config and not uniform_intensity_mode:
             warnings.warn(f"'{key}' is ignored: it describes the line of a 'uniform_intensity', "
@@ -649,7 +649,7 @@ def main() -> None:
         series_paths = _series_paths(config, "atmosphere_series")
         synthesis_settings = _parse_synthesis_settings(config)
         raster_plan = _parse_raster_plan(config)
-        # Left empty, as not given: the first line.
+        # Empty or absent: the first line.
         reference_line = config.get("reference_line") or synthesis_settings.lines[0]
         if reference_line not in synthesis_settings.lines:
             raise ValueError(f"'reference_line' {reference_line!r} is not one of "
@@ -677,8 +677,8 @@ def main() -> None:
             )
         uniform_rest_wavelength = parse_yaml_input(config.get("rest_wavelength", "195.119 AA"))
         uniform_thermal_width = parse_yaml_input(config.get("thermal_width", "20 km/s"))
-        # Each a positive amount of its own kind: a negative width, or one of
-        # zero, gave a line the fit made nonsense of, saved as a result.
+        # Each must be positive, in units of the right kind: a zero or negative
+        # width gives a nonsense fit, which would be saved as a result.
         for key, value, kind, example in (
                 ("uniform_intensity", uniform_intensity, u.erg / (u.s * u.cm**2 * u.sr),
                  "5000 erg / (s cm2 sr)"),
@@ -694,9 +694,8 @@ def main() -> None:
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
     else:
         synthesis_file = config.get("synthesis_file", DEFAULT_SYNTHESIS_FILE)
-        # A run set up for an older version, whose synthesis wrote the pickle
-        # and whose configuration leaves the file to the default, still finds
-        # it.
+        # Fall back to the pickle older versions wrote, for a run that leaves
+        # the synthesis file at its default.
         if "synthesis_file" not in config and Path(LEGACY_SYNTHESIS_FILE).is_file():
             if not Path(synthesis_file).is_file():
                 synthesis_file = LEGACY_SYNTHESIS_FILE
@@ -738,17 +737,16 @@ def main() -> None:
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
     # A run models frames taken with the shutter closed outside the exposure.
-    # Without one, light falls on the CCDs while a frame is cleared and read,
-    # and every line in the band smears into the window; the run synthesises
-    # only the window, so it cannot model that. Refused here rather than
-    # taken and ignored.
+    # Without a shutter, light falls on the CCDs while a frame is cleared and
+    # read, and every line in the band smears into the window. The run
+    # synthesises only the window, so it cannot model this, and refuses the
+    # setting rather than ignoring it.
     if "shutter" in det_sweep or det_fixed.get("shutter", True) is False:
         raise ValueError(
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
             "modelled by euvst_response.readout, which takes the detector's settings.")
-    # Nor does a run model the read-out, so the charge left behind in its
-    # transfers would be taken and ignored; refused too.
+    # A run does not model the read-out either, so a CTE below 1 would be ignored.
     for name in ("cte_parallel", "cte_serial"):
         if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
             raise ValueError(
@@ -757,9 +755,9 @@ def main() -> None:
                 f"euvst_response.readout, which takes the detector's settings.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
-    # are sized for the spectral PSF of the slit, which also depends on the
-    # slit psf_params was measured with. That is one fact about the
-    # telescope, as psf_params is, so it takes one value.
+    # sized for the slit's spectral PSF, which also depends on the slit
+    # psf_params was measured with. Like psf_params, that is a fixed property
+    # of the telescope, so it takes one value.
     if "psf_slit_width" in tel_sweep:
         raise ValueError(
             "telescope.psf_slit_width is the slit psf_params was measured with, "
@@ -790,8 +788,8 @@ def main() -> None:
                 )
                 tel_fixed.pop(key, None)
                 tel_sweep.pop(key, None)
-        # Any pinhole key at all, not just the sizes: a config carrying
-        # positions alone was accepted here and then silently ignored.
+        # Any pinhole key, not just the sizes: positions given alone would
+        # otherwise be accepted and silently ignored.
         if (pinhole_sizes or pinhole_positions or pinhole_positions_spectral
                 or sim_fixed.get("enable_pinholes")
                 or any(sim_sweep.get("enable_pinholes", []))):
@@ -832,17 +830,17 @@ def main() -> None:
     if fit_signals != "both":
         skipped = "photon" if fit_signals == "dn" else "dn"
         print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
-    # Unless the fitting block says not, the DN fits are weighted by each
-    # pixel's uncertainty, and the photon fits are those of greatest Poisson
-    # likelihood. The ground truth is weighted as the DN fits are; with only
-    # the photons fitted it is not, as no DN uncertainty is worked out.
+    # Unless the fitting block turns weighting off, the DN fits are weighted
+    # by each pixel's uncertainty and the photon fits maximise the Poisson
+    # likelihood. The ground truth is weighted like the DN fits, except when
+    # only photons are fitted, as no DN uncertainty is then worked out.
     weighted_fits = fit_config is None or fit_config.weighted
     weighted_truth = weighted_fits and fit_signals != "photon"
     print("DN fits weighted by each pixel's uncertainty, photon fits by their Poisson "
           "likelihood" if weighted_fits else "Fits unweighted")
 
     def _fit_ground_truth(cube_binned, offchip_bin_slit, uncertainty=None):
-        """The fit to the spectra with no noise, saying where it failed."""
+        """Fit to the noise-free spectra, reporting where it failed."""
         print(f"Fitting ground truth cube (offchip_bin_slit={offchip_bin_slit})...")
         truth = ground_truth_summary(cube_binned, fit_config, n_jobs=ncpu,
                                      uncertainty=uncertainty)
@@ -852,8 +850,9 @@ def main() -> None:
                   f"of {truth_failed.size} pixels; their true velocity and "
                   f"width are NaN")
         return truth
-    # ensure_list wraps scalars in a list; values are plain ints (no units),
-    # which int() would have made of a fraction or a numeric string.
+    # ensure_list wraps scalars in a list. Values must be plain ints (no
+    # units), not passed through int(), which would turn a fraction or a
+    # numeric string into one.
     if not offchip_bin_slits or any(isinstance(v, bool) or not isinstance(v, int) or v < 1
                                     for v in offchip_bin_slits):
         raise ValueError(f"'offchip_bin_slit' must be whole numbers of rows, 1 or more, got "
@@ -885,7 +884,7 @@ def main() -> None:
             det_fixed[attr] = default
 
     def _swept(*attrs):
-        """Each of the simulation values *attrs*, as the list the sweep takes it through."""
+        """List of values for each simulation attribute in `attrs`: swept, or the fixed one."""
         return [list(sim_sweep[attr]) if attr in sim_sweep else [sim_fixed[attr]]
                 for attr in attrs]
 
@@ -962,25 +961,26 @@ def main() -> None:
     raster_summed = {}
     raster_cubes = {}
     synthesis = None
-    # What the cubes from a single synthesis file carry beyond its spectra,
-    # as those from a pickle did: its dynamic mode.
+    # Metadata kept with the cubes from a single synthesis file, as with a
+    # pickle: its dynamic mode.
     file_meta = {}
     if uniform_intensity_mode:
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
     elif atmosphere_series_mode:
-        # The cubes are synthesised per combination inside the loop, since
-        # the slit width and the exposure time decide what the slit sees.
+        # The cubes are synthesised per combination in the loop, since the
+        # slit width and exposure time decide what the slit sees.
         cube_sim = None
         print("\nReading the atmosphere series...")
         series = AtmosphereSeries(series_paths)
         print(f"  {len(series)} snapshots from {series.times[0]:.3f} to {series.times[-1]:.3f}")
-        # Before the contribution functions, which take minutes and gigabytes.
+        # Check the plan before computing the contribution functions, which
+        # take minutes and gigabytes.
         RasterSynthesiser.check_plan(series, raster_plan, *_swept("slit_width", "expos"))
         raster = RasterSynthesiser(series, synthesis_settings)
     elif synthesis_series_mode:
-        # The spectra are read per combination inside the loop, a strip of
-        # columns at a time, and each column once.
+        # The spectra are read per combination in the loop, a strip of
+        # columns at a time, each column once.
         cube_sim = None
         print("\nReading the synthesis series...")
         series = SynthesisSeries(series_paths, reference_line)
@@ -992,9 +992,9 @@ def main() -> None:
         print(f"\nLoading the synthesis from {synthesis_file}...")
         print(f"Using '{reference_line}' as reference line for wavelength grid and metadata...")
         if synthesis_is_hdf5:
-            # Only the lines that reach the reference line's window are read,
-            # and added up on its wavelengths here. The sum is resampled onto
-            # the detector grid per slit width inside the loop.
+            # Read only the lines that reach the reference line's window and
+            # sum them on its wavelengths. The sum is resampled onto the
+            # detector grid per slit width in the loop.
             synthesis = read_synthesis(synthesis_file, reference_line)
             print(f"  Lines in its window: {', '.join(synthesis.lines)}")
             if synthesis.source:
@@ -1002,8 +1002,8 @@ def main() -> None:
             products = read_synthesis_products(synthesis_file, keys=("dynamic_mode",))
             dynamic_mode_info = products.get("dynamic_mode", {"enabled": False})
             summed_input = synthesis.summed(reference_line)
-            # Kept in the results as the spectra the instrument observed, where
-            # evenly spaced wavelengths let a WCS describe them.
+            # Saved in the results as the spectra the instrument observed, if
+            # their wavelengths are evenly spaced so a WCS can describe them.
             file_meta = {"dynamic_mode": dynamic_mode_info}
             cube_sim = (synthesis.summed_cube(reference_line, summed_input, file_meta)
                         if synthesis.evenly_spaced(reference_line) else None)
@@ -1065,10 +1065,10 @@ def main() -> None:
     cube_reb_cache = {}
     # rebin_cache: keyed by (slit_width_arcsec, plate_scale, wvl_res, offchip_bin_slit)
     rebin_cache = {}
-    # observed_cache: the cubes the Monte Carlo observes through the PSF,
-    # keyed by the sampling and the PSF.
+    # observed_cache: cubes the Monte Carlo observes through the PSF, keyed by
+    # sampling and PSF.
     observed_cache = {}
-    # A synthesis series' raster, its metadata and its summed spectra, by sampling.
+    # Synthesis-series raster, its metadata and its summed spectra, by sampling.
     raster_syntheses = {}
     # Keyed by slit_width_arcsec (first match) for convenient downstream access
     cube_reb_dict = {}
@@ -1083,9 +1083,8 @@ def main() -> None:
             total_combinations *= len(v)
         print(f"\nUpdated to {total_combinations} parameter combination(s) (including offchip_bin_slit sweep).")
 
-    # Each raster of a time series is observed on its own, so a plan of several
-    # rasters is a sweep over them, and a sit-and-stare a sweep over its
-    # exposures.
+    # Each raster of a time series is observed on its own, so repeated
+    # rasters, or the exposures of a sit-and-stare, are swept over.
     if raster_mode and raster_plan.repeats > 1:
         sweep_dims["raster.repeat"] = list(range(raster_plan.repeats))
         dim_names = list(sweep_dims.keys())
@@ -1096,11 +1095,11 @@ def main() -> None:
         print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
 
     def _combinations():
-        """The sweep's combinations, afresh each time, one at a time rather than all at once."""
+        """New iterator over the sweep's combinations, yielding one at a time."""
         return itertools_product(*dim_values) if dim_names else iter([()])
 
     def _combination(combo_values):
-        """One combination: its sweep values, and its configuration objects, which check them."""
+        """Sweep values and config objects of one combination; the objects check the values."""
         combo = dict(zip(dim_names, combo_values)) if dim_names else {}
         offchip = combo.pop("offchip_bin_slit", offchip_bin_slits[0])
         repeat = combo.pop("raster.repeat", 0)
@@ -1153,22 +1152,22 @@ def main() -> None:
             pinhole_positions=pinhole_positions if enable else [],
             pinhole_positions_spectral=pinhole_positions_spectral if enable else [],
         )
-        # The optics' spectral FWHM comes from the telescope and the detector
-        # together, and was worked out only once the combination's scene was
-        # laid onto the detector: every run needs it when psf_params is for a
-        # given slit, and the PSF convolved with the slit always does.
+        # The optics' spectral FWHM depends on the telescope and the detector
+        # together. Work it out here, not only once the scene is laid onto
+        # the detector. It is needed when psf_params is for a given slit, and
+        # always for the PSF convolved with the slit.
         if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
             spectral_optics_fwhm(tel, det)
         return combo, offchip, repeat, fil, tel, det, sim
 
-    # Every combination is checked before the first is run, so that a value
-    # that cannot be run does not end the sweep part-way, and lose the
-    # combinations run before it, which are saved only at the end.
+    # Check every combination before running any, so a bad value does not
+    # stop the sweep part-way and lose the earlier results, which are saved
+    # only at the end.
     for combo_values in _combinations():
         _, _, _, _, tel, _, _ = _combination(combo_values)
-    # The throughput tables are read now too, where one that was missing or
-    # had a slip in it was found only when the first photons were counted.
-    # They cannot be swept, so every combination has the last one's.
+    # Read the throughput tables now too, so a missing or faulty table is
+    # found before the first photons are counted. They cannot be swept, so
+    # the last combination's tables are every combination's.
     if instrument == "SWC":
         for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
                       tel.filter.oxide_table, tel.filter.c_table):
@@ -1184,8 +1183,8 @@ def main() -> None:
                     f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
                     f"slit, so there would be nothing left; bin at most {n_slit}.")
 
-    # The off-chip binning is checked against the scene once it is first
-    # rebinned; a uniform intensity is made with the rows it bins.
+    # The off-chip binning is checked against the scene when it is first
+    # rebinned. A uniform intensity is made with the rows it bins.
     offchip_checked = uniform_intensity_mode
 
     for combination_idx, combo_values in enumerate(_combinations(), start=1):
@@ -1210,10 +1209,10 @@ def main() -> None:
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
         )
-        # In uniform-intensity mode the cube is built with one slit pixel per binning
-        # factor, so that rebin_slit_offchip has independent noise realisations to sum.
-        # The cube therefore does depend on offchip_bin_slit, and the key must say so.
-        # A time series is synthesised per exposure time as well as per slit width.
+        # In uniform-intensity mode the cube has offchip_bin_slit pixels along the
+        # slit, giving rebin_slit_offchip independent noise realisations to sum, so
+        # the key includes offchip_bin_slit. A time series is synthesised per
+        # exposure time as well as per slit width.
         if uniform_intensity_mode:
             cube_reb_key = (*sampling_key, offchip_bin_slit)
         elif raster_mode:
@@ -1233,8 +1232,8 @@ def main() -> None:
         if synthesis_series_mode and cube_reb_key not in cube_reb_cache:
             print(f"\nReading the time series as observed "
                   f"(slit_width={slit_width}, expos={expos})...")
-            # The exposures, as a synthesis whose columns they are, go onto
-            # the detector as a single snapshot does.
+            # The exposures form a synthesis, one column each, which goes onto
+            # the detector like a single snapshot.
             synthesis, raster_meta = raster.synthesis(raster_plan, slit_width, expos,
                                                       repeat=raster_repeat)
             summed_input = synthesis.summed(reference_line)
@@ -1273,9 +1272,8 @@ def main() -> None:
                 )
             else:
                 # A slit wider than the one psf_params is for spreads each line
-                # further than the synthesis window's margin allows, so the
-                # window is widened to hold what it spreads. Not for the
-                # reference slit, whose window is as it was.
+                # beyond the synthesis window's margin, so the window is padded
+                # to hold it. The reference slit's window is unchanged.
                 if synthesis is None:
                     rebinned = rebin_atmosphere(cube_sim, DET, SIM_rebin)
                 else:
@@ -1285,9 +1283,9 @@ def main() -> None:
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
                 if not offchip_checked:
-                    # The scene is as long along the slit for every
-                    # combination, so the rows each one's plate scale gives
-                    # it are known now, before any combination has run.
+                    # The scene has the same length along the slit for every
+                    # combination, so each one's number of rows is known now,
+                    # before any has run.
                     _check_offchip_bins(cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
                     offchip_checked = True
 
@@ -1297,16 +1295,16 @@ def main() -> None:
             # Apply off-chip binning
             cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
 
-            # Weighted, the ground truth's fit takes the uncertainties the DN
-            # would have, which change with the exposure and the instrument,
-            # so it is fitted for each combination below.
+            # A weighted ground-truth fit uses the expected DN uncertainties,
+            # which depend on the exposure and the instrument, so it is
+            # fitted for each combination below.
             ground_truth = (None if weighted_truth
                             else _fit_ground_truth(cube_reb_binned, offchip_bin_slit))
             rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
-            # Key by (slit_width_arcsec, offchip_bin_slit) so that sweeps over
-            # multiple binning factors at fixed slit width all retain their cubes
-            # (a single-key dict would silently keep only the first one). A
-            # time series adds the exposure time, which changes the cube too.
+            # Key by (slit_width_arcsec, offchip_bin_slit) so sweeps over
+            # several binning factors at a fixed slit width keep all their
+            # cubes; a single key would silently keep only the first. A time
+            # series adds the exposure time, which changes the cube too.
             cube_key = ((sampling_key[0], expos.to_value(u.s), raster_repeat, offchip_bin_slit)
                         if raster_mode else (sampling_key[0], offchip_bin_slit))
             cube_reb_dict.setdefault(cube_key, cube_reb_binned)
@@ -1315,25 +1313,36 @@ def main() -> None:
 
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
-        # The cube the Monte Carlo observes. With the PSF on, the scene goes
-        # onto the pixels through it, which is exact where blurring the pixels
-        # afterwards moves a narrow line within its pixel; the ground truth
-        # stays the scene without it. A uniform intensity is centred on a
-        # pixel and uniform along the slit, and the Monte Carlo blurs it.
+        # The cube the Monte Carlo observes: the scene laid onto the pixels
+        # through the telescope, with each photon counted at its own
+        # wavelength. With the PSF on, the scene is also blurred by the PSF
+        # before it is laid onto the pixels. This is exact, whereas blurring
+        # the pixels afterwards moves a narrow line within its pixel. The
+        # ground truth is the scene without either. A uniform intensity is
+        # centred on a pixel and uniform along the slit, and the Monte Carlo
+        # blurs it.
         cube_obs = cube_reb
-        if psf and not uniform_intensity_mode:
-            # The observed cube carries the telescope's throughput as well as
-            # its PSF, so every setting of the telescope and filter is in the key.
+        if not uniform_intensity_mode:
+            # The observed cube includes the telescope's throughput as well as
+            # its PSF, so every telescope and filter setting is in the key.
             telescope_key = _params_to_key({
                 **_extract_config_params(TEL, "telescope"),
                 **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
-            psf_key = (*cube_reb_key, spectral_psf, psf_boundary, telescope_key)
+            # With the pinholes on, it also includes the light they let past
+            # the filter.
+            pinholes = _pinholes_on(SIM)
+            psf_key = (*cube_reb_key, psf, spectral_psf, psf_boundary, telescope_key, pinholes)
             if psf_key not in observed_cache:
-                print("Laying the scene onto the detector through the PSF...")
+                print("Laying the scene onto the detector through the telescope...")
                 SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
-                                     ncpu=ncpu, instrument=instrument, psf=True,
-                                     psf_boundary=psf_boundary, spectral_psf=spectral_psf)
-                across = TEL.psf_across_slit
+                                     ncpu=ncpu, instrument=instrument, psf=psf,
+                                     psf_boundary=psf_boundary, spectral_psf=spectral_psf,
+                                     enable_pinholes=SIM.enable_pinholes,
+                                     pinhole_sizes=list(SIM.pinhole_sizes),
+                                     pinhole_positions=list(SIM.pinhole_positions),
+                                     pinhole_positions_spectral=list(
+                                         SIM.pinhole_positions_spectral))
+                across = TEL.psf_across_slit if psf else None
                 extend = psf_boundary == "replicate"
                 if atmosphere_series_mode:
                     scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(
@@ -1375,9 +1384,9 @@ def main() -> None:
             print(f"  Pinhole positions: {pinhole_positions}")
 
         if weighted_truth:
-            # The ground truth is weighted by the uncertainty the DN would
-            # have with no noise, so that it is the same fit as the measured
-            # spectra's, of the same line.
+            # Weight the ground truth by the DN uncertainty expected with no
+            # noise, so it is the same fit, of the same line, as for the
+            # measured spectra.
             expected = expected_dn_uncertainty(cube_obs, expos, DET, TEL, SIM, offchip_bin_slit,
                                                uniform_mode=uniform_intensity_mode)
             if expected.shape != cube_reb_binned.data.shape:
@@ -1454,9 +1463,9 @@ def main() -> None:
             },
             "fit_config": fit_config,
             "fit_signals": fit_signals,
-            # Whether the fits were weighted: the DN by each pixel's uncertainty,
-            # the photons by their Poisson likelihood. Results made before this was
-            # recorded were not.
+            # Whether the fits were weighted: DN by each pixel's uncertainty,
+            # photons by their Poisson likelihood. Results made before this was
+            # recorded were unweighted.
             "fit_weighted": weighted_fits,
         }
 
@@ -1477,8 +1486,8 @@ def main() -> None:
             "software_version": software_version,
         }
         if raster_mode:
-            # What the series was observed with, and the cube each combination
-            # saw; cube_sim is the last combination's.
+            # How the series was observed, and the cube each combination saw;
+            # cube_sim is the last combination's.
             save_data["raster"] = {
                 "plan": raster_plan,
                 "settings": synthesis_settings,
@@ -1491,13 +1500,12 @@ def main() -> None:
         output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
-        # A rerun replaced the pickle of the same name when results were
-        # pickles, so one left from an older version is moved aside rather
-        # than read in place of these results.
+        # Move aside a results pickle of the same name left by an older
+        # version, so it is not read in place of these results.
         stale = output_file.with_suffix(".pkl")
         if stale.is_file():
-            # Beside any moved aside before, rather than over it, which may be
-            # the only copy of still older results.
+            # Do not overwrite a file moved aside before, which may be the
+            # only copy of even older results.
             aside = stale.with_name(stale.name + ".old")
             number = 0
             while aside.exists():

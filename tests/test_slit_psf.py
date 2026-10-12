@@ -1,15 +1,9 @@
-"""The spectral PSF follows the slit (issue #31).
+"""The spectral PSF depends on the slit width (issue #31).
 
-The spectral resolution ECLIPSE was given, 43.00 mA or 2.54 SWC pixels, is
-RSC-2022021C's value for the 0.2 arcsec slit: the FWHM of the optics after
-the slit, 0.352 arcsec at 212.3 A, added in quadrature to the width of the
-slit, giving 0.405 arcsec. The wider slits add more, and were given the
-0.2 arcsec value.
-
-By default the PSF stays a Gaussian whose FWHM adds the slit in quadrature,
-as the document does. spectral_psf: convolution instead convolves the optics
-Gaussian with the slit's rectangular image, which is how the document
-defines the line profile.
+ECLIPSE's 43.00 mA (2.54 SWC pixels) is the RSC-2022021C value for the
+0.2 arcsec slit: the 0.352 arcsec optics FWHM at 212.3 A and the slit in
+quadrature, 0.405 arcsec. `spectral_psf: convolution` convolves the optics
+Gaussian with the slit's image instead.
 """
 import sys
 
@@ -40,7 +34,7 @@ N_SLIT, N_WAVE = 5, 81
 
 
 def _frame(slit_width, spectral_psf="quadrature", profile=None):
-    """One exposure of a line, one pixel wide unless *profile* is given, uniform along the slit."""
+    """One exposure of a line uniform along the slit, one pixel wide unless `profile` is given."""
     if profile is None:
         profile = np.zeros(N_WAVE)
         profile[N_WAVE // 2] = 1.0
@@ -58,7 +52,7 @@ def _frame(slit_width, spectral_psf="quadrature", profile=None):
 
 
 def _profile(slit_width, spectral_psf="quadrature"):
-    """The line after the PSF, along the dispersion."""
+    """Line profile along the dispersion after the PSF."""
     cube, sim = _frame(slit_width, spectral_psf)
     out = apply_focusing_optics_psf(cube, TEL, DET, sim, convolve_spatial=False)
     return out.data[N_SLIT // 2, 0]
@@ -85,18 +79,19 @@ def _variance(profile):
 # The widths
 # ----------------------------------------------------------------------
 def test_the_optics_part_is_the_one_rsc_2022021c_gives():
-    """0.352 arcsec, and with the 0.2 arcsec slit in quadrature 0.405 arcsec."""
+    """0.352 arcsec, or 0.405 arcsec with the 0.2 arcsec slit added in quadrature."""
     plate_scale = DET.plate_scale_angle.to_value(u.arcsec / u.pixel)
     # The document's own convolved value is the quadrature sum.
     assert np.hypot(0.352, 0.2) == pytest.approx(0.405, abs=5e-4)
-    # What the code separates out agrees with it to the rounding of 43.00 mA
-    # to 2.54 pixels and of 0.0118 arcsec per 13.5 micron pixel to 0.159.
+    # The optics part the code derives agrees within the rounding of 43.00 mA
+    # to 2.54 pixels and of 0.0118 arcsec per micron times 13.5 micron pixels
+    # to 0.159 arcsec per pixel.
     assert spectral_optics_fwhm(TEL, DET) * plate_scale == pytest.approx(0.352, abs=0.002)
     assert slit_image_width(0.2 * u.arcsec, DET) == pytest.approx(0.2 / plate_scale)
 
 
 def test_the_reference_slit_keeps_the_spectral_fwhm_it_was_given():
-    """To the last bit, so that a 0.2 arcsec run is exactly what it was."""
+    """Bit for bit, so a 0.2 arcsec run is unchanged."""
     assert spectral_psf_fwhm(TEL, DET, 0.2 * u.arcsec) == 2.54
     other = Telescope_EUVST(psf_params=[2.66 * u.pixel, 3.1 * u.pixel])
     assert spectral_psf_fwhm(other, DET, 0.2 * u.arcsec) == 3.1
@@ -112,7 +107,7 @@ def test_wider_slits_add_their_width_in_quadrature(slit, expected):
 
 
 def test_the_reference_slit_blurs_exactly_as_one_fixed_psf_did():
-    """What every slit got before is what the 0.2 arcsec slit still gets."""
+    """The 0.2 arcsec slit gets the fixed PSF that every slit used to get."""
     fixed = Telescope_EUVST(psf_slit_width=None)
     for convolve_spatial in (True, False):
         cube, sim = _frame(0.2)
@@ -136,14 +131,14 @@ def test_a_wide_slit_broadens_the_line_to_the_quadrature_width(slit):
 # ----------------------------------------------------------------------
 @pytest.mark.parametrize("slit", SLITS)
 def test_the_convolution_is_the_optics_gaussian_across_the_slit_image(slit):
-    """Against a numerical convolution on a grid a thousand times finer."""
+    """Compared with a numerical convolution on a grid a thousand times finer."""
     kernel = spectral_line_spread(TEL, DET, slit * u.arcsec)
     sigma = _fwhm_to_sigma(spectral_optics_fwhm(TEL, DET))
     half = 0.5 * slit_image_width(slit * u.arcsec, DET)
 
     x = np.arange(-(kernel.size // 2), kernel.size // 2 + 1)
-    # The Gaussian averaged across the rectangle, at each pixel centre, by the
-    # midpoint rule on exactly the rectangle.
+    # Average the Gaussian across the rectangle at each pixel centre, using
+    # the midpoint rule over exactly the rectangle.
     n = 20000
     offsets = -half + (2 * half / n) * (np.arange(n) + 0.5)
     numerical = np.array([np.exp(-0.5 * ((centre - offsets) / sigma) ** 2).sum()
@@ -154,13 +149,13 @@ def test_the_convolution_is_the_optics_gaussian_across_the_slit_image(slit):
 
 
 def test_a_wide_slit_gives_a_flat_topped_profile():
-    """The 1.6 arcsec slit is ten pixels wide against an optics FWHM of 2.2."""
+    """The 1.6 arcsec slit is ten pixels wide, against an optics FWHM of 2.2."""
     kernel = spectral_line_spread(TEL, DET, 1.6 * u.arcsec)
     centre = kernel.size // 2
     top = kernel[centre - 2:centre + 3]
     assert top.min() == pytest.approx(top.max(), rel=1e-3)
-    # Its FWHM is the slit's image, where the Gaussian is rounder and wider
-    # at the top.
+    # Its FWHM is the width of the slit image, while the Gaussian is rounder
+    # and wider at the top.
     assert _fwhm(_profile(1.6, "convolution")) == pytest.approx(
         slit_image_width(1.6 * u.arcsec, DET), rel=0.03)
     gaussian = _profile(1.6)
@@ -168,7 +163,7 @@ def test_a_wide_slit_gives_a_flat_topped_profile():
 
 
 def test_the_convolution_is_narrower_than_quadrature_for_the_narrow_slit():
-    """A rectangle adds less to a width than a Gaussian with its FWHM does."""
+    """A rectangle adds less to the width than a Gaussian of the same FWHM."""
     convolved = _profile(0.2, "convolution")
     quadrature = _profile(0.2)
     assert convolved.sum() == pytest.approx(1.0, rel=1e-12)
@@ -205,8 +200,8 @@ def test_the_configuration_takes_the_new_settings():
 def test_the_uniform_intensity_grid_holds_a_wide_slit_line():
     """The grid is sized for the line after this slit's PSF.
 
-    Whether or not psf is on, as it was sized for the 0.2 arcsec PSF whether
-    or not psf was on, so that a sweep of psf sees one grid per slit.
+    This holds whether or not `psf` is on, as it did for the 0.2 arcsec PSF,
+    so a sweep of `psf` sees one grid per slit.
     """
     widths = []
     for slit in (0.2, 1.6):
@@ -230,10 +225,10 @@ def test_a_wider_slit_widens_the_window_by_its_extra_reach(slit, margin):
 def test_a_widened_window_keeps_a_doppler_shifted_line():
     """The default synthesis window, 300 km/s either side, is 25 pixels at 195 A.
 
-    A line at +200 km/s sits five pixels from its end. Blurred by the 1.6
-    arcsec PSF, about a seventh of it would spread off the end of that
-    window; the widened window holds all of it, and the pixels already there
-    keep their wavelengths.
+    A line at +200 km/s sits five pixels from its end. The 1.6 arcsec PSF
+    would spread about a seventh of it off the end of that window. The
+    widened window holds all of it, and the existing pixels keep their
+    wavelengths.
     """
     pixel = (DET.wvl_res * u.pixel).to(u.AA)
     shift = (200 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
@@ -254,7 +249,7 @@ def test_a_widened_window_keeps_a_doppler_shifted_line():
 
 
 def test_the_window_is_widened_only_along_wavelength():
-    """The last data axis, which is the first WCS axis."""
+    """Wavelength must be the last data axis, which is the first WCS axis."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["HPLN-TAN", "HPLT-TAN", "WAVE"]
     cube = NDCube(np.zeros((4, 3, 2)), wcs=wcs)
@@ -263,7 +258,7 @@ def test_the_window_is_widened_only_along_wavelength():
 
 
 def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
-    """The grids are cached by slit width, and sized with it."""
+    """The grids are cached and sized by slit width."""
     from euvst_response.main import main
 
     config = tmp_path / "sweep.yaml"
@@ -279,7 +274,7 @@ def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
 
 
 def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, monkeypatch):
-    """From a synthesis file with the default window to the rebinned cubes the run keeps."""
+    """End to end, from a synthesis file with the default window to the saved rebinned cubes."""
     from euvst_response.main import main
 
     n_spec, n_cells = 121, 8  # 300 km/s either side at 5 km/s; 1.5 Mm square
@@ -319,7 +314,7 @@ def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, m
 
 
 def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypatch):
-    """From a configuration to fitted widths, with the noise off."""
+    """End to end, from a configuration to fitted widths, with the noise off."""
     from euvst_response.main import main
 
     config = tmp_path / "slits.yaml"

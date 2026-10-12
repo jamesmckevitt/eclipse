@@ -40,38 +40,37 @@ def load_cube(
     create_ndcube: bool = False,
 ) -> np.ndarray | u.Quantity | NDCube:
     """
-    Read a Fortran-ordered binary cube (single precision) and optionally return as NDCube.
+    Read a Fortran-ordered float32 binary cube, optionally as an NDCube.
 
-    The cube is stored (x, z, y) in the file and transposed to (z, y, x)
-    upon loading, so that a horizontal slice ``data[k]`` is an image indexed
-    ``[y, x]``.
+    The file stores the cube as (x, z, y). It is returned as (z, y, x), so
+    `data[k]` is a horizontal slice indexed `[y, x]`.
 
     Parameters
     ----------
     file_path : str | Path
         Path to the binary file.
     shape : Tuple[int, int, int]
-        The *full* cube dimensions in the file's own storage order, which is
-        ``(nx, nz, ny)`` - the vertical axis comes second, not last.
+        Full cube dimensions in the file's storage order, `(nx, nz, ny)`:
+        the vertical axis is second, not last.
     unit : astropy.units.Unit, optional
-        Astropy unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns
-        a plain ndarray.
+        Unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns a plain
+        ndarray.
     downsample : int | bool
-        Integer factor; if non-False, keep every *downsample*-th cell along
+        Integer factor; if not False, keep every `downsample`-th cell along
         each axis (simple stride).
     precision : type
-        np.float32 or np.float64 for returned dtype.
+        np.float32 or np.float64 for the returned dtype.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity, optional
-        Voxel sizes of the file, at full resolution. When *downsample* is
-        set, the returned cube's WCS uses them multiplied by it. Required if
-        create_ndcube=True.
+        Voxel sizes in the file, at full resolution. With `downsample`, the
+        returned cube's WCS uses them multiplied by it. Required if
+        `create_ndcube` is True.
     create_ndcube : bool, optional
-        If True, return an NDCube with proper WCS coordinates.
+        If True, return an NDCube with WCS coordinates.
 
     Returns
     -------
     ndarray, Quantity, or NDCube
-        Array with shape (nz', ny', nx') or NDCube with proper coordinates.
+        Array of shape (nz', ny', nx'), or an NDCube with its coordinates.
     """
     if downsample:
         require_downsample_divides(shape, downsample)
@@ -81,9 +80,9 @@ def load_cube(
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
-        # Each kept cell now stands for *downsample* cells of the file. New
-        # quantities, not *=, which would scale the caller's own voxel sizes
-        # and compound across calls.
+        # Each kept cell spans `downsample` cells of the file. Make new
+        # quantities rather than use *=, which would scale the caller's voxel
+        # sizes and compound across calls.
         voxel_dx, voxel_dy, voxel_dz = (
             None if size is None else size * downsample
             for size in (voxel_dx, voxel_dy, voxel_dz))
@@ -106,22 +105,22 @@ def create_atmosphere_ndcube(
     voxel_dz: u.Quantity,
 ) -> NDCube:
     """
-    Give a cube of a simulation's cells coordinates on the Sun, from the cells' sizes.
+    NDCube of a simulation cube, with solar coordinates from its cell sizes.
 
-    x and y are centred on zero, and z starts from zero.
+    x and y are centred on zero, and z starts at zero.
 
     Parameters
     ----------
     data : np.ndarray or u.Quantity
-        The cube, shaped (nz, ny, nx), so that ``data[k]`` is a horizontal
-        slice indexed ``[y, x]``.
+        Cube of shape (nz, ny, nx); `data[k]` is a horizontal slice indexed
+        `[y, x]`.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
-        The size of a cell along each axis.
+        Cell size along each axis.
 
     Returns
     -------
     NDCube
-        The cube, with its coordinates in Mm.
+        The cube, with coordinates in Mm.
     """
     nz, ny, nx = data.shape
 
@@ -143,7 +142,7 @@ def create_atmosphere_ndcube(
         voxel_dz.to(u.Mm).value
     ]
 
-    # A plain array, as the docstring allows, has no unit.
+    # A plain array has no unit.
     return NDCube(np.asarray(getattr(data, "value", data)),
                   wcs=wcs,
                   unit=getattr(data, "unit", None))
@@ -257,43 +256,39 @@ def compute_slice_timestep_mapping_mhd(
     crop_x: Optional[Tuple[u.Quantity, u.Quantity]] = None,
 ) -> Tuple[List[str], Dict[str, List[int]]]:
     """
-    Compute which timestep suffix to use for each MHD X-slice.
-    
-    The spectrometer scans from right to left (high X to low X).
-    Each slit position covers a physical width (slit_width converted to Mm).
-    Determine which slit position each MHD slice belongs to, then find
-    the appropriate timestep based on observation time.
-    
-    If crop_x is specified, the observation timing is calculated as if the
-    scan starts at the right edge of the crop region. Slices to the right
-    of the crop region are filled with the first timestep.
-    
-    To avoid error accumulation, calculate the observation time for each
-    MHD slice based on its absolute physical position.
-    
+    Timestep suffix to use for each MHD X-slice.
+
+    The spectrometer scans from right to left (high X to low X), and each
+    slit position covers `slit_width` converted to Mm. Each MHD slice is
+    assigned to a slit position, then to the timestep at that position's
+    observation time. The time is worked out from the slice's absolute
+    position, so errors do not accumulate.
+
+    With `crop_x`, the scan starts at the right edge of the crop region.
+    Slices to the right of it get the first timestep.
+
     Parameters
     ----------
     nx_mhd : int
         Number of MHD X-slices.
     voxel_dx : u.Quantity
-        MHD voxel size in X direction (physical units, e.g., Mm).
+        MHD voxel size along X, as a length (e.g. Mm).
     slit_width : u.Quantity
-        Slit width in angular units (e.g., arcsec).
+        Slit width as an angle (e.g. arcsec).
     slit_rest_time : u.Quantity
         Slit rest time per position.
     timestep_times : dict
-        Mapping of timestep suffix to simulation time in seconds.
+        Simulation time in seconds for each timestep suffix.
     crop_x : tuple of u.Quantity, optional
-        If provided, (x_min, x_max) crop boundaries. Observation timing starts
-        at x_max (right edge of crop). Slices outside crop on the right use
-        the first timestep.
-        
+        (x_min, x_max) crop boundaries. The scan starts at x_max, the right
+        edge of the crop; slices to the right of it use the first timestep.
+
     Returns
     -------
     slice_mapping : list
-        List of timestep suffixes, one per MHD X-slice.
+        Timestep suffix for each MHD X-slice.
     grouped : dict
-        Dictionary mapping each unique timestep suffix to list of MHD slice indices.
+        MHD slice indices for each timestep suffix.
     """
     rest_time_sec = slit_rest_time.to_value(u.s)
     
@@ -315,14 +310,13 @@ def compute_slice_timestep_mapping_mhd(
     # Total physical extent of the full domain
     total_extent = nx_mhd * voxel_physical
     
-    # Determine the effective scan start position (right edge)
-    # If crop_x is specified, scan starts at the crop boundary
+    # The scan starts at the right edge of the domain, or of the crop if given.
     if crop_x is not None:
         x_min_crop = crop_x[0].to(u.Mm)
         x_max_crop = crop_x[1].to(u.Mm)
         
-        # The domain is centered at 0, so convert to absolute position
-        # WCS has X centered, so x=0 is at nx/2
+        # The WCS centres X on zero (x=0 is at nx/2), so convert to absolute
+        # positions from the left edge.
         domain_center = total_extent / 2
         scan_start_position = domain_center + x_max_crop  # Right edge of crop in absolute coords
         scan_end_position = domain_center + x_min_crop    # Left edge of crop in absolute coords
@@ -346,8 +340,8 @@ def compute_slice_timestep_mapping_mhd(
     
     slice_mapping = []
     
-    # For each MHD X-slice, calculate which slit position it belongs to
-    # Scanning right to left: scan_start_position is observed first (at t=t0)
+    # Find the slit position of each MHD X-slice. The scan runs right to left,
+    # so scan_start_position is observed first, at t=t0.
     for mhd_slice_idx in range(nx_mhd):
         # Physical position of this slice (center of voxel) in absolute coords
         x_physical = (mhd_slice_idx + 0.5) * voxel_physical
@@ -356,13 +350,11 @@ def compute_slice_timestep_mapping_mhd(
         distance_from_scan_start = scan_start_position - x_physical
         
         if distance_from_scan_start < 0:
-            # This slice is to the right of the scan start (outside crop on right)
-            # Use the first timestep for these slices
+            # Outside the crop on the right: use the first timestep.
             slice_mapping.append(first_suffix)
             continue
         
-        # Which slit position does this belong to?
-        # slit_position = 0 is at scan_start_position
+        # Slit position 0 is at scan_start_position.
         slit_position = int(np.floor((distance_from_scan_start / slit_physical).decompose().value))
         
         # Observation time for this slit position
@@ -441,8 +433,8 @@ def apply_cube_cropping(
         point1.append(None)
         point2.append(None)
     
-    # A crop that keeps one cell along an axis keeps the axis, which the
-    # synthesis needs all three of.
+    # keepdims keeps an axis cropped to one cell, since the synthesis needs
+    # all three axes.
     temp_cube = temp_cube.crop(point1, point2, keepdims=True)
     rho_cube = rho_cube.crop(point1, point2, keepdims=True)
     vel_cube = vel_cube.crop(point1, point2, keepdims=True)
@@ -469,9 +461,9 @@ def build_composite_cubes_mhd(
 ) -> Tuple[NDCube, NDCube, NDCube]:
     """
     Build composite temp, rho, vel cubes from multiple timesteps at MHD resolution.
-    
-    Each MHD X-slice comes from the appropriate timestep per slice_mapping.
-    No spatial rebinning is performed - output is at full MHD resolution.
+
+    Each MHD X-slice comes from its timestep in `slice_mapping`. There is no
+    spatial rebinning: the output is at full MHD resolution.
     
     Parameters
     ----------
@@ -490,8 +482,8 @@ def build_composite_cubes_mhd(
     cube_shape : tuple
         Original cube dimensions in the file's storage order.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
-        Voxel sizes of the files, at full resolution; load_cube applies the
-        downsampling to them.
+        Voxel sizes in the files, at full resolution; `load_cube` applies the
+        downsampling.
     downsample : int or bool
         Downsampling factor.
     precision : type
@@ -568,18 +560,21 @@ def build_composite_cubes_mhd(
 
 def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.ndarray) -> tuple:
     """
-    The transitions *line_name* names, by index, and how they were found.
+    Indices of the transitions matching `line_name`, and how they were matched.
 
-    First those whose wavelength, written to as many decimals as the name
-    gives, is the name's: observed ones if any are, else theoretical ones, so
-    that a line CHIANTI has only worked out can be named at its wavelength.
-    With none, the nearest line CHIANTI has observed: its theoretical
-    wavelengths include many weak transitions within a few mA of strong
-    lines, and a name a little off an observed wavelength, as another line
-    list may give it, would otherwise pick one of those, up to 1e12 times
-    fainter. An ion with no observed lines has only its theoretical ones.
-    All the transitions at the chosen wavelength are given, for the
-    brightest to be taken.
+    The match is, in order of preference:
+
+    - Transitions whose wavelength, rounded to the decimals in the name,
+      equals the name's: observed ones if any, else theoretical ones, so a
+      line with only a theoretical wavelength can still be named.
+    - The nearest observed line. CHIANTI's theoretical wavelengths include
+      many weak transitions within a few mA of strong lines, and a name
+      slightly off an observed wavelength (as from another line list) would
+      otherwise pick one of those, up to 1e12 times fainter.
+    - The nearest theoretical line, for an ion with no observed lines.
+
+    All transitions at the chosen wavelength are returned, so the brightest
+    can be taken.
     """
     number = line_name.split("_", 1)[1]
     decimals = len(number.partition(".")[2])
@@ -598,13 +593,12 @@ def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.n
 
 
 def _compute_single_ion(args):
-    """Worker that computes G(T,N) for one ion.  Imports fiasco locally so
-    that each spawned process gets its own HDF5 handles.
+    """Worker that computes G(T,N) for one ion.
 
-    With a temperature chunk, fiasco is called on that many temperatures at a
-    time, one call after another, and only the requested lines are kept from
-    each call, so the memory needed is that of one chunk rather than of the
-    whole temperature grid."""
+    fiasco is imported here so that each spawned process gets its own HDF5
+    handles. With a temperature chunk, fiasco is called on that many
+    temperatures at a time and only the requested lines are kept, so memory
+    use is that of one chunk rather than the whole temperature grid."""
 
     import fiasco
     import logging
@@ -615,18 +609,17 @@ def _compute_single_ion(args):
     n_temperatures = len(temperature_K)
     step = n_temperatures if temperature_chunk is None else temperature_chunk
 
-    # A spawned process re-imports fiasco from scratch, so it re-reads
-    # ~/.fiasco/fiascorc and knows nothing about a database the parent
-    # selected in memory. The root therefore has to travel in the arguments.
+    # A spawned process re-imports fiasco and re-reads ~/.fiasco/fiascorc,
+    # so it does not see a database the parent selected in memory. The
+    # database root is passed in the arguments instead.
     ion_kwargs = {} if hdf5_dbase_root is None else {
         'hdf5_dbase_root': hdf5_dbase_root}
 
-    # Suppress repetitive fiasco warnings about missing proton data and
-    # autoionization/rrlvl files.  These are CHIANTI database gaps (not all
-    # ions have .psplups or .auto/.rrlvl data) and both fiasco and IDL
-    # gracefully fall back to excluding proton rates / using the single-ion
-    # model.  The warnings fire once per density point, producing hundreds of
-    # identical lines.
+    # Silence fiasco's repeated warnings about missing proton data and
+    # autoionization/rrlvl files. These are gaps in CHIANTI (not all ions
+    # have .psplups or .auto/.rrlvl data), and fiasco and IDL both fall back
+    # to leaving out proton rates or using the single-ion model. The warnings
+    # fire once per density point, giving hundreds of identical lines.
     fiasco_logger = logging.getLogger('fiasco')
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
@@ -647,8 +640,9 @@ def _compute_single_ion(args):
             if start == 0:
                 bound = ion.transitions.is_bound_bound
                 bb_wl = ion.transitions.wavelength[bound]
-                # CHIANTI stores its theoretical wavelengths negative, and
-                # fiasco gives them positive with this flag.
+                # CHIANTI stores theoretical wavelengths as negative numbers;
+                # fiasco gives them positive and marks observed ones with this
+                # flag.
                 observed = np.asarray(ion.transitions.is_observed[bound])
                 matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
                            for line_name, _ in lines}
@@ -668,7 +662,7 @@ def _compute_single_ion(args):
         for idx in indices:
             g_tn = np.concatenate(g_parts[(line_name, int(idx))]).T
             tables[int(idx)] = np.nan_to_num(g_tn, nan=0.0, posinf=0.0, neginf=0.0)
-        # Transitions CHIANTI lists at one wavelength are told apart by their brightness.
+        # Of the transitions at one wavelength, take the brightest.
         idx = max(tables, key=lambda i: tables[i].max())
         matched_wl = bb_wl[idx]
 
@@ -682,29 +676,29 @@ def _compute_single_ion(args):
             "observed": bool(observed[idx]),
             "transition": idx,
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
-            # The root this Ion was built against.  fiasco resolves it to the
-            # fiascorc default when the caller did not choose one, so this is
-            # always the database the contribution functions came from.
+            # Database root this Ion was built with. fiasco sets it to the
+            # fiascorc default if none was chosen, so this is always the
+            # database the contribution functions came from.
             "hdf5_dbase_root": str(ion.hdf5_dbase_root),
         }
     return results
 
 
-# A line name: element, ionisation stage, and a wavelength in Angstrom, such
-# as Fe12_195.1190.
+# Line name: element, ionisation stage and wavelength in Angstrom, such as
+# Fe12_195.1190.
 _LINE_NAME = re.compile(r'^([A-Z][a-z]?)(\d+)_(\d+\.?\d*)$')
 
 
 def _parse_line_name(name: str) -> Tuple[str, int, float]:
     """
-    The element, ionisation stage and wavelength in Angstrom of a line name
-    such as ``Fe12_195.1190``.
+    Element, ionisation stage and wavelength in Angstrom of a line name.
 
-    The element must be one, the stage one it has, from 1, neutral, to its
-    atomic number plus one, and the wavelength above zero: an element or
-    stage that is not was found only when its ion was made, after the
-    atmosphere had been read, and a wavelength of zero matched whichever
-    transition was shortest.
+    Names look like `Fe12_195.1190`. The element must exist, the stage must
+    be from 1 (neutral) to its atomic number plus one, and the wavelength
+    must be above zero. These are checked here because a bad element or
+    stage would otherwise only be found when the ion is made, after the
+    atmosphere has been read, and a wavelength of zero would match the
+    shortest transition.
     """
     match = _LINE_NAME.match(name)
     if not match:
@@ -723,9 +717,9 @@ def _parse_line_name(name: str) -> Tuple[str, int, float]:
                          f"Angstrom.")
     return elem, stage, wavelength
 
-# The grids G(T, n_e) is worked out on unless given others: log10 T from 4 to 9
-# every 0.05, and log10 n_e from 7 to 13 every 0.3. density_grid carries the
-# density grid on, on the same points, as far as an atmosphere needs.
+# Default grids for G(T, n_e): log10 T from 4 to 9 in steps of 0.05, and
+# log10 n_e from 7 to 13 in steps of 0.3. density_grid extends the density
+# grid on the same points as far as an atmosphere needs.
 _LOGT_MIN, _LOGT_MAX, _N_T = 4.0, 9.0, 101
 _LOGN_MIN, _LOGN_MAX, _N_N = 7.0, 13.0, 21
 
@@ -745,64 +739,65 @@ def compute_goft_fiasco(
     temperature_chunk: int | None = None,
 ) -> Tuple[Dict[str, dict], np.ndarray, np.ndarray]:
     """
-    Compute each line's contribution function, G(T, n_e), from CHIANTI through fiasco.
+    Contribution function G(T, n_e) of each line, from CHIANTI via fiasco.
 
-    Each line is matched to a transition in CHIANTI as the docs page on
-    naming spectral lines describes, and placed at CHIANTI's wavelength,
-    ``wl0``, not the name's. G includes the ratio of protons to electrons, so
-    that it multiplies an emission measure of n_e^2 dh. With two or more ions
-    and more than one worker, the ions are computed in separate processes,
-    so a script calling this needs an ``if __name__ == "__main__":`` guard.
+    Each line is matched to a CHIANTI transition as described in the docs
+    page on naming spectral lines, and placed at CHIANTI's wavelength, `wl0`,
+    not the name's. G includes the proton-to-electron ratio, so it multiplies
+    an emission measure of n_e^2 dh. With two or more ions and more than one
+    worker, the ions are computed in separate processes, so a calling script
+    needs an `if __name__ == "__main__":` guard.
 
     Parameters
     ----------
     line_names : list of str
-        The lines, such as ``["Fe12_195.1190", "Fe09_171.073"]``.
+        Line names, such as `["Fe12_195.1190", "Fe09_171.073"]`.
     abundance : str, optional
-        The CHIANTI abundance set. Default ``"sun_coronal_2021_chianti"``.
+        CHIANTI abundance set. Default `"sun_coronal_2021_chianti"`.
     logT_min, logT_max : float, optional
-        The range of log10(T / K).
+        Range of log10(T / K).
     nT : int, optional
-        How many temperatures, evenly spaced in log10(T), across that range.
+        Number of temperatures, evenly spaced in log10(T) across that range.
     logN_min, logN_max : float, optional
-        The range of log10(n_e / cm-3).
+        Range of log10(n_e / cm-3).
     nN : int, optional
-        How many densities, evenly spaced in log10(n_e), across that range.
+        Number of densities, evenly spaced in log10(n_e) across that range.
     precision : type, optional
-        ``np.float32`` or ``np.float64`` (default).
+        `np.float32` or `np.float64` (default).
     n_workers : int, optional
-        How many processes to compute the ions with, one ion each at a time,
-        so never more than there are ions. Default 0, which uses every CPU
-        this process may use, as SLURM allocates them, up to that limit.
+        Number of worker processes, each computing one ion at a time, capped
+        at the number of ions. Default 0 uses every CPU this process may use
+        (as allocated by SLURM), up to that cap.
     hdf5_dbase_root : str or Path, optional
-        The CHIANTI database to read. Default fiasco's own, set in
-        ``~/.fiasco/fiascorc``.
+        CHIANTI database to read. Default is fiasco's, set in
+        `~/.fiasco/fiascorc`.
     temperature_chunk : int, optional
-        Give fiasco this many temperatures at a time, rather than the whole
-        grid, to use less memory. The result is the same. Default None, for
-        the whole grid.
+        Pass fiasco this many temperatures at a time, rather than the whole
+        grid, to use less memory. The result is the same. Default None (the
+        whole grid).
 
     Returns
     -------
     goft_dict : dict
-        For each line, by name: ``wl0``, its wavelength in CHIANTI; ``g_tn``,
-        G on the grid of densities and temperatures, shaped (nN, nT), in
-        erg cm3 / s; ``atom`` and ``ion``, its atomic number and ionisation
-        stage; and ``hdf5_dbase_root``, the database it came from.
+        Entry per line name, holding `wl0` (CHIANTI wavelength), `g_tn` (G on
+        the density and temperature grid, shape (nN, nT), in erg cm3 / s),
+        `atom` and `ion` (atomic number and ionisation stage) and
+        `hdf5_dbase_root` (database used).
     logT_grid : np.ndarray
-        The temperatures, as log10(T / K).
+        Temperatures, as log10(T / K).
     logN_grid : np.ndarray
-        The densities, as log10(n_e / cm-3).
+        Densities, as log10(n_e / cm-3).
     """
     # fiasco's contribution_function, G = Ab(X) f_{X,k} (N_j / N) A_ij dE_ij
-    # / n_e, leaves out n_H / n_e, which is multiplied in here. Each worker is
-    # spawned rather than forked, to keep HDF5 safe, so it imports fiasco and
-    # reads fiascorc afresh: setting fiasco.defaults in the parent does not
-    # reach it, which is why the database is passed down, and each worker
-    # reports the root its Ion was built with, checked against the request.
-    # fiasco solves the level populations for every temperature it is given
-    # at once, so its memory grows with them; chunks of an ion are computed
-    # one after another, at the cost of reading its atomic data again.
+    # / n_e, leaves out n_H / n_e, which is multiplied in here.
+    # Workers are spawned rather than forked, for HDF5 safety, so each one
+    # imports fiasco and reads fiascorc afresh and does not see
+    # fiasco.defaults set in the parent. The database is therefore passed
+    # down, and each worker reports the root its Ion used, which is checked
+    # against the request.
+    # fiasco solves the level populations for all its temperatures at once,
+    # so its memory grows with their number. Temperature chunks are computed
+    # one after another, at the cost of reading the atomic data again.
     if temperature_chunk is not None and temperature_chunk < 1:
         raise ValueError(
             f"temperature_chunk must be a positive number of temperatures, "
@@ -832,13 +827,13 @@ def compute_goft_fiasco(
     if temperature_chunk is not None and temperature_chunk < nT:
         print(f"  {nT} temperatures in chunks of {temperature_chunk}")
 
-    # Here, since spawned workers cannot ask whether to build it.
+    # Offer to build the database here, since spawned workers cannot ask.
     _offer_database_build(dbase_root)
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
     if n_workers <= 0:
-        # The CPUs this process may run on, as a SLURM step gives it, not
+        # Use the CPUs this process may run on, as its SLURM step allows, not
         # the whole node's, which would start a worker per CPU of the node.
         n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
                      else os.cpu_count() or 1)
@@ -875,7 +870,7 @@ def compute_goft_fiasco(
                 f"{'observed' if info['observed'] else 'theoretical'} "
                 f"(delta={info['delta_aa']:.4f} Angstrom)"
             )
-            # No line of the ion is at the name's wavelength to its digits.
+            # No line of the ion matches the name's wavelength to its digits.
             if info["match"] == "nearest observed":
                 warnings.warn(
                     f"{line_name}: no line of this ion is at that wavelength to the digits "
@@ -900,8 +895,8 @@ def compute_goft_fiasco(
                     f"{info['matched_wl_aa']:.4f} Angstrom, which would be synthesised twice "
                     f"and summed. Give it once.")
             goft_dict[line_name] = {
-                # The line is where CHIANTI has observed it, whatever
-                # digits the name gave.
+                # Place the line at its CHIANTI wavelength, not at the
+                # name's digits.
                 "wl0": info["matched_wl_aa"] * u.AA.to(u.cm) * u.cm,
                 "transition": info["transition"],
                 "g_tn": info["g_tn"].astype(precision),
@@ -927,35 +922,34 @@ def compute_dem(
     integration_axis: str = "z",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Build the differential emission measure DEM(T) and the emission-measure
-    weighted mean electron density <n_e>(T).
+    DEM(T) and emission-measure-weighted mean electron density <n_e>(T).
 
     Parameters
     ----------
     logT_cube : np.ndarray
         3D array of log10(T/K) values.
-    logN_cube : np.ndarray  
-        3D array of log10(n_e/cm^3) values.
+    logN_cube : np.ndarray
+        3D array of log10(n_e / cm^-3) values.
     voxel_dh_cm : float or np.ndarray
-        Depth of the cells along the integration axis in cm: one value for
-        every cell, or one value per cell along that axis.
+        Cell depth along the integration axis in cm: one value for all cells,
+        or one per cell along that axis.
     logT_grid : np.ndarray
         1D array of temperature bin centers for DEM calculation.
     integration_axis : str
-        The view: the axis to integrate along, ``"x"``, ``"y"`` or ``"z"``,
-        optionally with a sign for the side of the box to look from, such as
-        ``"-x"``; see `line_of_sight_velocity`.
+        View: the axis to integrate along, `"x"`, `"y"` or `"z"`, optionally
+        signed for the side of the box to look from, such as `"-x"`; see
+        `line_of_sight_velocity`.
 
     Returns
     -------
     dem_map : np.ndarray
-        DEM array [cm^-5 per dex]. The two remaining spatial axes come out in
+        DEM array [cm^-5 per dex], with the two remaining spatial axes in
         image order (row, column). Shape depends on the axis:
         - "x": (nz, ny, nT)
         - "y": (nz, nx, nT)
         - "z": (ny, nx, nT)
     avg_ne : np.ndarray
-        Mean electron density per T-bin [cm^-3]. Same shape as dem_map.
+        Mean electron density per T-bin [cm^-3]. Same shape as `dem_map`.
     """
     nT = len(logT_grid)
     axis, _ = view_axis_and_side(integration_axis)
@@ -967,9 +961,9 @@ def compute_dem(
     w2 = np.broadcast_to(ne**2 * dh, logT_cube.shape)  # weights for EM
     w3 = np.broadcast_to(ne**3 * dh, logT_cube.shape)  # weights for EM*n_e
 
-    # Each cell is shared between the two temperature bins about it, as in
-    # build_em_tv, so that the DEM is the emission measure it spreads over
-    # velocity, and each bin's density that of the plasma it holds.
+    # Split each cell between the two temperature bins either side of it, as
+    # in build_em_tv, so the DEM equals the emission measure build_em_tv
+    # spreads over velocity, and each bin's density is that of its plasma.
     lower, share, inside = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
     pixel, (n_rows, n_cols) = _image_pixels(logT_cube.shape, integration_axis)
     em = np.zeros(n_rows * n_cols * nT)   # cm^-5
@@ -982,14 +976,15 @@ def compute_dem(
     em, em_n = em.reshape(n_rows, n_cols, nT), em_n.reshape(n_rows, n_cols, nT)
 
     dem = em / dlogT
-    # Zero where no plasma is at a temperature, rather than whatever memory
-    # the division left there, which reached the saved G diagnostic.
+    # Zero where there is no plasma at a temperature. Otherwise the division
+    # leaves uninitialised memory there, which ends up in the saved G
+    # diagnostic.
     avg_ne = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
     return dem, avg_ne
 
 
 def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
-    """The width and the edges of the DEM's temperature bins, centred on *logT_grid*."""
+    """Width and edges of the DEM temperature bins centred on `logT_grid`."""
     dlogT = logT_grid[1] - logT_grid[0] if len(logT_grid) > 1 else 0.1
     logT_edges = np.concatenate([
         [logT_grid[0] - dlogT/2],
@@ -1002,17 +997,18 @@ def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
 def _neighbouring_bins(values: np.ndarray, centres: np.ndarray,
                        edges: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Each value's shares of the two bins about it: the bin whose centre is at
-    or below it, the share the next bin up takes, and whether it is within
-    the bins' edges at all.
+    Split each value between the two bins either side of it.
 
-    The share is in proportion to how far the value is from the one centre
-    towards the next, so that the two centres, weighted by their shares,
-    average to the value itself: a flow of 2.4 km/s on a 5 km/s grid is 0.52
-    of the 0 km/s bin and 0.48 of the 5 km/s one, where it went wholly to the
-    0 km/s bin. A value between the first or last centre and that bin's outer
-    edge is that bin's alone, as before, so the grid reaches as far as it
-    did; one beyond the edges is no bin's, and its share is zero.
+    Returns the index of the bin whose centre is at or below each value, the
+    share going to the next bin up, and whether the value is inside the
+    outer bin edges.
+
+    The share rises linearly from 0 at one centre to 1 at the next, so the
+    two centres weighted by their shares average to the value: 2.4 km/s on a
+    5 km/s grid is 0.52 in the 0 km/s bin and 0.48 in the 5 km/s bin. A
+    value between the first or last centre and that bin's outer edge goes
+    wholly to that bin, so the grid still reaches its outer edges. A value
+    beyond the edges is in no bin, and its share is zero.
     """
     values = np.asarray(values, dtype=np.float64)
     inside = (values >= edges[0]) & (values < edges[-1])
@@ -1028,14 +1024,15 @@ def _neighbouring_bins(values: np.ndarray, centres: np.ndarray,
 
 def _image_pixels(shape: Tuple[int, int, int], integration_axis: str) -> Tuple[np.ndarray, Tuple[int, int]]:
     """
-    For a (z, y, x) cube seen along *integration_axis*, the image pixel each
-    cell is seen in, as row times the number of columns plus column, and the
-    image's (rows, columns), in the order compute_dem and build_em_tv give.
+    Image pixel that each cell of a (z, y, x) cube is seen in.
 
-    Seen from the side of the box opposite the one :data:`OBSERVER_SIDE`
-    gives, the image is mirrored left to right, as walking round to the
-    other side of the box mirrors it, so that it is the right way round for
-    that observer too.
+    For a view along `integration_axis`, returns each cell's flat pixel index
+    (row times the number of columns plus column) and the image shape
+    (rows, columns), in the order `compute_dem` and `build_em_tv` use.
+
+    Seen from the side opposite :data:`OBSERVER_SIDE`, the image is mirrored
+    left to right, as walking round to the other side of the box mirrors it,
+    so it is the right way round for that observer too.
     """
     axis, side = view_axis_and_side(integration_axis)
     z, y, x = np.indices(shape, sparse=True)
@@ -1048,10 +1045,10 @@ def _image_pixels(shape: Tuple[int, int, int], integration_axis: str) -> Tuple[n
 
 def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
                precision: type) -> Tuple[np.ndarray, np.ndarray]:
-    """log10 of the temperature and the electron density, as the synthesis works with them.
+    """log10 of the temperature and electron density, in `precision`.
 
-    A cell with no electrons has a log density of minus infinity, so that it
-    adds nothing to the emission measure; one with no temperature is put at
+    A cell with no electrons gets a log density of minus infinity, so it
+    adds nothing to the emission measure. A cell with no temperature gets
     log T = 0, below every temperature grid.
     """
     logN_cube = np.log10(electron_density, where=electron_density > 0.0,
@@ -1067,33 +1064,32 @@ def density_grid(
     logT_grid: np.ndarray,
     precision: type = np.float64,
 ) -> Tuple[float, float, int]:
-    """The density grid to work G(T, n_e) out on for an atmosphere.
+    """Density grid on which to compute G(T, n_e) for an atmosphere.
 
     The contribution functions are read at the mean density of each
-    temperature along each line of sight, and taken as zero off their grid.
-    This grid has the points of the default one, every 0.3 in log10 n_e
-    through 10**7 cm^-3, and goes each way until it is past the density of
-    every cell whose temperature is on *logT_grid*, and no further. No mean
-    density falls off it, and an atmosphere with a narrower range of
-    densities than the default grid needs fewer points.
+    temperature along each line of sight, and are zero off their grid. This
+    grid uses the default grid's points (every 0.3 in log10 n_e, through
+    10**7 cm^-3) and extends each way to just past the densities of all
+    cells whose temperature is on `logT_grid`. No mean density falls off
+    it, and an atmosphere with a narrower density range than the default
+    grid needs fewer points.
 
     Parameters
     ----------
     temperature, electron_density : np.ndarray
-        The temperature of every cell in K and its electron density in cm^-3.
+        Temperature of every cell in K and electron density in cm^-3.
     logT_grid : np.ndarray
-        The temperature grid of the DEM, as :func:`compute_goft_fiasco`
-        returns it.
+        DEM temperature grid, as returned by :func:`compute_goft_fiasco`.
     precision : type
-        The precision of the synthesis, which the densities are rounded to as
-        :func:`synthesise_cubes` rounds them.
+        Precision of the synthesis; the densities are rounded to it as in
+        :func:`synthesise_cubes`.
 
     Returns
     -------
     logN_min, logN_max : float
     nN : int
-        The grid, for :func:`compute_goft_fiasco`. It is the default grid if
-        no cell has electrons at a temperature on *logT_grid*.
+        Grid for :func:`compute_goft_fiasco`. The default grid if no cell
+        has electrons at a temperature on `logT_grid`.
     """
     points = _density_points(temperature, electron_density, logT_grid, precision)
     if points is None:
@@ -1103,15 +1099,15 @@ def density_grid(
 
 
 def _density_point(index: int) -> float:
-    """log10 n_e of a point of the default density grid, counted from its first."""
+    """log10 n_e at 0-based point `index` of the default density grid."""
     return _LOGN_MIN + index * (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
 
 
 def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
                     logT_grid: np.ndarray, precision: type) -> Optional[Tuple[int, int]]:
-    """The first and last point of :func:`density_grid`, counted as :func:`_density_point` counts them.
+    """First and last :func:`_density_point` indices of :func:`density_grid`.
 
-    None if no cell has electrons at a temperature on *logT_grid*.
+    None if no cell has electrons at a temperature on `logT_grid`.
     """
     logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
     _, logT_edges = _temperature_bins(logT_grid)
@@ -1121,15 +1117,15 @@ def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
         return None
 
     step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
-    # Where the lowest and highest densities fall among the default grid's
-    # points, counted in steps from its first; rounded, so that a density on a
-    # point, but for the arithmetic that put it there, counts as on it.
+    # Positions of the lowest and highest densities, in steps from the
+    # default grid's first point. Rounded so that a density on a point up to
+    # floating-point error counts as on it.
     lowest, highest = (
         round((float(extreme) - _LOGN_MIN) / step, 9) for extreme in (
             np.min(logN_cube, where=counted, initial=np.inf),
             np.max(logN_cube, where=counted, initial=-np.inf)))
-    # The points just past them, so that a mean density a rounding error
-    # beyond the lowest or the highest is still on the grid.
+    # Take the points just past them, so a mean density a rounding error
+    # beyond the lowest or highest is still on the grid.
     return int(np.ceil(lowest)) - 1, int(np.floor(highest)) + 1
 
 
@@ -1142,31 +1138,29 @@ def interpolate_g_on_dem(
     precision: type = np.float32,
 ) -> None:
     """
-    Take each line's contribution function at the density of each pixel and temperature.
+    Each line's contribution function at each pixel's density and temperature.
 
-    G is interpolated linearly from the grid `compute_goft_fiasco` computed
-    it on, and is zero outside it. The result is added to each line's entry
-    in *goft* as ``g``, shaped (rows, columns, temperatures), ready for
-    `synthesise_spectra`.
+    G is interpolated linearly from the `compute_goft_fiasco` grid and is
+    zero outside it. The result is stored in each line's entry of `goft` as
+    `g`, shape (rows, columns, temperatures), for `synthesise_spectra`.
 
     Parameters
     ----------
     goft : dict
-        The lines, as `compute_goft_fiasco` gives them, changed in place.
+        Lines from `compute_goft_fiasco`, modified in place.
     avg_ne : np.ndarray
-        The electron density in each pixel at each temperature, in cm-3,
-        shaped (rows, columns, temperatures). Where the cells along the line
-        of sight have different densities, give their mean weighted by
-        emission measure, as ECLIPSE's own synthesis does. For a DEM, give
-        the one density you choose.
+        Electron density in each pixel at each temperature, in cm-3, shape
+        (rows, columns, temperatures). If the cells along the line of sight
+        differ in density, give their mean weighted by emission measure, as
+        ECLIPSE's own synthesis does. For a DEM, give the density you choose.
     logT_grid : np.ndarray
-        The temperatures to take G at, as log10(T / K).
+        Temperatures at which to take G, as log10(T / K).
     logN_grid : np.ndarray
-        The densities G was computed on, from `compute_goft_fiasco`.
+        Densities G was computed on, from `compute_goft_fiasco`.
     logT_goft : np.ndarray
-        The temperatures G was computed on, from `compute_goft_fiasco`.
+        Temperatures G was computed on, from `compute_goft_fiasco`.
     precision : type, optional
-        ``np.float32`` (default) or ``np.float64``.
+        `np.float32` (default) or `np.float64`.
     """
     nT, n_rows, n_cols = len(logT_grid), *avg_ne.shape[:2]
 
@@ -1192,27 +1186,28 @@ def interpolate_g_on_dem(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# A view looks along one axis of the box, from one side of it. Named by its
-# axis alone, it is from the side OBSERVER_SIDE (from utils) gives: +1 on the
-# side of increasing coordinate, -1 on the other. That is the side from which
-# the line cube, with its rows and columns as create_line_cube lays them out,
-# is seen the right way round, so the column axis crossed with the row axis
-# points at the observer: above the box (+z) for the top-down view, and at +x
-# and at -y for the two side views. Named with a sign, such as "-x", it is
-# from that side; from the other side the image is mirrored left to right
-# (_image_pixels), so that it is the right way round for that observer too.
+# A view looks along one axis of the box from one side. A view named by its
+# axis alone looks from the side given by OBSERVER_SIDE (in utils): +1 for
+# the side of increasing coordinate, -1 for the other. From that side the
+# line cube, with rows and columns as create_line_cube lays them out, is the
+# right way round: the column axis crossed with the row axis points at the
+# observer, above the box (+z) for the top-down view and at +x and -y for
+# the two side views. A view named with a sign, such as "-x", looks from
+# that side. Seen from the side opposite OBSERVER_SIDE, the image is
+# mirrored left to right (_image_pixels), so it is the right way round for
+# that observer too.
 SIGNED_VIEWS = ("+x", "-x", "+y", "-y", "+z", "-z")
 
 
 def line_of_sight_velocity(velocity, integration_axis: str):
     """
-    Turn the velocity along the integration axis into velocity away from the observer.
+    Velocity away from the observer, from velocity along the integration axis.
 
     Simulation velocities are positive towards increasing coordinate, so an
-    upflow has a positive z velocity.  Seen from above, that upflow is moving
+    upflow has a positive z velocity. Seen from above, that upflow moves
     towards the observer and is blueshifted, so its line-of-sight velocity is
-    negative.  Positive line-of-sight velocity is a redshift: each line is
-    placed at ``lambda_0 (1 + v / c)``.
+    negative. Positive line-of-sight velocity is a redshift: each line is
+    placed at `lambda_0 (1 + v / c)`.
 
     Parameters
     ----------
@@ -1220,9 +1215,9 @@ def line_of_sight_velocity(velocity, integration_axis: str):
         Velocity along the integration axis, positive towards increasing
         coordinate.
     integration_axis : str
-        The view: ``"x"``, ``"y"`` or ``"z"``, whose observer is on the side
-        given by :data:`OBSERVER_SIDE`, or an axis with a sign for the side,
-        such as ``"-x"`` for the view from -x.
+        View: `"x"`, `"y"` or `"z"`, seen from the side given by
+        :data:`OBSERVER_SIDE`, or a signed axis for the side, such as `"-x"`
+        for the view from -x.
 
     Returns
     -------
@@ -1242,14 +1237,14 @@ def build_em_tv(
     integration_axis: str = "z",
 ) -> np.ndarray:
     """
-    Construct the 4-D emission-measure cube EM(row, column, T, v) [cm^-5].
+    4-D emission measure cube EM(row, column, T, v) [cm^-5].
 
-    Each cell's emission measure is shared between the two temperature bins
-    and the two velocity bins about it, in proportion to how near it is to
-    each (:func:`_neighbouring_bins`), so that its mean velocity over the bins
-    is the cell's and its contribution function is interpolated in
-    temperature. A value beyond the outermost bin centre, within that bin,
-    goes to it alone.
+    Each cell's emission measure is split between the two temperature bins
+    and the two velocity bins either side of it, in proportion to how close
+    it is to each (:func:`_neighbouring_bins`). Its mean velocity over the
+    bins is then the cell's own, and its contribution function is
+    interpolated in temperature. A value past the outermost bin centre but
+    inside that bin goes wholly to it.
 
     Parameters
     ----------
@@ -1264,14 +1259,14 @@ def build_em_tv(
     ne_sq_dh : np.ndarray
         n_e^2 * dh for each voxel.
     integration_axis : str
-        The view: the axis to integrate along, ``"x"``, ``"y"`` or ``"z"``,
-        optionally with a sign for the side of the box to look from, such as
-        ``"-x"``; see `line_of_sight_velocity`.
+        View: the axis to integrate along, `"x"`, `"y"` or `"z"`, optionally
+        signed for the side of the box to look from, such as `"-x"`; see
+        `line_of_sight_velocity`.
 
     Returns
     -------
     em_tv : np.ndarray
-        4D emission measure cube. The two remaining spatial axes come out in
+        4D emission measure cube, with the two remaining spatial axes in
         image order (row, column). Shape depends on the axis:
         - "x": (nz, ny, nT, nv)
         - "y": (nz, nx, nT, nv)
@@ -1285,22 +1280,22 @@ def build_em_tv(
                  else np.asarray(vel_grid, dtype=float))
     v_edges = velocity_centers_to_edges(v_centres)
 
-    # Each cell's emission measure is shared between the two temperature bins
-    # and the two velocity bins about it, in proportion to how near it is to
-    # each: put wholly in the nearest, a uniform 2.4 km/s flow on the default
-    # 5 km/s grid was synthesised at rest and a 2.6 km/s one at 5 km/s, and a
-    # cell's contribution function was that of the nearest temperature bin.
-    # Shared, its mean velocity over the bins is the cell's, its line's width
-    # grows by the spread of the two bins' velocities, at most a quarter of a
-    # bin squared in variance, and the contribution function is interpolated
-    # between the two temperatures. Past the outermost centres, within the
-    # outermost bins, a cell goes to that bin alone, as before.
+    # Split each cell between the two temperature and two velocity bins
+    # either side of it, in proportion to how close it is to each. Put wholly
+    # in the nearest bin, a uniform 2.4 km/s flow on the default 5 km/s grid
+    # would be synthesised at rest and a 2.6 km/s one at 5 km/s, and each
+    # cell would get the contribution function of the nearest temperature
+    # bin. With the split, the mean velocity over the bins is the cell's, the
+    # line width grows by the spread of the two bins' velocities (at most a
+    # quarter of a bin squared in variance), and the contribution function
+    # is interpolated between the two temperatures. Past the outermost
+    # centres, within the outermost bins, a cell goes to that bin alone.
     lower_T, share_T, in_T = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
     lower_v, share_v, in_v = _neighbouring_bins(vel_cube, v_centres, v_edges)
 
-    # Plasma faster than the grid reaches emits beyond the synthesised
-    # wavelengths, so its emission is not in the spectra, though the DEM keeps
-    # it. Said, since the default grid misses the fastest flows of a flare.
+    # Plasma faster than the velocity grid emits outside the synthesised
+    # wavelengths, so it is missing from the spectra but kept in the DEM.
+    # Warn, since the default grid misses the fastest flows of a flare.
     in_temperature = ne_sq_dh * in_T
     beyond = in_temperature[~in_v].sum()
     if beyond > 0:
@@ -1311,7 +1306,7 @@ def build_em_tv(
             f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
             f"it.", UserWarning, stacklevel=2)
 
-    # Summed along the line of sight into each image pixel's bins.
+    # Sum along the line of sight into each image pixel's bins.
     nT, nv = len(logT_grid), len(v_centres)
     pixel, (n_rows, n_cols) = _image_pixels(logT_cube.shape, integration_axis)
     em = np.where(in_T & in_v, ne_sq_dh, 0.0)
@@ -1331,37 +1326,37 @@ def synthesise_spectra(
     logT_grid: np.ndarray,
 ) -> None:
     """
-    Synthesise each line's spectrum in every pixel from the emission measure by temperature and velocity.
+    Spectrum of each line in every pixel, from the emission measure EM(T, v).
 
-    Each temperature and velocity bin gives the line a Gaussian of that
-    temperature's thermal width, Doppler shifted by that velocity, with the
-    emission measure times G. The spectra are added to each line's entry in
-    *goft* as ``si``, in erg / (s cm2 sr cm), on the wavelengths ``wl_grid``:
-    the velocity grid converted with ``lambda_0 (1 + v / c)``.
+    Each temperature and velocity bin adds a Gaussian with that
+    temperature's thermal width, Doppler shifted by that velocity, scaled by
+    the emission measure times G. The spectra are stored in each line's
+    entry of `goft` as `si`, in erg / (s cm2 sr cm), on the wavelengths
+    `wl_grid`: the velocity grid converted with `lambda_0 (1 + v / c)`.
 
     Parameters
     ----------
     goft : dict
-        The lines, with ``g`` from `interpolate_g_on_dem`, changed in place.
+        Lines with `g` from `interpolate_g_on_dem`, modified in place.
     em_tv : np.ndarray
-        The emission measure in each bin, in cm-5, shaped (rows, columns,
+        Emission measure in each bin, in cm-5, shape (rows, columns,
         temperatures, velocities).
     vel_grid : u.Quantity or np.ndarray
-        The velocities of the bins' centres, evenly spaced and increasing. A
-        plain array is taken to be in cm/s.
+        Velocity bin centres, evenly spaced and increasing. A plain array is
+        taken to be in cm/s.
     logT_grid : np.ndarray
-        The temperatures of the bins' centres, as log10(T / K).
+        Temperature bin centres, as log10(T / K).
     """
     kb = const.k_B.cgs.value
     c_cm_s = const.c.cgs.value
-    # The Doppler shifts below are worked out in cm/s, which a grid in km/s
-    # was taken to be, moving every line by a factor of 1e5 too little.
+    # The Doppler shifts below are in cm/s. A grid in km/s taken as cm/s
+    # would shift every line by a factor of 1e5 too little.
     vel_grid = (vel_grid.to(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
                 else np.asarray(vel_grid, dtype=float) * (u.cm / u.s))
 
-    # The wavelength grid built below is the velocity grid mapped through
-    # lambda_0 (1 + v/c), and create_line_cube writes its CDELT from the first
-    # step alone, so an uneven velocity grid becomes a wrong wavelength axis.
+    # The wavelength grid below is the velocity grid mapped through
+    # lambda_0 (1 + v/c), and create_line_cube sets CDELT from the first step
+    # alone, so an uneven velocity grid would give a wrong wavelength axis.
     require_uniform_grid(vel_grid, "vel_grid")
 
     for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
@@ -1411,67 +1406,66 @@ def synthesise_cubes(
 ) -> Union[Tuple[Dict[str, dict], np.ndarray, np.ndarray],
            Tuple[Dict[str, dict], np.ndarray, np.ndarray, np.ndarray]]:
     """
-    The spectra of every line from one set of cubes: a whole box or a strip of it.
+    Spectra of every line from one set of cubes (a whole box or a strip of it).
 
     Parameters
     ----------
     temperature : np.ndarray
-        Temperature of every cell in K, ``(nz, ny, nx)``.
+        Temperature of every cell in K, shape `(nz, ny, nx)`.
     electron_density : np.ndarray
-        Electron density of every cell in cm^-3, the same shape.
+        Electron density of every cell in cm^-3, same shape.
     los_velocity : np.ndarray
-        Velocity away from the observer in cm/s, the same shape.
+        Velocity away from the observer in cm/s, same shape.
     dh_cm : float or np.ndarray
-        Depth of the cells along the line of sight in cm, one value for all
-        or one per cell along that axis.
+        Cell depth along the line of sight in cm, one value for all cells or
+        one per cell along that axis.
     goft : dict
         Contribution functions from :func:`compute_goft_fiasco`, on the
-        temperature grid *logT_grid* and density grid *logN_grid*. Not
-        modified: the entries are copied before the interpolated function
-        and the spectra are added to them.
+        temperature grid `logT_grid` and density grid `logN_grid`. Not
+        modified: the entries are copied before the interpolated G and the
+        spectra are added.
     logT_grid, logN_grid : np.ndarray
-        The grids the contribution functions are tabulated on; the DEM uses
-        the same temperature grid.
+        Grids the contribution functions are tabulated on. The DEM uses the
+        same temperature grid.
     vel_grid : u.Quantity
         Velocity bin centres, evenly spaced.
     integration_axis : str
-        The view: ``"x"``, ``"y"`` or ``"z"``, optionally with a sign for the side of
-        the box to look from, such as ``"-x"``; see `line_of_sight_velocity`.
+        View: `"x"`, `"y"` or `"z"`, optionally signed for the side of the
+        box to look from, such as `"-x"`; see `line_of_sight_velocity`.
     precision : type
         np.float32 or np.float64.
     continuum : dict, optional
-        The continuum to add, by entry name: ``"wl_grid"``, its
-        wavelengths, and ``"free"`` and ``"two_photon"``, as
-        `continuum.compute_continuum_fiasco` gives them on these
-        temperatures and densities. Keyword only. Default None, for none.
+        Continuum to add, by entry name, each with `"wl_grid"` (its
+        wavelengths) and `"free"` and `"two_photon"` from
+        `continuum.compute_continuum_fiasco` on these temperatures and
+        densities. Keyword only. Default None (no continuum).
     return_density : bool, optional
-        Also return the electron density at each temperature of each pixel,
-        the mean of its cells weighted by their emission measure, which the
-        contribution functions are taken at. Keyword only. Default False.
+        Also return the electron density at which the contribution functions
+        are taken: for each temperature of each pixel, the mean over its
+        cells weighted by emission measure. Keyword only. Default False.
 
     Returns
     -------
     lines : dict
-        A copy of *goft* whose entries also hold ``"g"``, the contribution
-        function on the DEM, ``"wl_grid"`` and ``"si"``, the specific
-        intensity ``(rows, columns, wavelength)``. With *continuum*, it also
-        holds an entry for each of its names, with ``"wl_grid"``, ``"si"``,
-        ``"wl0"``, the middle of its wavelengths, and no ``"atom"`` or
-        ``"ion"``.
+        Copy of `goft` whose entries also hold `"g"` (contribution function
+        on the DEM), `"wl_grid"` and `"si"` (specific intensity, shape
+        `(rows, columns, wavelength)`). With `continuum`, it also has an
+        entry per continuum name, with `"wl_grid"`, `"si"` and `"wl0"` (the
+        middle of its wavelengths), and no `"atom"` or `"ion"`.
     dem_map : np.ndarray
-        As :func:`compute_dem` returns it.
+        As returned by :func:`compute_dem`.
     em_tv : np.ndarray
-        As :func:`build_em_tv` returns it.
+        As returned by :func:`build_em_tv`.
     electron_density : np.ndarray
-        Only with *return_density*: the density in cm^-3, shaped as
-        *dem_map*, zero where there is no plasma at a temperature.
+        Only with `return_density`: density in cm^-3, same shape as
+        `dem_map`, zero where there is no plasma at a temperature.
     """
     logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
 
     dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis)
 
-    # The contribution functions are worked out on a grid of densities and
-    # taken as zero off it; said, with how much of the emission that is.
+    # The contribution functions are zero off their density grid; warn, with
+    # the fraction of the emission measure affected.
     occupied = dem_map > 0
     log_ne = np.log10(avg_ne_map, where=avg_ne_map > 0,
                       out=np.full(avg_ne_map.shape, -np.inf))
@@ -1492,10 +1486,10 @@ def synthesise_cubes(
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
 
-    # The continuum takes the emission measure in each temperature bin, from
-    # the DEM, which keeps the cells moving faster than the velocity grid
-    # reaches, as the continuum is not Doppler shifted, and each pixel's
-    # density at that temperature.
+    # The continuum uses the emission measure in each temperature bin from
+    # the DEM, and each pixel's density at that temperature. The DEM keeps
+    # cells faster than the velocity grid, which the continuum needs since it
+    # is not Doppler shifted.
     if continuum:
         emission_measure = dem_map * _temperature_bins(logT_grid)[0]
         for name, table in continuum.items():
@@ -1510,10 +1504,10 @@ def synthesise_cubes(
 
 
 def _cell_size_mm(cube: NDCube, pixel_axis: int) -> float:
-    """The world distance across one pixel of *cube* along *pixel_axis*, in Mm.
+    """World size in Mm of one pixel of `cube` along `pixel_axis`.
 
-    Measured between the two edges of the first pixel, so it needs no second
-    pixel and no access to a CDELT, which a cropped cube's WCS does not have.
+    Measured between the edges of the first pixel, so it needs neither a
+    second pixel nor a CDELT, which a cropped cube's WCS does not have.
     """
     # A cropped cube wraps its WCS in a high-level object; the pixel-to-world
     # conversion of plain numbers is on the low-level one underneath.
@@ -1529,11 +1523,11 @@ def _cell_size_mm(cube: NDCube, pixel_axis: int) -> float:
 
 def _world_at(coords: u.Quantity, crpix: float) -> float:
     """
-    The value an even grid *coords* has at 1-based pixel *crpix*, as a plain number.
+    Value of the uniform grid `coords` at 1-based pixel `crpix`, as a float.
 
-    A reference pixel at the middle of an axis falls between two pixels when
-    there is an even number of them, so the reference value has to be read
-    off the grid there rather than taken from the pixel below.
+    A reference pixel in the middle of an axis with an even number of pixels
+    falls between two of them, so its value is read off the grid there
+    rather than taken from the pixel below.
     """
     if coords.size == 1:
         return coords[0].value
@@ -1549,41 +1543,38 @@ def create_line_cube(
     integration_axis: str = "z",
 ) -> NDCube:
     """
-    Make one line's synthesised spectra into an NDCube, with the image's coordinates.
+    NDCube of one line's synthesised spectra, with the image's coordinates.
 
     Parameters
     ----------
     line_name : str
-        The line's name.
+        Line name.
     line_data : dict
-        The line's entry from `compute_goft_fiasco`, after
-        `synthesise_spectra` has added its spectra, ``si``, and their
-        wavelengths, ``wl_grid``.
+        The line's entry from `compute_goft_fiasco`, with its spectra `si`
+        and their wavelengths `wl_grid` added by `synthesise_spectra`.
     spatial_cube : NDCube
-        A cube of the atmosphere, such as `create_atmosphere_ndcube` makes,
-        whose coordinates the image takes.
+        Atmosphere cube, such as from `create_atmosphere_ndcube`, whose
+        coordinates the image takes.
     intensity_unit : u.Unit
-        The unit of the spectra.
+        Unit of the spectra.
     integration_axis : str, optional
-        The view the synthesis had: the axis it looked along, ``"x"``,
-        ``"y"`` or ``"z"`` (default), optionally with a sign for the side of
-        the box it looked from, such as ``"-x"``; see
-        `line_of_sight_velocity`. From the side opposite the one
-        :data:`OBSERVER_SIDE` gives, the image is mirrored left to right, so
-        its column coordinate is the box's coordinate with its sign changed,
-        which increases to that observer's right.
+        View used in the synthesis: the axis looked along, `"x"`, `"y"` or
+        `"z"` (default), optionally signed for the side of the box looked
+        from, such as `"-x"`; see `line_of_sight_velocity`. Seen from the
+        side opposite :data:`OBSERVER_SIDE`, the image is mirrored left to
+        right, so its column coordinate is the box coordinate with its sign
+        flipped, which increases to that observer's right.
 
     Returns
     -------
     NDCube
-        The spectra, indexed ``[row, column, wavelength]`` like an image, so
-        that summing over wavelength gives an array that plots the right way
-        up.
+        Spectra indexed `[row, column, wavelength]` like an image, so summing
+        over wavelength gives an array that plots the right way up.
     """
     view = view_name(integration_axis)
     los_axis, side = view_axis_and_side(view)
-    # An axis whose cells differ in size has no one CDELT. Only the line of
-    # sight may be such an axis, and that is the one integrated out here.
+    # An axis with unequal cells has no single CDELT. Only the line of sight
+    # may be like that, since it is integrated out here.
     nonuniform = (spatial_cube.meta or {}).get("nonuniform_axes", [])
     stretched = [axis for axis in AXES
                  if axis != los_axis and axis in nonuniform]
@@ -1597,15 +1588,14 @@ def create_line_cube(
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
 
-    # The cell size of each axis comes from the reference cube's own WCS, so
-    # that an axis a single cell wide has one too. It is read as the world
-    # distance across one pixel, which any WCS answers, cropped ones included.
+    # Take each axis's cell size from the reference cube's WCS, so an axis
+    # one cell wide has one too. It is read as the world size of one pixel,
+    # which works for any WCS, cropped ones included.
     cell_size = [_cell_size_mm(spatial_cube, pixel_axis) for pixel_axis in range(3)]
 
-    # The WCS below carries a single linear CDELT, the grid's one spacing, so
-    # the grid has to be uniform for that to describe it. Checked here as
-    # well as in synthesise_spectra because this is a public entry point: the
-    # DEM and VDEM routes call it directly.
+    # The WCS below has a single linear CDELT, so the wavelength grid must be
+    # uniform. Checked here as well as in synthesise_spectra because this is
+    # a public entry point, called directly by the DEM and VDEM routes.
     wl_step = require_uniform_grid(line_data["wl_grid"].to(u.cm), "wl_grid")
 
     # Get spatial coordinate information from the reference cube,
@@ -1671,8 +1661,8 @@ def create_line_cube(
         ]
 
     # Seen from the other side, the image is mirrored left to right
-    # (_image_pixels), so its columns run along the box's coordinate with its
-    # sign changed. They are centred, so the middle column keeps its place.
+    # (_image_pixels), so the column coordinate is the box coordinate with
+    # its sign flipped. The columns are centred, so the middle one stays put.
     if side != OBSERVER_SIDE[los_axis]:
         spatial_crval[1] = -spatial_crval[1]
 
@@ -1706,28 +1696,28 @@ def create_line_cube(
 # ---------------------------------------------------------------------------
 ##############################################################################
 
-# The options that say where MURaM's own files are and how they are laid out,
-# for dynamic mode and for the deprecated static route that reads them
-# without an atmosphere file. An atmosphere file carries all of this itself,
-# so giving both is a contradiction rather than a choice.
+# Options giving the location and layout of MURaM's own files, used by
+# dynamic mode and by the deprecated static route without an atmosphere
+# file. An atmosphere file carries all of this itself, so giving both is an
+# error.
 MURAM_LAYOUT_OPTIONS = ("data_dir", "temp_file", "rho_file", "vx_file", "vy_file",
                         "vz_file", "cube_shape", "voxel_dx", "voxel_dy", "voxel_dz")
 
-# The options only dynamic mode reads, which a static synthesis from an
+# Options read only in dynamic mode, which a static synthesis from an
 # atmosphere file would ignore.
 DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_filename",
                    "vx_dir", "vx_filename", "vy_dir", "vy_filename", "vz_dir",
                    "vz_filename", "time_dir", "time_filename")
 
-# Where the documentation describes the atmosphere file and how to write one.
+# Documentation of the atmosphere file and how to write one.
 ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
-# Where it describes observing a time series of atmosphere files, which
+# Documentation of observing a time series of atmosphere files, which
 # replaces the deprecated dynamic mode.
 TIME_SERIES_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/time-series/"
 
 
 class _NotedOption(argparse.Action):
-    """Stores the value and records that the option was given, at its default or not."""
+    """Store the value and record that the option was given, even at its default."""
 
     def __call__(self, parser, namespace, values, option_string=None):
         setattr(namespace, self.dest, values)
@@ -1739,7 +1729,7 @@ class _NotedOption(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The command line options of synthesise-spectra."""
+    """Command line parser for synthesise-spectra."""
     parser = argparse.ArgumentParser(
         description="Synthesise solar spectra from 3D MHD simulation data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -1750,9 +1740,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="The ECLIPSE atmosphere file (HDF5) to synthesise "
                             f"from; see {ATMOSPHERE_DOCS} for how to write one. "
                             "Required, except in dynamic mode.")
-    # The MURaM files static mode read before atmosphere files, kept out of
-    # the help so that old command lines still run, with a warning, until
-    # the route is removed.
+    # MURaM file options of the deprecated static route, hidden from the
+    # help so old command lines still run, with a warning, until the route
+    # is removed.
     for flag, default in (("--temp-file", "temp/eosT.0270000"),
                           ("--rho-file", "rho/result_prim_0.0270000"),
                           ("--vx-file", "vx/result_prim_1.0270000"),
@@ -1826,8 +1816,8 @@ def build_parser() -> argparse.ArgumentParser:
                             "0.11.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
     
-    # Dynamic atmosphere mode (time-varying synthesis), which reads MURaM's
-    # own files and so carries the options describing their layout.
+    # Dynamic atmosphere mode (time-varying synthesis). It reads MURaM's own
+    # files, so it carries the options describing their layout.
     dynamic_group = parser.add_argument_group("Dynamic atmosphere mode (deprecated)",
         "Options for synthesising with time-varying atmosphere (raster scanning). "
         "Deprecated: observe a time series of atmosphere files with the "
@@ -1898,8 +1888,8 @@ def build_parser() -> argparse.ArgumentParser:
 def parse_arguments(argv=None):
     """Parse command line arguments for spectrum synthesis."""
     words = list(sys.argv[1:] if argv is None else argv)
-    # argparse takes a word that starts with a dash, such as the -x of
-    # "--integration-axis -x", for an option, and stops. Joined into
+    # argparse takes a value starting with a dash, such as the -x in
+    # "--integration-axis -x", for an option and stops. Joined into
     # "--integration-axis=-x", it is read as the value.
     joined, i = [], 0
     while i < len(words):
@@ -1915,14 +1905,13 @@ def parse_arguments(argv=None):
 
 def check_atmosphere_options(args) -> None:
     """
-    Refuse an atmosphere given alongside options it makes meaningless, and warn when there is none.
+    Reject options that --atmosphere makes meaningless; warn if it is absent.
 
     The synthesis reads its atmosphere from an atmosphere file. Without one,
-    static mode still reads MURaM's own files, and dynamic mode reads a
-    time series of them; both are deprecated. The MURaM layout options
-    describe those files, and the dynamic mode options only apply to dynamic
-    mode, so one of either given with --atmosphere would be ignored without
-    a word.
+    static mode reads MURaM's own files and dynamic mode reads a time series
+    of them; both are deprecated. The MURaM layout options describe those
+    files and the dynamic mode options apply only to dynamic mode, so any of
+    them given with --atmosphere would be silently ignored.
     """
     if not args.atmosphere:
         if args.slit_rest_time is not None:
@@ -1972,13 +1961,12 @@ def load_atmosphere_file(
     crop_x=None, crop_y=None, crop_z=None,
 ) -> Atmosphere:
     """
-    Read an atmosphere file with the velocity a view along *integration_axis* needs.
+    Read an atmosphere file, with the velocity along `integration_axis`.
 
     Downsampling and cropping are applied here, in the atmosphere's own
-    coordinates, and the two axes that become the image are checked to be
-    evenly spaced, since the image WCS can only describe an even grid. The
-    line of sight may be stretched: the emission measure uses the true size
-    of each cell along it.
+    coordinates. The two image axes are checked to be evenly spaced, since
+    the image WCS can only describe an even grid. The line of sight may be
+    stretched: the emission measure uses the true size of each cell along it.
     """
     atmosphere = read_atmosphere(path, velocities=(integration_axis,))
     return _prepare_atmosphere(atmosphere, str(path), integration_axis,
@@ -1992,11 +1980,12 @@ def load_muram_files(
     crop_x=None, crop_y=None, crop_z=None,
 ) -> Atmosphere:
     """
-    Read the MURaM files the deprecated static options name, as :func:`load_atmosphere_file` reads a file.
+    Read the MURaM files named by the deprecated static options.
 
-    The box is placed where ECLIPSE has always placed a MURaM box, x and y
-    centred on zero and z = 0 at the centre of the bottom cell, so the crop
-    options mean what they did before atmosphere files.
+    They are downsampled, cropped and checked as in
+    :func:`load_atmosphere_file`. x and y are centred on zero and z = 0 is at
+    the centre of the bottom cell, as ECLIPSE has always placed a MURaM box,
+    so the crop options keep the meaning they had before atmosphere files.
     """
     data_dir = Path(args.data_dir)
     files = {
@@ -2025,7 +2014,7 @@ def load_muram_files(
 
 def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str,
                         downsample, crop_x, crop_y, crop_z) -> Atmosphere:
-    """Downsample and crop *atmosphere*, and check that its image axes are even."""
+    """Downsample and crop `atmosphere`, and check its image axes are evenly spaced."""
     if downsample:
         atmosphere = atmosphere.downsampled(downsample)
     if crop_x or crop_y or crop_z:
@@ -2042,9 +2031,9 @@ def _prepare_atmosphere(atmosphere: Atmosphere, name: str, integration_axis: str
 
 
 def resolve_mass_per_electron(args) -> Tuple[float, str]:
-    """The mass per free electron to use, in atomic mass units, and where it came from."""
+    """Mass per free electron in atomic mass units, and where it came from."""
     given = getattr(args, "mass_per_electron", None)
-    # A script that sets the option's old name on its arguments still gets it.
+    # Accept the old name, mean_mol_wt, from scripts that set it on `args`.
     if given is None and getattr(args, "mean_mol_wt", None) is not None:
         warnings.warn(
             "mean_mol_wt is the old name of mass_per_electron, the mass of the plasma per "
@@ -2063,9 +2052,10 @@ def resolve_mass_per_electron(args) -> Tuple[float, str]:
 
 def along_line_of_sight(values, integration_axis: str) -> np.ndarray:
     """
-    *values*, one per cell along the line of sight, shaped to broadcast over a (z, y, x) cube.
+    Reshape `values` to broadcast over a (z, y, x) cube.
 
-    A single value comes back as it is, so one cell size applies everywhere.
+    `values` holds one value per cell along the line of sight. A single
+    value is returned unchanged, so one cell size applies everywhere.
     """
     values = np.asarray(values, dtype=float)
     if values.ndim == 0:
@@ -2080,19 +2070,19 @@ def along_line_of_sight(values, integration_axis: str) -> np.ndarray:
 
 def main(args=None) -> None:
     """
-    Main workflow for synthesising solar spectra from 3D MHD simulations.
+    Synthesise solar spectra from a 3D MHD simulation.
 
     Supports two modes:
-    - Static mode: Single timestep synthesis, from an atmosphere file
-      (--atmosphere), or from MURaM's own files, which is deprecated
-    - Dynamic mode: Time-varying synthesis with raster scanning, from MURaM's
-      own files, which is deprecated: the instrument run observes a time
-      series of atmosphere files instead (see euvst_response.raster)
+    - Static mode: one timestep, from an atmosphere file (--atmosphere) or
+      from MURaM's own files (deprecated).
+    - Dynamic mode (deprecated): time-varying synthesis with raster
+      scanning, from MURaM's own files. The instrument run observes a time
+      series of atmosphere files instead (see euvst_response.raster).
 
     Parameters
     ----------
     args : argparse.Namespace, optional
-        Command line arguments. If None, will parse from sys.argv.
+        Command line arguments. If None, parsed from sys.argv.
     """
     if args is None:
         args = parse_arguments()
@@ -2102,13 +2092,14 @@ def main(args=None) -> None:
     if args.downsample < 1:
         raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
-    # Checked now, where a name that could not be read was found only once
-    # the atmosphere had been read, which can take minutes and gigabytes.
+    # Check the line names now, before reading the atmosphere, which can take
+    # minutes and gigabytes.
     for name in args.lines:
         _parse_line_name(name)
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
-    # Checked now, before the atmosphere is read or anything computed.
+    # Check the velocity grid now, before the atmosphere is read or anything
+    # computed.
     velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
@@ -2116,13 +2107,13 @@ def main(args=None) -> None:
     print_mem = lambda: f"{psutil.virtual_memory().used/1e9:.2f}/" \
                         f"{psutil.virtual_memory().total/1e9:.2f} GB"
 
-    # The view: the axis looked along, which the atmosphere is read and
-    # summed along, and the side of the box it is seen from.
+    # The view: the axis to read and sum the atmosphere along, and the side
+    # of the box it is seen from.
     view = view_name(args.integration_axis.lower())
     integration_axis, observer_side = view_axis_and_side(view)
     check_atmosphere_options(args)
-    # A name ending in .pkl still gets the pickle older versions wrote, so
-    # that scripts written for them keep working until it is removed.
+    # A name ending in .pkl still gets the old pickle format, so older scripts
+    # keep working until it is removed.
     write_pickle = Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill")
     if write_pickle:
         warnings.warn(
@@ -2136,9 +2127,9 @@ def main(args=None) -> None:
             f"versions of ECLIPSE wrote a pickle under any name; a name ending in .pkl "
             f"still gets one, until that is removed.", UserWarning, stacklevel=2)
 
-    # What the common processing below needs from whichever route reads the
-    # atmosphere. Only an atmosphere file can give the electron density
-    # directly or a different size for every cell along the line of sight;
+    # Inputs to the common processing below, set by whichever route reads
+    # the atmosphere. Only an atmosphere file can give the electron density
+    # directly, or a different size for each cell along the line of sight;
     # dynamic mode gives a mass density and one cell size.
     ne_values = None
     los_thickness = None
@@ -2151,9 +2142,9 @@ def main(args=None) -> None:
         # Validate dynamic mode requirements
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
-        # The snapshots are laid across x, which the slit steps across in a
-        # view along z or y. Seen along x, x is the line of sight, and every
-        # pixel would add up cells from all the snapshots.
+        # The snapshots are laid out along x, which the slit steps across in a
+        # view along z or y. In a view along x, x is the line of sight, and
+        # every pixel would sum cells from all the snapshots.
         if integration_axis == "x":
             raise ValueError(
                 "Dynamic mode lays its snapshots across x, which is the line of sight "
@@ -2166,8 +2157,8 @@ def main(args=None) -> None:
                 f"{view}, synthesise from an atmosphere file with --atmosphere.")
 
         base_dir = Path(args.data_dir)
-        # Voxel sizes of the MURaM files. load_cube scales these itself when
-        # it downsamples, so they are passed to it as given.
+        # Voxel sizes in the MURaM files. load_cube scales them itself when it
+        # downsamples, so they are passed to it as given.
         file_voxel_dz = u.Quantity(args.voxel_dz)
         file_voxel_dx = u.Quantity(args.voxel_dx)
         file_voxel_dy = u.Quantity(args.voxel_dy)
@@ -2282,9 +2273,9 @@ def main(args=None) -> None:
         }
         
     else:
-        # Static mode from an atmosphere file, which brings its own layout, or
-        # by the deprecated route from MURaM's own files, read into the same
-        # atmosphere the converter would write
+        # Static mode: from an atmosphere file, which carries its own layout,
+        # or by the deprecated route from MURaM's own files, read into the
+        # same atmosphere the converter would write.
         dynamic_mode_metadata = {"enabled": False}
 
         if args.atmosphere:
@@ -2314,9 +2305,8 @@ def main(args=None) -> None:
                 args, integration_axis, downsample=downsample, **crops)
         print(atmosphere.describe())
 
-        # The file may hold float32 in any units; the run works in the
-        # precision --precision asks for, and the processing below takes the
-        # cubes' values as K and cm/s, so they are converted here.
+        # The file may hold float32 in any units. Convert to the --precision
+        # dtype and to K and cm/s, which the processing below assumes.
         temp_cube = atmosphere.to_ndcube(
             atmosphere.temperature.astype(precision).to(u.K))
         vel_cube = atmosphere.to_ndcube(
@@ -2329,8 +2319,8 @@ def main(args=None) -> None:
         los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
 
-        # The cell sizes stand in for the MURaM voxel sizes in what is saved;
-        # a stretched axis has no single size.
+        # The cell sizes are saved in place of the MURaM voxel sizes; a
+        # stretched axis has no single size.
         voxel_dx, voxel_dy, voxel_dz = (
             atmosphere.spacing(axis) if atmosphere.is_uniform(axis) else None
             for axis in AXES)
@@ -2348,8 +2338,8 @@ def main(args=None) -> None:
     # Build velocity grid
     vel_grid = velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
-    # The electron density: the atmosphere's own where it gives one, otherwise
-    # the mass density over the mass per free electron.
+    # Electron density from the atmosphere if given, otherwise the mass
+    # density divided by the mass per free electron.
     if ne_values is None:
         mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
         print(f"Electron density from the mass density with "
@@ -2365,7 +2355,7 @@ def main(args=None) -> None:
     vel_data = line_of_sight_velocity(vel_cube.data, view)
 
     # ---------------- Compute contribution functions (fiasco) ---------
-    # At the densities this atmosphere has, and no others.
+    # Only over the densities this atmosphere has.
     logN_min, logN_max, nN = density_grid(
         temp_cube.data, ne_values,
         np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
@@ -2379,9 +2369,8 @@ def main(args=None) -> None:
         temperature_chunk=getattr(args, "goft_temperature_chunk", None),
     )
 
-    # Record the database the contribution functions actually came from, not
-    # the request, so that a run which did not choose one is still traceable
-    # to the atomic data it used.
+    # Record the database actually used, not the one requested, so a run that
+    # did not choose one can still be traced to its atomic data.
     goft_dbase_root = (
         next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
     )
@@ -2397,9 +2386,9 @@ def main(args=None) -> None:
     dh_cm = los_thickness.to_value(u.cm)
 
     # ---------------- DEM, EM(T,v) and spectra -----------------
-    # The continuum over the lines' windows, each group of overlapping ones
-    # an entry of its own: the windows are each line's velocity grid about
-    # its wavelength in CHIANTI, as synthesise_spectra lays them out.
+    # Continuum over the lines' windows, one entry per group of overlapping
+    # windows. Each window is the line's velocity grid around its CHIANTI
+    # wavelength, as in synthesise_spectra.
     continuum = None
     if getattr(args, "continuum", False):
         windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
@@ -2437,20 +2426,19 @@ def main(args=None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / args.output_name
     
-    # The line cubes are the file's spectra; everything else the synthesis
-    # worked out goes with them, so that the file is the whole synthesis.
+    # The line cubes are the file's spectra. The other synthesis products are
+    # saved with them, so the file holds the whole synthesis.
     products = {
         "dem_map": dem_map,
         "em_tv": em_tv,
-        # The electron density at each temperature of each pixel, the mean of
-        # its cells weighted by their emission measure, which the lines'
-        # contribution functions were taken at.
+        # Electron density at each temperature of each pixel (mean over its
+        # cells weighted by emission measure), at which G was taken.
         "electron_density": electron_density,
         "logT_grid": logT_grid,
         "vel_grid": vel_grid,
         "logN_grid": logN_grid,
-        # Each line's spectra and wavelengths are the file's lines, so they
-        # are not kept a second time here.
+        # Each line's spectra and wavelengths are already in the line cubes,
+        # so they are not stored twice.
         "goft": {name: {key: value for key, value in info.items()
                         if key not in ("si", "wl_grid")}
                  for name, info in goft.items() if name not in (continuum or {})},
@@ -2484,14 +2472,14 @@ def main(args=None) -> None:
     }
     
     if write_pickle:
-        # As older versions wrote it, contribution functions and all.
+        # The old pickle format, including the full contribution functions.
         with open(output_file, "wb") as f:
             dill.dump({"line_cubes": line_cubes, **products,
                        "goft": {name: info for name, info in goft.items()
                                 if name not in (continuum or {})}}, f)
     else:
-        # The snapshot's time goes with the spectra, so that syntheses of a
-        # series of snapshots can be observed as a time series.
+        # Save the snapshot time, so syntheses of a series of snapshots can be
+        # observed as a time series.
         write_line_cubes(line_cubes, output_file,
                          source=(atmosphere_metadata or {}).get("source") or "",
                          products=products,

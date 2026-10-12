@@ -1,16 +1,8 @@
 """
-Tests for the Hinode/EIS effective area.
+Hinode/EIS effective area.
 
-The numerical anchors are IDL: eis_ea.pro on the pre-flight tables returns
-0.301803 cm^2 at 195 Angstrom and 0.0413185 cm^2 at 284 Angstrom. Those two
-numbers pin down three things at once - that the short- and long-wavelength
-tables are assigned to the right channels, that the interpolation convention
-is a natural cubic spline through log(EA) rather than a linear interpolation,
-and that the quantum efficiency is handled the way the tables assume.
-
-Everything else here is structural: that the epoch changes the answer, that
-the two bands stay separate, and that the quantum efficiency is divided out
-exactly once on the way into ECLIPSE's radiometric chain.
+The reference values are from IDL's eis_ea.pro on the pre-flight tables:
+0.301803 cm^2 at 195 Angstrom and 0.0413185 cm^2 at 284 Angstrom.
 """
 
 import re
@@ -51,12 +43,12 @@ def test_time_dependent_calibrations_require_a_date(method):
 
 @pytest.mark.parametrize("method", eis_calibration.TIME_DEPENDENT_CALIBRATIONS)
 def test_epoch_changes_the_answer(method):
-    """The whole point of an in-flight calibration is that the area moves.
+    """An in-flight calibration must change the area with time.
 
-    Asserted on the long-wavelength channel, which every published
-    calibration agrees decayed substantially; the direction is deliberately
-    not asserted for the short-wavelength channel, where the in-flight
-    calibrations revise the pre-flight peak upwards rather than downwards.
+    Checked on the long-wavelength channel, which every published
+    calibration finds decayed substantially. The direction is not checked
+    for the short-wavelength channel, where the in-flight calibrations raise
+    the pre-flight peak rather than lower it.
     """
     early = eis_calibration.effective_area(284.0, date="2008-01-01", method=method)
     late = eis_calibration.effective_area(284.0, date="2018-01-01", method=method)
@@ -64,7 +56,7 @@ def test_epoch_changes_the_answer(method):
 
 
 def test_area_varies_strongly_across_a_band():
-    """A flat effective area is the thing this module exists to replace."""
+    """This module exists to replace a flat effective area."""
     wavelengths = np.array([181.9, 188.2, 195.119, 202.0, 211.3])
     area = eis_calibration.effective_area(wavelengths, method="ground")
     assert np.all(np.isfinite(area))
@@ -80,7 +72,7 @@ def test_no_area_between_the_bands():
 
 
 def test_both_bands_in_one_call():
-    """Each band must use its own table, whatever order they arrive in."""
+    """Each band must use its own table, in either order."""
     together = eis_calibration.effective_area(
         np.array([284.0, 195.0]), method="ground")
     separately = [eis_calibration.effective_area(w, method="ground")[0]
@@ -94,10 +86,10 @@ def test_unknown_calibration_is_rejected():
 
 
 def test_offset_dates_are_converted_not_relabelled():
-    """An ISO offset must shift the instant, not just the label.
+    """An ISO offset must shift the time, not just relabel it.
 
-    replace(tzinfo=utc) would keep the wall clock, so a -05:00 date would
-    enter the degradation calculation five hours early.
+    replace(tzinfo=utc) would keep the local clock time, so a -05:00 date
+    would be five hours early in the degradation calculation.
     """
     utc = eis_calibration._parse_date("2012-06-03T00:00:00+00:00")
     minus5 = eis_calibration._parse_date("2012-06-03T00:00:00-05:00")
@@ -133,11 +125,11 @@ class TestTelescope:
             area.to_value(u.cm**2) / eis_calibration.QE_IN_TABLES, rel=1e-12)
 
     def test_table_qe_is_not_a_telescope_field(self):
-        """The QE the tables are quoted against is a calibration constant.
+        """The QE included in the tables is a calibration constant.
 
-        Exposing it on the telescope would let a caller divide by one value
-        while ``to_electrons`` applied ``Detector_EIS.qe_euv``, silently
-        scaling the whole response.
+        On the telescope, a caller could divide by one value while
+        `to_electrons` applied `Detector_EIS.qe_euv`, silently scaling the
+        whole response.
         """
         assert not hasattr(Telescope_EIS(), "qe_euv")
         with pytest.raises(TypeError):
@@ -172,15 +164,15 @@ class TestTelescope:
         assert not tel.ea_and_throughput([195.0, 196.0] * u.AA).isscalar
 
 
-# Areas from SolarSoft itself, IDL 8.8: eis_ea (ground), eis_ea_gdz, which is
-# eis_ea over eis_ltds's correction (dz2013), eis_ea_nrl (warren2014) and
-# interpol_eis_ea with the bundled smooth fit (dz2025). Between the tables'
-# nodes, where each routine's own interpolation decides the value: a linear
-# one in place of eis_ltds's splines gives dz2013 more than twice SolarSoft's value near
-# 168 A. IDL works in single precision, and its spline solves, and dz2013's
-# ratio of two splines, gather up to 2.2e-6 of rounding at these points,
-# which the tolerance allows for; the interpolations it tells apart differ
-# by 2.5 per cent and more.
+# Areas from SolarSoft, IDL 8.8: eis_ea (ground), eis_ea_gdz, which is eis_ea
+# over eis_ltds's correction (dz2013), eis_ea_nrl (warren2014) and
+# interpol_eis_ea with the bundled smooth fit (dz2025). The points lie between
+# the table nodes, where each routine's interpolation sets the value: linear
+# interpolation in place of eis_ltds's splines gives dz2013 more than twice
+# SolarSoft's value near 168 A. In IDL's single precision, the spline solves
+# and dz2013's ratio of two splines build up to 2.2e-6 of rounding at these
+# points, which the tolerance allows for. The interpolations it tells apart
+# differ by 2.5 per cent or more.
 IDL_RTOL = 5e-6
 IDL_BETWEEN_NODES = [
     ("ground", None, 172.5, 8.67057301e-04),
@@ -217,9 +209,9 @@ def test_areas_between_the_nodes_match_solarsoft(method, date, wavelength, expec
 ])
 def test_a_date_beyond_a_fitted_range_is_said_to_be(method, date, wavelength, message,
                                                     expected, rel):
-    """SolarSoft prints the same, and the value is SolarSoft's too, the ground one before launch."""
-    # Once for each call: one that spans both bands, then the same one twice,
-    # the second answered from the cache.
+    """Warns as SolarSoft does and gives SolarSoft's value, the ground one before launch."""
+    # One warning per call: a call spanning both bands, then the same call
+    # twice, the second answered from the cache.
     for wavelengths in ([195.0, 268.25], [wavelength], [wavelength]):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
