@@ -1,19 +1,14 @@
 """
 Laying a scene onto detector pixels.
 
-A synthesis gives the radiance of cells, each uniform over its extent in
-space and in wavelength. A detector pixel records the mean over its own
-extent of the scene the instrument forms, which is the scene blurred by the
-optics. Both steps are linear, so a pixel's value is a weighted sum of the
-cells', with weights
+A pixel records the mean over its extent of the cells' radiance, each cell
+uniform, blurred by the optics. The weight of cell b in pixel p is
 
     W[p, b] = (1 / |p|) int_p dx int_b dx' h(x - x')
 
-for pixel *p*, cell *b* and the optics' blur *h*, taken along each axis in
-turn. For a Gaussian blur, and for one convolved with a rectangle such as a
-slit's image, the integrals have closed forms in the Gaussian's repeated
-antiderivatives, so the weights are exact whatever the sizes of the cells,
-the pixels and the blur, and a narrow line keeps its place within a pixel.
+for blur h, along each axis in turn. For a Gaussian blur, alone or
+convolved with a rectangle such as a slit's image, these integrals have
+closed forms, so the weights are exact for any cell, pixel and blur sizes.
 """
 from __future__ import annotations
 
@@ -21,15 +16,18 @@ import numpy as np
 from scipy import sparse
 from scipy.special import erfc
 
-# A Gaussian's weight beyond this many sigma is below a part in 1e30 of it.
+# A Gaussian's weight beyond this many sigma is below 1e-30 of its total.
 _REACH_IN_SIGMA = 12.0
 
 
 def _antiderivative(u, sigma, order: int) -> np.ndarray:
     """
-    The *order*-th antiderivative, 1 (the cumulative distribution), 2 or 3,
-    of a unit Gaussian of *sigma*, vanishing at minus infinity; where *sigma*
-    is 0, of a unit spike. *sigma* is one value, or one for each of *u*.
+    Antiderivative of order `order` of a unit Gaussian of standard deviation
+    `sigma`, zero at minus infinity.
+
+    `order` is 1 (the cumulative distribution), 2 or 3. Where `sigma` is 0
+    the Gaussian is a unit spike. `sigma` is one value or one per element of
+    `u`.
     """
     u = np.asarray(u, dtype=float)
     sigma = np.broadcast_to(np.asarray(sigma, dtype=float), u.shape)
@@ -54,8 +52,8 @@ def _antiderivative(u, sigma, order: int) -> np.ndarray:
 def _blurred_antiderivative(u, sigma, width, order: int) -> np.ndarray:
     """
     :func:`_antiderivative` of the Gaussian convolved with a rectangle
-    *width* wide, such as a slit's image, where *width* is above 0. *sigma*
-    and *width* are each one value, or one for each of *u*.
+    `width` wide, such as a slit's image, where `width` is above 0. `sigma`
+    and `width` are each one value or one per element of `u`.
     """
     u = np.asarray(u, dtype=float)
     width = np.broadcast_to(np.asarray(width, dtype=float), u.shape)
@@ -72,28 +70,28 @@ def _blurred_antiderivative(u, sigma, width, order: int) -> np.ndarray:
 def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
                       width=0.0) -> sparse.csr_matrix:
     """
-    The share of each cell's light that each pixel records, once blurred.
+    Share of each cell's blurred light recorded by each pixel.
 
-    Each cell's light is spread evenly from *cell_low* to *cell_high* and
-    blurred by a Gaussian of *sigma* convolved with a rectangle *width*
-    wide. The shares are the exact integrals of the blur over the cell and
-    the pixel, and only the pixels the blur reaches from a cell are worked
-    out. The cells may overlap and leave gaps; the pixels are contiguous.
+    Each cell's light is spread evenly from `cell_low` to `cell_high` and
+    blurred by a Gaussian of `sigma` convolved with a rectangle `width`
+    wide. The shares are exact integrals of the blur over the cell and the
+    pixel, computed only for the pixels the blur reaches from each cell.
+    Cells may overlap and leave gaps; pixels are contiguous.
 
     Parameters
     ----------
     cell_low, cell_high : array
-        The ends of each cell, in one unit.
+        Ends of each cell, in one unit.
     pixel_edges : array
-        The edges of the pixels, increasing, in that unit.
+        Pixel edges, increasing, in the same unit.
     sigma, width : float or array
-        The blur, one value or one for each cell, in that unit; 0 for none.
+        Blur, one value or one per cell, in the same unit; 0 for none.
 
     Returns
     -------
     scipy.sparse.csr_matrix
-        ``(n_pixels, n_cells)``. A cell whose light all lands within the
-        pixels has shares adding up to 1.
+        Shape `(n_pixels, n_cells)`. The shares of a cell whose light all
+        lands within the pixels add up to 1.
     """
     low = np.atleast_1d(np.asarray(cell_low, dtype=float))
     high = np.atleast_1d(np.asarray(cell_high, dtype=float))
@@ -101,8 +99,9 @@ def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
     sigma = np.broadcast_to(np.asarray(sigma, dtype=float), low.shape)
     width = np.broadcast_to(np.asarray(width, dtype=float), low.shape)
     reach = _REACH_IN_SIGMA * sigma + width
-    # The first pixel that ends above where a cell's blurred light starts,
-    # and the pixels before the first that starts above where it ends.
+    # Pixels each cell's blurred light reaches: from the first pixel ending
+    # above where it starts, to just before the first starting above where
+    # it ends.
     first = np.searchsorted(edges[1:], low - reach, side="right")
     last = np.searchsorted(edges[:-1], high + reach, side="left")
     count = np.maximum(last - first, 0)
@@ -124,7 +123,7 @@ def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
 
 def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_matrix:
     """
-    The share of the light of each point that each pixel records, once blurred.
+    Share of each point's blurred light recorded by each pixel.
 
     This is :func:`light_onto_pixels` for light all at one place, such as a
     line at its centre blurred by its own width.
@@ -132,18 +131,18 @@ def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_ma
     Parameters
     ----------
     position : array
-        Where each point is, in one unit.
+        Position of each point, in one unit.
     pixel_edges : array
-        The edges of the pixels, increasing, in that unit.
+        Pixel edges, increasing, in the same unit.
     sigma, width : float or array
-        The blur, a Gaussian of *sigma* convolved with a rectangle *width*
-        wide, one value or one for each point, in that unit. *sigma* is above
-        0 where *width* is 0.
+        Blur, a Gaussian of `sigma` convolved with a rectangle `width` wide,
+        one value or one per point, in the same unit. `sigma` is above 0
+        where `width` is 0.
 
     Returns
     -------
     scipy.sparse.csr_matrix
-        ``(n_pixels, n_points)``.
+        Shape `(n_pixels, n_points)`.
     """
     position = np.atleast_1d(np.asarray(position, dtype=float))
     edges = np.asarray(pixel_edges, dtype=float)
@@ -165,27 +164,27 @@ def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_ma
 def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
                         wavelength: np.ndarray) -> tuple:
     """
-    Photons in cells laid onto pixels, and the wavelengths of the mean and the root mean square energies of each pixel's photons.
+    Photons laid onto pixels, with the wavelengths of their mean and root mean square energies.
 
     Parameters
     ----------
     share : scipy.sparse matrix
         Each cell's share in each pixel, from :func:`light_onto_pixels`.
     photons : np.ndarray
-        The photons in each cell, any number of spectra with the cells on
-        the last axis.
+        Photons in each cell, any number of spectra with the cells on the
+        last axis.
     wavelength : np.ndarray
-        The wavelength of each cell's photons.
+        Wavelength of each cell's photons.
 
     Returns
     -------
     tuple
-        ``(on_pixels, photon_wavelength, rms_wavelength)``, all with the
-        pixels on the last axis. A photon frees electrons in a detector by
-        its energy, so the second, in the unit of *wavelength*, is the
-        wavelength whose energy is the mean of the photons a pixel receives,
-        and the third the wavelength whose energy is their root mean square,
-        which sets how far their electrons spread. Both are NaN where none
+        `(on_pixels, photon_wavelength, rms_wavelength)`, all with the pixels
+        on the last axis. A photon frees electrons in a detector by its
+        energy, so `photon_wavelength` is the wavelength of the mean energy
+        of the photons a pixel receives, and `rms_wavelength` that of their
+        root mean square energy, which sets how far their electrons spread.
+        Both are in the unit of `wavelength`, and NaN where no photons
         arrive.
     """
     photons = np.asarray(photons, dtype=float)
@@ -199,33 +198,32 @@ def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
 
 def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     """
-    Photons moved by *carry*, and the wavelengths of the mean and the root
-    mean square energies of the photons wherever they land.
+    Photons moved by `carry`, with the wavelengths of the mean and root mean
+    square energies of the photons where they land.
 
     A photon's energy goes as one over its wavelength. Photons whose mean
-    energy is that of wavelength *mean*, and whose root mean square energy
-    is that of *rms*, hold an energy that goes as photons / mean, and a
-    square energy that goes as photons / rms**2. Both add up as the photons
-    do, so *carry*, any linear map of the photons, moves them as it moves
-    the photons.
+    energy is that of wavelength `mean`, and whose root mean square energy
+    is that of `rms`, hold an energy that goes as photons / mean and a
+    squared energy that goes as photons / rms**2. Both add up like the
+    photons, so any linear map `carry` moves them as it moves the photons.
 
     Parameters
     ----------
     carry : callable
-        A linear map, from an array shaped as *photons* to where they land.
+        Linear map from an array shaped as `photons` to where they land.
     photons : np.ndarray
-        The photons.
+        Photons.
     mean, rms : np.ndarray
-        The wavelengths of the mean and the root mean square energies of
-        *photons*, broadcasting against them.
+        Wavelengths of the mean and root mean square energies of `photons`,
+        broadcasting against them.
     fill : float or np.ndarray
-        The wavelength of both where no photons land, broadcasting against
+        Wavelength for both where no photons land, broadcasting against
         where they land.
 
     Returns
     -------
     tuple
-        ``(moved, mean, rms)``.
+        `(moved, mean, rms)`.
     """
     photons = np.asarray(photons, dtype=float)
     mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
@@ -242,28 +240,28 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
 def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.0,
                   extend: bool = False) -> np.ndarray:
     """
-    The weight of each cell in each pixel: the mean over the pixel of the light
-    of the cell, uniform over it, once blurred.
+    Weight of each cell in each pixel: the mean over the pixel of the cell's
+    light, uniform over the cell, after blurring.
 
     Parameters
     ----------
     cell_edges, pixel_edges : array
-        The edges of the cells and of the pixels along one axis, increasing,
-        in one unit.
+        Cell and pixel edges along one axis, increasing, in one unit.
     sigma : float
-        The standard deviation of the Gaussian blur, in that unit; 0 for none.
+        Standard deviation of the Gaussian blur, in the same unit; 0 for
+        none.
     width : float
-        The width of a rectangle the Gaussian is convolved with, such as the
-        image of a slit, in that unit; 0 for none.
+        Width of a rectangle convolved with the Gaussian, such as a slit's
+        image, in the same unit; 0 for none.
     extend : bool
-        Carry the first and the last cell on outward as far as the blur
-        reaches, for a scene that goes on past its edges.
+        Extend the first and last cells outward as far as the blur reaches,
+        for a scene that continues past its edges.
 
     Returns
     -------
     np.ndarray
-        ``(n_pixels, n_cells)``. With no blur each row is the share of the
-        pixel each cell covers.
+        Shape `(n_pixels, n_cells)`. With no blur each row is the fraction
+        of the pixel each cell covers.
     """
     cells = np.asarray(cell_edges, dtype=float)
     pixels = np.asarray(pixel_edges, dtype=float)
@@ -274,23 +272,23 @@ def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.
         cells[0] = min(cells[0], pixels[0]) - beyond
         cells[-1] = max(cells[-1], pixels[-1]) + beyond
 
-    # Each cell's share of its light in a pixel, as the mean over the pixel
-    # of the cell's light per unit length.
+    # Each cell's share of its light in a pixel, turned into the mean over
+    # the pixel of the cell's light per unit length.
     share = light_onto_pixels(cells[:-1], cells[1:], pixels, sigma, width)
     weights = sparse.diags(1.0 / np.diff(pixels)) @ share @ sparse.diags(np.diff(cells))
     return weights.toarray()
 
 
 def centred_edges(n: int, pitch: float, centre: float = 0.0) -> np.ndarray:
-    """The edges of *n* pixels of *pitch*, centred on *centre*."""
+    """Edges of `n` pixels of width `pitch`, centred on `centre`."""
     return centre + (np.arange(n + 1) - n / 2) * pitch
 
 
 def onto_pixels(data: np.ndarray, rows: np.ndarray, columns: np.ndarray,
                 wavelengths: np.ndarray) -> np.ndarray:
     """
-    ``data`` ``(y, x, wavelength)`` laid onto pixels by the weights along each
-    axis, from :func:`pixel_weights`.
+    `data`, shaped `(y, x, wavelength)`, laid onto pixels by the weights
+    along each axis from :func:`pixel_weights`.
     """
     out = np.tensordot(data, wavelengths, axes=([2], [1]))       # (y, x, l)
     out = np.tensordot(out, columns, axes=([1], [1]))            # (y, l, q)

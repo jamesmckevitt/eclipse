@@ -1,24 +1,16 @@
 """
-Reading out the SW CCDs, with and without a shutter.
+Read-out of the SW CCDs, with and without a shutter.
 
-The SW focal plane is two Teledyne e2v CCD42-40 devices butted along the
-dispersion, each 2048 x 2048 pixels of 13.5 micron, with a 1 mm gap between
-them.  Their serial registers are on the two outer edges, so charge is clocked
-*along the dispersion*: a row of the CCD is one wavelength, and the columns of a
-row run along the slit.  Rows are numbered from the register, so row 0 is the
-outermost row of each device and row 2047 sits at the butted edge.
+The SW focal plane is two Teledyne e2v CCD42-40s, 2048 x 2048 pixels of
+13.5 micron, butted along the dispersion with a 1 mm gap. Each serial
+register is on an outer edge, so a CCD row is one wavelength and row 0 is
+the row next to the register.
 
-A frame is taken in three steps (SOLC-EUVST-MSSL-ICD-0003 v3.1 {SWI-IRD}-032):
-the FEE dumps a number of rows to clear the image area, waits for the exposure,
-then reads out row by row.  Rows inside a read-out window go through the serial
-register; the rest are dumped through the dump drain, which is much quicker.
-
-With a mechanical shutter the chip is dark for the first and third steps, and a
-pixel records only what fell on it during the exposure.  Without one, every
-charge packet keeps collecting light while it is clocked, and so carries a
-sample of every row it crossed on its way to the register.  That is what
-:func:`smear_photons` computes, and why a bright line contaminates the rows
-between it and the register.
+A frame is a dump of the image area, the exposure, and a row-by-row
+read-out, in which rows outside the read-out windows are dumped
+(SOLC-EUVST-MSSL-ICD-0003 v3.1 {SWI-IRD}-032). Without a shutter, each
+charge packet also collects light from every row it crosses on its way to
+the register (:func:`smear_photons`).
 
 Sources
 -------
@@ -43,24 +35,23 @@ from scipy.signal import fftconvolve
 
 from .config import Detector_SWC
 
-# Wavelength in Angstrom as a function of position along the dispersion, in mm
-# from the centre of the focal plane (the middle of the gap), positive toward
-# longer wavelength.  Fitted to the positions RSC-2022021C gives for the two
-# detector edges, the focal plane centre, the chief ray and the dispersion
-# there, together with the ray-traced line positions drawn on its SW footprint
-# figure.  A single linear scale is not good enough: the design runs from 17.0
-# mA per row at the short-wavelength end to 16.8 at the long one, so the
-# nominal 16.9 misplaces a line by up to about seven rows.
+# Wavelength in Angstrom against position along the dispersion, in mm from the
+# focal plane centre (the middle of the gap), positive toward longer
+# wavelength. Fitted to the RSC-2022021C positions of the two detector edges,
+# the focal plane centre, the chief ray and the dispersion there, and to the
+# ray-traced line positions on its SW footprint figure. A linear scale is not
+# good enough: the design runs from 17.0 mA per row at the short-wavelength
+# end to 16.8 at the long end, so the nominal 16.9 misplaces a line by up to
+# about seven rows.
 DISPERSION_COEFFICIENTS = (198.885944, 1.2516577, -1.361114e-4)
 
-# A spectral line is an image of the slit, and the optics do not lay that image
-# down on exactly one row: it drifts along the dispersion from one end of the
-# slit to the other.  These are the row offsets at 140 arcsec from the centre of
-# the field, the linear term first and then the quadratic, measured from the
-# ray-traced line positions on the SW footprint figure of RSC-2022021C.  All
-# eleven lines drawn there agree on them to a few tenths of a row.  Pass them to
-# FocalPlane_SWC to model the drift; by default a line lands on one row all the
-# way along the slit.
+# A spectral line is an image of the slit, and the optics do not put it on
+# exactly one row: it drifts along the dispersion from one end of the slit to
+# the other. These are the row offsets at 140 arcsec from the field centre,
+# linear term then quadratic, measured from the ray-traced line positions on
+# the SW footprint figure of RSC-2022021C. All eleven lines drawn there agree
+# on them to a few tenths of a row. Pass them to FocalPlane_SWC to model the
+# drift; by default a line lands on one row along the whole slit.
 MEASURED_SLIT_IMAGE_TILT = (0.991, 0.605)
 
 # The field angle those offsets are quoted at.
@@ -72,9 +63,9 @@ class FocalPlane_SWC:
     """
     Geometry of the SW focal plane, and the wavelength each row records.
 
-    The CCDs' format, pixel size, gap and plate scale are the camera's, and
+    The CCD format, pixel size, gap and plate scale belong to the camera, and
     default to those of :class:`euvst_response.config.Detector_SWC`;
-    :meth:`from_detector` takes them from a configured one.
+    :meth:`from_detector` takes them from a configured detector.
 
     Parameters
     ----------
@@ -86,26 +77,26 @@ class FocalPlane_SWC:
         Space between the two imaging areas.
     dispersion : tuple of float
         Coefficients of the wavelength scale, lowest order first, in Angstrom
-        for a position in mm.  See :data:`DISPERSION_COEFFICIENTS`.
+        for a position in mm. See :data:`DISPERSION_COEFFICIENTS`.
     wavelength_offset : u.Quantity
-        Added to every row's wavelength.  The design positions above are good to
+        Added to every row's wavelength. The design positions are good to
         about a row, but the camera's alignment to the beam is quoted at
-        +/-0.79 Angstrom, some 47 rows (SOLC-EUVST-MSSL-RP-0007 v1.2 p45), so an
-        as-built or in-flight wavelength calibration belongs here.
+        +/-0.79 Angstrom, some 47 rows (SOLC-EUVST-MSSL-RP-0007 v1.2 p45), so
+        an as-built or in-flight wavelength calibration goes here.
     lit_band : tuple of u.Quantity
-        The wavelengths between which light reaches the detectors; outside them
-        a baffle vignettes the beam.  Rows outside this band record nothing, but
+        Wavelengths between which light reaches the detectors; outside them a
+        baffle vignettes the beam. Rows outside this band record nothing, but
         charge still crosses them on its way out.
     plate_scale : u.Quantity
         Angle a pixel covers along the slit.
     slit_image_tilt : tuple of float
-        How far a line drifts along the dispersion between the centre of the
-        field and 140 arcsec from it, in rows: a linear term and a quadratic
-        one.  The default ``(0.0, 0.0)`` lays each line on one row for the whole
-        slit, and the methods below then ignore their *column* argument.  Pass
-        :data:`MEASURED_SLIT_IMAGE_TILT` to model the drift the optical design
-        shows, which is about two rows end to end.  Which end of the slit it
-        runs toward is not documented, so the sign may need flipping against a
+        Drift of a line along the dispersion between the field centre and
+        140 arcsec from it, in rows: a linear and a quadratic term. The
+        default `(0.0, 0.0)` puts each line on one row along the whole slit,
+        and the methods then ignore their `column` argument. Pass
+        :data:`MEASURED_SLIT_IMAGE_TILT` to model the drift in the optical
+        design, about two rows end to end. Which end of the slit it runs
+        toward is not documented, so the sign may need flipping against a
         calibration.
     """
 
@@ -122,10 +113,11 @@ class FocalPlane_SWC:
     @classmethod
     def from_detector(cls, det: Detector_SWC, **settings) -> "FocalPlane_SWC":
         """
-        The focal plane of the camera *det* describes: its CCDs' format, pixel
-        size, gap and plate scale, with the rest as the defaults or as
-        *settings* gives them.  The camera's own settings are refused here,
-        so that they are set in one place, on the detector.
+        Focal plane of the camera `det`.
+
+        The CCD format, pixel size, gap and plate scale come from `det`, and
+        the rest are the defaults or given in `settings`. Camera settings in
+        `settings` are refused, so they are set in one place, the detector.
         """
         camera = dict(n_rows=det.n_rows, n_columns=det.n_columns,
                       pixel_size=(det.pix_size * u.pixel).to(u.micron), gap=det.ccd_gap,
@@ -164,10 +156,10 @@ class FocalPlane_SWC:
 
     def position(self, row, ccd: str) -> u.Quantity:
         """
-        Position along the dispersion of the centre of *row*, in mm from the
-        focal plane centre.  Rows count from the serial register, which is on
-        the outer edge of each CCD, so the position runs inward as the row
-        number rises.
+        Position along the dispersion of the centre of `row`, in mm from the
+        focal plane centre. Rows count from the serial register on the outer
+        edge of each CCD, so the position moves inward as the row number
+        rises.
         """
         self._check_ccd(ccd)
         offset = (np.asarray(row, dtype=float) + 0.5) * self.pixel_size.to_value(u.mm)
@@ -181,9 +173,9 @@ class FocalPlane_SWC:
 
     def line_shift(self, column=None) -> u.Quantity:
         """
-        How far a line lands from where it would at the centre of the field, in
-        mm along the dispersion, positive toward longer wavelength.  Zero
-        everywhere unless :attr:`slit_image_tilt` says otherwise.
+        Shift of a line from where it lands at the field centre, in mm along
+        the dispersion, positive toward longer wavelength. Zero everywhere
+        unless :attr:`slit_image_tilt` is non-zero.
         """
         linear, quadratic = self.slit_image_tilt
         if column is None or (linear == 0.0 and quadratic == 0.0):
@@ -193,9 +185,9 @@ class FocalPlane_SWC:
 
     def wavelength(self, row, ccd: str, column=None) -> u.Quantity:
         """
-        Wavelength recorded by the centre of *row*.
+        Wavelength recorded by the centre of `row`.
 
-        Give *column* to include the drift of a line along the slit; without
+        Give `column` to include the drift of a line along the slit; without
         :attr:`slit_image_tilt` it makes no difference.
         """
         s = (self.position(row, ccd) - self.line_shift(column)).to_value(u.mm)
@@ -204,12 +196,12 @@ class FocalPlane_SWC:
 
     def row_edges(self, ccd: str, column=None) -> u.Quantity:
         """
-        Wavelengths at the boundaries between rows, ``n_rows + 1`` of them.
+        Wavelengths at the `n_rows + 1` boundaries between rows.
 
         Binning a spectrum onto the detector conserves flux when it is
-        integrated between these, rather than sampled at the row centres.  They
-        decrease with row number on the right CCD, since its register is at the
-        long-wavelength end.
+        integrated between these, rather than sampled at the row centres.
+        They decrease with row number on the right CCD, whose register is at
+        the long-wavelength end.
         """
         s = (self.position(np.arange(self.n_rows + 1) - 0.5, ccd)
              - self.line_shift(column)).to_value(u.mm)
@@ -220,11 +212,10 @@ class FocalPlane_SWC:
         """
         Which CCD records a wavelength, and at which row.
 
-        Returns the row as a float, where an integer value is the centre of that
-        row, and the outer edges of the first and last rows are -0.5 and
-        ``n_rows - 0.5``.  Raises if the wavelength falls in the gap or off the
-        focal plane.  Give *column* to include the drift of a line along the
-        slit.
+        The row is a float: an integer is the centre of that row, and the
+        outer edges of the first and last rows are -0.5 and `n_rows - 0.5`.
+        Raises ValueError if the wavelength falls in the gap or off the focal
+        plane. Give `column` to include the drift of a line along the slit.
         """
         target = u.Quantity(wavelength).to_value(u.Angstrom)
         for ccd in ("left", "right"):
@@ -241,10 +232,9 @@ class FocalPlane_SWC:
 
     def _row_on(self, ccd: str, target: float, column=None) -> float:
         """
-        The row of *ccd* at which *target*, in Angstrom, lands, counted as
-        :meth:`row_of_wavelength` counts them: below -0.5 or above
-        ``n_rows - 0.5``, and infinite if it is beyond every row, when it is
-        off the CCD.
+        Row of `ccd` where `target`, in Angstrom, lands, counted as in
+        :meth:`row_of_wavelength`. Off the CCD it is below -0.5 or above
+        `n_rows - 0.5`, and infinite if beyond every row.
         """
         ends = (-0.5, self.n_rows - 0.5)
 
@@ -264,10 +254,12 @@ class FocalPlane_SWC:
 
     def _extreme_columns(self) -> List[float]:
         """
-        The columns at which a line lands furthest each way along the
-        dispersion: the two ends of the slit and, when the curvature turns the
-        drift back within them, the columns either side of the turn.  With no
-        :attr:`slit_image_tilt` a line lands on the same row at all of them.
+        Columns where a line lands furthest each way along the dispersion.
+
+        These are the two ends of the slit and, when the curvature turns the
+        drift back between them, the columns either side of the turn. With
+        no :attr:`slit_image_tilt` a line lands on the same row at all of
+        them.
         """
         columns = [0.0, float(self.n_columns - 1)]
         linear, quadratic = self.slit_image_tilt
@@ -281,13 +273,14 @@ class FocalPlane_SWC:
 
     def lit_rows(self, ccd: str, column=None) -> Tuple[int, int]:
         """
-        First and last row of *ccd* whose centre receives light, inclusive.
+        First and last row of `ccd` whose centre receives light, inclusive.
 
-        The edge is treated as sharp at :attr:`lit_band`.  The documents put it
-        within a few rows of there but do not dimension the baffle, so a row or
-        two either side of these two values is a modelling choice rather than a
-        measurement.  Rows outside the range still pass charge, and on the right
-        CCD there are some 1290 of them between the band and the register.
+        The edge is taken as sharp at :attr:`lit_band`. The documents put it
+        within a few rows of there but do not dimension the baffle, so a row
+        or two either side of these values is a modelling choice, not a
+        measurement.
+        Rows outside the range still pass charge; on the right CCD some 1290
+        of them lie between the band and the register.
         """
         self._check_ccd(ccd)
         lam = self.wavelength(np.arange(self.n_rows), ccd, column).to_value(u.Angstrom)
@@ -307,23 +300,23 @@ class ReadoutSequence:
     """
     How the FEE clocks a frame out of the SW CCDs.
 
-    Both CCDs are clocked together, and a row wanted on either of them is read
-    on both, so one row timeline covers the pair
+    Both CCDs are clocked together, and a row wanted on either is read on
+    both, so one row timeline covers the pair
     (SOLC-EUVST-MSSL-RS-0002 v2.0 SolC-FPGA-RS-033).
 
-    The shutter, the timing and the register layout are the camera's, and
+    The shutter, timing and register layout belong to the camera, and
     default to those of :class:`euvst_response.config.Detector_SWC`;
-    :meth:`from_detector` takes them from a configured one.  The windows and
-    the clear belong to an observation, and are given here.
+    :meth:`from_detector` takes them from a configured detector. The windows
+    and the clear belong to an observation, and are given here.
 
     Parameters
     ----------
     shutter : bool
-        True keeps the chip dark outside the exposure, as a mechanical shutter
-        does.  False leaves it illuminated while the image area is cleared and
-        read, which is what smears the frame.
+        True keeps the chip dark outside the exposure, as a mechanical
+        shutter does. False leaves it illuminated while the image area is
+        cleared and read, which smears the frame.
     row_transfer_time : u.Quantity
-        Time to move every row one step toward the register.  Configurable in
+        Time to move every row one step toward the register. Configurable in
         flight; 15 us is the value in the SWC modes table and in the read-out
         times of RP-0007 v1.2 Table 5-11.
     pixel_period : u.Quantity
@@ -332,23 +325,23 @@ class ReadoutSequence:
         Samples read per output for each row that goes through the register.
         The register is split, so each half carries half the columns, 1024
         image pixels, with the prescan at the outer end and the overscan at
-        the middle.  Both scans are configurable in flight between 0 and 200.
-        A row takes as long as the output with more pixels, so an odd number
-        of columns counts the larger half.
+        the middle. Both scans are configurable in flight from 0 to 200. A
+        row takes as long as the output with more pixels, so for an odd
+        number of columns the larger half counts.
     parallel_overscan_rows : int
-        Rows clocked and read after the last image row.  Without a shutter these
-        hold pure smear, since their charge crosses the whole illuminated image
-        area on the way out.
+        Rows clocked and read after the last image row. Without a shutter
+        they hold pure smear, as their charge crosses the whole illuminated
+        image area on the way out.
     dump_rows : int
-        Row transfers used to clear the image area before the exposure.  The
-        default clears a whole CCD.  A frame here always starts from an empty
-        chip, so fewer rows leave out the charge a partial clear leaves
-        behind, which :func:`dark_current_time` warns of, and
-        :func:`smear_photons` too without a shutter, with which there is no
-        smear to leave out.
+        Row transfers used to clear the image area before the exposure.
+        Default a whole CCD. A frame here always starts from an empty chip,
+        so with fewer rows the charge a partial clear leaves behind is not
+        modelled. :func:`dark_current_time` warns of this, and so does
+        :func:`smear_photons` without a shutter (with one there is no smear
+        to leave out).
     windows : list of tuple of int
-        Inclusive row ranges that are read out.  An empty list reads every row,
-        which is the slowest case.
+        Inclusive row ranges that are read out. An empty list reads every
+        row, the slowest case.
     """
 
     shutter: bool = Detector_SWC.shutter
@@ -366,18 +359,18 @@ class ReadoutSequence:
                       dump_rows: int | None = None, shutter: bool | None = None,
                       ) -> "ReadoutSequence":
         """
-        The read-out of the camera *det* describes, for one observation.
+        Read-out of the camera `det` for one observation.
 
         Parameters
         ----------
         det : Detector_SWC
-            The camera, whose shutter, timing and register layout are used.
+            Camera, whose shutter, timing and register layout are used.
         windows : sequence of tuple of int, optional
-            The row ranges read out, as for the constructor.  Default every row.
+            Row ranges read out, as for the constructor. Default every row.
         dump_rows : int, optional
-            The row transfers of the clear.  Default a whole CCD.
+            Row transfers of the clear. Default a whole CCD.
         shutter : bool, optional
-            Whether the frame is taken with the shutter.  Default as the
+            Whether the frame is taken with the shutter. Default as the
             camera is configured.
         """
         return cls(shutter=det.shutter if shutter is None else shutter,
@@ -418,9 +411,11 @@ class ReadoutSequence:
 
     def is_read(self, n_rows: int) -> np.ndarray:
         """
-        Which rows go through the serial register, as a boolean array covering
-        the image rows and then the parallel overscan rows.  The overscan is
-        always read; with no windows, so is everything else.
+        Which rows go through the serial register.
+
+        A boolean array over the image rows and then the parallel overscan
+        rows. The overscan is always read; with no windows, so is every
+        other row.
         """
         total = n_rows + self.parallel_overscan_rows
         if not self.windows:
@@ -433,14 +428,13 @@ class ReadoutSequence:
 
     def dwell(self, n_rows: int) -> np.ndarray:
         """
-        Time in seconds between one row transfer and the next, for every
-        transfer of a read-out.
+        Time in seconds between successive row transfers of a read-out.
 
-        Element ``k`` covers the interval after transfer ``k + 1``, during which
-        image row ``k`` sits in the serial register and is either read or
-        dumped.  Every charge packet in the image area is stationary for that
-        whole interval, which is what makes the smear depend on the window
-        layout rather than only on the number of rows.
+        Element `k` is the interval after transfer `k + 1`, while image row
+        `k` is in the serial register being read or dumped. Every charge
+        packet in the image area is stationary for that whole interval,
+        which is why the smear depends on the window layout and not only on
+        the number of rows.
         """
         read = self.is_read(n_rows)
         return (self.row_transfer_time.to_value(u.s)
@@ -459,19 +453,21 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
                              ranges: Sequence[Tuple[u.Quantity, u.Quantity]],
                              ) -> List[Tuple[int, int]]:
     """
-    Turn wavelength ranges into the row ranges a read-out window covers.
+    Convert wavelength ranges to the row ranges of read-out windows.
 
-    A window holds every row any part of the range lands on, at any column:
-    with a :attr:`~FocalPlane_SWC.slit_image_tilt` a line drifts along the
-    dispersion from one end of the slit to the other, and the window follows
-    it.  A row the range only touches at its edge is left out.
+    A window holds every row that any part of the range lands on, at any
+    column. With a :attr:`~FocalPlane_SWC.slit_image_tilt` a line drifts
+    along the dispersion from one end of the slit to the other, and the
+    window follows it. A row the range only touches at its edge is left
+    out.
 
     Both CCDs share one row timeline, so the returned ranges are row numbers
-    without a CCD attached: a window over rows 1850 to 1880 makes those rows
-    slow on both devices, whatever wavelength they are on the other one.  A
-    range that crosses the gap runs from each of its ends to the butted edge,
-    so its window goes on to the last row.  The parts of a range in the gap or
-    beyond the ends of the focal plane are not recorded and need no rows.
+    with no CCD attached: a window over rows 1850 to 1880 makes those rows
+    slow on both devices, though they record a different wavelength on the
+    other one. A range that crosses the gap runs from each of its ends to
+    the butted edge, so its window extends to the last row. Parts of a range
+    in the gap or beyond the ends of the focal plane are not recorded and
+    need no rows.
     """
     n_rows = focal_plane.n_rows
     windows = []
@@ -481,10 +477,10 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
         for column in focal_plane._extreme_columns():
             for ccd in ("left", "right"):
                 rows = [focal_plane._row_on(ccd, target, column) for target in targets]
-                # The rows the range covers on this CCD, cut to its edges. A
-                # range that reaches the CCD only at its outer edge is not on
-                # it; one of no width is on the row below the boundary it is
-                # on, as between two rows, which the lower edge has none of.
+                # Rows the range covers on this CCD, cut to its edges. A range
+                # that reaches the CCD only at its outer edge is not on it. A
+                # range of no width on a row boundary is on the row below, so
+                # at the lower edge, with no row below, it is not on the CCD.
                 lo, hi = min(rows), max(rows)
                 start, end = max(lo, -0.5), min(hi, n_rows - 0.5)
                 if start < end or (lo == hi and -0.5 < lo <= n_rows - 0.5):
@@ -492,15 +488,15 @@ def windows_from_wavelengths(focal_plane: FocalPlane_SWC,
         if first > last:
             raise ValueError(
                 f"No part of {u.Quantity(low)} to {u.Quantity(high)} is on either CCD.")
-        # The rows whose span, from half a row below their centre to half a
-        # row above, overlaps the range; a range of no width is on one row.
+        # Rows whose span, half a row either side of the centre, overlaps the
+        # range; a range of no width is on one row.
         top = int(np.ceil(last + 0.5)) - 1
         windows.append((min(int(np.floor(first - 0.5)) + 1, top), top))
     return windows
 
 
 def _warn_of_a_partial_clear(sequence: ReadoutSequence, n_rows: int, what: str) -> None:
-    """Say that a clear of fewer rows than the CCD has leaves out the charge it does not clear."""
+    """Warn that the charge left by a clear of fewer rows than the CCD has is not modelled."""
     if sequence.dump_rows < n_rows:
         warnings.warn(
             f"dump_rows is {sequence.dump_rows}, fewer than the {n_rows} rows of the CCD, so "
@@ -512,27 +508,27 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
     """
     Photons a shutterless frame collects outside its exposure.
 
-    Charge is clocked toward the register while the chip is still illuminated,
-    so a packet collects light from every row it crosses.  For the packet read
-    out of row ``r``, the read-out contributes ``sum_k rate[r - k] * dwell[k - 1]``
-    over ``k >= 1``, and clearing the image area beforehand contributes
-    ``row_transfer_time`` times the rows above it, since the packet that ends
-    at row ``r`` was clocked down from ``r + dump_rows``.
+    Charge is clocked toward the register while the chip is still lit, so a
+    packet collects light from every row it crosses. For the packet read out
+    of row `r`, the read-out adds `sum_k rate[r - k] * dwell[k - 1]` over
+    `k >= 1`. Clearing the image area beforehand adds `row_transfer_time`
+    times the rows above it, since the packet that ends at row `r` was
+    clocked down from `r + dump_rows`.
 
     Parameters
     ----------
     rate : np.ndarray
         Photons per second reaching each pixel of one CCD, shaped
-        ``(n_rows, n_columns)`` with row 0 at the serial register.
+        `(n_rows, n_columns)` with row 0 at the serial register.
     sequence : ReadoutSequence
-        The clocking.  With ``shutter`` True this returns zeros.
+        Clocking. With `shutter` True this returns zeros.
 
     Returns
     -------
     np.ndarray
         Photons collected outside the exposure, shaped
-        ``(n_rows + parallel_overscan_rows, n_columns)``.  The extra rows are
-        the parallel overscan, which sees nothing but smear.
+        `(n_rows + parallel_overscan_rows, n_columns)`. The extra rows are
+        the parallel overscan, which sees only smear.
     """
     rate = np.asarray(rate, dtype=float)
     if rate.ndim != 2:
@@ -546,24 +542,24 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
         return np.zeros((total_rows, rate.shape[1]))
     _warn_of_a_partial_clear(sequence, n_rows, "smear")
 
-    # Read-out.  The packet leaving row r is at row r - k while image row k - 1
-    # is in the register, so the smear is a convolution of the rate with the
-    # dwell times, and the parallel overscan rows are the terms past the last
-    # image row.
+    # Read-out. The packet leaving row r is at row r - k while image row k - 1
+    # is in the register, so the smear is the rate convolved with the dwell
+    # times. The parallel overscan rows are the terms past the last image row.
     kernel = np.concatenate([[0.0], sequence.dwell(n_rows)])
     smear = fftconvolve(rate, kernel[:, np.newaxis], mode="full", axes=0)[:total_rows]
     # The FFT leaves rounding noise, of order 1e-16 of the brightest row, in
     # packets no light reached, which would give them a mean photon energy
-    # made of noise.  Those are the packets whose path crossed no lit pixel: a
-    # count of lit pixels, which the same convolution gives to far better
-    # than a half.
+    # made of noise. Zero the packets whose path crossed no lit pixel, found
+    # by convolving a count of lit pixels, which is good to far better than
+    # a half.
     crossed = fftconvolve((rate > 0).astype(float), (kernel > 0).astype(float)[:, np.newaxis],
                           mode="full", axes=0)[:total_rows]
     smear[crossed < 0.5] = 0.0
 
-    # Clearing the image area.  The packet that ends the clear at row r has
-    # come down from row r + dump_rows, collecting one row transfer at each row
-    # on the way.  Rows above the image area are empty, so the sum stops there.
+    # Clearing the image area. The packet that ends the clear at row r came
+    # down from row r + dump_rows, collecting light for one row transfer at
+    # each row on the way. Rows above the image area are empty, so the sum
+    # stops there.
     if sequence.dump_rows:
         above = np.zeros((n_rows + 1, rate.shape[1]))
         above[:-1] = np.cumsum(rate[::-1], axis=0)[::-1]
@@ -571,9 +567,9 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
         last = np.minimum(np.arange(n_rows) + sequence.dump_rows + 1, n_rows)
         smear[:n_rows] += (above[first] - above[last]) * sequence.row_transfer_time.to_value(u.s)
 
-    # The sum above cannot be negative, but the convolution is done by FFT and
-    # leaves rounding noise of order 1e-20 where the answer is zero, which would
-    # otherwise reach the Poisson draw downstream as a negative mean.
+    # The sum cannot be negative, but the FFT convolution leaves rounding noise
+    # of order 1e-20 where it is zero, which would reach the Poisson draw
+    # downstream as a negative mean.
     return np.maximum(smear, 0.0)
 
 
@@ -584,24 +580,24 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
     Parameters
     ----------
     rate : np.ndarray
-        Photons per second reaching each pixel of one CCD, ``(n_rows, n_columns)``.
+        Photons per second reaching each pixel of one CCD, `(n_rows, n_columns)`.
     exposure : u.Quantity
         Time between clearing the image area and starting the read-out.
     sequence : ReadoutSequence
-        The clocking.
+        Clocking.
 
     Returns
     -------
     np.ndarray
-        The mean photons per pixel, shaped
-        ``(n_rows + parallel_overscan_rows, n_columns)``. Without a shutter a
+        Mean photons per pixel, shaped
+        `(n_rows + parallel_overscan_rows, n_columns)`. Without a shutter a
         pixel holds photons from every row its charge crossed, so for a frame
         :func:`euvst_response.frame.expose_with_wavelengths` gives these with
         the wavelengths of each pixel's mean and root mean square photon
-        energies. Drawn as whole photons, a Poisson draw of each pixel, they
-        go to :func:`euvst_response.frame.detect` with those wavelengths and
-        :func:`dark_current_time`; or the means go with ``noise=False``, for
-        the frame's mean.
+        energies. A Poisson draw of whole photons in each pixel goes to
+        :func:`euvst_response.frame.detect` with those wavelengths and
+        :func:`dark_current_time`. For the frame's mean, pass the means
+        instead, with `noise=False`.
     """
     rate = np.asarray(rate, dtype=float)
     signal = smear_photons(rate, sequence)
@@ -615,24 +611,24 @@ def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
     How long each packet of a frame collects dark current, for the image rows
     and then the parallel overscan rows.
 
-    A packet collects dark current in whichever pixel it sits, so this is the
-    time it spends in the image area, the same time :func:`smear_photons`
-    gives it light for.  An image row's packet is clocked into place during
-    the clear, sits through the exposure, and waits while the rows before it
-    are read; a parallel overscan packet only crosses the image area during
-    the read-out.  None of that needs light, so it is the same with a shutter
-    as without one.  The serial register's own dark current is not included.
+    A packet collects dark current in any pixel it sits in, so this is its
+    time in the image area, the same time :func:`smear_photons` gives it
+    light for. An image row's packet is clocked into place during the clear,
+    sits through the exposure, and waits while the rows before it are read.
+    A parallel overscan packet only crosses the image area during the
+    read-out. None of this needs light, so it is the same with a shutter as
+    without one. The serial register's own dark current is not included.
     """
     _warn_of_a_partial_clear(sequence, n_rows, "dark current")
     dwell = sequence.dwell(n_rows)
     packets = np.arange(n_rows + sequence.parallel_overscan_rows)
     image = packets < n_rows
-    # The read-out: every dwell before the packet's own, back to the one in
-    # which it came in at the top of the image area.
+    # Read-out: every dwell before the packet's own, back to the one in which
+    # it entered the top of the image area.
     elapsed = np.concatenate([[0.0], np.cumsum(dwell)])
     reading = elapsed[packets] - elapsed[np.maximum(packets - n_rows, 0)]
-    # The clear: one row transfer at each row above its own on the way down,
-    # as far as the clear reaches.
+    # Clear: one row transfer at each row above its own, as far as the clear
+    # reaches.
     above = np.where(image, n_rows - 1 - packets, 0)
     clear = np.minimum(sequence.dump_rows, above) * sequence.row_transfer_time.to_value(u.s)
     exposed = np.where(image, u.Quantity(exposure).to_value(u.s), 0.0)
