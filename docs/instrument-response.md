@@ -116,6 +116,27 @@ simulation:
   psf_boundary: zero
 ```
 
+## The slit's fiducials
+
+Each SWC slit is 300 arcsec long and is interrupted in two places. These gaps, the fiducials, block the light over a short length of the slit, so they show as dark rows along the slit in every slit's data. They are there to line up observations made with different slits.
+
+With `simulation.slit_mask: True`, no light reaches the pixels behind the fiducials or beyond the ends of the slit. A pixel partly behind one gets the part of the light that falls on its open part. It is off by default, which leaves the slit open along the whole atmosphere.
+
+```yaml
+simulation:
+  slit_width: 0.4 arcsec
+  psf: True
+  slit_mask: True
+```
+
+- The centre of the slit is the middle of the atmosphere along the slit.
+- The fiducials are 25 arcsec to one side of the centre and 70 arcsec to the other. `telescope.fiducial_centres` sets where they are, and `telescope.fiducial_lengths` how long they are for each slit: 0.8 arcsec for the three narrower slits and 1.6 arcsec for the widest.
+- With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
+
+!!! warning "Which end of the slit is which"
+
+    The design documents do not say which end of the slit the +70 arcsec fiducial is at on the detector. Swap the signs of `fiducial_centres` to put it at the other end.
+
 ## Off-chip slit binning
 
 `offchip_bin_slit` adds together neighbouring pixels along the slit after read-out, so the binning is done on the ground rather than on the detector. Adding `n` pixels multiplies the signal by `n`, while the noise only grows as `sqrt(n)`. The signal to noise therefore goes up as `sqrt(n)`, at the cost of resolution along the slit.

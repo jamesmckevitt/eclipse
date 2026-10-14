@@ -643,7 +643,7 @@ def deduplicate_list(param_list, param_name):
 _SECTION_LIST_FIELDS = {
     "simulation": [],
     "detector": [],
-    "telescope": ["psf_params"],
+    "telescope": ["psf_params", "fiducial_centres", "fiducial_lengths"],
     "filter": [],
 }
 
