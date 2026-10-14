@@ -129,13 +129,7 @@ simulation:
   slit_mask: True
 ```
 
-- The centre of the slit is the middle of the atmosphere along the slit.
-- The fiducials are 25 arcsec to one side of the centre and 70 arcsec to the other. `telescope.fiducial_centres` sets where they are, and `telescope.fiducial_lengths` how long they are for each slit: 0.8 arcsec for the three narrower slits and 1.6 arcsec for the widest.
 - With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
-
-!!! warning "Which end of the slit is which"
-
-    The design documents do not say which end of the slit the +70 arcsec fiducial is at on the detector. Swap the signs of `fiducial_centres` to put it at the other end.
 
 ## Off-chip slit binning
 
