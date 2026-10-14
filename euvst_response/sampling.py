@@ -185,7 +185,7 @@ def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
         of the photons a pixel receives, and `rms_wavelength` that of their
         root mean square energy, which sets how far their electrons spread.
         Both are in the unit of `wavelength`, and NaN where no photons
-        arrive.
+        arrive, or only photons below the smallest normal float.
     """
     photons = np.asarray(photons, dtype=float)
     flat = photons.reshape(-1, photons.shape[-1])
@@ -218,7 +218,9 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
         broadcasting against them.
     fill : float or np.ndarray
         Wavelength for both where no photons land, broadcasting against
-        where they land.
+        where they land. Also used where the photons that land are below
+        the smallest normal float, as their ratios then have too few
+        significant bits to mean anything.
 
     Returns
     -------
@@ -228,12 +230,23 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     photons = np.asarray(photons, dtype=float)
     mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
     rms = np.broadcast_to(np.asarray(rms, dtype=float), photons.shape)
+    # The wavelengths are taken relative to the largest, so the energies
+    # carried are about the size of the photons. Divided by wavelengths in
+    # cm they would be up to 1e12 times larger, and could stay above zero
+    # where the photons round to zero.
+    scale = np.max(mean, initial=0.0, where=np.isfinite(mean))
+    scale = scale if scale > 0 else 1.0
     moved = carry(photons)
-    energy = carry(np.divide(photons, mean, out=np.zeros(photons.shape), where=mean > 0))
-    square = carry(np.divide(photons, rms**2, out=np.zeros(photons.shape), where=rms > 0))
+    energy = carry(photons * np.divide(scale, mean, out=np.zeros(photons.shape), where=mean > 0))
+    square = carry(photons * np.divide(scale, rms, out=np.zeros(photons.shape), where=rms > 0)**2)
     empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
-    moved_mean = np.divide(moved, energy, out=np.array(empty), where=energy > 0)
-    moved_rms = np.sqrt(np.divide(moved, square, out=np.array(empty) ** 2, where=square > 0))
+    tiny = np.finfo(float).tiny
+    with_mean = (moved >= tiny) & (energy >= tiny)
+    with_rms = (moved >= tiny) & (square >= tiny)
+    ratio = np.divide(moved, energy, out=np.ones(moved.shape), where=with_mean)
+    moved_mean = np.where(with_mean, scale * ratio, empty)
+    ratio = np.divide(moved, square, out=np.ones(moved.shape), where=with_rms)
+    moved_rms = np.where(with_rms, scale * np.sqrt(ratio), empty)
     return moved, moved_mean, moved_rms
 
 

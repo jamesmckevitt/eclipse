@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, and the lines of a band, in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, the lines of a band, in `euvst_response.band`, and full-CCD frames, in `euvst_response.full_frame`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -157,6 +157,16 @@ A full-CCD frame holds every line in the band, not only the lines a synthesis na
 ::: euvst_response.band.write_band_lines
 
 ::: euvst_response.band.read_band_lines
+
+## Full-CCD frames
+
+A frame of both SW CCDs at one slit position, with every line in the band and the continuum. [A full-CCD frame](full-ccd-frame.md) shows them in use.
+
+::: euvst_response.full_frame.full_ccd_frame
+
+::: euvst_response.full_frame.FullFrame
+
+::: euvst_response.full_frame.write_full_frame
 
 ## Results files
 
