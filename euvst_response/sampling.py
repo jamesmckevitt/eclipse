@@ -292,6 +292,48 @@ def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.
     return weights.toarray()
 
 
+def pixel_weights_through(cell_edges, pixel_edges, openings, sigma: float = 0.0,
+                          extend: bool = False) -> np.ndarray:
+    """
+    Pixel weights for light passing only through `openings`.
+
+    As :func:`pixel_weights`, for a slit with gaps in it. The blur comes before the openings,
+    as the optics in front of a slit blur the image the slit then cuts. Each
+    pixel still holds the mean over its whole extent, so a pixel half
+    covered by a gap holds half the light, and a pixel inside a gap none.
+
+    Parameters
+    ----------
+    cell_edges, pixel_edges, sigma, extend
+        As for :func:`pixel_weights`.
+    openings : array
+        `(n, 2)` start and end of each opening, in the unit of the edges,
+        increasing and not overlapping.
+
+    Returns
+    -------
+    np.ndarray
+        Weights, `(n_pixels, n_cells)`.
+    """
+    pixels = np.asarray(pixel_edges, dtype=float)
+    openings = np.asarray(openings, dtype=float).reshape(-1, 2)
+    if np.any(openings[:, 1] <= openings[:, 0]) or np.any(openings[1:, 0] < openings[:-1, 1]):
+        raise ValueError("The openings must each end after they start, in increasing "
+                         "order, without overlapping.")
+    # Cut the pixels at every opening edge inside them, so each piece is wholly
+    # open or closed, then average the open pieces' weights over their pixel.
+    cuts = openings[(openings > pixels[0]) & (openings < pixels[-1])]
+    pieces = np.union1d(pixels, cuts)
+    middles = (pieces[:-1] + pieces[1:]) / 2
+    is_open = np.any((middles[:, np.newaxis] > openings[:, 0])
+                     & (middles[:, np.newaxis] < openings[:, 1]), axis=1)
+    weights = pixel_weights(cell_edges, pieces, sigma, extend=extend)
+    pixel = np.searchsorted(pixels, middles, side="right") - 1
+    out = np.zeros((pixels.size - 1, weights.shape[1]))
+    np.add.at(out, pixel, weights * (np.diff(pieces) * is_open)[:, np.newaxis])
+    return out / np.diff(pixels)[:, np.newaxis]
+
+
 def centred_edges(n: int, pitch: float, centre: float = 0.0) -> np.ndarray:
     """Edges of `n` pixels of width `pitch`, centred on `centre`."""
     return centre + (np.arange(n + 1) - n / 2) * pitch

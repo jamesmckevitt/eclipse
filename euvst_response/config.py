@@ -99,6 +99,37 @@ def _check_psf_params(tel, section: str = "telescope") -> None:
                          f"such as 1 arcsec, or left out for none; got {across!r}.")
 
 
+def _check_fiducials(tel, section: str = "telescope") -> None:
+    """
+    Check the fiducials are angles along the slit, with one length for each
+    of the four slits, and each inside the slit and clear of the others at
+    the longest of those lengths.
+    """
+    def angles(value):
+        return (isinstance(value, (list, tuple))
+                and all(isinstance(q, u.Quantity) and q.isscalar and q.unit.is_equivalent(u.arcsec)
+                        and np.isfinite(q.value) for q in value))
+
+    if not angles(tel.fiducial_centres):
+        raise ValueError(f"{section}.fiducial_centres must be a list of angles along the slit "
+                         f"from its centre, such as [-25 arcsec, 70 arcsec]; got "
+                         f"{tel.fiducial_centres!r}.")
+    lengths = tel.fiducial_lengths
+    if not angles(lengths) or len(lengths) != 4 or not all(q.value > 0 for q in lengths):
+        raise ValueError(f"{section}.fiducial_lengths must be four lengths above zero, one for "
+                         f"each of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, such as [0.8 arcsec, "
+                         f"0.8 arcsec, 0.8 arcsec, 1.6 arcsec]; got {lengths!r}.")
+    longest = max(q.to_value(u.arcsec) for q in lengths)
+    centres = np.sort([q.to_value(u.arcsec) for q in tel.fiducial_centres])
+    half = tel.slit_length.to_value(u.arcsec) / 2
+    if centres.size and (centres[0] - longest / 2 <= -half or centres[-1] + longest / 2 >= half):
+        raise ValueError(f"{section}.fiducial_centres must keep every fiducial inside the "
+                         f"{tel.slit_length} slit; got {tel.fiducial_centres!r}.")
+    if np.any(np.diff(centres) <= longest):
+        raise ValueError(f"{section}.fiducial_centres must keep the fiducials apart; got "
+                         f"{tel.fiducial_centres!r} for fiducials up to {longest} arcsec long.")
+
+
 def _check_tables(obj, names: tuple, section: str) -> None:
     """
     Check each of `names` is a table path; text, as from a configuration, becomes a Path.
@@ -648,6 +679,15 @@ class Telescope_EUVST:
     psf_across_slit : u.Quantity or None
         FWHM of the telescope's blur across the slit, which brings in light
         from either side of it. Default None, for no blur. Keyword only.
+    slit_length : u.Quantity
+        Length of the slits. Default 300 arcsec. Keyword only.
+    fiducial_centres : list of u.Quantity
+        Middle of each fiducial along the slit, from the slit's centre. A
+        fiducial is a short gap in the slit, used to co-align observations
+        made with different slits. Default -25 and 70 arcsec. Keyword only.
+    fiducial_lengths : list of u.Quantity
+        Fiducial length for the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that
+        order. Default 0.8, 0.8, 0.8 and 1.6 arcsec. Keyword only.
     pm_table, grating_table : path
         Tables of primary mirror reflectance and grating efficiency, two
         columns: wavelength in nm and value. Default the packaged tables.
@@ -670,16 +710,56 @@ class Telescope_EUVST:
     # psf_params[0], the blur along the slit measured at the detector, which
     # includes the spectrograph after the slit.
     psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
+    # The slits are 4.07 mm long, 300 arcsec at the slit's 13.57 um per arcsec,
+    # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
+    # narrow slits and 21.8 um (1.6 arcsec) in the widest, centred -340 um
+    # (-25 arcsec) and +950 um (+70 arcsec) from its centre along the slit
+    # (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170). The documents
+    # do not say which end of the slit is positive on the detector.
+    slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True)
+    fiducial_centres: list = field(
+        default_factory=lambda: [-25.0 * u.arcsec, 70.0 * u.arcsec], kw_only=True)
+    fiducial_lengths: list = field(
+        default_factory=lambda: [0.8 * u.arcsec, 0.8 * u.arcsec, 0.8 * u.arcsec, 1.6 * u.arcsec],
+        kw_only=True)
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
     grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
 
     def __post_init__(self):
-        _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
+        _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width", "slit_length"),
                         non_negative=("microroughness_sigma",), optional=("psf_slit_width",))
         _check_psf_params(self)
+        _check_fiducials(self)
         _check_tables(self, ("pm_table", "grating_table"), "telescope")
+
+    def slit_openings(self, slit_width: u.Quantity) -> u.Quantity:
+        """
+        Stretches of the slit that let light through: its length less its fiducials.
+
+        Parameters
+        ----------
+        slit_width : u.Quantity
+            Slit, 0.2, 0.4, 0.8 or 1.6 arcsec, which sets the fiducial length.
+
+        Returns
+        -------
+        u.Quantity
+            `(n, 2)` start and end of each open stretch, along the slit from
+            its centre, in increasing order.
+        """
+        widths = [0.2, 0.4, 0.8, 1.6]
+        width = u.Quantity(slit_width).to_value(u.arcsec)
+        if width not in widths:
+            raise ValueError(f"The fiducials are known for the 0.2, 0.4, 0.8 and 1.6 arcsec "
+                             f"slits, not {slit_width}.")
+        length = self.fiducial_lengths[widths.index(width)].to_value(u.arcsec)
+        centres = np.sort([c.to_value(u.arcsec) for c in self.fiducial_centres])
+        half = self.slit_length.to_value(u.arcsec) / 2
+        edges = np.concatenate([[-half], np.ravel(np.column_stack(
+            [centres - length / 2, centres + length / 2])), [half]])
+        return edges.reshape(-1, 2) * u.arcsec
 
     @property
     def collecting_area(self) -> u.Quantity:
@@ -965,6 +1045,9 @@ class Simulation:
     spectral_psf : str
         How the slit is combined with the optics blur: `"quadrature"`
         (default) or `"convolution"`.
+    slit_mask : bool
+        Whether the slit's ends and fiducials block the light (SWC only).
+        Default False.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
@@ -1000,6 +1083,11 @@ class Simulation:
     # a wide slit, and a narrower profile than quadrature for the 0.2 arcsec
     # slit. See radiometric.spectral_line_spread.
     spectral_psf: str = "quadrature"
+    # With slit_mask True, no light gets through beyond the slit's ends or in
+    # its fiducials, as set in the telescope. The slit's centre is the middle
+    # of the scene along the slit. The blur along the slit comes before the
+    # slit, so a fiducial's edges are as sharp as the pixels sampling them.
+    slit_mask: bool = False
     # With noise False, every random draw in the detector chain is replaced by
     # its mean, so the run gives the signal the instrument would measure on
     # average. Quantisation stays: DN are still rounded and still clipped at
@@ -1053,6 +1141,9 @@ class Simulation:
                 f"spectral_psf must be 'quadrature' or 'convolution', got "
                 f"{self.spectral_psf!r}."
             )
+        if self.slit_mask and inst == "EIS":
+            raise ValueError("slit_mask is for SWC, whose slits' fiducials ECLIPSE knows; "
+                             "EIS's slits are taken to be open along their length.")
 
         # Both pipelines zip the paired pinhole lists, and zip stops at the
         # shortest, so a mismatch would silently drop pinholes. main() runs
