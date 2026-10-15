@@ -657,7 +657,8 @@ _SECTION_STRING_FIELDS = {
     # main() rejects it rather than let it appear to take effect.
     "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
-    "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table"],
+    "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table",
+                  "field_of_view", "resolution_budget"],
     "filter": ["al_table", "oxide_table", "c_table"],
 }
 
