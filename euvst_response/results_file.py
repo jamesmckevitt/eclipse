@@ -329,7 +329,8 @@ def _jsonable(value):
 # Settings whose value in runs made before they existed differs from
 # today's default. An object or file from then that lacks one gets the old
 # value, not the default. Fits were unweighted before FitConfig.weighted.
-_EARLIER_VALUES = {"FitConfig": {"weighted": False}}
+_EARLIER_VALUES = {"FitConfig": {"weighted": False},
+                   "Telescope_EUVST": {"resolution_budget": "none"}}
 
 
 def _init_fields(value) -> dict:

@@ -14,8 +14,9 @@ from scipy.sparse import csr_matrix
 from scipy.special import erf
 from tqdm import tqdm
 from .pinhole_diffraction import _filter_transmission, _pinholes_on
-from .radiometric import (_carry_photon_meta, photons_per_energy, slit_image_width,
-                          spectral_optics_fwhm, spectral_psf_fwhm, spectral_psf_margin)
+from .radiometric import (_carry_photon_meta, across_slit_fwhm, photons_per_energy,
+                          slit_image_width, spatial_psf_fwhm, spectral_blur_fwhm,
+                          spectral_psf_fwhm, spectral_psf_margin)
 from .sampling import centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
@@ -463,7 +464,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     if sim.psf and sim.spectral_psf == "quadrature":
         sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * step
     elif sim.psf:
-        sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det)) * step
+        sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det)) * step
         width = slit_image_width(sim.slit_width, det) * step
     pixel_edges = np.concatenate([grid - step / 2, [grid[-1] + step / 2]])
     cells = _bin_edges(centres)
@@ -506,9 +507,9 @@ def _spatial_blur(tel, det, sim) -> dict:
     Blur along and across the slit, as standard deviations in arcsec, for
     :func:`reproject_ndcube_heliocentric_to_helioprojective`.
     """
-    along = (_fwhm_to_sigma(tel.psf_params[0].to_value(u.pix))
+    along = (_fwhm_to_sigma(spatial_psf_fwhm(tel, det))
              * (det.plate_scale_angle * u.pix).to_value(u.arcsec))
-    across = getattr(tel, "psf_across_slit", None)
+    across = across_slit_fwhm(tel)
     return {"sigma_y": along,
             "sigma_x": 0.0 if across is None else _fwhm_to_sigma(across.to_value(u.arcsec)),
             "extend": sim.psf_boundary == "replicate"}
