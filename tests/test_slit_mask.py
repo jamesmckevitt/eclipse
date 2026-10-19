@@ -208,3 +208,21 @@ def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
     main()
     results = load_instrument_response_results(tmp_path / "run" / "result" / "masked.h5")
     assert len(results["results"]["all_combinations"]) == 2
+
+
+def test_a_cube_masked_without_the_psf_is_not_blurred_afterwards():
+    """The blur comes before the slit, so masking first and blurring later is refused."""
+    from euvst_response.monte_carlo import monte_carlo, simulate_once
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    scene = _scene(np.ones((40, 4, 21)), 0.1 * u.arcsec)
+    common = dict(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, slit_mask=True)
+    cube = rebin_atmosphere(scene, det, Simulation(**common, psf=False), tel=tel)
+    blurred = Simulation(**common, psf=True)
+    with pytest.raises(ValueError, match="masked without the PSF"):
+        simulate_once(cube, 1 * u.s, det, tel, blurred)
+    with pytest.raises(ValueError, match="masked without the PSF"):
+        monte_carlo(cube, 1 * u.s, det, tel, blurred, n_iter=1)
+    # Masked with the PSF, it is accepted.
+    together = rebin_atmosphere(scene, det, blurred, tel=tel)
+    simulate_once(together, 1 * u.s, det, tel, blurred)
