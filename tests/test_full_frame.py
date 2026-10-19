@@ -146,6 +146,41 @@ def test_the_prescan_and_overscan_hold_only_the_read_noise():
     assert np.all(laid[:, :pre] == 0.0) and np.all(laid[:, -pre:] == 0.0)
 
 
+def test_the_overscan_holds_what_the_register_leaves_behind():
+    det = Detector_SWC()
+    image = np.full((5, 8), 7.0)
+    pre, over = det.serial_prescan, det.serial_overscan
+    overscan = np.arange(5 * 2 * over, dtype=float).reshape(5, 2 * over)
+    laid = lay_out_register(image, det, noise=False, overscan_dn=overscan)
+    assert np.array_equal(laid[:, pre + 4:pre + 4 + 2 * over], overscan)
+    with pytest.raises(ValueError, match="overscan_dn must be shaped"):
+        lay_out_register(image, det, noise=False, overscan_dn=overscan[:, 1:])
+
+
+def test_a_frame_with_imperfect_serial_transfer_trails_into_the_overscan(uniform_synthesis):
+    """The line lights each half's last image pixels, and its trail reaches the overscan.
+
+    A long exposure gives the line hundreds of DN. Dark charge is not
+    followed along the register, so rows without the line keep empty
+    overscan samples.
+    """
+    products = read_synthesis_products(uniform_synthesis)
+    det = Detector_SWC(cte_serial=0.999)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+                           det=det, noise=False, n_workers=1)
+    perfect = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+                             noise=False, n_workers=1)
+    pre, over, half = det.serial_prescan, det.serial_overscan, det.n_columns // 2
+    first = {half - 1: pre + half, half: pre + half + 2 * over - 1}
+    photons = perfect.photons["left"][:det.n_rows]
+    for column, sample in first.items():
+        lit = photons[:, column] >= photons[:, column].max() / 2
+        assert photons[:, column].max() > 0
+        assert np.all(frame.dn["left"][:det.n_rows][lit, sample] > 0)
+        assert np.all(frame.dn["left"][:det.n_rows][photons[:, column] == 0, sample] == 0)
+        assert np.all(perfect.dn["left"][:, sample] == 0)
+
+
 def test_a_pixels_emission_measure_is_shared_between_the_densities_either_side():
     grid = np.array([8.0, 9.0, 10.0])
     lower, upper, low_share, high_share = _density_shares(np.array([8.25, 10.0, 11.0, np.nan]),

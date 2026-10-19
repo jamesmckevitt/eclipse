@@ -32,7 +32,7 @@ from .radiometric import (
     spectral_psf_fwhm,
     spectral_psf_reach,
 )
-from .readout import FocalPlane_SWC, expose
+from .readout import FocalPlane_SWC, expose, expose_serial_overscan
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
 from .utils import angle_to_distance, _fwhm_to_sigma
@@ -542,6 +542,39 @@ def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: 
     fallback = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])
     photons, mean, rms = _carry_photon_wavelengths(
         lambda values: expose(values, exposure, sequence), rate, own, rms, fallback)
+    return photons, mean * u.Angstrom, rms * u.Angstrom
+
+
+def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity,
+                                            exposure: u.Quantity, sequence,
+                                            rms_wavelength: Optional[u.Quantity] = None) -> tuple:
+    """
+    Photons the serial register carries into the overscan, with the
+    wavelengths of their mean and root mean square energies.
+
+    As :func:`expose_with_wavelengths`, for the samples of
+    :func:`~euvst_response.readout.expose_serial_overscan`. A sample no
+    photons reach takes the wavelength of the image pixel next to it.
+
+    Returns
+    -------
+    photons : np.ndarray
+        Photons per sample, `(n_rows + parallel_overscan_rows, 2 * serial_overscan)`.
+    wavelength, rms_wavelength : u.Quantity
+        Wavelengths of their mean and root mean square energies, same shape.
+    """
+    rate = np.asarray(rate, dtype=float)
+    if rate.ndim != 2:
+        raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
+    own = _per_pixel(wavelength, rate.shape)
+    rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
+    n_more, overscan = sequence.parallel_overscan_rows, sequence.serial_overscan
+    half = (rate.shape[1] + 1) // 2
+    edges = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])[:, [half - 1, half]]
+    fallback = np.repeat(edges, overscan, axis=1)
+    photons, mean, rms = _carry_photon_wavelengths(
+        lambda values: expose_serial_overscan(values, exposure, sequence), rate, own, rms,
+        fallback)
     return photons, mean * u.Angstrom, rms * u.Angstrom
 
 

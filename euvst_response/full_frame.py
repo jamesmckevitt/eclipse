@@ -23,7 +23,8 @@ import astropy.units as u
 
 from .band import BandLines
 from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
-                    detect, digitise, expose_with_wavelengths, pixel_solid_angle)
+                    detect, digitise, expose_serial_overscan_with_wavelengths,
+                    expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import photons_per_energy
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
@@ -455,7 +456,8 @@ class FullFrame:
     settings: dict = field(default_factory=dict)
 
 
-def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarray:
+def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
+                     overscan_dn: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Frame samples as the two outputs read them, with prescan and overscan.
 
@@ -463,9 +465,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarra
     the register and the overscan at the inner end (`ReadoutSequence`). In
     order across the CCD, a row is: left prescan, first half of the image,
     left overscan, right overscan, second half of the image, right prescan.
-    The prescan and overscan samples hold no charge from the image area, so
-    they read only the read noise. The serial register's own dark current
-    is not modelled, here or elsewhere.
+    The prescan samples hold no charge from the image area, so they read
+    only the read noise. So do the overscan samples, unless `overscan_dn`
+    gives them, `(n_rows, 2 * serial_overscan)` in that order, with the
+    charge the serial register carries past the image. The serial
+    register's own dark current is not modelled, here or elsewhere.
     """
     n_rows, n_columns = image_dn.shape
     half = (n_columns + 1) // 2
@@ -474,6 +478,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarra
     blank = digitise(detect(empty, np.full(n_rows, 200.0) * u.AA, 0.0 * u.s, det,
                             noise=noise), det)
     pieces = np.split(blank, np.cumsum([prescan, overscan, overscan]), axis=1)
+    if overscan_dn is not None:
+        if np.shape(overscan_dn) != (n_rows, 2 * overscan):
+            raise ValueError(f"overscan_dn must be shaped {(n_rows, 2 * overscan)}, got "
+                             f"{np.shape(overscan_dn)}.")
+        pieces[1], pieces[2] = overscan_dn[:, :overscan], overscan_dn[:, overscan:]
     return np.concatenate([pieces[0], image_dn[:, :half], pieces[1], pieces[2],
                            image_dn[:, half:], pieces[3]], axis=1)
 
@@ -656,9 +665,18 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         drawn = np.random.poisson(photons).astype(float) if noise else photons
         electrons = detect(drawn, mean_wavelength, dark, det, noise=noise,
                            rms_wavelength=rms_wavelength)
+        overscan_dn = None
+        if sequence.cte_serial != 1:
+            # Charge the serial register leaves behind reaches the overscan.
+            trail, trail_wavelength, trail_rms = expose_serial_overscan_with_wavelengths(
+                image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
+            trail = np.random.poisson(trail).astype(float) if noise else trail
+            overscan_dn = digitise(detect(trail, trail_wavelength, 0.0 * u.s, det, noise=noise,
+                                          rms_wavelength=trail_rms), det)
         frame["rate"][ccd] = image_rate
         frame["photons"][ccd] = drawn
-        frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise)
+        frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise,
+                                            overscan_dn=overscan_dn)
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
         frame["photon_rms_wavelength"][ccd] = rms_wavelength

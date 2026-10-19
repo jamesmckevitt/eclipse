@@ -688,7 +688,8 @@ def _along_columns(rate: np.ndarray, exposure, sequence: ReadoutSequence,
     return arrived
 
 
-def _along_register(frame: np.ndarray, sequence: ReadoutSequence, power: int = 1) -> np.ndarray:
+def _along_register(frame: np.ndarray, sequence: ReadoutSequence, power: int = 1,
+                    overscan: int = 0):
     """
     Charge each pixel of a frame brings to its output along the serial
     register, with the arrival probabilities raised to `power`.
@@ -697,11 +698,16 @@ def _along_register(frame: np.ndarray, sequence: ReadoutSequence, power: int = 1
     pixels from the outer end of its half has `serial_prescan + j + 1`
     transfers to go. What it leaves behind arrives in the pixels read after
     it, toward the middle of the register, and past the last image pixel
-    goes into the overscan.
+    goes into the overscan. With `overscan` above zero, the charge reaching
+    the first `overscan` overscan samples of each half is returned too,
+    shaped `(rows, 2 * overscan)` and laid out across the CCD: the left
+    output's samples in the order read, then the right output's in reverse,
+    so that each half's first sample sits next to its image pixels.
     """
-    if sequence.cte_serial == 1:
-        return frame
     n_columns = frame.shape[1]
+    if sequence.cte_serial == 1:
+        trail = np.zeros((frame.shape[0], 2 * overscan))
+        return (frame, trail) if overscan else frame
     half = sequence.serial_image_pixels
     if n_columns not in (2 * half, 2 * half - 1):
         raise ValueError(
@@ -710,17 +716,24 @@ def _along_register(frame: np.ndarray, sequence: ReadoutSequence, power: int = 1
             f"output; got {n_columns}."
         )
     arrived = np.zeros_like(frame)
+    trails = []
     # Each half in the order its output reads it: the first from column 0, the
     # second from the last column.
     for columns in (np.arange(half), np.arange(n_columns - 1, half - 1, -1)):
         charge = frame[:, columns]
-        probability = transfer_probabilities(sequence.serial_prescan + 1 + np.arange(columns.size),
-                                             sequence.cte_serial, most=columns.size) ** power
-        reached = np.zeros_like(charge)
-        for k, weight in enumerate(probability[:columns.size]):
-            reached[:, k:] += (charge * weight)[:, :columns.size - k]
-        arrived[:, columns] = reached
-    return arrived
+        size = columns.size
+        probability = transfer_probabilities(sequence.serial_prescan + 1 + np.arange(size),
+                                             sequence.cte_serial, most=size + overscan) ** power
+        # Samples in the order read: the image pixels, then the overscan.
+        reached = np.zeros((frame.shape[0], size + overscan))
+        for k, weight in enumerate(probability[:size + overscan]):
+            n = min(size, size + overscan - k)
+            reached[:, k:k + n] += (charge * weight)[:, :n]
+        arrived[:, columns] = reached[:, :size]
+        trails.append(reached[:, size:])
+    if not overscan:
+        return arrived
+    return arrived, np.concatenate([trails[0], trails[1][:, ::-1]], axis=1)
 
 
 def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
@@ -800,6 +813,38 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
     if not sequence.shutter:
         _warn_of_a_partial_clear(sequence, rate.shape[0], "smear")
     return _along_register(_along_columns(rate, exposure, sequence), sequence)
+
+
+def expose_serial_overscan(rate: np.ndarray, exposure: u.Quantity,
+                           sequence: ReadoutSequence) -> np.ndarray:
+    """
+    Photons whose charge the serial register carries past the image into the overscan.
+
+    With `cte_serial` below 1, each pixel leaves charge behind at every
+    transfer along the register, and that charge arrives in the samples read
+    after it. For the last image pixels of each half these are the serial
+    overscan samples. The register's own dark current, and dark charge left
+    behind, are not included, as for :func:`dark_current_time`.
+
+    Parameters
+    ----------
+    rate, exposure, sequence
+        As for :func:`expose`. `rate` must have the whole CCD's columns.
+
+    Returns
+    -------
+    np.ndarray
+        Mean photons in each serial overscan sample, shaped
+        `(n_rows + parallel_overscan_rows, 2 * serial_overscan)`: the left
+        output's samples in the order read, then the right output's in
+        reverse, as they sit across the CCD. Zeros with `cte_serial` 1.
+    """
+    rate = _check_rate(rate)
+    n_out = (rate.shape[0] + sequence.parallel_overscan_rows, 2 * sequence.serial_overscan)
+    if sequence.cte_serial == 1:
+        return np.zeros(n_out)
+    return _along_register(_along_columns(rate, exposure, sequence), sequence,
+                           overscan=sequence.serial_overscan)[1]
 
 
 def expose_variance(variance_rate: np.ndarray, mean_rate: np.ndarray, exposure: u.Quantity,

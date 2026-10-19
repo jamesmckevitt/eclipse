@@ -29,6 +29,7 @@ from euvst_response.readout import (
     ReadoutSequence,
     dark_current_time,
     expose,
+    expose_serial_overscan,
     expose_variance,
     smear_photons,
     transfer_probabilities,
@@ -680,6 +681,40 @@ def test_charge_left_behind_along_the_register_trails_towards_its_middle():
     assert frame == pytest.approx(expected, rel=1e-12)
     with pytest.raises(ValueError, match="needs the frame's every column"):
         expose(rate[:, :8], 1.0 * u.s, sequence)
+
+
+def test_charge_left_behind_past_the_last_image_pixel_reaches_the_serial_overscan():
+    """As moved one transfer at a time, with each half's last image pixel bright."""
+    rate = np.random.default_rng(4).uniform(0.0, 3.0, (4, 10))
+    rate[:, 4] = rate[:, 5] = 100.0
+    sequence = ReadoutSequence(serial_prescan=3, serial_image_pixels=5, serial_overscan=6,
+                               parallel_overscan_rows=0, dump_rows=4, cte_serial=0.9)
+    trail = expose_serial_overscan(rate, 1.0 * u.s, sequence)
+    assert trail.shape == (4, 12)
+    expected = []
+    for columns in (np.arange(5), np.arange(9, 4, -1)):
+        half = np.zeros((4, 6))
+        for row in range(4):
+            register = np.concatenate([np.zeros(3), rate[row, columns], np.zeros(6)])
+            read = []
+            for _ in range(register.size):
+                out, register = _transfer(register, 0.9)
+                read.append(out)
+            half[row] = read[3 + 5:]
+        expected.append(half)
+    # The right output's samples sit across the CCD in reverse.
+    expected = np.concatenate([expected[0], expected[1][:, ::-1]], axis=1)
+    assert trail == pytest.approx(expected, rel=1e-12, abs=1e-12)
+    # Nothing is lost: the image and an overscan long enough for the trail
+    # hold what reached the pixels.
+    long = replace(sequence, serial_overscan=60)
+    total = expose(rate, 1.0 * u.s, long).sum() + expose_serial_overscan(rate, 1.0 * u.s,
+                                                                         long).sum()
+    perfect = expose(rate, 1.0 * u.s, replace(sequence, cte_serial=1.0)).sum()
+    assert total == pytest.approx(perfect, rel=1e-6)
+    assert np.array_equal(expose_serial_overscan(rate, 1.0 * u.s,
+                                                 replace(sequence, cte_serial=1.0)),
+                          np.zeros((4, 12)))
 
 
 def test_a_perfect_transfer_leaves_the_frame_as_it_was():
