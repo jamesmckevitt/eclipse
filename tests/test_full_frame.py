@@ -11,8 +11,8 @@ from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.band import BandLines, IonLines
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.frame import photons_from_lines
-from euvst_response.full_frame import (_density_shares, full_ccd_frame, lay_out_register,
-                                       write_full_frame)
+from euvst_response.full_frame import (_Default, _density_shares, _settings_from_simulation,
+                                       full_ccd_frame, lay_out_register, write_full_frame)
 from euvst_response.readout import FocalPlane_SWC
 from euvst_response.synthesis_file import read_synthesis_products
 
@@ -433,6 +433,14 @@ def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings
                        sim=Simulation(**settings))
 
 
+def test_a_simulation_gives_the_frame_its_slit_width_psf_and_noise():
+    sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
+                     spectral_psf="convolution", noise=False)
+    given = dict.fromkeys(("slit_width", "psf", "spectral_psf", "noise"), _Default(None))
+    assert _settings_from_simulation(sim, given) == {
+        "slit_width": 0.4 * u.arcsec, "psf": True, "spectral_psf": "convolution", "noise": False}
+
+
 def test_a_frame_refuses_settings_given_both_directly_and_by_a_simulation():
     sim = Simulation(psf=False)
     for given in ({"psf": False}, {"slit_width": 0.2 * u.arcsec}, {"noise": True},
@@ -444,7 +452,7 @@ def test_a_frame_refuses_settings_given_both_directly_and_by_a_simulation():
 
 
 def test_the_frame_api_is_exported_from_the_package():
-    """The package names are the objects in the modules, so the old imports still work."""
+    """The frame API is importable from both the package and its modules."""
     import euvst_response
     from euvst_response import band, full_frame, readout
 

@@ -488,16 +488,27 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
                            image_dn[:, half:], pieces[3]], axis=1)
 
 
+class _Default:
+    """Default of a `full_ccd_frame` argument that a `Simulation` can set instead."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+
 def _settings_from_simulation(sim: Simulation, given: Dict[str, object]) -> dict:
     """
     Slit width, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
 
-    Raises ValueError if any of `given` was also passed to `full_ccd_frame`,
-    or if `sim` asks for an effect the frame does not model.
+    Raises TypeError if `sim` is not a `Simulation`, and ValueError if any of
+    `given` was also passed to `full_ccd_frame` or if `sim` asks for an effect
+    the frame does not model.
     """
     if not isinstance(sim, Simulation):
         raise TypeError(f"sim must be a Simulation, got {type(sim).__name__}.")
-    both = [name for name, value in given.items() if value is not None]
+    both = [name for name, value in given.items() if not isinstance(value, _Default)]
     if both:
         raise ValueError(f"{', '.join(both)} given both directly and by sim; give each setting "
                          f"once.")
@@ -521,11 +532,11 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object]) -> dict
 
 
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
-                   exposure: u.Quantity, *, slit_width: Optional[u.Quantity] = None,
+                   exposure: u.Quantity, *, slit_width: u.Quantity = _Default(0.2 * u.arcsec),
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
-                   psf: Optional[bool] = None, spectral_psf: Optional[str] = None,
+                   psf: bool = _Default(True), spectral_psf: str = _Default("quadrature"),
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
-                   noise: Optional[bool] = None, n_workers: int = 0,
+                   noise: bool = _Default(True), n_workers: int = 0,
                    sim: Optional[Simulation] = None) -> FullFrame:
     """
     Full-CCD frame of the SW camera from a synthesis and every line in the band.
@@ -571,8 +582,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         on Windows, one process is used.
     sim : Simulation, optional
         Settings to take `slit_width`, `psf`, `spectral_psf` and `noise`
-        from, in place of those arguments. Its `expos`, `n_iter` and `ncpu`
-        are not used. Default None.
+        from, in place of those arguments. A `Simulation` has the PSF off
+        unless `psf=True` is given. Its `expos`, `n_iter` and `ncpu` are not
+        used. Default None.
 
     Returns
     -------
@@ -580,6 +592,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
     Raises
     ------
+    TypeError
+        If `sim` is not a `Simulation`.
     ValueError
         If `sim` is given with any of `slit_width`, `psf`, `spectral_psf` or
         `noise`, or asks for an effect the frame does not model: an
@@ -594,9 +608,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if sim is not None:
         settings = _settings_from_simulation(sim, given)
     else:
-        defaults = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
-                    "noise": True}
-        settings = {name: defaults[name] if value is None else value
+        settings = {name: value.value if isinstance(value, _Default) else value
                     for name, value in given.items()}
     slit_width, psf = settings["slit_width"], settings["psf"]
     spectral_psf, noise = settings["spectral_psf"], settings["noise"]

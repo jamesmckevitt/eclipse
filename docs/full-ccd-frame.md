@@ -62,7 +62,7 @@ frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
                        exposure=10 * u.s, sim=sim, continuum=(wavelength, free, two_photon))
 ```
 
-The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf` and `noise`. The exposure is still given by `exposure`. A frame takes the Sun beyond the edges of the synthesis as dark, so with the PSF on, `psf_boundary` must be `"zero"`. A frame does not model the slit's fiducials, pinholes or visible stray light, so `slit_mask`, `enable_pinholes` and `vis_sl` must be left off. `instrument` must be `"SWC"`. Give each setting either in the `Simulation` or as an argument, not both.
+The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf` and `noise`. A `Simulation` has the PSF off unless `psf=True` is given. The exposure is set by `exposure`, not by the `Simulation`'s `expos`, and the number of workers by `n_workers`. A frame takes the Sun beyond the edges of the synthesis as dark, so with the PSF on, `psf_boundary` must be `"zero"`. A frame does not model the slit's fiducials, pinholes or visible stray light, so `slit_mask`, `enable_pinholes` and `vis_sl` must be left off. `instrument` must be `"SWC"`. Give each setting either in the `Simulation` or as an argument, not both.
 
 For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about 20 minutes and 55 GB of memory on 16 cores. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
