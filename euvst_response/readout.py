@@ -39,29 +39,9 @@ from scipy.optimize import brentq
 from scipy.signal import fftconvolve
 from scipy.special import gammaln
 
-from .config import Detector_SWC
-
-# Wavelength in Angstrom against position along the dispersion, in mm from the
-# focal plane centre (the middle of the gap), positive toward longer
-# wavelength. Fitted to the RSC-2022021C positions of the two detector edges,
-# the focal plane centre, the chief ray and the dispersion there, and to the
-# ray-traced line positions on its SW footprint figure. A linear scale is not
-# good enough: the design runs from 17.0 mA per row at the short-wavelength
-# end to 16.8 at the long end, so the nominal 16.9 misplaces a line by up to
-# about seven rows.
-DISPERSION_COEFFICIENTS = (198.885944, 1.2516577, -1.361114e-4)
-
-# A spectral line is an image of the slit, and the optics do not put it on
-# exactly one row: it drifts along the dispersion from one end of the slit to
-# the other. These are the row offsets at 140 arcsec from the field centre,
-# linear term then quadratic, measured from the ray-traced line positions on
-# the SW footprint figure of RSC-2022021C. All eleven lines drawn there agree
-# on them to a few tenths of a row. Pass them to FocalPlane_SWC to model the
-# drift; by default a line lands on one row along the whole slit.
-MEASURED_SLIT_IMAGE_TILT = (0.991, 0.605)
-
-# The field angle those offsets are quoted at.
-TILT_REFERENCE_ANGLE = 140.0 * u.arcsec
+# The focal plane constants are set in config and can be imported from here too.
+from .config import (DISPERSION_COEFFICIENTS, MEASURED_SLIT_IMAGE_TILT,  # noqa: F401
+                     TILT_REFERENCE_ANGLE, Detector_SWC, _check_focal_plane)
 
 
 @dataclass
@@ -69,9 +49,8 @@ class FocalPlane_SWC:
     """
     Geometry of the SW focal plane, and the wavelength each row records.
 
-    The CCD format, pixel size, gap and plate scale belong to the camera, and
-    default to those of :class:`euvst_response.config.Detector_SWC`;
-    :meth:`from_detector` takes them from a configured detector.
+    Every setting defaults to that of :class:`euvst_response.config.Detector_SWC`,
+    and :meth:`from_detector` takes them from a configured detector.
 
     Parameters
     ----------
@@ -83,7 +62,8 @@ class FocalPlane_SWC:
         Space between the two imaging areas.
     dispersion : tuple of float
         Coefficients of the wavelength scale, lowest order first, in Angstrom
-        for a position in mm. See :data:`DISPERSION_COEFFICIENTS`.
+        for a position in mm. See
+        :data:`~euvst_response.config.DISPERSION_COEFFICIENTS`.
     wavelength_offset : u.Quantity
         Added to every row's wavelength. The design positions are good to
         about a row, but the camera's alignment to the beam is quoted at
@@ -100,30 +80,31 @@ class FocalPlane_SWC:
         140 arcsec from it, in rows: a linear and a quadratic term. The
         default `(0.0, 0.0)` puts each line on one row along the whole slit,
         and the methods then ignore their `column` argument. Pass
-        :data:`MEASURED_SLIT_IMAGE_TILT` to model the drift in the optical
-        design, about two rows end to end. Which end of the slit it runs
-        toward is not documented, so the sign may need flipping against a
-        calibration.
+        :data:`~euvst_response.config.MEASURED_SLIT_IMAGE_TILT` to model the
+        drift in the optical design, about two rows end to end. Which end of
+        the slit it runs toward is not documented, so the sign may need
+        flipping against a calibration.
     """
 
     n_rows: int = Detector_SWC.n_rows
     n_columns: int = Detector_SWC.n_columns
     pixel_size: u.Quantity = (Detector_SWC.pix_size * u.pixel).to(u.micron)
     gap: u.Quantity = Detector_SWC.ccd_gap
-    dispersion: Tuple[float, ...] = DISPERSION_COEFFICIENTS
-    wavelength_offset: u.Quantity = 0.0 * u.Angstrom
-    lit_band: Tuple[u.Quantity, u.Quantity] = (170.0 * u.Angstrom, 212.3 * u.Angstrom)
+    dispersion: Tuple[float, ...] = Detector_SWC.dispersion
+    wavelength_offset: u.Quantity = Detector_SWC.wavelength_offset
+    lit_band: Tuple[u.Quantity, u.Quantity] = Detector_SWC.lit_band
     plate_scale: u.Quantity = (Detector_SWC.plate_scale_angle * u.pixel).to(u.arcsec)
-    slit_image_tilt: Tuple[float, float] = (0.0, 0.0)
+    slit_image_tilt: Tuple[float, float] = Detector_SWC.slit_image_tilt
 
     @classmethod
     def from_detector(cls, det: Detector_SWC, **settings) -> "FocalPlane_SWC":
         """
         Focal plane of the camera `det`.
 
-        The CCD format, pixel size, gap and plate scale come from `det`, and
-        the rest are the defaults or given in `settings`. Camera settings in
-        `settings` are refused, so they are set in one place, the detector.
+        Every setting comes from `det`. `dispersion`, `wavelength_offset`,
+        `lit_band` and `slit_image_tilt` given in `settings` replace the
+        detector's. The CCD format, pixel size, gap and plate scale are
+        refused in `settings`, so they are set in one place, the detector.
         """
         camera = dict(n_rows=det.n_rows, n_columns=det.n_columns,
                       pixel_size=(det.pix_size * u.pixel).to(u.micron), gap=det.ccd_gap,
@@ -133,7 +114,9 @@ class FocalPlane_SWC:
             raise ValueError(f"{', '.join(taken)} come from the detector; set them there, as "
                              f"Detector_SWC.n_rows, n_columns, pix_size, ccd_gap and "
                              f"plate_scale_angle.")
-        return cls(**camera, **settings)
+        optics = dict(dispersion=det.dispersion, wavelength_offset=det.wavelength_offset,
+                      lit_band=det.lit_band, slit_image_tilt=det.slit_image_tilt)
+        return cls(**camera, **{**optics, **settings})
 
     def __post_init__(self):
         if self.n_rows < 1 or self.n_columns < 1:
@@ -146,6 +129,7 @@ class FocalPlane_SWC:
                 "dispersion needs at least a constant and a linear coefficient, "
                 f"got {len(self.dispersion)} coefficient(s)."
             )
+        _check_focal_plane(self, "focal_plane")
 
     @property
     def outer_edge(self) -> u.Quantity:

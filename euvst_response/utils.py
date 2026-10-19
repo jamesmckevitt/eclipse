@@ -642,7 +642,7 @@ def deduplicate_list(param_list, param_name):
 # even when the YAML value is a list.
 _SECTION_LIST_FIELDS = {
     "simulation": [],
-    "detector": [],
+    "detector": ["dispersion", "lit_band", "slit_image_tilt"],
     "telescope": ["psf_params", "fiducial_centres", "fiducial_lengths"],
     "filter": [],
 }

@@ -471,6 +471,8 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     as stored, unchecked, with a warning given once `reading` is done.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
+    # A setting stored under an old name is read under its new one.
+    stored = {getattr(cls, "_OLD_NAMES", {}).get(key, key): item for key, item in stored.items()}
     # A setting in _EARLIER_VALUES that the file lacks gets the value runs
     # had before it existed.
     before = {name: item for name, item in _EARLIER_VALUES.get(cls.__name__, {}).items()

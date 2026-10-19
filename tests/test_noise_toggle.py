@@ -128,7 +128,7 @@ def test_the_dark_current_is_worked_out_from_the_rate_given():
     for detector in (Detector_SWC, Detector_EIS):
         default = detector(ccd_temperature=-20 * u.deg_C)
         doubled = detector(ccd_temperature=-20 * u.deg_C,
-                           _dark_current_293k=2 * default._dark_current_293k)
+                           dark_current_293k=2 * default.dark_current_293k)
         assert doubled.dark_current == 2 * default.dark_current
 
 

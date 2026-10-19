@@ -130,7 +130,8 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "slit_mask", "noise", "enable_pinholes"}
+                    "spectral_psf", "slit_mask", "noise", "enable_pinholes",
+                    "pinhole_visible_wavelength"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -186,8 +187,9 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
             f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'EIS'."
         )
 
-    det_keys = _dataclass_keys(Detector_EIS if instrument == "EIS"
-                               else Detector_SWC)
+    det_class = Detector_EIS if instrument == "EIS" else Detector_SWC
+    # Old names, such as _dark_current_293k, still work, with a FutureWarning.
+    det_keys = _dataclass_keys(det_class) | set(det_class._OLD_NAMES)
     tel_keys = _dataclass_keys(Telescope_EIS if instrument == "EIS"
                                else Telescope_EUVST)
     fil_keys = _dataclass_keys(AluminiumFilter)
@@ -734,6 +736,15 @@ def main() -> None:
     # Parse config sections
     sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
     det_fixed, det_sweep = _parse_section(config.get("detector", {}), "detector")
+    # An old name is read as its new one, so the results record the new one.
+    for old, new in (Detector_EIS if instrument == "EIS" else Detector_SWC)._OLD_NAMES.items():
+        for given in (det_fixed, det_sweep):
+            if old in given:
+                if new in det_fixed or new in det_sweep:
+                    raise ValueError(f"Give detector.{new} only, not {old} as well.")
+                warnings.warn(f"detector.{old} is renamed {new}; the old name will be removed "
+                              f"in a future release.", FutureWarning)
+                given[new] = given.pop(old)
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
@@ -754,6 +765,12 @@ def main() -> None:
                 f"detector.{name} must be 1 for an instrument run, which does not model the "
                 f"read-out. Charge left behind as a frame is read is modelled by "
                 f"euvst_response.readout, which takes the detector's settings.")
+    # Nor does it use the SW focal plane, so a sweep over it would repeat one run.
+    if "wavelength_offset" in det_sweep:
+        raise ValueError(
+            "detector.wavelength_offset takes one value: an instrument run does not use the "
+            "focal plane, and only records it. It is modelled by euvst_response.readout and "
+            "euvst_response.full_frame.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
     # sized for the slit's spectral PSF, which also depends on the slit
@@ -793,11 +810,14 @@ def main() -> None:
         # otherwise be accepted and silently ignored.
         if (pinhole_sizes or pinhole_positions or pinhole_positions_spectral
                 or sim_fixed.get("enable_pinholes")
-                or any(sim_sweep.get("enable_pinholes", []))):
+                or any(sim_sweep.get("enable_pinholes", []))
+                or "pinhole_visible_wavelength" in sim_fixed
+                or "pinhole_visible_wavelength" in sim_sweep):
             raise ValueError(
                 "Pinhole effects are not supported for EIS. Remove "
-                "enable_pinholes, pinhole_sizes, pinhole_positions and "
-                "pinhole_positions_spectral, or run this config against SWC."
+                "enable_pinholes, pinhole_sizes, pinhole_positions, "
+                "pinhole_positions_spectral and pinhole_visible_wavelength, or run this "
+                "config against SWC."
             )
 
     # Parse fitting configuration
@@ -1159,6 +1179,8 @@ def main() -> None:
             pinhole_sizes=pinhole_sizes if enable else [],
             pinhole_positions=pinhole_positions if enable else [],
             pinhole_positions_spectral=pinhole_positions_spectral if enable else [],
+            pinhole_visible_wavelength=all_sim.get("pinhole_visible_wavelength",
+                                                   Simulation.pinhole_visible_wavelength),
         )
         # The optics' spectral FWHM depends on the telescope and the detector
         # together. Work it out here, not only once the scene is laid onto

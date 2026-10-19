@@ -69,15 +69,15 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     """
     Mean number of electrons a detected photon frees in the detector silicon.
 
-    This is the photon energy over the energy per electron-hole pair, which
-    depends on the CCD temperature.
+    This is the photon energy over the detector's `pair_energy`, the energy
+    per electron-hole pair, which depends on the CCD temperature.
 
     Parameters
     ----------
     rest_wavelength : u.Quantity
         Photon wavelength, one value or an array.
     det : Detector_SWC or Detector_EIS
-        Detector, with its `ccd_temperature`.
+        Detector.
 
     Returns
     -------
@@ -86,10 +86,8 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     """
     if not hasattr(det, 'ccd_temperature'):
         raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
-    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
-    w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
-    return np.asarray(photon_energy_ev / w_T, dtype=float)
+    return np.asarray(photon_energy_ev / det.pair_energy.to_value(u.eV), dtype=float)
 
 
 def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
@@ -1166,8 +1164,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
     # Get detector and data properties
     data_shape = electrons.data.shape  # Should be (n_slit, n_scan, n_spectral)
     
-    # Visible light wavelength (typical)
-    visible_wavelength = 600 * u.nm
+    visible_wavelength = sim.pinhole_visible_wavelength
     
     # Initialize additional electron contributions
     additional_electrons = np.zeros_like(electrons.data)
