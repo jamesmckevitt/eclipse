@@ -22,6 +22,7 @@ import astropy.constants as const
 import astropy.units as u
 
 from .band import BandLines
+from .config import Simulation
 from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
                     detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
@@ -487,12 +488,45 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
                            image_dn[:, half:], pieces[3]], axis=1)
 
 
+def _settings_from_simulation(sim: Simulation, given: Dict[str, object]) -> dict:
+    """
+    Slit width, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
+
+    Raises ValueError if any of `given` was also passed to `full_ccd_frame`,
+    or if `sim` asks for an effect the frame does not model.
+    """
+    if not isinstance(sim, Simulation):
+        raise TypeError(f"sim must be a Simulation, got {type(sim).__name__}.")
+    both = [name for name, value in given.items() if value is not None]
+    if both:
+        raise ValueError(f"{', '.join(both)} given both directly and by sim; give each setting "
+                         f"once.")
+    unmodelled = []
+    if sim.instrument.upper() != "SWC":
+        unmodelled.append(f"instrument {sim.instrument!r} (a frame is of SWC)")
+    if sim.psf and sim.psf_boundary != "zero":
+        unmodelled.append(f"psf_boundary {sim.psf_boundary!r} (the frame takes the Sun "
+                          f"beyond the synthesis's edges as dark, psf_boundary 'zero')")
+    if sim.slit_mask:
+        unmodelled.append("slit_mask (the slit's ends and fiducials)")
+    if sim.enable_pinholes:
+        unmodelled.append("enable_pinholes (pinholes in the filter)")
+    if np.any(u.Quantity(sim.vis_sl).value > 0):
+        unmodelled.append("vis_sl (visible stray light)")
+    if unmodelled:
+        raise ValueError(f"The full-CCD frame does not model {'; '.join(unmodelled)}. Change "
+                         f"these settings in sim.")
+    return {"slit_width": sim.slit_width, "psf": sim.psf, "spectral_psf": sim.spectral_psf,
+            "noise": sim.noise}
+
+
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
-                   exposure: u.Quantity, *, slit_width: u.Quantity = 0.2 * u.arcsec,
+                   exposure: u.Quantity, *, slit_width: Optional[u.Quantity] = None,
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
-                   psf: bool = True, spectral_psf: str = "quadrature",
+                   psf: Optional[bool] = None, spectral_psf: Optional[str] = None,
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
-                   noise: bool = True, n_workers: int = 0) -> FullFrame:
+                   noise: Optional[bool] = None, n_workers: int = 0,
+                   sim: Optional[Simulation] = None) -> FullFrame:
     """
     Full-CCD frame of the SW camera from a synthesis and every line in the band.
 
@@ -518,7 +552,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         Default `FocalPlane_SWC.from_detector(det)`.
     psf : bool, optional
         Blur with the telescope's PSF along the slit and in wavelength, and
-        across the slit if the telescope gives that. Default True.
+        across the slit if the telescope gives that. Beyond the synthesis's
+        edges the Sun is taken as dark. Default True.
     spectral_psf : str, optional
         `"quadrature"` (default) or `"convolution"`, as in the configuration.
     continuum : tuple, optional
@@ -534,14 +569,37 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         Number of processes to compute the temperatures with. Default 0 uses
         every CPU this process may use. Where processes cannot be forked, as
         on Windows, one process is used.
+    sim : Simulation, optional
+        Settings to take `slit_width`, `psf`, `spectral_psf` and `noise`
+        from, in place of those arguments. Its `expos`, `n_iter` and `ncpu`
+        are not used. Default None.
 
     Returns
     -------
     FullFrame
+
+    Raises
+    ------
+    ValueError
+        If `sim` is given with any of `slit_width`, `psf`, `spectral_psf` or
+        `noise`, or asks for an effect the frame does not model: an
+        instrument other than SWC, `psf_boundary` `"replicate"` with the PSF
+        on, `slit_mask`, pinholes or visible stray light.
     """
     from . import frame as frame_module
     from .config import Detector_SWC, Telescope_EUVST
 
+    given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
+             "noise": noise}
+    if sim is not None:
+        settings = _settings_from_simulation(sim, given)
+    else:
+        defaults = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+                    "noise": True}
+        settings = {name: defaults[name] if value is None else value
+                    for name, value in given.items()}
+    slit_width, psf = settings["slit_width"], settings["psf"]
+    spectral_psf, noise = settings["spectral_psf"], settings["noise"]
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
     focal_plane = FocalPlane_SWC.from_detector(det) if focal_plane is None else focal_plane

@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, the lines of a band, in `euvst_response.band`, and full-CCD frames, in `euvst_response.full_frame`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, and `IonLines`, which is in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -152,25 +152,29 @@ These are the steps `simulate_once` takes, in order.
 
 A full-CCD frame holds every line in the band, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, and keep them in a file.
 
-::: euvst_response.band.band_contribution_functions
+::: euvst_response.band_contribution_functions
 
-::: euvst_response.band.BandLines
+::: euvst_response.BandLines
 
 ::: euvst_response.band.IonLines
 
-::: euvst_response.band.write_band_lines
+::: euvst_response.write_band_lines
 
-::: euvst_response.band.read_band_lines
+::: euvst_response.read_band_lines
 
 ## Full-CCD frames
 
-A frame of both SW CCDs at one slit position, with every line in the band and the continuum. [A full-CCD frame](full-ccd-frame.md) shows them in use.
+A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how the frame is read out; both are taken from the detector by default. [A full-CCD frame](full-ccd-frame.md) shows them in use.
 
-::: euvst_response.full_frame.full_ccd_frame
+::: euvst_response.full_ccd_frame
 
-::: euvst_response.full_frame.FullFrame
+::: euvst_response.FullFrame
 
-::: euvst_response.full_frame.write_full_frame
+::: euvst_response.write_full_frame
+
+::: euvst_response.FocalPlane_SWC
+
+::: euvst_response.ReadoutSequence
 
 ## Results files
 

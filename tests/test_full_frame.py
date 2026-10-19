@@ -9,7 +9,7 @@ import pytest
 from euvst_response import synthesis
 from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.band import BandLines, IonLines
-from euvst_response.config import Detector_SWC, Telescope_EUVST
+from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.frame import photons_from_lines
 from euvst_response.full_frame import (_density_shares, full_ccd_frame, lay_out_register,
                                        write_full_frame)
@@ -400,3 +400,58 @@ def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthe
     moving = full_ccd_frame(fast_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
     assert at_rest.rate["left"].any()
     assert np.allclose(moving.rate["left"], at_rest.rate["left"], rtol=1e-12, atol=0)
+
+
+def test_a_frame_takes_its_settings_from_a_simulation(uniform_synthesis, blurred_frame):
+    """A `Simulation` with the keyword arguments' values gives the same frame."""
+    products = read_synthesis_products(uniform_synthesis)
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=False)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), sim=sim,
+                           n_workers=1)
+    assert frame.settings == blurred_frame.settings
+    assert frame.slit_width == blurred_frame.slit_width
+    for name in ("rate", "photons", "dn", "wavelength", "photon_wavelength",
+                 "photon_rms_wavelength"):
+        for ccd in ("left", "right"):
+            assert np.array_equal(u.Quantity(getattr(frame, name)[ccd]).value,
+                                  u.Quantity(getattr(blurred_frame, name)[ccd]).value)
+
+
+@pytest.mark.parametrize("settings, message", [
+    ({"psf": True}, "psf_boundary 'replicate'"),
+    ({"psf": True, "psf_boundary": "zero", "slit_mask": True}, "slit_mask"),
+    ({"enable_pinholes": True, "pinhole_sizes": [5 * u.um], "pinhole_positions": [0.5]},
+     "pinholes"),
+    ({"vis_sl": 1e3 * u.photon / (u.s * u.cm**2)}, "visible stray light"),
+    ({"instrument": "EIS", "slit_width": 1 * u.arcsec}, "instrument 'EIS'"),
+])
+def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings, message):
+    """The settings are checked before the synthesis is read, so no file is needed."""
+    with pytest.raises(ValueError, match=message):
+        full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s,
+                       sim=Simulation(**settings))
+
+
+def test_a_frame_refuses_settings_given_both_directly_and_by_a_simulation():
+    sim = Simulation(psf=False)
+    for given in ({"psf": False}, {"slit_width": 0.2 * u.arcsec}, {"noise": True},
+                  {"spectral_psf": "quadrature"}):
+        with pytest.raises(ValueError, match="both directly and by sim"):
+            full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim=sim, **given)
+    with pytest.raises(TypeError, match="must be a Simulation"):
+        full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim={"psf": False})
+
+
+def test_the_frame_api_is_exported_from_the_package():
+    """The package names are the objects in the modules, so the old imports still work."""
+    import euvst_response
+    from euvst_response import band, full_frame, readout
+
+    for module, names in ((full_frame, ("full_ccd_frame", "write_full_frame", "FullFrame")),
+                          (readout, ("FocalPlane_SWC", "ReadoutSequence")),
+                          (band, ("BandLines", "band_contribution_functions", "read_band_lines",
+                                  "write_band_lines"))):
+        for name in names:
+            assert getattr(euvst_response, name) is getattr(module, name)
+            assert name in euvst_response.__all__
