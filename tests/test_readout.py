@@ -831,3 +831,15 @@ def test_the_serial_overscan_trail_with_no_overscan_or_one_column():
                           parallel_overscan_rows=0, cte_serial=0.9)
     trail = expose_serial_overscan(np.full((3, 1), 2.0), 1.0 * u.s, one)
     assert trail.shape == (3, 6) and np.all(trail[:, :3] > 0) and not trail[:, 3:].any()
+
+
+def test_charge_still_in_the_register_after_the_overscan_is_warned_of():
+    """Each row is read from an empty register, so a short overscan with a poor CTE is warned of."""
+    with pytest.warns(UserWarning, match="still in the serial register"):
+        ReadoutSequence(serial_prescan=0, serial_image_pixels=2, serial_overscan=0,
+                        cte_serial=0.9)
+    # The RP-0007 CTE with the camera's 20 overscan samples leaves nothing measurable.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ReadoutSequence(cte_serial=0.99999)
+        ReadoutSequence(cte_serial=0.999)

@@ -419,6 +419,20 @@ class ReadoutSequence:
                     f"{name} is the fraction of a packet's charge one transfer moves, above "
                     f"0 and at most 1, got {value}."
                 )
+        if self.cte_serial < 1:
+            # Each row is read from an empty serial register, so charge the
+            # last image pixel leaves behind past the end of the overscan,
+            # which would be read with the next row, is left out.
+            transfers = self.serial_prescan + self.serial_image_pixels
+            arrived = transfer_probabilities([transfers], self.cte_serial,
+                                             most=self.serial_overscan)[:, 0].sum()
+            if 1 - arrived > _LEFT_IN_REGISTER:
+                warnings.warn(
+                    f"With cte_serial {self.cte_serial} and {self.serial_overscan} serial "
+                    f"overscan samples, {1 - arrived:.1e} of the last image pixel's charge is "
+                    f"still in the serial register when the next row is read. Each row is "
+                    f"read from an empty register, so that charge is left out.", UserWarning,
+                    stacklevel=3)
 
     @property
     def samples_per_row(self) -> int:
@@ -528,6 +542,10 @@ def _warn_of_a_partial_clear(sequence: ReadoutSequence, n_rows: int, what: str) 
 # Largest fraction of a charge that transfer_probabilities leaves out past its
 # last term.
 _TAIL = 1e-15
+
+# Largest fraction of the last image pixel's charge that may still be in the
+# serial register after the overscan without a warning.
+_LEFT_IN_REGISTER = 1e-6
 
 
 def transfer_probabilities(transfers, cte: float, most: int | None = None) -> np.ndarray:
