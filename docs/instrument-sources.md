@@ -13,7 +13,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `telescope.microroughness_sigma` | 0.3 nm | Not recorded |
 | `telescope.pm_table` | packaged table | RSC-2022035A, Sensitivity Budget (13 Dec 2024) |
 | `telescope.grating_table` | packaged table | RSC-2022035A, Sensitivity Budget (13 Dec 2024) |
-| `telescope.psf_params`, through `telescope.field_of_view` | 0.423, 0.195 or 0.161 arcsec along the slit; 43.00 mA in wavelength with the 0.2 arcsec slit | RSC-2022021C (March 2025) |
+| `telescope.psf_params`, through `telescope.field_of_view` | 0.423 arcsec along the slit for the default 280 x 280 arcsec field (0.195 and 0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit | RSC-2022021C (March 2025) |
 | `telescope.resolution_budget` | current best estimate | RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1 |
 | `telescope.pointing_jitter` | 0.110 arcsec | RSC-2022033B rev. B, Table 3-1 row 20 |
 | Slit widths | 0.2, 0.4, 0.8 and 1.6 arcsec | RSC-2022021C |
@@ -39,31 +39,32 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `detector.ccd_temperature` | -60 C | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 5.5.2.1, gives a goal of -50 to -60 C |
 | `detector.qe_euv`, `detector.qe_vis` | 0.76 and 1.0 | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of 0.75 |
 | `detector.read_noise_rms` | 10 electrons | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, predicts 11.0 electrons at most |
-| `detector.gain_e_per_dn` | 2.78 electrons per DN | MSSL engineering model test results; the design value in SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5 |
+| `detector.gain_e_per_dn` | 2.78 electrons per DN | MSSL engineering model test results; SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5, gives the same design value |
 | Dark current at 293 K | 20000 electrons per pixel per second | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement) |
 | Dark current against temperature | the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value below 198 K | MSSL test results |
 | `detector.full_well` | 150000 electrons | Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1 (January 2024) |
 | `detector.filter_distance` | 250 mm | Not recorded |
 | `detector.row_transfer_time` | 15 us | SOLC-EUVST-MSSL-RP-0007 v1.2, Table 5-11 |
 | `detector.pixel_period` | 500 ns | SOLC-EUVST-MSSL-RS-0002 v2.0 |
-| `detector.serial_prescan`, `detector.serial_overscan`, `detector.parallel_overscan_rows` | 50, 20 and 20; scans settable from 0 to 200 | Not recorded for the defaults; SOLC-EUVST-MSSL-RS-0002 v2.0 for the range |
-| `detector.cte_parallel`, `detector.cte_serial` | 1 | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than 0.999993; SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1 gives 0.99999 as typical |
+| `detector.serial_prescan`, `detector.serial_overscan` | 50 and 20; each settable from 0 to 200 | Not recorded for the defaults; SOLC-EUVST-MSSL-RS-0002 v2.0 for the range |
+| `detector.parallel_overscan_rows` | 20 | Not recorded |
+| `detector.cte_parallel`, `detector.cte_serial` | 1, a perfect transfer | Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than 0.999993; SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1 gives 0.99999 as typical |
 
 ## EUVST-SW focal plane
 
-These are used by the [full-CCD frame](full-ccd-frame.md) and are not yet settings in the configuration.
+These describe the focal plane in `FocalPlane_SWC`, which the [full-CCD frame](full-ccd-frame.md) uses. They are not yet settings in the configuration, and the frame does not yet take the slit image tilt.
 
 | Quantity | Value | Source |
 | --- | --- | --- |
-| Wavelength of each row | quadratic in position along the dispersion | Fitted to RSC-2022021C (ver. 20230909): the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
+| Wavelength of each row | quadratic in position along the dispersion | Fitted to RSC-2022021C (cited in the code as ver. 20230909): the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
 | Band reaching the detectors | 170.0 to 212.3 Angstrom | RSC-2022021C REQ-103; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2 |
 | Alignment of the camera to the beam | +/-0.79 Angstrom; no offset by default | SOLC-EUVST-MSSL-RP-0007 v1.2, p45 |
 | Slit image tilt, when asked for | 0.991 and 0.605 rows at 140 arcsec | RSC-2022021C, SW footprint figure |
 | Clear and read-out sequence | dump, exposure, row-by-row read with windows | SOLC-EUVST-MSSL-SP-0001 v1.4, SOLC-EUVST-MSSL-RS-0002 v2.0, SOLC-EUVST-MSSL-ICD-0003 v3.1 |
 
-## Constants in the code
+## Constants and assumptions in the code
 
-These are physical constants set in the code rather than in the configuration.
+These are set in the code rather than in the configuration.
 
 | Quantity | Value | Source |
 | --- | --- | --- |
@@ -80,6 +81,6 @@ These are physical constants set in the code rather than in the configuration.
 | `telescope.psf_params` | 3 pixels FWHM | Ugarte-Urra (2016), EIS Software Note 2 |
 | `detector.qe_euv` | 0.64 | EIS Software Note 2 |
 | `detector.qe_vis` | 0.65 | MSSL engineering test report |
-| Dark current against temperature | the 293 K value times 1.14e6 T^3 exp(-9080/T) | MSSL test results |
+| Dark current against temperature | the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K value below 198 K | MSSL test results |
 | `detector.read_noise_rms`, `detector.gain_e_per_dn`, dark current at 293 K | 5 electrons, 6.3 electrons per DN, 250 electrons per pixel per second | Not recorded |
 | `detector.wvl_res`, `detector.plate_scale_angle` | 22.3 mA per pixel, 1 arcsec per pixel | Not recorded |
