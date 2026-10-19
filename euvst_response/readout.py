@@ -12,6 +12,11 @@ read-out, in which rows outside the read-out windows are dumped
 charge packet also collects light from every row it crosses on its way to
 the register (:func:`smear_photons`).
 
+Each transfer leaves a fraction 1 - CTE of a packet's charge to the packet
+behind it, along the columns (`cte_parallel`) and along the serial register
+(`cte_serial`); :func:`transfer_probabilities` gives where the charge ends
+up.
+
 Sources
 -------
 RSC-2022021C   SOLAR-C EUVST Optical Design Summary (ver.20230909): focal plane
@@ -25,13 +30,14 @@ SOLC-EUVST-MSSL-ICD-0003 v3.1: the same sequence at the FEE to SEB interface.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Sequence, Tuple
 
 import astropy.units as u
 import numpy as np
 from scipy.optimize import brentq
 from scipy.signal import fftconvolve
+from scipy.special import gammaln
 
 from .config import Detector_SWC
 
@@ -342,6 +348,10 @@ class ReadoutSequence:
     windows : list of tuple of int
         Inclusive row ranges that are read out. An empty list reads every
         row, the slowest case.
+    cte_parallel, cte_serial : float
+        Charge transfer efficiency of one row transfer and of one transfer
+        along the serial register: the fraction of a packet's charge that
+        moves, the rest joining the packet behind. 1 is a perfect transfer.
     """
 
     shutter: bool = Detector_SWC.shutter
@@ -353,6 +363,8 @@ class ReadoutSequence:
     parallel_overscan_rows: int = Detector_SWC.parallel_overscan_rows
     dump_rows: int = Detector_SWC.n_rows
     windows: List[Tuple[int, int]] = field(default_factory=list)
+    cte_parallel: float = Detector_SWC.cte_parallel
+    cte_serial: float = Detector_SWC.cte_serial
 
     @classmethod
     def from_detector(cls, det: Detector_SWC, *, windows: Sequence[Tuple[int, int]] = (),
@@ -364,7 +376,8 @@ class ReadoutSequence:
         Parameters
         ----------
         det : Detector_SWC
-            Camera, whose shutter, timing and register layout are used.
+            Camera, whose shutter, timing, register layout and charge
+            transfer efficiencies are used.
         windows : sequence of tuple of int, optional
             Row ranges read out, as for the constructor. Default every row.
         dump_rows : int, optional
@@ -380,7 +393,8 @@ class ReadoutSequence:
                    serial_overscan=det.serial_overscan,
                    parallel_overscan_rows=det.parallel_overscan_rows,
                    dump_rows=det.n_rows if dump_rows is None else dump_rows,
-                   windows=list(windows))
+                   windows=list(windows), cte_parallel=det.cte_parallel,
+                   cte_serial=det.cte_serial)
 
     def __post_init__(self):
         for first, last in self.windows:
@@ -398,6 +412,27 @@ class ReadoutSequence:
                 f"parallel_overscan_rows cannot be negative, got "
                 f"{self.parallel_overscan_rows}."
             )
+        for name in ("cte_parallel", "cte_serial"):
+            value = getattr(self, name)
+            if not 0 < value <= 1:
+                raise ValueError(
+                    f"{name} is the fraction of a packet's charge one transfer moves, above "
+                    f"0 and at most 1, got {value}."
+                )
+        if self.cte_serial < 1:
+            # Each row is read from an empty serial register, so charge the
+            # last image pixel leaves behind past the end of the overscan,
+            # which would be read with the next row, is left out.
+            transfers = self.serial_prescan + self.serial_image_pixels
+            arrived = transfer_probabilities([transfers], self.cte_serial,
+                                             most=self.serial_overscan)[:, 0].sum()
+            if 1 - arrived > _LEFT_IN_REGISTER:
+                warnings.warn(
+                    f"With cte_serial {self.cte_serial} and {self.serial_overscan} serial "
+                    f"overscan samples, {1 - arrived:.1e} of the last image pixel's charge is "
+                    f"still in the serial register when the next row is read. Each row is "
+                    f"read from an empty register, so that charge is left out.", UserWarning,
+                    stacklevel=3)
 
     @property
     def samples_per_row(self) -> int:
@@ -504,6 +539,223 @@ def _warn_of_a_partial_clear(sequence: ReadoutSequence, n_rows: int, what: str) 
             f"starts from an empty chip and leaves that charge out.", UserWarning, stacklevel=3)
 
 
+# Largest fraction of a charge that transfer_probabilities leaves out past its
+# last term.
+_TAIL = 1e-15
+
+# Largest fraction of the last image pixel's charge that may still be in the
+# serial register after the overscan without a warning.
+_LEFT_IN_REGISTER = 1e-6
+
+
+def transfer_probabilities(transfers, cte: float, most: int | None = None) -> np.ndarray:
+    """
+    Fraction of a charge arriving 0, 1, 2, ... packets late after its transfers.
+
+    Each transfer moves a fraction `cte` of a packet's charge and leaves the
+    rest in the well it vacated, where the packet behind picks it up. Every
+    electron is left behind independently, so charge with `m` transfers to
+    go arrives `k` packets late with the negative binomial probability
+    `C(m - 1 + k, k) * cte**m * (1 - cte)**k`: it moves `m` times and is
+    held back `k` times, each time joining a packet with one more transfer
+    to go.
+
+    Parameters
+    ----------
+    transfers : array_like of int
+        Transfers each charge has to go, 1 or more.
+    cte : float
+        Fraction of a packet's charge one transfer moves, above 0 and at
+        most 1.
+    most : int, optional
+        Latest arrival wanted; later charge would leave the frame anyway.
+        Default no limit.
+
+    Returns
+    -------
+    np.ndarray
+        Shape `(n_terms, *transfers.shape)`; element `[k, ...]` is the
+        fraction arriving `k` packets late. Terms run until less than 1e-15
+        of every charge is left over, or to `most`. A perfect transfer gives
+        one term of ones.
+
+    Raises
+    ------
+    ValueError
+        If a transfer count is not finite, a charge has no transfer to go,
+        or `cte` is not above 0 and at most 1.
+    """
+    m = np.asarray(transfers, dtype=float)
+    if not np.all(np.isfinite(m)):
+        raise ValueError("Transfers must be finite.")
+    if np.any(m < 1):
+        raise ValueError("A charge has at least one transfer to go.")
+    if not 0 < cte <= 1:
+        raise ValueError(f"cte is a fraction above 0 and at most 1, got {cte}.")
+    if cte == 1:
+        return np.ones((1,) + m.shape)
+    log_kept, log_left = np.log(cte), np.log1p(-cte)
+    terms = []
+    k = 0
+    while True:
+        terms.append(np.exp(gammaln(m + k) - gammaln(k + 1) - gammaln(m)
+                            + m * log_kept + k * log_left))
+        # Past the most likely arrival each term is at most `ratio` times the
+        # last, so the rest is bounded by a geometric series.
+        ratio = (m + k) / (k + 1) * (1.0 - cte)
+        with np.errstate(divide="ignore"):
+            left = np.where(ratio < 1, terms[-1] * ratio / (1.0 - ratio), np.inf)
+        if np.all(left < _TAIL) or (most is not None and k >= most):
+            return np.array(terms)
+        k += 1
+
+
+def _check_rate(rate: np.ndarray) -> np.ndarray:
+    rate = np.asarray(rate, dtype=float)
+    if rate.ndim != 2:
+        raise ValueError(
+            f"rate is one CCD's pixels, shaped (n_rows, n_columns), got shape "
+            f"{rate.shape}."
+        )
+    return rate
+
+
+def _cleared(rate: np.ndarray, sequence: ReadoutSequence, packets: np.ndarray) -> np.ndarray:
+    """
+    Charge each of `packets` collects while the image area is cleared, in
+    units of `rate` times seconds.
+
+    The packet that ends the clear at row `r` came down from row
+    `r + dump_rows`, collecting one row transfer at each of rows `r + 1` to
+    `r + dump_rows`. Rows above the image area are empty. A packet with `r`
+    below zero went into the dump drain before the clear ended.
+    """
+    n_rows = rate.shape[0]
+    cleared = np.zeros((packets.size, rate.shape[1]))
+    if not sequence.dump_rows:
+        return cleared
+    above = np.zeros((n_rows + 1, rate.shape[1]))
+    above[:-1] = np.cumsum(rate[::-1], axis=0)[::-1]
+    first = np.clip(packets + 1, 0, n_rows)
+    last = np.clip(packets + sequence.dump_rows + 1, 0, n_rows)
+    some = first < last
+    cleared[some] = ((above[first[some]] - above[last[some]])
+                     * sequence.row_transfer_time.to_value(u.s))
+    return cleared
+
+
+def _along_columns(rate: np.ndarray, exposure, sequence: ReadoutSequence,
+                   power: int = 1) -> np.ndarray:
+    """
+    Charge each packet of a frame brings to the serial register.
+
+    `rate` is any quantity each pixel's light adds per second. It is
+    collected during the exposure, unless `exposure` is None, and without a
+    shutter also while the image area is cleared and read. Without a
+    shutter, the packet read out of row `r` adds
+    `sum_k rate[r - k] * dwell[k - 1]` over `k >= 1` during the read-out,
+    and :func:`_cleared` during the clear. Each addition, made at row `x`,
+    has `x + 1` row transfers to go and is shared among the packets by
+    :func:`transfer_probabilities`, with the probabilities raised to
+    `power`. Packets dumped during the clear also leave charge behind, which
+    arrives in the first rows read.
+    """
+    n_rows, n_columns = rate.shape
+    total_rows = n_rows + sequence.parallel_overscan_rows
+    lit = not sequence.shutter
+    # A packet dumped during the clear can start up to dump_rows rows before
+    # the first one read, so its charge can arrive that much later.
+    latest = total_rows - 1 + (sequence.dump_rows if lit else 0)
+    probability = transfer_probabilities(np.arange(1, n_rows + 1), sequence.cte_parallel,
+                                         most=latest) ** power
+    if lit:
+        kernel = np.concatenate([[0.0], sequence.dwell(n_rows)])
+        # The FFT leaves rounding noise, of order 1e-16 of the brightest row, in
+        # packets no light reached, which would give them a mean photon energy
+        # made of noise. Zero the packets whose path crossed no lit pixel,
+        # found by convolving a count of lit pixels, which is good to far
+        # better than a half.
+        crossed = fftconvolve((rate > 0).astype(float),
+                              (kernel > 0).astype(float)[:, np.newaxis],
+                              mode="full", axes=0)[:total_rows]
+    arrived = np.zeros((total_rows, n_columns))
+    for k, weight in enumerate(probability):
+        weighted = rate * weight[:, np.newaxis]
+        # Indexed by arrival, k packets after collection, so the first k rows
+        # come from packets dumped during the clear.
+        packets = np.zeros((total_rows, n_columns))
+        if lit:
+            if k < total_rows:
+                # Read-out. The packet leaving row r is at row r - j while image
+                # row j - 1 is in the register, so the smear is the rate
+                # convolved with the dwell times. The parallel overscan rows are
+                # the terms past the last image row.
+                reading = fftconvolve(weighted, kernel[:, np.newaxis], mode="full",
+                                      axes=0)[:total_rows]
+                reading[crossed < 0.5] = 0.0
+                packets[k:] += reading[:total_rows - k]
+            packets += _cleared(weighted, sequence, np.arange(total_rows) - k)
+            # The sum cannot be negative, but the FFT convolution leaves rounding
+            # noise of order 1e-20 where it is zero, which would reach the
+            # Poisson draw downstream as a negative mean.
+            np.maximum(packets, 0.0, out=packets)
+        if exposure is not None and k < total_rows:
+            # Exposure. Image row r's charge arrives in packet r + k, in the
+            # parallel overscan for the last rows.
+            end = min(n_rows + k, total_rows)
+            packets[k:end] += (weighted * u.Quantity(exposure).to_value(u.s))[:end - k]
+        arrived += packets
+    return arrived
+
+
+def _along_register(frame: np.ndarray, sequence: ReadoutSequence, power: int = 1,
+                    overscan: int = 0):
+    """
+    Charge each pixel of a frame brings to its output along the serial
+    register, with the arrival probabilities raised to `power`.
+
+    Each half of the register is read from its outer end. A pixel `j` image
+    pixels from the outer end of its half has `serial_prescan + j + 1`
+    transfers to go. What it leaves behind arrives in the pixels read after
+    it, toward the middle of the register, and past the last image pixel
+    goes into the overscan. With `overscan` above zero, the charge reaching
+    the first `overscan` overscan samples of each half is returned too,
+    shaped `(rows, 2 * overscan)` and laid out across the CCD: the left
+    output's samples in the order read, then the right output's in reverse,
+    so that each half's first sample sits next to its image pixels.
+    """
+    n_columns = frame.shape[1]
+    if sequence.cte_serial == 1:
+        trail = np.zeros((frame.shape[0], 2 * overscan))
+        return (frame, trail) if overscan else frame
+    half = sequence.serial_image_pixels
+    if n_columns not in (2 * half, 2 * half - 1):
+        raise ValueError(
+            f"A transfer along the serial register needs the frame's every column, "
+            f"{2 * half} for two halves of {half}, to know how far each is from its "
+            f"output; got {n_columns}."
+        )
+    arrived = np.zeros_like(frame)
+    trails = []
+    # Each half in the order its output reads it: the first from column 0, the
+    # second from the last column.
+    for columns in (np.arange(half), np.arange(n_columns - 1, half - 1, -1)):
+        charge = frame[:, columns]
+        size = columns.size
+        probability = transfer_probabilities(sequence.serial_prescan + 1 + np.arange(size),
+                                             sequence.cte_serial, most=size + overscan) ** power
+        # Samples in the order read: the image pixels, then the overscan.
+        reached = np.zeros((frame.shape[0], size + overscan))
+        for k, weight in enumerate(probability[:size + overscan]):
+            n = min(size, size + overscan - k)
+            reached[:, k:k + n] += (charge * weight)[:, :n]
+        arrived[:, columns] = reached[:, :size]
+        trails.append(reached[:, size:])
+    if not overscan:
+        return arrived
+    return arrived, np.concatenate([trails[0], trails[1][:, ::-1]], axis=1)
+
+
 def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
     """
     Photons a shutterless frame collects outside its exposure.
@@ -515,11 +767,17 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
     times the rows above it, since the packet that ends at row `r` was
     clocked down from `r + dump_rows`.
 
+    With a transfer efficiency below 1, part of what each packet collects
+    arrives in the packets after it (:func:`transfer_probabilities`), along
+    the columns and then along the serial register.
+
     Parameters
     ----------
     rate : np.ndarray
         Photons per second reaching each pixel of one CCD, shaped
-        `(n_rows, n_columns)` with row 0 at the serial register.
+        `(n_rows, n_columns)` with row 0 at the serial register. With
+        `cte_serial` below 1, `n_columns` must be the whole CCD's, so that
+        each column's distance from its output is known.
     sequence : ReadoutSequence
         Clocking. With `shutter` True this returns zeros.
 
@@ -530,47 +788,13 @@ def smear_photons(rate: np.ndarray, sequence: ReadoutSequence) -> np.ndarray:
         `(n_rows + parallel_overscan_rows, n_columns)`. The extra rows are
         the parallel overscan, which sees only smear.
     """
-    rate = np.asarray(rate, dtype=float)
-    if rate.ndim != 2:
-        raise ValueError(
-            f"rate is one CCD's pixels, shaped (n_rows, n_columns), got shape "
-            f"{rate.shape}."
-        )
+    rate = _check_rate(rate)
     n_rows, _ = rate.shape
     total_rows = n_rows + sequence.parallel_overscan_rows
     if sequence.shutter:
         return np.zeros((total_rows, rate.shape[1]))
     _warn_of_a_partial_clear(sequence, n_rows, "smear")
-
-    # Read-out. The packet leaving row r is at row r - k while image row k - 1
-    # is in the register, so the smear is the rate convolved with the dwell
-    # times. The parallel overscan rows are the terms past the last image row.
-    kernel = np.concatenate([[0.0], sequence.dwell(n_rows)])
-    smear = fftconvolve(rate, kernel[:, np.newaxis], mode="full", axes=0)[:total_rows]
-    # The FFT leaves rounding noise, of order 1e-16 of the brightest row, in
-    # packets no light reached, which would give them a mean photon energy
-    # made of noise. Zero the packets whose path crossed no lit pixel, found
-    # by convolving a count of lit pixels, which is good to far better than
-    # a half.
-    crossed = fftconvolve((rate > 0).astype(float), (kernel > 0).astype(float)[:, np.newaxis],
-                          mode="full", axes=0)[:total_rows]
-    smear[crossed < 0.5] = 0.0
-
-    # Clearing the image area. The packet that ends the clear at row r came
-    # down from row r + dump_rows, collecting light for one row transfer at
-    # each row on the way. Rows above the image area are empty, so the sum
-    # stops there.
-    if sequence.dump_rows:
-        above = np.zeros((n_rows + 1, rate.shape[1]))
-        above[:-1] = np.cumsum(rate[::-1], axis=0)[::-1]
-        first = np.arange(1, n_rows + 1)
-        last = np.minimum(np.arange(n_rows) + sequence.dump_rows + 1, n_rows)
-        smear[:n_rows] += (above[first] - above[last]) * sequence.row_transfer_time.to_value(u.s)
-
-    # The sum cannot be negative, but the FFT convolution leaves rounding noise
-    # of order 1e-20 where it is zero, which would reach the Poisson draw
-    # downstream as a negative mean.
-    return np.maximum(smear, 0.0)
+    return _along_register(_along_columns(rate, None, sequence), sequence)
 
 
 def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) -> np.ndarray:
@@ -598,11 +822,136 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
         :func:`euvst_response.frame.detect` with those wavelengths and
         :func:`dark_current_time`. For the frame's mean, pass the means
         instead, with `noise=False`.
+
+        With a transfer efficiency below 1, these are the mean photons whose
+        charge arrives in each pixel. The transfer itself is not drawn, so a
+        frame drawn from them has the right mean, but its noise leaves out
+        the spread of the charge left behind; :func:`expose_variance`
+        includes it.
     """
-    rate = np.asarray(rate, dtype=float)
-    signal = smear_photons(rate, sequence)
-    signal[:rate.shape[0]] += rate * u.Quantity(exposure).to_value(u.s)
-    return signal
+    rate = _check_rate(rate)
+    if not sequence.shutter:
+        _warn_of_a_partial_clear(sequence, rate.shape[0], "smear")
+    return _along_register(_along_columns(rate, exposure, sequence), sequence)
+
+
+def expose_serial_overscan(rate: np.ndarray, exposure: u.Quantity,
+                           sequence: ReadoutSequence) -> np.ndarray:
+    """
+    Photons whose charge the serial register carries past the image into the overscan.
+
+    With `cte_serial` below 1, each pixel leaves charge behind at every
+    transfer along the register, and that charge arrives in the samples read
+    after it. For the last image pixels of each half these are the serial
+    overscan samples. The register's own dark current is not included, and
+    the image's dark charge is in :func:`serial_dark_shares`.
+
+    Parameters
+    ----------
+    rate, exposure, sequence
+        As for :func:`expose`. `rate` must have the whole CCD's columns.
+
+    Returns
+    -------
+    np.ndarray
+        Mean photons in each serial overscan sample, shaped
+        `(n_rows + parallel_overscan_rows, 2 * serial_overscan)`: the left
+        output's samples in the order read, then the right output's in
+        reverse, as they sit across the CCD. Zeros with `cte_serial` 1.
+    """
+    rate = _check_rate(rate)
+    n_out = (rate.shape[0] + sequence.parallel_overscan_rows, 2 * sequence.serial_overscan)
+    if sequence.cte_serial == 1 or sequence.serial_overscan == 0:
+        return np.zeros(n_out)
+    return _along_register(_along_columns(rate, exposure, sequence), sequence,
+                           overscan=sequence.serial_overscan)[1]
+
+
+def serial_dark_shares(sequence: ReadoutSequence, n_columns: int) -> tuple:
+    """
+    Share of a row's dark charge per pixel that each sample receives along the register.
+
+    Dark current is the same in every column of a row, so with `cte_serial`
+    below 1 each sample gets the row's dark charge per pixel times a share
+    that is the same for every row. Most image pixels get 1. The first
+    pixels each output reads get a little less, as their charge left behind
+    is not made up by pixels read before them, and the serial overscan
+    samples get the charge left behind by the last image pixels.
+
+    Parameters
+    ----------
+    sequence : ReadoutSequence
+        Clocking.
+    n_columns : int
+        Columns of the whole CCD.
+
+    Returns
+    -------
+    image : np.ndarray
+        Share for each image column, `(n_columns,)`.
+    overscan : np.ndarray
+        Share for each serial overscan sample, `(2 * serial_overscan,)`, laid
+        out as from :func:`expose_serial_overscan`. Ones and zeros with
+        `cte_serial` 1.
+    """
+    ones = np.ones((1, n_columns))
+    if not sequence.serial_overscan:
+        return _along_register(ones, sequence)[0], np.zeros(0)
+    image, overscan = _along_register(ones, sequence, overscan=sequence.serial_overscan)
+    return image[0], overscan[0]
+
+
+def expose_variance(variance_rate: np.ndarray, mean_rate: np.ndarray, exposure: u.Quantity,
+                    sequence: ReadoutSequence) -> np.ndarray:
+    """
+    Variance of the charge in each pixel of a frame, exposure and smear
+    together.
+
+    Every electron is left behind independently at each transfer, so a
+    pixel receiving a fraction `P` of a charge `Q` gets a variance of
+    `P**2 * var(Q) + P * (1 - P) * mean(Q)`. Summed over the frame, with `P`
+    from :func:`transfer_probabilities`, this is the transfer of
+    `variance_rate - mean_rate` weighted by `P**2` plus that of `mean_rate`
+    weighted by `P`. With a perfect transfer it equals :func:`expose` of
+    `variance_rate`.
+
+    Parameters
+    ----------
+    variance_rate, mean_rate : np.ndarray
+        Variance (electrons^2) and mean (electrons) of the charge each
+        pixel's light frees per second, `(n_rows, n_columns)`. The variance
+        is at least the mean, as for charge freed by whole photons.
+    exposure, sequence
+        As for :func:`expose`.
+
+    Returns
+    -------
+    np.ndarray
+        Variance in electrons^2, shape
+        `(n_rows + parallel_overscan_rows, n_columns)`.
+
+    Raises
+    ------
+    ValueError
+        If the two rates differ in shape, or the variance is below the mean
+        in any pixel.
+    """
+    variance_rate, mean_rate = _check_rate(variance_rate), _check_rate(mean_rate)
+    if variance_rate.shape != mean_rate.shape:
+        raise ValueError(
+            f"variance_rate and mean_rate describe the same pixels, got shapes "
+            f"{variance_rate.shape} and {mean_rate.shape}."
+        )
+    excess = variance_rate - mean_rate
+    if np.any(excess < -1e-12 * np.abs(variance_rate).max()):
+        raise ValueError("variance_rate must be at least mean_rate in every pixel.")
+    if sequence.cte_parallel == 1 and sequence.cte_serial == 1:
+        return expose(variance_rate, exposure, sequence)
+    if not sequence.shutter:
+        _warn_of_a_partial_clear(sequence, variance_rate.shape[0], "smear")
+    return (_along_register(_along_columns(np.maximum(excess, 0.0), exposure, sequence, 2),
+                            sequence, 2)
+            + _along_register(_along_columns(mean_rate, exposure, sequence), sequence))
 
 
 def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
@@ -618,8 +967,17 @@ def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
     A parallel overscan packet only crosses the image area during the
     read-out. None of this needs light, so it is the same with a shutter as
     without one. The serial register's own dark current is not included.
+
+    With `cte_parallel` below 1, dark charge is left behind and picked up
+    like any other, so this is the time each packet's dark charge is worth,
+    weighted as :func:`expose` weights light. Along the serial register,
+    :func:`serial_dark_shares` gives the share of a row's dark charge each
+    sample receives.
     """
     _warn_of_a_partial_clear(sequence, n_rows, "dark current")
+    if sequence.cte_parallel != 1:
+        unlit = replace(sequence, shutter=False)
+        return _along_columns(np.ones((n_rows, 1)), exposure, unlit)[:, 0] * u.s
     dwell = sequence.dwell(n_rows)
     packets = np.arange(n_rows + sequence.parallel_overscan_rows)
     image = packets < n_rows
