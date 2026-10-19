@@ -293,13 +293,15 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     Starting amplitude ratio of a component held fainter than its parent.
 
     The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres. The guess itself starts every component but the
-    primary at the same fraction of the primary, so two components held one
-    below the other would start equal, at the bound, and a primary held
-    below another would start above it. If the spectrum makes the child the
+    two guessed centres. The guess itself starts tied components at the same
+    fraction of the peak, so two of them held one below the other would
+    start equal, at the bound. If the spectrum makes the child the
     brighter, `_GUESS_FRACTION` is used, strictly inside the bounds. `child`
     and `parent` index the amplitudes in the full `guess`.
     """
+    if len(wv) > 1 and wv[0] > wv[-1]:
+        wv, prof = wv[::-1], prof[::-1]
+
     def level(index):
         return float(np.interp(guess[index + 1], wv, prof - guess[-1]))
 
@@ -331,6 +333,43 @@ def _in_dependency_order(fainter_than: dict) -> list:
 #  Single-component helpers
 # ---------------------------------------------------------------------------
 
+def _half_max_fwhm(wv: np.ndarray, height: np.ndarray, peak_idx: int) -> float:
+    """
+    Full width at half maximum of the feature at `peak_idx`.
+
+    The feature is the run of pixels around `peak_idx` at or above half its
+    height, so other features and noise elsewhere in the window are left
+    out. Every pixel of the run is a pixel wide, ends included, so the width
+    is the run's span plus one pixel. NaN pixels end the run.
+
+    Parameters
+    ----------
+    wv : np.ndarray
+        Wavelength of each pixel, increasing or decreasing.
+    height : np.ndarray
+        Spectrum above its background, same shape as `wv`.
+    peak_idx : int
+        Index of the feature's peak.
+
+    Returns
+    -------
+    float
+        Width in the units of `wv`, zero or more; zero if the peak is not
+        above zero.
+    """
+    peak = height[peak_idx]
+    if not peak > 0:
+        return 0.0
+    above = height >= 0.5 * peak
+    lo = hi = peak_idx
+    while lo > 0 and above[lo - 1]:
+        lo -= 1
+    while hi < len(above) - 1 and above[hi + 1]:
+        hi += 1
+    step = abs(float(np.median(np.diff(wv)))) if len(wv) > 1 else 0.0
+    return abs(float(wv[hi] - wv[lo])) + step
+
+
 def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     """
     Starting peak, centre, width and background for a Gaussian fit.
@@ -353,20 +392,9 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     peak_idx = int(np.nanargmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
     centre = wv[peak_idx]
-    if smooth[peak_idx] <= 0:
-        sigma = (wv.max() - wv.min()) / 10
-    else:
-        above = smooth >= 0.5 * smooth[peak_idx]
-        lo = hi = peak_idx
-        while lo > 0 and above[lo - 1]:
-            lo -= 1
-        while hi < len(above) - 1 and above[hi + 1]:
-            hi += 1
-        # Every pixel of the run is a pixel wide, ends included, so add one step.
-        step = abs(float(np.median(np.diff(wv)))) if len(wv) > 1 else 0.0
-        fwhm = abs(float(wv[hi] - wv[lo])) + step
-        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
-                 else (wv.max() - wv.min()) / 10)
+    fwhm = _half_max_fwhm(wv, smooth, peak_idx)
+    sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+             else (wv.max() - wv.min()) / 10)
     return [peak, centre, sigma, back]
 
 
@@ -848,41 +876,23 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
 
 def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
                         fit_config: FitConfig) -> np.ndarray:
-    """Initial guess for the full parameter vector."""
-    back = float(prof.min())
-    prof_c = prof - back
+    """
+    Initial guess for the full parameter vector.
+
+    NaN pixels count as background. A spectrum with no finite pixel starts
+    at zero peak and background.
+    """
+    wv = np.asarray(wv, dtype=float)
+    prof = np.asarray(prof, dtype=float)
+    if len(wv) > 1 and wv[0] > wv[-1]:
+        # The comb search below interpolates, which needs increasing wavelengths.
+        wv, prof = wv[::-1], prof[::-1]
+    finite = np.isfinite(prof)
+    back = float(prof[finite].min()) if finite.any() else 0.0
+    prof_c = np.where(finite, prof - back, 0.0)
     prof_c[prof_c < 0] = 0
 
     peak = float(prof_c.max())
-    if peak == 0:
-        sigma = (wv.max() - wv.min()) / 10
-    else:
-        # Width of the feature containing the peak, not of everything above
-        # half maximum.
-        #
-        # In a blend, the first and last pixels above half maximum span the
-        # whole blend, not one line. Every component then starts several
-        # pixels wide, and the fit can settle there: on a seven-component EIS
-        # window the widths came out at 89 mA and 16 mA either side of a 28 mA
-        # instrumental floor, with a residual 45 percent of the peak and the
-        # requested line fitted at effectively zero. Walking out from the peak
-        # to half maximum measures the peak feature alone, and for a single
-        # line it matches the first and last pixels.
-        half_max = 0.5 * peak
-        above = prof_c >= half_max
-        peak_idx = int(np.nanargmax(prof_c))
-        lo = hi = peak_idx
-        while lo > 0 and above[lo - 1]:
-            lo -= 1
-        while hi < len(above) - 1 and above[hi + 1]:
-            hi += 1
-        if hi > lo:
-            sigma = (wv[hi] - wv[lo]) / (2 * np.sqrt(2 * np.log(2)))
-        else:
-            # Unresolved: the feature is one pixel wide, so take that as an
-            # upper bound on the width rather than a tenth of the window.
-            sigma = float(np.median(np.diff(wv))) if len(wv) > 1 else \
-                (wv.max() - wv.min()) / 10
 
     # Estimate one shift of the primary centre, and start every other centre
     # at its rest wavelength scaled by the same factor, as the tie enforces.
@@ -940,18 +950,69 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             # The comb is wider than the window, so no shift keeps all of it
             # inside. Fall back to the brightest pixel and the component
             # nearest to it, read as a Doppler factor.
-            peak_wl = float(wv[np.nanargmax(prof_c)])
+            peak_wl = float(wv[np.argmax(prof_c)])
             nearest = float(rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
             shift = ref_wl * (peak_wl / nearest - 1.0)
     else:
         shift = 0.0
 
     doppler = (ref_wl + shift) / ref_wl
+    centres = rest_wl * doppler
+    levels = np.interp(centres, wv, prof_c, left=0.0, right=0.0)
+
+    if peak == 0:
+        sigma = (wv.max() - wv.min()) / 10
+    else:
+        # Width of the feature containing the peak, not of everything above
+        # half maximum.
+        #
+        # In a blend, the first and last pixels above half maximum span the
+        # whole blend, not one line. Every component then starts several
+        # pixels wide, and the fit can settle there: on a seven-component EIS
+        # window the widths came out at 89 mA and 16 mA either side of a 28 mA
+        # instrumental floor, with a residual 45 percent of the peak and the
+        # requested line fitted at effectively zero. Walking out from the peak
+        # to half maximum measures the peak feature alone, and for a single
+        # line it matches the first and last pixels. The walk also stops
+        # halfway to the next component's centre either side, as the wings of
+        # two close lines can hold the spectrum between them above half
+        # maximum.
+        peak_idx = int(np.argmax(prof_c))
+        own = centres[np.argmin(np.abs(centres - wv[peak_idx]))]
+        lower, upper = centres[centres < own], centres[centres > own]
+        inside = np.ones(wv.size, dtype=bool)
+        if lower.size:
+            inside &= wv >= 0.5 * (own + lower.max())
+        if upper.size:
+            inside &= wv <= 0.5 * (own + upper.min())
+        inside[peak_idx] = True
+        fwhm = _half_max_fwhm(wv, np.where(inside, prof_c, 0.0), peak_idx)
+        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+                 else (wv.max() - wv.min()) / 10)
+
+    # The primary, and every component whose centre is free, starts at the
+    # height of the spectrum at its guessed centre, as the peak pixel need
+    # not be the primary's. It starts at no less than a fixed fraction of
+    # the peak, so a line that is not there can still grow. Other components
+    # start at that fraction. A component whose centre is tied could
+    # otherwise take over the primary's line with the whole comb one spacing
+    # off, which fits a noisy close blend such as Fe XII 195.119 and 195.179
+    # about as well. A second component at the same centre would otherwise
+    # start identical to the first, and the two would stay identical.
+    order = [fit_config.primary_component] + [
+        i for i in range(fit_config.n_components) if i != fit_config.primary_component]
+    from_level: list = []
     full_guess = np.zeros(fit_config.n_full_params)
-    for i, comp in enumerate(fit_config.components):
+    for i in order:
         base = 3 * i
-        full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
-        full_guess[base + 1] = rest_wl[i] * doppler
+        free = (i == fit_config.primary_component
+                or fit_config.components[i].tie_center is None)
+        if free and not any(np.isclose(centres[i], c, rtol=1e-12, atol=0) for c in from_level):
+            full_guess[base] = max(levels[i], _GUESS_FRACTION * peak)
+            from_level.append(centres[i])
+        else:
+            full_guess[base] = _GUESS_FRACTION * peak
+        full_guess[base + 1] = centres[i]
         full_guess[base + 2] = sigma
     full_guess[-1] = back
     return full_guess
