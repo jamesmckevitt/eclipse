@@ -65,6 +65,8 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `serial_prescan` | The samples each output digitises before the image pixels of a row it reads | `50` | - |
 | `serial_overscan` | The samples each output digitises after them | `20` | - |
 | `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
+| `cte_parallel` | The charge transfer efficiency of a row transfer: the fraction of a packet's charge that moves with it. A run does not model the read-out, so a value below 1 is refused. | `1` | - |
+| `cte_serial` | The same for a transfer along the serial register | `1` | - |
 
 ## telescope
 
@@ -73,9 +75,12 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `D_ap` | The aperture's diameter. Half of its area feeds the SW channel. | `0.28 m` | - |
 | `microroughness_sigma` | The RMS roughness of the primary mirror | `0.3 nm` | - |
 | `psf_type` | The shape of the PSF; only `gaussian` is modelled | `gaussian` | `gaussian` |
-| `psf_params` | The PSF's FWHMs in pixels, along the slit and in wavelength. This is one value, not a sweep. | `[2.66 pix, 2.54 pix]` | `[3 pix, 3 pix]` |
+| `psf_params` | The FWHMs in pixels of the optical design's PSF, along the slit and in wavelength. This is one value, not a sweep. | from `field_of_view` | `[3 pix, 3 pix]` |
+| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [what the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of). | `280x280` | - |
+| `resolution_budget` | The blur added to the optical design's from the resolution budget: `current_estimate`, `allocation` or `none` | `current_estimate` | - |
+| `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
 | `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
-| `psf_across_slit` | The FWHM of the telescope's blur across the slit, which brings in light from either side of it. Without it there is none. | none | none |
+| `psf_across_slit` | The FWHM of the telescope optics' blur across the slit, which brings in light from either side of it. For SWC the resolution budget's blur before the slit is added to it. | none | none |
 | `slit_length` | The length of the slits | `300 arcsec` | - |
 | `fiducial_centres` | Where the middle of each fiducial is along the slit, from its centre. This is one value, not a sweep. | `[-25 arcsec, 70 arcsec]` | - |
 | `fiducial_lengths` | The length of the fiducials of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that order. This is one value, not a sweep. | `[0.8 arcsec, 0.8 arcsec, 0.8 arcsec, 1.6 arcsec]` | - |

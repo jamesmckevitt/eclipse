@@ -23,7 +23,7 @@ The results are written to `run/result/<config name>.h5`, named after the config
 
 The configuration file is YAML. Most settings go in four sections, `simulation`, `detector`, `telescope` and `filter`, and any field of the matching class in `config.py` can be set there. **In these four sections, a setting given as a list of more than one value is swept**: ECLIPSE runs every combination of the swept values. A list of one value is just that value.
 
-There are two exceptions: `telescope.psf_params`, which is a list itself, and `telescope.psf_slit_width`, the slit it was measured with. Each always takes one value, never a sweep.
+There are two exceptions: `telescope.psf_params`, which is a list itself, and `telescope.psf_slit_width`, the slit it was measured with. Each always takes one value, never a sweep. `telescope.field_of_view` and `telescope.resolution_budget` can be swept.
 
 At the top level, only `offchip_bin_slit` is swept this way. The other lists there, such as the pinhole lists and a time series' files, are lists of things rather than sweeps, as are the fitting components.
 
@@ -85,9 +85,43 @@ For recommended values, see [McKevitt et al. (2026), PASJ 78, 1524](https://acad
 
 With `simulation.psf: True`, ECLIPSE blurs the spectra with the instrument's point spread function (PSF), along the slit and in wavelength, before they reach the detector's pixels. It is off by default.
 
+### What the SW PSF is made of
+
+The SW PSF is a Gaussian. Its width is two parts added in quadrature:
+
+- The optical design, from RSC-2022021C (March 2025). This is the worst case over a field of view, chosen with `telescope.field_of_view`: `280x280` (default, the full scan), `100x100` or `70x70` arcsec. Along the slit it is 0.423, 0.195 or 0.161 arcsec. In wavelength it is 43.00 mA with the 0.2 arcsec slit, which the design gives for the 70 x 70 arcsec field only and which is used for all three.
+- Everything else, from the resolution budget RSC-2022033B rev. B (October 2025): the primary mirror, the scan mirror, focusing, alignment, wavefront measurement, pointing jitter, the spectrograph's optics and vibration of the grating. `telescope.resolution_budget` chooses `current_estimate` (default), the current best estimate, or `allocation`, what the budget allows each part. `none` leaves them out.
+
+The budget is written for the 70 x 70 and 100 x 100 arcsec fields, and apart from the optical design it is the same for both. The full field has no budget yet, so these terms are used for every field. In wavelength the budget gives only the allocation. Each of its rows there is a row of the spatial budget, or a fraction of one, so the current best estimate in wavelength is worked out from the spatial estimate in the same way. The slit width error in the budget is a tolerance on the slit, not a blur, and is left out.
+
+The telescope's terms, which come before the slit, also blur the scene across the slit, so some light from beside the slit falls into it. These are everything but the spectrograph's optics. The optical design's own blur across the slit is not known, so `telescope.psf_across_slit` adds it only if given.
+
+| FWHM, 280 x 280 field | Optical design | With current estimate | With allocation |
+| --- | --- | --- | --- |
+| Along the slit | 0.423 arcsec | 0.516 arcsec | 0.564 arcsec |
+| Across the slit | none | 0.278 arcsec | 0.336 arcsec |
+| In wavelength, 0.2 arcsec slit | 43.0 mA | 45.0 mA | 47.7 mA |
+
+```yaml
+telescope:
+  field_of_view: 70x70
+  resolution_budget: allocation
+simulation:
+  psf: True
+```
+
+Setting `telescope.psf_params` gives the optical design's widths directly, in place of `field_of_view`.
+
+The budget's pointing jitter is 0.110 arcsec FWHM. `telescope.pointing_jitter` replaces it with another FWHM, which can be swept. The jitter blurs the scene along and across the slit. The budget takes the grating's vibration as two thirds of the jitter, so that changes with it too. A jitter given as a 3-sigma amplitude is converted with FWHM = 2.3548 sigma.
+
+```yaml
+telescope:
+  pointing_jitter: [0 arcsec, 0.110 arcsec, 0.2 arcsec]
+```
+
 ### The spectral PSF and the slit
 
-With `psf: True`, each line is blurred in wavelength by the optics and by the image of the slit, so the blur depends on the slit width. `telescope.psf_params` gives the PSF's FWHM in pixels, along the slit and in wavelength. For SWC, the one in wavelength is for the 0.2 arcsec slit.
+With `psf: True`, each line is blurred in wavelength by the optics and by the image of the slit, so the blur depends on the slit width. `telescope.psf_params` gives the optical design's FWHM in pixels, along the slit and in wavelength. For SWC, the one in wavelength is for the 0.2 arcsec slit.
 
 `simulation.spectral_psf` sets how the slit is added to the optics' blur:
 

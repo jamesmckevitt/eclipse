@@ -23,9 +23,10 @@ import astropy.units as u
 
 from .band import BandLines
 from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
-                    detect, digitise, expose_with_wavelengths, pixel_solid_angle)
-from .radiometric import photons_per_energy
-from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
+                    detect, digitise, expose_serial_overscan_with_wavelengths,
+                    expose_with_wavelengths, pixel_solid_angle)
+from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
+from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
 from .utils import _fwhm_to_sigma, distance_to_angle
 
@@ -455,7 +456,8 @@ class FullFrame:
     settings: dict = field(default_factory=dict)
 
 
-def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarray:
+def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
+                     overscan_dn: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Frame samples as the two outputs read them, with prescan and overscan.
 
@@ -463,9 +465,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarra
     the register and the overscan at the inner end (`ReadoutSequence`). In
     order across the CCD, a row is: left prescan, first half of the image,
     left overscan, right overscan, second half of the image, right prescan.
-    The prescan and overscan samples hold no charge from the image area, so
-    they read only the read noise. The serial register's own dark current
-    is not modelled, here or elsewhere.
+    The prescan samples hold no charge from the image area, so they read
+    only the read noise. So do the overscan samples, unless `overscan_dn`
+    gives them, `(n_rows, 2 * serial_overscan)` in that order, with the
+    charge, light and dark, the serial register carries past the image. The
+    serial register's own dark current is not modelled, here or elsewhere.
     """
     n_rows, n_columns = image_dn.shape
     half = (n_columns + 1) // 2
@@ -474,6 +478,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True) -> np.ndarra
     blank = digitise(detect(empty, np.full(n_rows, 200.0) * u.AA, 0.0 * u.s, det,
                             noise=noise), det)
     pieces = np.split(blank, np.cumsum([prescan, overscan, overscan]), axis=1)
+    if overscan_dn is not None:
+        if np.shape(overscan_dn) != (n_rows, 2 * overscan):
+            raise ValueError(f"overscan_dn must be shaped {(n_rows, 2 * overscan)}, got "
+                             f"{np.shape(overscan_dn)}.")
+        pieces[1], pieces[2] = overscan_dn[:, :overscan], overscan_dn[:, overscan:]
     return np.concatenate([pieces[0], image_dn[:, :half], pieces[1], pieces[2],
                            image_dn[:, half:], pieces[3]], axis=1)
 
@@ -549,7 +558,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if any(value != 0.0 for value in focal_plane.slit_image_tilt):
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
-    across = telescope.psf_across_slit if psf else None
+    across = across_slit_fwhm(telescope) if psf else None
     scene = read_slit_scene(synthesis_path, slit_position, slit_width, across)
     if not np.array_equal(scene.logT_grid, lines.logT_grid):
         raise ValueError("The band's lines are on another grid of temperature than the "
@@ -582,7 +591,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     # Along the slit: weight of each image row in each detector column.
     columns = np.arange(focal_plane.n_columns + 1) - 0.5
     column_edges = focal_plane.field_angle(columns).to_value(u.arcsec)
-    sigma = (_fwhm_to_sigma(telescope.psf_params[0].to_value(u.pix))
+    sigma = (_fwhm_to_sigma(spatial_psf_fwhm(telescope, det))
              * focal_plane.plate_scale.to_value(u.arcsec) if psf else 0.0)
     along = pixel_weights(scene.y_edges, column_edges, sigma)        # (columns, image rows)
 
@@ -636,6 +645,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
+    # Each sample's share of its row's dark charge along the serial register.
+    dark_image, dark_overscan = serial_dark_shares(sequence, focal_plane.n_columns)
+    dark_time = dark[:, np.newaxis] * dark_image
     rows = np.arange(focal_plane.n_rows)
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}}
@@ -654,11 +666,21 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
             image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons
-        electrons = detect(drawn, mean_wavelength, dark, det, noise=noise,
+        electrons = detect(drawn, mean_wavelength, dark_time, det, noise=noise,
                            rms_wavelength=rms_wavelength)
+        overscan_dn = None
+        if sequence.cte_serial != 1:
+            # Charge the serial register leaves behind reaches the overscan.
+            trail, trail_wavelength, trail_rms = expose_serial_overscan_with_wavelengths(
+                image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
+            trail = np.random.poisson(trail).astype(float) if noise else trail
+            overscan_dn = digitise(detect(trail, trail_wavelength,
+                                          dark[:, np.newaxis] * dark_overscan, det,
+                                          noise=noise, rms_wavelength=trail_rms), det)
         frame["rate"][ccd] = image_rate
         frame["photons"][ccd] = drawn
-        frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise)
+        frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise,
+                                            overscan_dn=overscan_dn)
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
         frame["photon_rms_wavelength"][ccd] = rms_wavelength

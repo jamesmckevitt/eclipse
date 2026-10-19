@@ -182,7 +182,8 @@ def test_a_flat_spectrum_matches_the_radiometric_chain():
 
 def test_the_spectral_psf_conserves_flux_and_widens_a_line():
     fp = FocalPlane_SWC()
-    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    telescope, det, slit = (Telescope_EUVST(resolution_budget="none"), Detector_SWC(),
+                            SLIT_WIDTH * u.arcsec)
     rows = photons_from_lines(fp, "left", StubTelescope(), slit,
                               [195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
                               [0.001] * u.Angstrom)
@@ -717,3 +718,16 @@ def test_lines_laid_a_block_at_a_time_give_what_they_give_all_at_once(monkeypatc
     apart = photons_from_lines(FocalPlane_SWC(), "left", Telescope_EUVST(),
                                SLIT_WIDTH * u.arcsec, *lines, **settings).value
     np.testing.assert_allclose(apart, together, rtol=1e-12, atol=1e-15 * together.max())
+
+
+def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
+    """The one column stands in for the empty second half."""
+    from euvst_response.frame import expose_serial_overscan_with_wavelengths
+    from euvst_response.readout import ReadoutSequence
+
+    one = ReadoutSequence(serial_prescan=2, serial_image_pixels=1, serial_overscan=3,
+                          parallel_overscan_rows=0, cte_serial=0.9)
+    photons, mean, rms = expose_serial_overscan_with_wavelengths(
+        np.full((3, 1), 2.0), [195.0, 196.0, 197.0] * u.AA, 1.0 * u.s, one)
+    assert photons.shape == mean.shape == (3, 6)
+    assert np.allclose(mean.to_value(u.AA), [[195.0], [196.0], [197.0]])

@@ -22,11 +22,13 @@ from euvst_response.data_processing import create_uniform_intensity_cube, pad_sp
 from euvst_response.main import _validate_config_keys
 from euvst_response.radiometric import (apply_focusing_optics_psf, slit_image_width,
                                         spectral_line_spread, spectral_optics_fwhm,
-                                        spectral_psf_fwhm, spectral_psf_margin)
+                                        spectral_psf_fwhm, spectral_psf_margin,
+                                        spectral_psf_reach)
 from euvst_response.synthesis_file import write_line_cubes
 from euvst_response.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
 
-TEL = Telescope_EUVST()
+# The optical design alone, whose widths these tests check.
+TEL = Telescope_EUVST(resolution_budget="none")
 DET = Detector_SWC()
 REST = 195.119 * u.Angstrom
 SLITS = [0.2, 0.4, 0.8, 1.6]  # arcsec, every SWC slit
@@ -93,7 +95,7 @@ def test_the_optics_part_is_the_one_rsc_2022021c_gives():
 def test_the_reference_slit_keeps_the_spectral_fwhm_it_was_given():
     """Bit for bit, so a 0.2 arcsec run is unchanged."""
     assert spectral_psf_fwhm(TEL, DET, 0.2 * u.arcsec) == 2.54
-    other = Telescope_EUVST(psf_params=[2.66 * u.pixel, 3.1 * u.pixel])
+    other = Telescope_EUVST(psf_params=[2.66 * u.pixel, 3.1 * u.pixel], resolution_budget="none")
     assert spectral_psf_fwhm(other, DET, 0.2 * u.arcsec) == 3.1
 
 
@@ -108,7 +110,7 @@ def test_wider_slits_add_their_width_in_quadrature(slit, expected):
 
 def test_the_reference_slit_blurs_exactly_as_one_fixed_psf_did():
     """The 0.2 arcsec slit gets the fixed PSF that every slit used to get."""
-    fixed = Telescope_EUVST(psf_slit_width=None)
+    fixed = Telescope_EUVST(psf_slit_width=None, resolution_budget="none")
     for convolve_spatial in (True, False):
         cube, sim = _frame(0.2)
         cube.data[0, 0, 10] = 3.0  # something that is not uniform along the slit
@@ -326,6 +328,7 @@ def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypa
         "simulation": {"slit_width": ["0.2 arcsec", "1.6 arcsec"], "expos": "10 s",
                        "psf": True, "noise": False,
                        "spectral_psf": ["quadrature", "convolution"]},
+        "telescope": {"resolution_budget": "none"},
     }))
     monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
     monkeypatch.chdir(tmp_path)
@@ -349,3 +352,25 @@ def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypa
         sigma_psf = _fwhm_to_sigma(spectral_psf_fwhm(TEL, DET, slit * u.arcsec)) * dispersion
         assert np.sqrt(fitted**2 - true**2) == pytest.approx(sigma_psf, rel=0.05)
     assert measured[1.6, "convolution"][0] > 2 * measured[0.2, "convolution"][0]
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.110, 0.5, 1.0])
+def test_a_widened_window_keeps_a_line_blurred_by_the_budget(jitter):
+    """The reference slit's window widens with the budget and jitter.
+
+    A line at +200 km/s, five pixels from the end of the window, keeps its light.
+    """
+    pixel = (DET.wvl_res * u.pixel).to(u.AA)
+    shift = (200 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    sigma = (20 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    x = np.arange(25) - 12
+    cube, sim = _frame(0.2, profile=np.exp(-0.5 * ((x - shift) / sigma) ** 2))
+    total = cube.data.sum()
+    tel = Telescope_EUVST(pointing_jitter=jitter * u.arcsec)
+
+    margin = spectral_psf_margin(tel, DET, sim.slit_width)
+    assert margin == max(0, spectral_psf_reach(tel, DET, sim.slit_width)
+                         - spectral_psf_reach(TEL, DET, sim.slit_width))
+    kept = apply_focusing_optics_psf(pad_spectral_axis(cube, margin), tel, DET, sim,
+                                     convolve_spatial=False)
+    assert kept.data.sum() == pytest.approx(total, rel=1e-4)

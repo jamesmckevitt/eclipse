@@ -70,14 +70,19 @@ maps["velocity_std"].peek()
 
 A synthesised scene has no date of its own, so the maps need one from you, as `date_obs`. The only exception is an EIS run with a dated calibration, whose date is used. The maps are:
 
-- `total_dn` and `total_photons`: the first iteration's signal, summed over wavelength
-- `velocity_from_fit`, `line_width_from_fit` and `intensity_from_fit`: the first iteration's fit
-- `velocity_mean`, `line_width_mean` and `intensity_mean`: the means over the iterations
-- `velocity_std`, `line_width_std` and `intensity_std`: the standard deviations over the iterations
-- `velocity_true` and `velocity_err`: the true velocity, and the true velocity minus the mean
-- `failed_fits`: the number of fits that failed in each pixel
+| Map | What it is | Unit |
+| --- | --- | --- |
+| `total_dn` | The first iteration's signal, summed over wavelength | DN |
+| `total_photons` | The first iteration's photons arriving at the detector, summed over wavelength | photons |
+| `velocity_from_fit`, `velocity_mean`, `velocity_std` | The first iteration's fitted velocity, the mean over the iterations, and the standard deviation | km/s |
+| `velocity_true`, `velocity_err` | The true velocity, and the true velocity minus the mean | km/s |
+| `line_width_from_fit`, `line_width_mean`, `line_width_std` | The same for the line width, the Gaussian's sigma | Angstrom |
+| `intensity_from_fit`, `intensity_mean`, `intensity_std` | The same for the intensity, the fitted line's counts | DN, or photons with `data_type="photon"` |
+| `failed_fits` | The number of fits that failed in each pixel | none |
 
-It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
+Each map also holds its unit, as `maps["velocity_std"].unit`.
+
+It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures, in seconds, at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
 
 The [worked example](worked-example.ipynb) plots one of these maps.
 
