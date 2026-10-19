@@ -226,3 +226,15 @@ def test_a_cube_masked_without_the_psf_is_not_blurred_afterwards():
     # Masked with the PSF, it is accepted.
     together = rebin_atmosphere(scene, det, blurred, tel=tel)
     simulate_once(together, 1 * u.s, det, tel, blurred)
+
+
+def test_the_mask_does_not_move_the_simulations_positional_arguments():
+    """It is keyword only, so a call passing `noise` and the rest by position is unchanged."""
+    import inspect
+
+    positional = [p.name for p in inspect.signature(Simulation).parameters.values()
+                  if p.kind is p.POSITIONAL_OR_KEYWORD]
+    assert positional == ["expos", "n_iter", "slit_width", "ncpu", "instrument", "vis_sl", "psf",
+                          "psf_boundary", "spectral_psf", "noise", "enable_pinholes",
+                          "pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral"]
+    assert "slit_mask" not in positional

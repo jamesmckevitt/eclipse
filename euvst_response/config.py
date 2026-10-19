@@ -1047,7 +1047,7 @@ class Simulation:
         (default) or `"convolution"`.
     slit_mask : bool
         Whether the slit's ends and fiducials block the light (SWC only).
-        Default False.
+        Default False. Keyword only.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
@@ -1087,7 +1087,7 @@ class Simulation:
     # its fiducials, as set in the telescope. The slit's centre is the middle
     # of the scene along the slit. The blur along the slit comes before the
     # slit, so a fiducial's edges are as sharp as the pixels sampling them.
-    slit_mask: bool = False
+    slit_mask: bool = field(default=False, kw_only=True)
     # With noise False, every random draw in the detector chain is replaced by
     # its mean, so the run gives the signal the instrument would measure on
     # average. Quantisation stays: DN are still rounded and still clipped at
