@@ -953,6 +953,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
             f"pickle runs whatever code it holds, so only read files you trust.{later}",
             FutureWarning, stacklevel=_stacklevel)
         payload = _load_pickle(path)
+        _give_earlier_values(payload)
         if _from_before_weighting(payload):
             warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning,
                           stacklevel=_stacklevel)
@@ -1019,6 +1020,32 @@ def _from_before_weighting(payload) -> bool:
     if own is not None and "weighted" not in own:
         object.__setattr__(results["fit_config"], "weighted", False)
     return True
+
+
+def _give_earlier_values(value, seen=None) -> None:
+    """
+    Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
+
+    An object pickled before a setting existed would otherwise read the
+    class default, such as a telescope's `resolution_budget`, which runs
+    then did not have.
+    """
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+    if isinstance(value, dict):
+        for item in value.values():
+            _give_earlier_values(item, seen)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _give_earlier_values(item, seen)
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        own = getattr(value, "__dict__", None)
+        if own is not None:
+            for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
+                if name not in own:
+                    object.__setattr__(value, name, item)
 
 
 def _load_pickle(path: Path) -> dict:
