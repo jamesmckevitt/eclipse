@@ -18,6 +18,10 @@ Everything on this page is imported from `euvst_response`, such as `from euvst_r
 
 ::: euvst_response.eis_effective_area
 
+::: euvst_response.spatial_psf_fwhm
+
+::: euvst_response.across_slit_fwhm
+
 ::: euvst_response.spectral_psf_fwhm
 
 ::: euvst_response.spectral_line_spread

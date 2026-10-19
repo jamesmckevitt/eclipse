@@ -28,7 +28,7 @@ from .radiometric import (
     photons_per_energy,
     slit_image_width,
     spectral_line_spread,
-    spectral_optics_fwhm,
+    spectral_blur_fwhm,
     spectral_psf_fwhm,
     spectral_psf_reach,
 )
@@ -120,7 +120,7 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
         sigma_rows = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
         box_rows = 0.0
     elif spectral_psf == "convolution":
-        sigma_rows = _fwhm_to_sigma(spectral_optics_fwhm(telescope, det))
+        sigma_rows = _fwhm_to_sigma(spectral_blur_fwhm(telescope, det))
         box_rows = slit_image_width(slit_width, det)
     else:
         raise ValueError(
