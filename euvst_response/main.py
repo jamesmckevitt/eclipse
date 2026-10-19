@@ -130,7 +130,7 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "noise", "enable_pinholes"}
+                    "spectral_psf", "slit_mask", "noise", "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -871,6 +871,7 @@ def main() -> None:
         "psf": False,
         "psf_boundary": "replicate",
         "spectral_psf": "quadrature",
+        "slit_mask": False,
         "noise": True,
         "enable_pinholes": False,
     }
@@ -966,6 +967,11 @@ def main() -> None:
     # pickle: its dynamic mode.
     file_meta = {}
     if uniform_intensity_mode:
+        # A uniform intensity has no position along the slit for the slit's
+        # fiducials to block, so the option is refused rather than ignored.
+        if sim_fixed.get("slit_mask") or True in sim_sweep.get("slit_mask", []):
+            raise ValueError("simulation.slit_mask needs a scene along the slit, from a "
+                             "synthesis or an atmosphere, not a uniform intensity.")
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
     elif atmosphere_series_mode:
@@ -1147,6 +1153,7 @@ def main() -> None:
             psf=all_sim.get("psf", False),
             psf_boundary=all_sim.get("psf_boundary", "replicate"),
             spectral_psf=all_sim.get("spectral_psf", "quadrature"),
+            slit_mask=all_sim.get("slit_mask", False),
             noise=all_sim.get("noise", True),
             enable_pinholes=enable,
             pinhole_sizes=pinhole_sizes if enable else [],
@@ -1197,6 +1204,7 @@ def main() -> None:
         expos = SIM.expos
         vis_sl = SIM.vis_sl
         psf = SIM.psf
+        slit_mask = SIM.slit_mask
         psf_boundary = SIM.psf_boundary
         spectral_psf = SIM.spectral_psf
         noise = SIM.noise
@@ -1322,10 +1330,11 @@ def main() -> None:
         # through the telescope, with each photon counted at its own
         # wavelength. With the PSF on, the scene is also blurred by the PSF
         # before it is laid onto the pixels. This is exact, whereas blurring
-        # the pixels afterwards moves a narrow line within its pixel. The
-        # ground truth is the scene without either. A uniform intensity is
-        # centred on a pixel and uniform along the slit, and the Monte Carlo
-        # blurs it.
+        # the pixels afterwards moves a narrow line within its pixel. With
+        # slit_mask on, the slit's ends and fiducials are cut out in the same
+        # step. The ground truth is the scene without any of these. A uniform
+        # intensity is centred on a pixel and uniform along the slit, and the
+        # Monte Carlo blurs it.
         cube_obs = cube_reb
         if not uniform_intensity_mode:
             # The observed cube includes the telescope's throughput as well as
@@ -1336,12 +1345,14 @@ def main() -> None:
             # With the pinholes on, it also includes the light they let past
             # the filter.
             pinholes = _pinholes_on(SIM)
-            psf_key = (*cube_reb_key, psf, spectral_psf, psf_boundary, telescope_key, pinholes)
+            psf_key = (*cube_reb_key, psf, slit_mask, spectral_psf, psf_boundary, telescope_key,
+                       pinholes)
             if psf_key not in observed_cache:
                 print("Laying the scene onto the detector through the telescope...")
                 SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
                                      ncpu=ncpu, instrument=instrument, psf=psf,
                                      psf_boundary=psf_boundary, spectral_psf=spectral_psf,
+                                     slit_mask=slit_mask,
                                      enable_pinholes=SIM.enable_pinholes,
                                      pinhole_sizes=list(SIM.pinhole_sizes),
                                      pinhole_positions=list(SIM.pinhole_positions),

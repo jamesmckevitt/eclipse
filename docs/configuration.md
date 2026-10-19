@@ -36,6 +36,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `psf` | Whether to blur the spectra with the PSF; see [The point spread function](instrument-response.md#the-point-spread-function) | `False` |
 | `psf_boundary` | What the PSF brings in from beyond the edges of the atmosphere: `replicate` or `zero` | `replicate` |
 | `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
+| `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-response.md#the-slits-fiducials) | `False` |
 | `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](instrument-response.md#turning-the-noise-off) | `True` |
 | `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
 
@@ -80,6 +81,9 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
 | `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
 | `psf_across_slit` | The FWHM of the telescope optics' blur across the slit, which brings in light from either side of it. For SWC the resolution budget's blur before the slit is added to it. | none | none |
+| `slit_length` | The length of the slits | `300 arcsec` | - |
+| `fiducial_centres` | Where the middle of each fiducial is along the slit, from its centre. This is one value, not a sweep. | `[-25 arcsec, 70 arcsec]` | - |
+| `fiducial_lengths` | The length of the fiducials of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that order. This is one value, not a sweep. | `[0.8 arcsec, 0.8 arcsec, 0.8 arcsec, 1.6 arcsec]` | - |
 | `pm_table` | A table of the primary mirror's reflectance | packaged | - |
 | `grating_table` | A table of the grating's efficiency | packaged | - |
 | `calibration` | The EIS effective area: `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](instruments.md#eis-effective-area) | - | `ground` |
