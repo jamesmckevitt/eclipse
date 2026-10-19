@@ -15,6 +15,7 @@ Charge transfer is checked against moving the charge one transfer at a time,
 each keeping a fraction `cte` of every well's charge and leaving the rest for
 the packet behind.
 """
+from dataclasses import replace
 import warnings
 
 import astropy.units as u
@@ -630,6 +631,34 @@ def test_charge_left_behind_arrives_as_moving_it_one_transfer_at_a_time(
         frame = expose(rate[:, np.newaxis], 0.7 * u.s, sequence)[:, 0]
     expected = _read_one_transfer_at_a_time(rate, 0.7, sequence)
     assert frame == pytest.approx(expected, rel=1e-12, abs=1e-12 * expected.max())
+
+
+@pytest.mark.parametrize("cte", [0.5, 0.9])
+def test_charge_left_by_packets_dumped_long_before_the_read_still_arrives(cte):
+    """Charge left behind in a clear longer than the frame reaches the rows read, as moved by hand."""
+    sequence = ReadoutSequence(shutter=False, row_transfer_time=1.0 * u.s,
+                               pixel_period=1e-3 * u.s, serial_prescan=0, serial_image_pixels=1,
+                               serial_overscan=0, parallel_overscan_rows=0, dump_rows=4,
+                               cte_parallel=cte)
+    # One row cleared by four transfers: each leaves 1 - cte behind, so the
+    # packet read holds 1 - cte**4 of what the row collected, read with cte.
+    frame = expose(np.ones((1, 1)), 0.0 * u.s, sequence)[0, 0]
+    assert frame == pytest.approx(cte * sum((1 - cte) ** n for n in range(1, 5)), rel=1e-12)
+    rate = np.array([3.0, 0.5, 2.0])
+    long_clear = replace(sequence, dump_rows=20, parallel_overscan_rows=1)
+    expected = _read_one_transfer_at_a_time(rate, 0.7, long_clear)
+    assert expose(rate[:, np.newaxis], 0.7 * u.s, long_clear)[:, 0] == pytest.approx(
+        expected, rel=1e-12)
+    dark = dark_current_time(0.7 * u.s, replace(long_clear, shutter=True), 3).to_value(u.s)
+    assert dark == pytest.approx(_read_one_transfer_at_a_time(np.ones(3), 0.7, long_clear),
+                                 rel=1e-12)
+
+
+def test_the_variance_must_be_at_least_the_mean_whatever_the_transfer():
+    """A variance below the mean is refused with a perfect transfer as with an imperfect one."""
+    for cte in (1.0, 0.99):
+        with pytest.raises(ValueError, match="at least mean_rate"):
+            expose_variance([[1.0]], [[2.0]], 1.0 * u.s, ReadoutSequence(cte_parallel=cte))
 
 
 def test_charge_left_behind_along_the_register_trails_towards_its_middle():

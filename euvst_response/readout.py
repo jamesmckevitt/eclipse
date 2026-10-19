@@ -642,9 +642,12 @@ def _along_columns(rate: np.ndarray, exposure, sequence: ReadoutSequence,
     """
     n_rows, n_columns = rate.shape
     total_rows = n_rows + sequence.parallel_overscan_rows
-    probability = transfer_probabilities(np.arange(1, n_rows + 1), sequence.cte_parallel,
-                                         most=total_rows) ** power
     lit = not sequence.shutter
+    # A packet dumped during the clear can start up to dump_rows rows before
+    # the first one read, so its charge can arrive that much later.
+    latest = total_rows - 1 + (sequence.dump_rows if lit else 0)
+    probability = transfer_probabilities(np.arange(1, n_rows + 1), sequence.cte_parallel,
+                                         most=latest) ** power
     if lit:
         kernel = np.concatenate([[0.0], sequence.dwell(n_rows)])
         # The FFT leaves rounding noise, of order 1e-16 of the brightest row, in
@@ -662,20 +665,21 @@ def _along_columns(rate: np.ndarray, exposure, sequence: ReadoutSequence,
         # come from packets dumped during the clear.
         packets = np.zeros((total_rows, n_columns))
         if lit:
-            # Read-out. The packet leaving row r is at row r - j while image row
-            # j - 1 is in the register, so the smear is the rate convolved with
-            # the dwell times. The parallel overscan rows are the terms past the
-            # last image row.
-            reading = fftconvolve(weighted, kernel[:, np.newaxis], mode="full",
-                                  axes=0)[:total_rows]
-            reading[crossed < 0.5] = 0.0
-            packets[k:] += reading[:total_rows - k]
+            if k < total_rows:
+                # Read-out. The packet leaving row r is at row r - j while image
+                # row j - 1 is in the register, so the smear is the rate
+                # convolved with the dwell times. The parallel overscan rows are
+                # the terms past the last image row.
+                reading = fftconvolve(weighted, kernel[:, np.newaxis], mode="full",
+                                      axes=0)[:total_rows]
+                reading[crossed < 0.5] = 0.0
+                packets[k:] += reading[:total_rows - k]
             packets += _cleared(weighted, sequence, np.arange(total_rows) - k)
             # The sum cannot be negative, but the FFT convolution leaves rounding
             # noise of order 1e-20 where it is zero, which would reach the
             # Poisson draw downstream as a negative mean.
             np.maximum(packets, 0.0, out=packets)
-        if exposure is not None:
+        if exposure is not None and k < total_rows:
             # Exposure. Image row r's charge arrives in packet r + k, in the
             # parallel overscan for the last rows.
             end = min(n_rows + k, total_rows)
@@ -839,13 +843,13 @@ def expose_variance(variance_rate: np.ndarray, mean_rate: np.ndarray, exposure: 
             f"variance_rate and mean_rate describe the same pixels, got shapes "
             f"{variance_rate.shape} and {mean_rate.shape}."
         )
+    excess = variance_rate - mean_rate
+    if np.any(excess < -1e-12 * np.abs(variance_rate).max()):
+        raise ValueError("variance_rate must be at least mean_rate in every pixel.")
     if sequence.cte_parallel == 1 and sequence.cte_serial == 1:
         return expose(variance_rate, exposure, sequence)
     if not sequence.shutter:
         _warn_of_a_partial_clear(sequence, variance_rate.shape[0], "smear")
-    excess = variance_rate - mean_rate
-    if np.any(excess < -1e-12 * np.abs(variance_rate).max()):
-        raise ValueError("variance_rate must be at least mean_rate in every pixel.")
     return (_along_register(_along_columns(np.maximum(excess, 0.0), exposure, sequence, 2),
                             sequence, 2)
             + _along_register(_along_columns(mean_rate, exposure, sequence), sequence))
