@@ -22,7 +22,8 @@ from euvst_response.data_processing import create_uniform_intensity_cube, pad_sp
 from euvst_response.main import _validate_config_keys
 from euvst_response.radiometric import (apply_focusing_optics_psf, slit_image_width,
                                         spectral_line_spread, spectral_optics_fwhm,
-                                        spectral_psf_fwhm, spectral_psf_margin)
+                                        spectral_psf_fwhm, spectral_psf_margin,
+                                        spectral_psf_reach)
 from euvst_response.synthesis_file import write_line_cubes
 from euvst_response.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
 
@@ -351,3 +352,25 @@ def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypa
         sigma_psf = _fwhm_to_sigma(spectral_psf_fwhm(TEL, DET, slit * u.arcsec)) * dispersion
         assert np.sqrt(fitted**2 - true**2) == pytest.approx(sigma_psf, rel=0.05)
     assert measured[1.6, "convolution"][0] > 2 * measured[0.2, "convolution"][0]
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.110, 0.5, 1.0])
+def test_a_widened_window_keeps_a_line_blurred_by_the_budget(jitter):
+    """The reference slit's window widens with the budget and jitter.
+
+    A line at +200 km/s, five pixels from the end of the window, keeps its light.
+    """
+    pixel = (DET.wvl_res * u.pixel).to(u.AA)
+    shift = (200 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    sigma = (20 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)
+    x = np.arange(25) - 12
+    cube, sim = _frame(0.2, profile=np.exp(-0.5 * ((x - shift) / sigma) ** 2))
+    total = cube.data.sum()
+    tel = Telescope_EUVST(pointing_jitter=jitter * u.arcsec)
+
+    margin = spectral_psf_margin(tel, DET, sim.slit_width)
+    assert margin == max(0, spectral_psf_reach(tel, DET, sim.slit_width)
+                         - spectral_psf_reach(TEL, DET, sim.slit_width))
+    kept = apply_focusing_optics_psf(pad_spectral_axis(cube, margin), tel, DET, sim,
+                                     convolve_spatial=False)
+    assert kept.data.sum() == pytest.approx(total, rel=1e-4)

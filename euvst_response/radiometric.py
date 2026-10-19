@@ -526,6 +526,14 @@ def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
     return float(np.sqrt(measured**2 + difference + budget**2))
 
 
+def _reach(fwhm: float) -> int:
+    """Pixels a kernel six sigma wide reaches either side of its centre, at least three."""
+    n = max(7, int(np.ceil(6 * _fwhm_to_sigma(fwhm))))
+    if n % 2 == 0:
+        n += 1
+    return n // 2
+
+
 def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
     """
     Pixels the spectral PSF kernel reaches either side of its centre.
@@ -536,29 +544,22 @@ def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
     Gaussian, and the pixels left out hold at most a few parts in ten
     thousand of it, for the narrowest slit.
     """
-    sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width))
-    n = max(7, int(np.ceil(6 * sigma)))
-    if n % 2 == 0:
-        n += 1
-    return n // 2
+    return _reach(spectral_psf_fwhm(tel, det, slit_width))
 
 
 def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
     """
-    Pixels by which the spectral PSF of a slit reaches beyond the reference slit's.
+    Pixels by which the spectral PSF reaches beyond that of the optics alone with the reference slit.
 
-    The wavelength window of a synthesis has some margin around its lines.
-    A slit wider than `tel.psf_slit_width` spreads them further, and light
-    spread past the ends of the window is lost. The window is therefore
-    widened by this many pixels at each end, to give every slit the margin
-    of the reference slit. Zero for the reference slit, and for a telescope
-    whose PSF does not depend on the slit.
+    The wavelength window of a synthesis has some margin around its lines,
+    enough for the optics' PSF, `tel.psf_params[1]`. A wider slit, the
+    resolution budget and the pointing jitter spread the lines further, and
+    light spread past the ends of the window is lost. The window is
+    therefore widened by this many pixels at each end. Zero when the PSF is
+    the optics' alone with the reference slit.
     """
-    reference = getattr(tel, "psf_slit_width", None)
-    if reference is None:
-        return 0
-    return max(0, spectral_psf_reach(tel, det, slit_width)
-               - spectral_psf_reach(tel, det, reference))
+    optics = _reach(tel.psf_params[1].to_value(u.pixel))
+    return max(0, spectral_psf_reach(tel, det, slit_width) - optics)
 
 
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
