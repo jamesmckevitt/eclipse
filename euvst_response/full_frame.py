@@ -26,7 +26,7 @@ from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _so
                     detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import photons_per_energy
-from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
+from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
 from .utils import _fwhm_to_sigma, distance_to_angle
 
@@ -468,8 +468,8 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
     The prescan samples hold no charge from the image area, so they read
     only the read noise. So do the overscan samples, unless `overscan_dn`
     gives them, `(n_rows, 2 * serial_overscan)` in that order, with the
-    charge the serial register carries past the image. The serial
-    register's own dark current is not modelled, here or elsewhere.
+    charge, light and dark, the serial register carries past the image. The
+    serial register's own dark current is not modelled, here or elsewhere.
     """
     n_rows, n_columns = image_dn.shape
     half = (n_columns + 1) // 2
@@ -645,6 +645,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
+    # Each sample's share of its row's dark charge along the serial register.
+    dark_image, dark_overscan = serial_dark_shares(sequence, focal_plane.n_columns)
+    dark_time = dark[:, np.newaxis] * dark_image
     rows = np.arange(focal_plane.n_rows)
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}}
@@ -663,7 +666,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
             image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons
-        electrons = detect(drawn, mean_wavelength, dark, det, noise=noise,
+        electrons = detect(drawn, mean_wavelength, dark_time, det, noise=noise,
                            rms_wavelength=rms_wavelength)
         overscan_dn = None
         if sequence.cte_serial != 1:
@@ -671,8 +674,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
             trail, trail_wavelength, trail_rms = expose_serial_overscan_with_wavelengths(
                 image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
             trail = np.random.poisson(trail).astype(float) if noise else trail
-            overscan_dn = digitise(detect(trail, trail_wavelength, 0.0 * u.s, det, noise=noise,
-                                          rms_wavelength=trail_rms), det)
+            overscan_dn = digitise(detect(trail, trail_wavelength,
+                                          dark[:, np.newaxis] * dark_overscan, det,
+                                          noise=noise, rms_wavelength=trail_rms), det)
         frame["rate"][ccd] = image_rate
         frame["photons"][ccd] = drawn
         frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise,

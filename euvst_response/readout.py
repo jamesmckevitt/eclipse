@@ -823,8 +823,8 @@ def expose_serial_overscan(rate: np.ndarray, exposure: u.Quantity,
     With `cte_serial` below 1, each pixel leaves charge behind at every
     transfer along the register, and that charge arrives in the samples read
     after it. For the last image pixels of each half these are the serial
-    overscan samples. The register's own dark current, and dark charge left
-    behind, are not included, as for :func:`dark_current_time`.
+    overscan samples. The register's own dark current is not included, and
+    the image's dark charge is in :func:`serial_dark_shares`.
 
     Parameters
     ----------
@@ -841,10 +841,44 @@ def expose_serial_overscan(rate: np.ndarray, exposure: u.Quantity,
     """
     rate = _check_rate(rate)
     n_out = (rate.shape[0] + sequence.parallel_overscan_rows, 2 * sequence.serial_overscan)
-    if sequence.cte_serial == 1:
+    if sequence.cte_serial == 1 or sequence.serial_overscan == 0:
         return np.zeros(n_out)
     return _along_register(_along_columns(rate, exposure, sequence), sequence,
                            overscan=sequence.serial_overscan)[1]
+
+
+def serial_dark_shares(sequence: ReadoutSequence, n_columns: int) -> tuple:
+    """
+    Share of each image pixel's dark charge that each sample of a row receives along the serial register.
+
+    Dark current is the same in every column of a row, so with `cte_serial`
+    below 1 each sample gets the row's dark charge per pixel times a share
+    that is the same for every row. Most image pixels get 1. The first
+    pixels each output reads get a little less, as their charge left behind
+    is not made up by pixels read before them, and the serial overscan
+    samples get the charge left behind by the last image pixels.
+
+    Parameters
+    ----------
+    sequence : ReadoutSequence
+        Clocking.
+    n_columns : int
+        Columns of the whole CCD.
+
+    Returns
+    -------
+    image : np.ndarray
+        Share for each image column, `(n_columns,)`.
+    overscan : np.ndarray
+        Share for each serial overscan sample, `(2 * serial_overscan,)`, laid
+        out as from :func:`expose_serial_overscan`. Ones and zeros with
+        `cte_serial` 1.
+    """
+    ones = np.ones((1, n_columns))
+    if not sequence.serial_overscan:
+        return _along_register(ones, sequence)[0], np.zeros(0)
+    image, overscan = _along_register(ones, sequence, overscan=sequence.serial_overscan)
+    return image[0], overscan[0]
 
 
 def expose_variance(variance_rate: np.ndarray, mean_rate: np.ndarray, exposure: u.Quantity,
@@ -916,10 +950,9 @@ def dark_current_time(exposure: u.Quantity, sequence: ReadoutSequence,
 
     With `cte_parallel` below 1, dark charge is left behind and picked up
     like any other, so this is the time each packet's dark charge is worth,
-    weighted as :func:`expose` weights light. The serial register is not
-    followed: for a dark current uniform over the columns it changes only
-    the first pixels each output reads, by less than
-    `(serial_prescan + 1) * (1 - cte_serial)` of their dark charge.
+    weighted as :func:`expose` weights light. Along the serial register,
+    :func:`serial_dark_shares` gives the share of a row's dark charge each
+    sample receives.
     """
     _warn_of_a_partial_clear(sequence, n_rows, "dark current")
     if sequence.cte_parallel != 1:

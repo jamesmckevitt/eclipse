@@ -31,6 +31,7 @@ from euvst_response.readout import (
     expose,
     expose_serial_overscan,
     expose_variance,
+    serial_dark_shares,
     smear_photons,
     transfer_probabilities,
     windows_from_wavelengths,
@@ -717,6 +718,29 @@ def test_charge_left_behind_past_the_last_image_pixel_reaches_the_serial_oversca
                           np.zeros((4, 12)))
 
 
+def test_dark_charge_is_carried_along_the_register_as_moved_one_transfer_at_a_time():
+    """A row's uniform dark charge, from the image into the overscan, and none lost."""
+    sequence = ReadoutSequence(serial_prescan=3, serial_image_pixels=5, serial_overscan=6,
+                               parallel_overscan_rows=0, cte_serial=0.9)
+    image, overscan = serial_dark_shares(sequence, 10)
+    expected = []
+    for _ in range(2):
+        register = np.concatenate([np.zeros(3), np.ones(5), np.zeros(6)])
+        read = []
+        for _ in range(register.size):
+            out, register = _transfer(register, 0.9)
+            read.append(out)
+        expected.append(np.array(read[3:]))
+    assert image[:5] == pytest.approx(expected[0][:5], rel=1e-12)
+    assert image[5:] == pytest.approx(expected[1][:5][::-1], rel=1e-12)
+    assert overscan == pytest.approx(np.concatenate([expected[0][5:], expected[1][5:][::-1]]),
+                                     rel=1e-12, abs=1e-15)
+    long_image, long_overscan = serial_dark_shares(replace(sequence, serial_overscan=60), 10)
+    assert long_image.sum() + long_overscan.sum() == pytest.approx(10.0, rel=1e-12)
+    perfect = serial_dark_shares(replace(sequence, cte_serial=1.0), 10)
+    assert np.array_equal(perfect[0], np.ones(10)) and np.array_equal(perfect[1], np.zeros(12))
+
+
 def test_a_perfect_transfer_leaves_the_frame_as_it_was():
     """With a CTE of 1, the frame is the exposure plus the smear, and the variance as `expose`."""
     rate = np.random.default_rng(3).uniform(0.0, 5.0, (40, 6))
@@ -790,3 +814,17 @@ def test_a_transfer_efficiency_is_a_fraction():
         ReadoutSequence(cte_parallel=0.0)
     with pytest.raises(ValueError, match="cte_serial is the fraction"):
         ReadoutSequence(cte_serial=1.5)
+
+
+def test_the_serial_overscan_trail_with_no_overscan_or_one_column():
+    """No overscan gives no samples; one column has only the first half's trail."""
+    rate = np.full((3, 4), 2.0)
+    none = ReadoutSequence(serial_prescan=2, serial_image_pixels=2, serial_overscan=0,
+                           parallel_overscan_rows=1, cte_serial=0.9)
+    assert expose_serial_overscan(rate, 1.0 * u.s, none).shape == (4, 0)
+    image, overscan = serial_dark_shares(none, 4)
+    assert image.shape == (4,) and overscan.shape == (0,)
+    one = ReadoutSequence(serial_prescan=2, serial_image_pixels=1, serial_overscan=3,
+                          parallel_overscan_rows=0, cte_serial=0.9)
+    trail = expose_serial_overscan(np.full((3, 1), 2.0), 1.0 * u.s, one)
+    assert trail.shape == (3, 6) and np.all(trail[:, :3] > 0) and not trail[:, 3:].any()

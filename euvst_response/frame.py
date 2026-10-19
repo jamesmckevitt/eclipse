@@ -569,8 +569,11 @@ def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quan
     own = _per_pixel(wavelength, rate.shape)
     rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
     n_more, overscan = sequence.parallel_overscan_rows, sequence.serial_overscan
+    # The image columns next to each half's overscan. A CCD one column wide
+    # has only the first half, whose column stands in for both.
     half = (rate.shape[1] + 1) // 2
-    edges = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])[:, [half - 1, half]]
+    edges = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])[
+        :, [half - 1, min(half, rate.shape[1] - 1)]]
     fallback = np.repeat(edges, overscan, axis=1)
     photons, mean, rms = _carry_photon_wavelengths(
         lambda values: expose_serial_overscan(values, exposure, sequence), rate, own, rms,
@@ -612,7 +615,8 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         energy, as from :func:`expose_with_wavelengths`.
     dark_time : u.Quantity
         Time each row collects dark current, one per row or one for all, as
-        from :func:`euvst_response.readout.dark_current_time`.
+        from :func:`euvst_response.readout.dark_current_time`, or one per
+        pixel, same shape as `photons`.
     det : Detector_SWC
         Detector.
     noise : bool
@@ -644,7 +648,9 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
                                        rms_wavelength=rms * u.Angstrom)
 
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
-    dark = np.broadcast_to(np.reshape(dark, (-1, 1)) if np.ndim(dark) else dark, photons.shape)
+    if np.ndim(dark) == 1:
+        dark = np.reshape(dark, (-1, 1))
+    dark = np.broadcast_to(dark, photons.shape)
     if noise:
         electrons = (electrons + np.random.poisson(dark)
                      + np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel),
