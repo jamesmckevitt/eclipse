@@ -93,19 +93,12 @@ def test_the_pixel_sees_the_slit_width_by_the_plate_scale():
     assert omega == pytest.approx(expected_solid_angle(), rel=1e-6)
 
 
-def test_a_line_keeps_its_flux():
+def test_a_line_keeps_its_flux_and_lands_on_its_own_row():
     fp = FocalPlane_SWC()
     rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
                               [195.119] * u.Angstrom, [5.0e4] * u.erg / (u.s * u.cm**2 * u.sr),
                               [0.02] * u.Angstrom)
     assert rows.to_value(1 / u.s).sum() == pytest.approx(expected_photons(5.0e4, 195.119), rel=1e-4)
-
-
-def test_a_line_lands_on_its_own_row():
-    fp = FocalPlane_SWC()
-    rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
-                              [195.119] * u.Angstrom, [5.0e4] * u.erg / (u.s * u.cm**2 * u.sr),
-                              [0.02] * u.Angstrom)
     _, row = fp.row_of_wavelength(195.119 * u.Angstrom)
     assert int(np.argmax(rows.value)) == pytest.approx(round(row), abs=1)
 

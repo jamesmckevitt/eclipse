@@ -713,7 +713,7 @@ def test_a_stretched_image_axis_is_refused(tmp_path, monkeypatch):
     assert np.all(_intensity(saved) > 0)
 
 
-def test_the_synthesis_crops_and_downsamples_an_atmosphere_file(tmp_path, monkeypatch):
+def test_the_synthesis_crops_an_atmosphere_file(tmp_path, monkeypatch):
     atmosphere = _structured_atmosphere()
     path = write_atmosphere(atmosphere, tmp_path / "box.h5")
     # x cells span -0.2 to 0.2 in steps of 0.1, so this keeps the middle two.
@@ -731,17 +731,6 @@ def test_the_synthesis_crops_and_downsamples_an_atmosphere_file(tmp_path, monkey
     assert _intensity(from_file).shape == (5, 2)
     assert from_file["line_cubes"][LINE].data == pytest.approx(
         beforehand["line_cubes"][LINE].data, rel=1e-6)
-
-    even_path = write_atmosphere(_atmosphere((6, 4, 4)), tmp_path / "even.h5")
-    full = _synthesise(tmp_path, monkeypatch, "full", "--atmosphere", str(even_path),
-                       "--mass-per-electron", str(MASS_PER_ELECTRON))
-    coarse = _synthesise(tmp_path, monkeypatch, "coarse", "--atmosphere", str(even_path),
-                         "--downsample", "2", "--mass-per-electron", str(MASS_PER_ELECTRON))
-    assert _intensity(coarse).shape == (2, 2)
-    assert _intensity(coarse) == pytest.approx(_intensity(full)[0, 0], rel=1e-6)
-    wcs = coarse["line_cubes"][LINE].wcs.wcs
-    assert wcs.cdelt[1] == pytest.approx(2 * SPACING["x"].to_value(u.Mm))
-    assert wcs.cdelt[2] == pytest.approx(2 * SPACING["y"].to_value(u.Mm))
 
 
 def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_a_warning(

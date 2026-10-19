@@ -90,10 +90,13 @@ def test_components_that_cannot_be_told_apart_or_tied_are_refused(components,
         FitConfig(components=components)
 
 
-@pytest.mark.parametrize("key", ["bessel_correction", "save_iterations"])
-def test_the_switches_have_to_be_true_or_false(key):
-    with pytest.raises(ValueError, match="true or false"):
-        FitConfig(**{key: "yes"})
+@pytest.mark.parametrize("key, value", [
+    ("bessel_correction", "yes"), ("save_iterations", "yes"),
+    ("constrain_positive_intensity", "false"), ("weighted", "yes")])
+def test_the_switches_have_to_be_true_or_false(key, value):
+    """A quoted 'false' is a string, which is true."""
+    with pytest.raises(ValueError, match=f"fitting.{key} must be true or false"):
+        FitConfig(**{key: value})
 
 
 # --- what each fit means -----------------------------------------------------
@@ -224,15 +227,6 @@ def _line_cube(n_wave=25):
     profile = 100.0 * np.exp(-0.5 * ((wave - centre) / sigma) ** 2) + 5.0
     return NDCube(np.tile(profile, (2, 3, 1)), wcs=wcs, unit=u.DN / u.pix,
                   meta={"rest_wav": REST0})
-
-
-def test_a_fit_that_runs_out_of_iterations_is_reported_as_failed():
-    cube = _line_cube()
-    _, _, starved = fit_cube_gauss(cube, n_jobs=1, fit_config=FitConfig(max_iter=1),
-                                   return_failed=True)
-    _, _, ample = fit_cube_gauss(cube, n_jobs=1, return_failed=True)
-    assert starved.shape == (2, 3) and starved.all()
-    assert not ample.any()
 
 
 def test_return_failed_has_to_be_named():

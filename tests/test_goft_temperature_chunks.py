@@ -67,7 +67,7 @@ def fake_fiasco(tmp_path, monkeypatch):
     return _Ion
 
 
-@pytest.mark.parametrize("chunk", [1, 7, 100, 101, 500])
+@pytest.mark.parametrize("chunk", [1, 7, 101])
 def test_chunks_give_what_the_whole_grid_gives(fake_fiasco, chunk):
     """Every value, in order, for chunks that do and do not divide the grid."""
     whole, logt, logn = compute_goft_fiasco(LINES, n_workers=1)

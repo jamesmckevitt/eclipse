@@ -68,6 +68,29 @@ def two_temperature_synthesis(tmp_path_factory):
     return _synthesise(tmp_path_factory.mktemp("frame2"), np.array([1e6, 1e6, 2e6, 2e6]))
 
 
+@pytest.fixture(scope="module")
+def sharp_frame(uniform_synthesis):
+    """Frame of the uniform corona for 1 s, without the PSF or noise. Tests must not change it."""
+    products = read_synthesis_products(uniform_synthesis)
+    return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                          telescope=Telescope_EUVST(resolution_budget="none"), psf=False,
+                          noise=False, n_workers=1)
+
+
+@pytest.fixture(scope="module")
+def blurred_frame(uniform_synthesis):
+    """Frame of the uniform corona with the PSF and no noise. Tests must not change it.
+
+    The exposure is long, 1000 s, so the read-out smear adds little light. The
+    telescope leaves out the resolution budget, whose blur across the slit would
+    carry light past the edges of this small scene.
+    """
+    products = read_synthesis_products(uniform_synthesis)
+    return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+                          telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
+                          n_workers=1)
+
+
 def _one_line(products, logN=None, g_off_the_synthesis=None):
     logT = products["logT_grid"]
     logN = products["logN_grid"] if logN is None else logN
@@ -85,13 +108,11 @@ def _one_line(products, logN=None, g_off_the_synthesis=None):
 
 
 @pytest.mark.parametrize("psf", [False, True])
-def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesis, psf):
+def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesis, psf, request):
     products = read_synthesis_products(uniform_synthesis)
-    # Without the resolution budget's blur across the slit, which would carry
-    # light past the edges of this small scene.
+    # The rate does not depend on the exposure, so the 1000 s frame serves.
+    frame = request.getfixturevalue("blurred_frame" if psf else "sharp_frame")
     det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
-                           telescope=tel, psf=psf, noise=False, n_workers=1)
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
     # all at 1 MK and at rest.
@@ -116,11 +137,9 @@ def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesi
     assert not frame.rate["left"][:, 0].any()
 
 
-def test_the_frame_is_read_out_with_its_prescan_and_overscan(uniform_synthesis, tmp_path):
-    products = read_synthesis_products(uniform_synthesis)
+def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_path):
     det = Detector_SWC()
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
-                           noise=False, n_workers=1)
+    frame = sharp_frame
     rows = det.n_rows + det.parallel_overscan_rows
     samples = 2 * (det.serial_prescan + det.n_columns // 2 + det.serial_overscan)
     assert frame.dn["left"].shape == (rows, samples)
@@ -201,19 +220,16 @@ def test_a_pixels_emission_measure_is_shared_between_the_densities_either_side()
     assert np.allclose(high_share, [0.25, 0.0, 0.0, 0.0])
 
 
-def test_lines_on_a_wider_density_grid_give_the_same_frame(uniform_synthesis):
+def test_lines_on_a_wider_density_grid_give_the_same_frame(uniform_synthesis, sharp_frame):
     products = read_synthesis_products(uniform_synthesis)
     grid = products["logN_grid"]
     step = grid[1] - grid[0]
     wider = np.concatenate([grid[0] - step * np.arange(3, 0, -1), grid,
                             grid[-1] + step * np.arange(1, 4)])
-    settings = {"psf": False, "noise": False, "n_workers": 1}
-    own = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
-                         **settings)
     frame = full_ccd_frame(uniform_synthesis,
                            _one_line(products, wider, g_off_the_synthesis=5 * G0),
-                           0.3 * u.Mm, 1 * u.s, **settings)
-    assert np.array_equal(frame.rate["left"], own.rate["left"])
+                           0.3 * u.Mm, 1 * u.s, psf=False, noise=False, n_workers=1)
+    assert np.array_equal(frame.rate["left"], sharp_frame.rate["left"])
 
 
 def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_synthesis):
@@ -260,16 +276,15 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
                        n_workers=1)
 
 
-def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synthesis):
+def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synthesis,
+                                                                    blurred_frame):
     from scipy.stats import norm
 
     from euvst_response.frame import _response
 
     products = read_synthesis_products(uniform_synthesis)
-    det, tel = Detector_SWC(), Telescope_EUVST()
-    # Long exposure, so the read-out smear adds little light.
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
-                           noise=False, n_workers=1)
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
+    frame = blurred_frame
     focal_plane = FocalPlane_SWC.from_detector(det)
     middle = focal_plane.n_columns // 2
     peak = int(np.argmax(frame.rate["left"][:, middle]))

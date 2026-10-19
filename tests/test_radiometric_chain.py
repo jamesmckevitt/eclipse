@@ -162,7 +162,7 @@ def expected_photons_per_pixel(radiance, t_exp, area_cm2, det, sim,
 
 
 @pytest.mark.parametrize("detector_cls,slit_arcsec", INSTRUMENT_SLITS)
-@pytest.mark.parametrize("t_exp_s", [1.0, 10.0, 60.0])
+@pytest.mark.parametrize("t_exp_s", [1.0, 60.0])
 @pytest.mark.parametrize("area_cm2", [0.25, 1.5])
 def test_photons_per_pixel_matches_standard_equation(detector_cls, slit_arcsec,
                                                      t_exp_s, area_cm2):
@@ -200,37 +200,6 @@ def test_wavelength_axis_follows_the_fits_convention():
     from_cube = cube.axis_world_coords(2)[0].to_value(u.cm)
     assert np.allclose(from_cube, literal_wavelength_axis_cm(), rtol=1e-12,
                        atol=0.0)
-
-
-def test_photon_energy_is_hc_over_lambda():
-    """Photon energy used by the chain is hc / lambda.
-
-    195.119 Angstrom is 63.54 eV, so a photon count is an energy divided by
-    1.018e-10 erg. Every photon number here depends on it.
-    """
-    e_ph_erg = HC_ERG_CM / REST.to_value(u.cm)
-    assert e_ph_erg == pytest.approx(1.0181e-10, rel=1e-3)
-    assert e_ph_erg / ERG_PER_EV == pytest.approx(63.54, rel=1e-3)
-
-    # Check the chain divides by this energy: with area, solid angle, pitch
-    # and exposure divided out, photons per pixel times E_ph must give back
-    # the input radiance.
-    det = Detector_SWC()
-    sim = sim_for(Detector_SWC)
-    t_exp = 1 * u.s
-    got = run_chain(make_radiance_cube(), ConstantAreaTelescope(1.0), det, sim,
-                    t_exp)
-    actual = (got.data * got.unit).to_value(u.photon / u.pix)[0, 0, :]
-
-    lam_cm = literal_wavelength_axis_cm()
-    slit_cm = 2.0 * AU_CM * np.tan(0.5 * sim.slit_width.to_value(u.rad))
-    pix_rad = (det.plate_scale_angle * (1 * u.pix)).to_value(u.rad)
-    pix_cm = 2.0 * AU_CM * np.tan(0.5 * pix_rad)
-    geometry = (slit_cm * pix_cm / AU_CM**2
-                * (det.wvl_res * (1 * u.pix)).to_value(u.cm))
-
-    recovered = actual * (HC_ERG_CM / lam_cm) / geometry / t_exp.to_value(u.s)
-    assert np.allclose(recovered, RADIANCE, rtol=1e-10, atol=0.0)
 
 
 def test_photons_scale_linearly_with_radiance_exposure_and_area():

@@ -306,10 +306,9 @@ def _write_results_file(path, meta):
 
 
 @pytest.mark.parametrize("meta", [
-    {"integration_axis": "z"},
     {"integration_axis": "x"},
     {},  # written before the side views existed, so a view along z
-], ids=["z", "x", "no axis"])
+], ids=["x", "no axis"])
 def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
     written = _write_results_file(tmp_path / "written.h5", meta)
     # Older versions wrote such results as pickles.

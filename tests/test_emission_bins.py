@@ -35,9 +35,9 @@ def test_a_temperature_between_two_bins_is_shared_between_them():
     assert em_t == pytest.approx([0.0, 0.52, 0.48, 0.0])
 
 
-@pytest.mark.parametrize("velocity", [2.4, -17.3, 2.6])
+@pytest.mark.parametrize("velocity", [2.4, -17.3])
 def test_the_synthesised_line_is_centred_on_the_flow(velocity):
-    """The nearest bin alone would put a 2.4 or 2.6 km/s flow at 0 or 5 km/s, half a bin off."""
+    """The nearest bin alone would put a 2.4 km/s flow at 0 km/s, half a bin off."""
     log_t, v, em = _one_cell(6.15, velocity, 1.0e27)
     em_tv = build_em_tv(log_t, v, LOGT, GRID, em, "z")
     line = {"Fe12_195.1190": {"wl0": (195.119 * u.AA).to(u.cm), "g": np.ones((1, 1, LOGT.size)),

@@ -59,13 +59,6 @@ def test_a_typo_suggests_the_near_miss():
                               "SWC")
 
 
-def test_an_unrecognisable_key_is_still_reported():
-    """No suggestion is better than a misleading one."""
-    with pytest.raises(ValueError) as excinfo:
-        _validate_config_keys(dict(MINIMAL, zzzzqqq=1), "SWC")
-    assert "zzzzqqq" in str(excinfo.value)
-
-
 def test_section_keys_are_checked_too():
     with pytest.raises(ValueError, match="'simulation' section"):
         _validate_config_keys(
@@ -200,6 +193,7 @@ def test_check_config_keys_passes_when_everything_is_known():
 
 
 def test_suggest_returns_none_when_nothing_is_close():
+    """No suggestion is better than a misleading one."""
     assert suggest_config_key("zzzzqqq", {"alpha", "beta"}) is None
 
 

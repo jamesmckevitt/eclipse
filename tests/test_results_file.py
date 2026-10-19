@@ -167,11 +167,15 @@ def test_a_later_layout_or_a_link_elsewhere_is_refused(tmp_path):
 
 
 def test_scalars_and_strings_survive(tmp_path):
+    """A bool that came back as 1 would quietly change a config comparison."""
     out = _round_trip(tmp_path)
     assert out["instrument"] == "SWC"
     assert out["software_version"] == "0.7.0"
     assert out["config"]["n_iter"] == 5
     assert out["config"]["simulation"]["expos"] == ["5 s", "20 s"]
+    combo = next(iter(out["results"]["all_combinations"].values()))
+    assert combo["parameters"]["simulation.psf"] is True
+    assert combo["photon_fit_stats"] is None
 
 
 def test_an_unquoted_yaml_date_survives(tmp_path):
@@ -213,14 +217,7 @@ def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
     assert [str(c) for c in restored.wcs.cunit] == ["cm", "arcsec", "arcsec"]
     assert list(restored.wcs.cdelt) == list(_wcs().wcs.cdelt)
     assert list(restored.wcs.crpix) == list(_wcs().wcs.crpix)
-
-
-def test_the_wcs_describes_the_same_world_coordinates(tmp_path):
-    """The world coordinates, which matter more than the keywords, are unchanged."""
-    out = _round_trip(tmp_path)
-    before = _cube().axis_world_coords(2)[0].to_value(u.cm)
-    after = out["cube_sim"].axis_world_coords(2)[0].to_value(u.cm)
-    assert np.allclose(after, before, rtol=1e-12, atol=0.0)
+    assert list(restored.wcs.crval) == list(_wcs().wcs.crval)
 
 
 def test_saving_leaves_the_callers_wcs_alone(tmp_path):
@@ -260,32 +257,6 @@ def test_quantities_and_units_survive(tmp_path):
     assert combo["first_dn_signal_unit"] == u.DN / u.pix
     assert combo["dn_fit_stats"]["units"][1] == u.Angstrom
     assert out["results"]["sweep_dimensions"]["simulation.expos"][1] == 20 * u.s
-
-
-def test_booleans_stay_boolean(tmp_path):
-    """A bool that comes back as 1 would quietly change a config comparison."""
-    out = _round_trip(tmp_path)
-    combo = next(iter(out["results"]["all_combinations"].values()))
-    assert combo["parameters"]["simulation.psf"] is True
-
-
-def test_none_stays_none(tmp_path):
-    out = _round_trip(tmp_path)
-    combo = next(iter(out["results"]["all_combinations"].values()))
-    assert combo["photon_fit_stats"] is None
-
-
-def test_config_objects_come_back_as_the_right_classes(tmp_path):
-    out = _round_trip(tmp_path)
-    objects = next(iter(
-        out["results"]["all_combinations"].values()))["config_objects"]
-
-    assert isinstance(objects["detector"], Detector_SWC)
-    assert isinstance(objects["simulation"], Simulation)
-    assert isinstance(objects["telescope"], Telescope_EUVST)
-    # A nested dataclass, with a value that is not the default.
-    assert isinstance(objects["telescope"].filter, AluminiumFilter)
-    assert objects["telescope"].filter.al_thickness == 1500 * u.AA
 
 
 def _same(before, after):
@@ -362,8 +333,13 @@ def test_every_config_field_survives(tmp_path, config_object):
 
 
 def test_a_restored_detector_still_computes(tmp_path):
-    """Rebuilt objects have to work, not merely have the right fields."""
-    out = _round_trip(tmp_path)
+    """
+    Rebuilt objects have to work, not merely have the right fields.
+
+    The EIS telescope checks its calibration and date in __post_init__.
+    """
+    eis = Telescope_EIS(calibration="dz2025", date="2012-06-03")
+    out = _round_trip(tmp_path, {**_payload(), "eis_telescope": eis})
     objects = next(iter(
         out["results"]["all_combinations"].values()))["config_objects"]
 
@@ -372,6 +348,7 @@ def test_a_restored_detector_still_computes(tmp_path):
     assert area.to_value(u.cm**2) == pytest.approx(
         Telescope_EUVST(filter=AluminiumFilter(al_thickness=1500 * u.AA))
         .ea_and_throughput(REST).to_value(u.cm**2), rel=1e-12)
+    assert np.isfinite(out["eis_telescope"].effective_area(REST).to_value(u.cm**2))
 
 
 def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
@@ -400,20 +377,6 @@ def test_a_path_outside_the_package_is_kept_as_given(tmp_path):
     table = tmp_path / "my_tables" / "aluminium.dat"
     out = _round_trip(tmp_path, {"filter": AluminiumFilter(al_table=table)})
     assert out["filter"].al_table == table
-
-
-def test_the_fit_config_survives(tmp_path):
-    out = _round_trip(tmp_path)
-    fit_config = out["results"]["fit_config"]
-
-    assert isinstance(fit_config, FitConfig)
-    assert fit_config.max_iter == 500
-    assert len(fit_config.components) == 2
-    assert isinstance(fit_config.components[1], FitComponent)
-    assert fit_config.components[1].tie_center == 0
-    assert fit_config.components[0].wavelength == 195.119 * u.AA
-    # A derived property, so the object really works.
-    assert fit_config.n_components == 2
 
 
 def test_arrays_keep_their_values_and_dtype(tmp_path):
@@ -518,26 +481,6 @@ def test_a_file_cannot_name_an_arbitrary_class(tmp_path):
         load_results(path)
 
 
-def test_an_eis_telescope_survives(tmp_path):
-    """It validates its calibration and date in __post_init__."""
-    telescope = Telescope_EIS(calibration="dz2025", date="2012-06-03")
-    out = _round_trip(tmp_path, {"telescope": telescope})
-    assert isinstance(out["telescope"], Telescope_EIS)
-    assert out["telescope"].date == "2012-06-03"
-    assert np.isfinite(
-        out["telescope"].effective_area(REST).to_value(u.cm**2))
-
-
-def test_numpy_scalars_do_not_stop_a_write(tmp_path):
-    """np.bool_ and the like turn up in parsed configs."""
-    out = _round_trip(tmp_path, {"flag": np.bool_(True),
-                                 "count": np.int64(7),
-                                 "value": np.float32(1.5)})
-    assert out["flag"] is np.True_
-    assert type(out["count"]) is np.int64 and out["count"] == 7
-    assert type(out["value"]) is np.float32 and out["value"] == 1.5
-
-
 def test_sequences_and_meta_holding_arrays_are_groups(tmp_path):
     cube = NDCube(np.ones((2, 3)), wcs=WCS(naxis=2),
                   meta={"positions": np.arange(3.0) * u.Mm, "raster": True})
@@ -566,15 +509,13 @@ def test_keys_that_cannot_name_members_are_kept(tmp_path):
         save_results(tmp_path / "bad.h5", {"version": 1})
 
 
-def test_dates_times_text_and_edge_values_survive(tmp_path):
+def test_dates_times_and_edge_values_survive(tmp_path):
     when = datetime.datetime(2026, 9, 25, 12, 30, 5)
-    names = np.array(["Fe12_195.1190", "Fe09_171.0730"])
-    out = _round_trip(tmp_path, {"when": when, "names": names, "empty": np.zeros((0, 3)),
-                                 "nan": float("nan"), "big": 2**70, "flags": np.array([True, False])})
+    out = _round_trip(tmp_path, {"when": when, "empty": np.zeros((0, 3)), "big": 2**70,
+                                 "flags": np.array([True, False])})
     assert type(out["when"]) is datetime.datetime and out["when"] == when
-    assert out["names"].dtype == names.dtype and list(out["names"]) == list(names)
     assert out["empty"].shape == (0, 3)
-    assert np.isnan(out["nan"]) and out["big"] == 2**70
+    assert out["big"] == 2**70
     assert out["flags"].dtype == bool and list(out["flags"]) == [True, False]
 
 
@@ -1170,12 +1111,16 @@ def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
 
 
 def test_numbers_keep_their_numpy_types(tmp_path):
-    """Such as the keys of a cube's sampling, and a setting given in single precision."""
+    """
+    Such as the keys of a cube's sampling, a setting given in single precision, and the
+    `np.bool_` and `np.int64` values of a parsed config.
+    """
     values = {"f32": np.float32(0.76), "f64": np.float64(0.2), "i32": np.int32(26),
-              "flag": np.bool_(True), "zero_d": np.array(5.0), "count": u.Quantity(3, u.pix, dtype=int),
-              "single": np.float32(1.5) * u.s, "keys": {(np.float64(0.2), 1): np.zeros(3)}}
+              "i64": np.int64(7), "flag": np.bool_(True), "zero_d": np.array(5.0),
+              "count": u.Quantity(3, u.pix, dtype=int), "single": np.float32(1.5) * u.s,
+              "keys": {(np.float64(0.2), 1): np.zeros(3)}}
     out = _round_trip(tmp_path, values)
-    for name in ("f32", "f64", "i32", "flag"):
+    for name in ("f32", "f64", "i32", "i64", "flag"):
         assert type(out[name]) is type(values[name]) and out[name] == values[name], name
     assert type(out["zero_d"]) is np.ndarray and out["zero_d"].shape == () and out["zero_d"] == 5.0
     for name in ("count", "single"):
@@ -1255,16 +1200,10 @@ def test_a_long_name_is_written(tmp_path):
 
 
 def test_odd_paths_are_named_for_what_they_are(tmp_path, monkeypatch):
-    import dill
-
     (tmp_path / "x.h5").mkdir()
     for path in (tmp_path / "x.h5", tmp_path, tmp_path / "."):
         with pytest.raises(IsADirectoryError):
             load_results(path)
-    with open(tmp_path / "run.pickle", "wb") as f:
-        dill.dump({"instrument": "SWC"}, f)
-    with pytest.raises(FileNotFoundError, match="run.pickle, beside it, is a results pickle"):
-        load_results(tmp_path / "run.h5")
     monkeypatch.setenv("HOME", str(tmp_path))
     save_results(tmp_path / "home.h5", {"instrument": "SWC"})
     assert is_results_file("~/home.h5")

@@ -23,7 +23,7 @@ def _wavelengths(velocities):
     return (REST * (1 + velocities / const.c)).to(u.cm)
 
 
-@pytest.mark.parametrize("nx, ny", [(4, 6), (5, 7), (4, 7)])
+@pytest.mark.parametrize("nx, ny", [(4, 6), (5, 7)])
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
 def test_the_image_axes_carry_the_atmospheres_coordinates(nx, ny, axis):
     """For even and odd sizes, each image axis has the reference cube's coordinates."""

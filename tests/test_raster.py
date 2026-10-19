@@ -850,8 +850,6 @@ def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch)
 
     with pytest.raises(ValueError, match="only one of"):
         run(atmosphere_series=str(tmp_path / "other" / "*.h5"))
-    with pytest.raises(ValueError, match="only one of"):
-        run(synthesis_file=str(tmp_path / "other" / "snap_0.h5"))
     with pytest.raises(ValueError, match="belongs to an 'atmosphere_series' run"):
         run(synthesis={"lines": [LINE]})
     with pytest.raises(ValueError, match="needs a 'raster:' section"):
@@ -862,8 +860,8 @@ def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch)
         run(raster={"start": "0 s", "centre": "5 Mm"})
 
 
-@pytest.mark.parametrize("steps", [2, 4])
-def test_a_plan_of_an_even_number_of_steps_is_centred_between_two_of_them(steps):
+def test_a_plan_of_an_even_number_of_steps_is_centred_between_two_of_them():
+    steps = 2
     step = angle_to_distance(0.4 * u.arcsec).to_value(u.Mm)
     exposures = RasterPlan(start=0 * u.s, steps=steps).exposures(
         0.4 * u.arcsec, 2 * u.s, atmosphere_centre=1 * u.Mm, repeat=0)

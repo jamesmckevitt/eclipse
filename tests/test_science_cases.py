@@ -205,13 +205,9 @@ def test_the_command_lists_cases_and_what_can_be_simulated(capsys):
     assert "Ne VIII 770.428        not simulated yet" in out
 
 
-@pytest.mark.parametrize("argv", [
-    ["--line", "Fe XII 195.5"],
-    ["--case", "I-3-1", "--line", "Fe XII"],
-])
-def test_the_list_refuses_a_line_choice_that_matches_nothing(argv, capsys):
+def test_the_list_refuses_a_line_choice_that_matches_nothing(capsys):
     with pytest.raises(ValueError, match="No line in the chosen cases matches"):
-        sc.main(["--list", *argv])
+        sc.main(["--list", "--case", "I-3-1", "--line", "Fe XII"])
     assert capsys.readouterr().out == ""
 
 

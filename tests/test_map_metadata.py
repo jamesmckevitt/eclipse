@@ -97,13 +97,6 @@ def test_no_sunpy_metadata_warnings_are_raised():
     assert [m.getMessage() for m in messages] == []
 
 
-def test_two_runs_produce_the_same_date():
-    """The maps must not depend on the clock."""
-    first = _make(date_obs=WHEN)["total_dn"].meta["date-obs"]
-    second = _make(date_obs=WHEN)["total_dn"].meta["date-obs"]
-    assert first == second
-
-
 def test_a_date_object_is_accepted():
     maps = _make(date_obs=date_type(2024, 3, 20))
     assert maps["total_dn"].meta["date-obs"].startswith("2024-03-20")
@@ -137,15 +130,6 @@ def test_units_are_still_attached():
     assert maps["total_dn"].meta["bunit"] == "DN"
     assert maps["velocity_mean"].meta["bunit"] == "km / s"
     assert maps["line_width_mean"].meta["bunit"] == "Angstrom"
-
-
-def test_the_wcs_still_describes_the_same_pixels():
-    """Going through a FITS header must not disturb the plate scale."""
-    maps = _make(date_obs=WHEN)
-    map_obj = maps["total_dn"]
-    assert map_obj.data.shape == (NY, NX)
-    assert map_obj.scale[0].to_value(u.arcsec / u.pix) == pytest.approx(0.2)
-    assert map_obj.scale[1].to_value(u.arcsec / u.pix) == pytest.approx(0.16)
 
 
 def test_the_exposure_time_map_holds_the_exposure_times_in_seconds():

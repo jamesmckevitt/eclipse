@@ -139,6 +139,27 @@ def test_a_uniform_intensity_run_reads_back_what_it_saved(tmp_path, monkeypatch)
     assert not Path("run/result/uniform.pkl").exists()
     _same(load_results(path), payload)
 
+    # A script asking for the old results name reads the new file.
+    with pytest.warns(FutureWarning, match="uniform.h5, which the instrument simulation now"):
+        results = load_instrument_response_results("run/result/uniform.pkl")
+    assert results["instrument"] == "SWC"
+
+    # An existing pickle is the one read, and the warning says when the .h5
+    # beside it is newer (the results of a later run).
+    import dill
+
+    old = Path("run/result/uniform.pkl")
+    with open(old, "wb") as f:
+        dill.dump({"instrument": "EIS"}, f)
+    written = Path("run/result/uniform.h5").stat().st_mtime
+    for offset, newer in ((-100, True), (100, False)):
+        os.utime(old, (written + offset, written + offset))
+        with pytest.warns(FutureWarning, match="results pickle") as seen:
+            assert load_results(old)["instrument"] == "EIS"
+        assert any("beside it, is newer" in str(w.message) for w in seen) is newer
+    with pytest.raises(FileNotFoundError):
+        load_results("run/result/elsewhere.pkl")
+
 
 def test_a_synthesis_file_run_reads_back_what_it_saved(tmp_path, monkeypatch):
     _synthesis_file(tmp_path / "synthesis.h5")
@@ -298,30 +319,6 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
     with pytest.warns(UserWarning, match="has allow_nonflight_slit, which this version of "
                                          "ECLIPSE does not have, so it is left out"):
         convert_results_pickle(tmp_path / "branch.pkl")
-
-
-def test_a_script_asking_for_the_old_results_name_reads_the_new_file(tmp_path, monkeypatch):
-    _run(tmp_path, monkeypatch, "uniform", uniform_intensity="5000 erg / (s cm2 sr)",
-         simulation={"slit_width": "0.2 arcsec", "expos": "5 s"})
-    with pytest.warns(FutureWarning, match="uniform.h5, which the instrument simulation now"):
-        results = load_instrument_response_results("run/result/uniform.pkl")
-    assert results["instrument"] == "SWC"
-
-    # An existing pickle is the one read, and the warning says when the .h5
-    # beside it is newer (the results of a later run).
-    import dill
-
-    old = Path("run/result/uniform.pkl")
-    with open(old, "wb") as f:
-        dill.dump({"instrument": "EIS"}, f)
-    written = Path("run/result/uniform.h5").stat().st_mtime
-    for offset, newer in ((-100, True), (100, False)):
-        os.utime(old, (written + offset, written + offset))
-        with pytest.warns(FutureWarning, match="results pickle") as seen:
-            assert load_results(old)["instrument"] == "EIS"
-        assert any("beside it, is newer" in str(w.message) for w in seen) is newer
-    with pytest.raises(FileNotFoundError):
-        load_results("run/result/elsewhere.pkl")
 
 
 def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsys):
