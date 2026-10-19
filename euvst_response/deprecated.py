@@ -1,27 +1,9 @@
 """
-Deprecated functions, kept so existing scripts still run.
+Deprecated functions, which warn when called and will be removed in a future release.
 
-Each warns when called and will be removed in a future release. They are
-gathered here so it is clear what will go; their old names, such as
-`euvst_response.frame.apply_spectral_psf`, still work.
-
-Functions:
-
-- `apply_spectral_psf` (was in `frame`): blur a frame's rows after the
-  light is on them. Use `photons_from_lines` or `photons_from_spectrum`
-  with `spectral_psf` and `det`.
-- `get_dem_data_from_results` (was in `analysis`): no version wrote the DEM
-  into the results. Use `read_synthesis_products`.
-- `_load_psf_ascii`, `_resample_psf`, `_combine_psfs` (were in `psf`): helpers
-  for tabulated PSF files, which ECLIPSE does not use.
-
-Deprecated features, not functions, which will also be removed:
-
-- Results and synthesis pickles, read with a warning and converted by
-  `convert_results_pickle` and `convert_synthesis_pickle`.
-- The synthesis's dynamic mode (`--slit-rest-time`), replaced by time
-  series of atmosphere files.
-- The synthesis's route from MURaM's own files, replaced by `--atmosphere`.
+They are kept so existing scripts still run, under their old names too.
+`docs/older-versions.md` lists the deprecated features, such as results
+pickles and the synthesis's dynamic mode.
 """
 
 from __future__ import annotations
@@ -65,17 +47,18 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     the spectrum continues across the gap. To include this, lay the spectrum
     with a `margin` of at least
     :func:`~euvst_response.radiometric.spectral_psf_reach` rows past each
-    end (:func:`photons_from_lines` and :func:`photons_from_spectrum` take
-    one), and pass the same margin here. The result is then the chip's own
+    end (:func:`~euvst_response.frame.photons_from_lines` and
+    :func:`~euvst_response.frame.photons_from_spectrum` take one), and pass
+    the same margin here. The result is then the chip's own
     rows. The kernel is normalised, so flux that stays within the rows is
     conserved.
 
-    .. deprecated:: 0.12.0
-        Blurring the rows after the light is on them moves a line narrower
-        than a row toward the middle of its row, by up to a few km/s. Give
-        `spectral_psf` and `det` to :func:`photons_from_lines` or
-        :func:`photons_from_spectrum` instead, which blur the light as it is
-        laid onto the rows.
+    Deprecated: blurring the rows after the light is on them moves a line
+    narrower than a row toward the middle of its row, by up to a few km/s.
+    Give `spectral_psf` and `det` to
+    :func:`~euvst_response.frame.photons_from_lines` or
+    :func:`~euvst_response.frame.photons_from_spectrum` instead, which blur
+    the light as it is laid onto the rows.
     """
     warnings.warn(
         "apply_spectral_psf is deprecated and will be removed in a future release: blurring "
@@ -139,7 +122,7 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
             "in the synthesis file: read it with "
             "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
         )
-    
+
     return results["dem_data"]
 
 

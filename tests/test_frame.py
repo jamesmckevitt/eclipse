@@ -724,3 +724,18 @@ def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
         np.full((3, 1), 2.0), [195.0, 196.0, 197.0] * u.AA, 1.0 * u.s, one)
     assert photons.shape == mean.shape == (3, 6)
     assert np.allclose(mean.to_value(u.AA), [[195.0], [196.0], [197.0]])
+
+
+def test_the_psf_file_helpers_warn_at_the_line_that_calls_them():
+    """Importing the deprecated psf module is silent; calling a helper warns once, at the caller."""
+    import warnings as _warnings
+
+    import euvst_response.psf as psf
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        psf._resample_psf(np.ones((4, 4)), 1 * u.arcsec, 2 * u.arcsec)
+    deprecations = [w for w in caught if issubclass(w.category, FutureWarning)]
+    assert len(deprecations) == 1
+    assert "_resample_psf is deprecated" in str(deprecations[0].message)
+    assert deprecations[0].filename == __file__

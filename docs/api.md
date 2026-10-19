@@ -98,7 +98,6 @@ These are the steps `simulate_once` takes, in order.
 
 ::: euvst_response.create_sunpy_maps_from_combo
 
-
 ## Atmosphere files
 
 ::: euvst_response.Atmosphere
