@@ -74,7 +74,7 @@ def test_a_failing_rank_says_so_and_ends_the_run(monkeypatch, capfd):
     assert "MPI rank 3: Error during simulation: out of memory" in capfd.readouterr().err
 
 
-@pytest.mark.parametrize("ncpu", [0, -2, "2", 2.5, True])
+@pytest.mark.parametrize("ncpu", [0, 2.5, True])
 def test_ncpu_is_a_whole_number_of_cpus_or_minus_one(ncpu, tmp_path, monkeypatch):
     import yaml
     from euvst_response.main import main

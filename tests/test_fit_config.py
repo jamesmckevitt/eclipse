@@ -112,22 +112,24 @@ def test_bad_backend_and_max_iter_are_refused_without_components(settings,
 
 # --- the settings reaching the single-Gaussian fit --------------------------
 
-def test_the_default_single_gaussian_fit_recovers_the_line():
-    fit, _ = fit_cube_gauss(_line_cube(), n_jobs=1)
-    _assert_recovers_the_line(fit)
-
-
 def test_max_iter_reaches_the_single_gaussian_fit():
-    """With one iteration scipy runs out and returns its initial guess."""
+    """
+    With one iteration scipy runs out, returns its initial guess, and the fit is
+    reported as failed. With the default settings the fit recovers the line.
+    """
     cube = _line_cube()
     wave = cube.axis_world_coords(2)[0].to_value(u.cm)
     guess = fitting._guess_params(wave, cube.data[0, 0].copy())
 
-    starved, _ = fit_cube_gauss(cube, n_jobs=1, fit_config=FitConfig(max_iter=1))
+    starved, _, starved_failed = fit_cube_gauss(cube, n_jobs=1,
+                                                fit_config=FitConfig(max_iter=1),
+                                                return_failed=True)
     assert np.array_equal(starved[0, 0], guess)
+    assert starved_failed.shape == (2, 3) and starved_failed.all()
 
-    ample, _ = fit_cube_gauss(cube, n_jobs=1, fit_config=FitConfig(max_iter=5000))
+    ample, _, ample_failed = fit_cube_gauss(cube, n_jobs=1, return_failed=True)
     _assert_recovers_the_line(ample)
+    assert not ample_failed.any()
 
 
 def test_the_mpfit_backend_reaches_the_single_gaussian_fit(monkeypatch):

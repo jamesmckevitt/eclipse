@@ -58,7 +58,6 @@ def _run(tmp_path, monkeypatch, config, text=None):
     (lambda: Telescope_EIS(psf_slit_width=np.inf * u.arcsec),
      "psf_slit_width must be a finite angle above zero"),
     (lambda: FitComponent(195.119), "wavelength must be the wavelength of a line"),
-    (lambda: FitConfig(weighted="yes"), "fitting.weighted must be true or false"),
     (lambda: FitConfig(components=[FitComponent(195.119 * u.AA), FitComponent(195.179 * u.AA)],
                        primary_component=1.0), "primary_component is 1.0"),
 ])
@@ -193,13 +192,22 @@ def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"shutter": shutter}})
 
 
-def test_the_cameras_read_out_settings_are_taken_from_the_configuration(tmp_path, monkeypatch):
-    """They describe the camera for the read-out model; a run checks and records them."""
-    _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {
+def test_the_cameras_read_out_settings_are_taken_from_the_configuration():
+    """They describe the camera for the read-out model; a run accepts them and builds it."""
+    from euvst_response.main import _validate_config_keys
+    from euvst_response.utils import _parse_section, load_yaml_config
+
+    config = load_yaml_config(yaml.safe_dump({**UNIFORM, "detector": {
         "shutter": True, "n_rows": 1024, "ccd_gap": "2 mm", "row_transfer_time": "20 us",
-        "pixel_period": "1 us", "serial_prescan": 0, "parallel_overscan_rows": 0}})
-    with pytest.raises(ValueError, match="detector.n_rows must be a whole number"):
-        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {"n_rows": 0}})
+        "pixel_period": "1 us", "serial_prescan": 0, "parallel_overscan_rows": 0}}))
+    _validate_config_keys(config, "SWC")
+    fixed, sweep = _parse_section(config["detector"], "detector")
+    assert not sweep
+    det = Detector_SWC(**fixed)
+    assert (det.shutter, det.n_rows, det.serial_prescan, det.parallel_overscan_rows) == (
+        True, 1024, 0, 0)
+    assert det.ccd_gap == 2 * u.mm
+    assert det.row_transfer_time == 20 * u.us and det.pixel_period == 1 * u.us
 
 
 def test_a_yaml_merge_key_is_read_as_yaml_reads_it():

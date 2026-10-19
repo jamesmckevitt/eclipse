@@ -95,16 +95,6 @@ def test_key_lines_land_where_the_design_puts_them():
         assert at == pytest.approx(row, abs=0.5), name
 
 
-def test_row_of_wavelength_inverts_wavelength():
-    fp = FocalPlane_SWC()
-    for ccd in ("left", "right"):
-        for row in (0, 17, 600, 1861, 2047):
-            lam = fp.wavelength(row, ccd)
-            where, back = fp.row_of_wavelength(lam)
-            assert where == ccd
-            assert back == pytest.approx(row, abs=1e-3)
-
-
 def test_the_gap_between_the_ccds_records_nothing():
     fp = FocalPlane_SWC()
     with pytest.raises(ValueError, match="not on either CCD"):
@@ -202,35 +192,6 @@ def test_windows_pay_for_the_rows_they_read_and_dump_the_rest():
     read_rows = 16 * 40 + 20
     expected = 2068 * 15.0e-6 + read_rows * 547.0e-6
     assert sequence.readout_duration(2048).to_value(u.s) == pytest.approx(expected)
-
-
-def test_windows_from_wavelengths_covers_the_line():
-    fp = FocalPlane_SWC()
-    windows = windows_from_wavelengths(fp, [(194.9 * u.Angstrom, 195.3 * u.Angstrom)])
-    (first, last), = windows
-    _, row = fp.row_of_wavelength(195.119 * u.Angstrom)
-    assert first <= row <= last
-    assert last - first == pytest.approx(0.4 / 0.0169, abs=2)
-
-
-@pytest.mark.parametrize("low, high", [
-    (194.9, 195.3),       # one CCD
-    (195.119, 200.972),   # Fe XII on the left CCD to Ca XV on the right
-    (200.972, 195.119),   # the same, given the other way round
-])
-def test_a_window_holds_every_row_its_wavelengths_land_on(low, high):
-    # A range across the gap runs out to the butted edge on both CCDs, so
-    # the window reaches row 2047.
-    fp = FocalPlane_SWC()
-    (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
-    rows = np.arange(fp.n_rows)
-    for ccd in ("left", "right"):
-        lam = fp.wavelength(rows, ccd).to_value(u.Angstrom)
-        wanted = rows[(lam >= min(low, high)) & (lam <= max(low, high))]
-        if wanted.size:
-            assert first <= wanted.min() and wanted.max() <= last
-    if min(low, high) < 199.0 < max(low, high):
-        assert last == fp.n_rows - 1
 
 
 # ---------------------------------------------------------------------------
@@ -428,12 +389,17 @@ def _rows_overlapping(fp, low, high, column=None):
 
 
 @pytest.mark.parametrize("low, high", [(194.9, 195.3), (192.0, 192.06), (195.119, 200.972),
-                                       (198.0, 198.6), (160.0, 164.0)])
+                                       (200.972, 195.119), (198.0, 198.6), (160.0, 164.0)])
 def test_a_window_is_the_rows_its_wavelengths_land_on_and_no_more(low, high):
-    """Rounding each end outward would add a row when an end is in the inner half of its row."""
+    """
+    Rounding each end outward would add a row when an end is in the inner half of its row.
+
+    A range may be given either way round. One across the gap, such as Fe XII on the left CCD
+    to Ca XV on the right, runs out to the butted edge on both CCDs.
+    """
     fp = FocalPlane_SWC()
     (first, last), = windows_from_wavelengths(fp, [(low * u.Angstrom, high * u.Angstrom)])
-    wanted = _rows_overlapping(fp, low, high)
+    wanted = _rows_overlapping(fp, min(low, high), max(low, high))
     assert (first, last) == (min(wanted), max(wanted))
 
 

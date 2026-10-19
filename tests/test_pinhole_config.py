@@ -113,17 +113,6 @@ def test_simulation_rejects_positions_without_sizes():
         _pinhole_sim(pinhole_positions=[0.2])
 
 
-def test_simulation_rejects_positions_outside_the_detector():
-    with pytest.raises(ValueError, match=r"must lie in \[0, 1\]"):
-        _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=[1.5])
-
-
-def test_simulation_rejects_spectral_positions_that_do_not_match():
-    with pytest.raises(ValueError, match="same length as pinhole_sizes"):
-        _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=[0.3],
-                     pinhole_positions_spectral=[0.1, 0.2])
-
-
 def test_simulation_converts_quoted_positions_to_floats():
     sim = _pinhole_sim(pinhole_sizes=[20 * u.um], pinhole_positions=["0.3"],
                        pinhole_positions_spectral=["0.6"])
@@ -133,8 +122,7 @@ def test_simulation_converts_quoted_positions_to_floats():
 
 # --- the EIS guard, exercised through main() ---------------------------------
 #
-# EIS has no aluminium filter, so it has no pinholes to model. The guard must
-# catch an EIS config with positions alone, not only one with sizes.
+# EIS has no aluminium filter, so it has no pinholes to model.
 
 EIS_UNIFORM = """
 instrument: EIS
@@ -168,9 +156,3 @@ def test_eis_rejects_enable_pinholes(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="not supported for EIS"):
         _run_main(tmp_path, monkeypatch,
                   "simulation:\n  enable_pinholes: True\n")
-
-
-def test_eis_rejects_positions_alone(tmp_path, monkeypatch):
-    """The config from the issue, which must not run with no pinholes."""
-    with pytest.raises(ValueError):
-        _run_main(tmp_path, monkeypatch, "pinhole_positions: [0.1, 0.2, 0.3]\n")

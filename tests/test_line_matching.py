@@ -97,6 +97,7 @@ def test_a_name_off_every_line_gets_the_nearest_observed_with_a_warning(fake_fia
 
 
 def test_one_line_named_twice_is_refused_whatever_the_names(fake_fiasco):
+    """Both would be synthesised and summed, which doubles the line."""
     with pytest.raises(ValueError, match="are the same line"):
         compute_goft_fiasco(["Fe12_195.1190", "Fe12_195.12"], **GRID)
 
@@ -141,10 +142,3 @@ def test_a_theoretical_line_of_chianti_is_synthesised_where_it_is_named():
     goft, _, _ = compute_goft_fiasco(["Fe12_193.526", "Fe12_195.12"], **GRID)
     assert goft["Fe12_193.526"]["wl0"].to_value(u.AA) == pytest.approx(193.526)
     assert goft["Fe12_195.12"]["wl0"].to_value(u.AA) == pytest.approx(195.119)
-
-
-@chianti
-def test_one_line_named_twice_is_refused():
-    """Both would be synthesised and summed, which doubles the line."""
-    with pytest.raises(ValueError, match="are the same line"):
-        compute_goft_fiasco(["Fe09_177.5920", "Fe09_177.59"], **GRID)

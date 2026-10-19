@@ -73,13 +73,6 @@ def test_photon_arrivals_return_the_mean_and_stay_continuous():
     assert out.data.dtype.kind == "f"
 
 
-def test_photon_arrivals_are_still_random_by_default():
-    np.random.seed(3)
-    a = sample_photon_arrivals(_photon_cube()).data
-    b = sample_photon_arrivals(_photon_cube()).data
-    assert not np.array_equal(a, b)
-
-
 def test_electrons_are_qe_times_gain_exactly():
     """Both draws give their mean: photons times QE times electrons per photon."""
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)

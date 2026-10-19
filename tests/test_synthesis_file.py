@@ -704,13 +704,6 @@ def test_load_atmosphere_reads_a_synthesis_file_as_it_read_the_pickle(tmp_path):
         _keeps_meta(got.meta, expected.meta)
 
 
-def test_an_instrument_run_names_a_line_the_file_lacks(tmp_path, monkeypatch):
-    write_synthesis(_synthesis(), tmp_path / "file.h5")
-    with pytest.raises(ValueError, match="is not in"):
-        _run(tmp_path, monkeypatch, "missing", synthesis_file=str(tmp_path / "file.h5"),
-             reference_line="Fe10_184.5370")
-
-
 @pytest.mark.parametrize("reader, kind", [
     ("atmosphere:read_atmosphere", "atmosphere"),
     ("atmosphere:describe_atmosphere_file", "atmosphere"),

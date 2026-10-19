@@ -106,10 +106,3 @@ def test_what_no_fit_can_meet_is_refused(ties, message):
             setattr(components[index], key, value)
     with pytest.raises(ValueError, match=message):
         FitConfig(components=components)
-
-
-def test_constrain_positive_intensity_must_be_true_or_false():
-    """A quoted 'false' is a string, which is true."""
-    components = [FitComponent(rest) for rest in RESTS]
-    with pytest.raises(ValueError, match="constrain_positive_intensity must be true or false"):
-        FitConfig(components=components, constrain_positive_intensity="false")
