@@ -652,17 +652,21 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}}
     for ccd in CCDS:
-        image_rate = rate[ccd].T                                          # (rows, columns)
+        # The line correction subtracts nearly equal numbers in a line's far
+        # wings, which can leave a rate a rounding error below zero; a rate is
+        # never negative, and the Poisson draw refuses one.
+        image_rate = np.maximum(rate[ccd], 0.0, out=rate[ccd]).T          # (rows, columns)
         wavelength = focal_plane.wavelength(rows, ccd)
         # Wavelengths of the mean and root mean square energies of the
         # photons reaching each pixel. A pixel no photons reach keeps its
         # row's wavelength.
         own = np.broadcast_to(wavelength.to_value(u.Angstrom)[:, np.newaxis], image_rate.shape)
+        lit = image_rate > 0
         reaching = np.divide(image_rate, per_wavelength[ccd].T, out=np.array(own, dtype=float),
-                             where=per_wavelength[ccd].T > 0) * u.Angstrom
+                             where=lit & (per_wavelength[ccd].T > 0)) * u.Angstrom
         reaching_rms = np.sqrt(np.divide(image_rate, per_square[ccd].T,
                                          out=np.array(own, dtype=float) ** 2,
-                                         where=per_square[ccd].T > 0)) * u.Angstrom
+                                         where=lit & (per_square[ccd].T > 0))) * u.Angstrom
         photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
             image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons

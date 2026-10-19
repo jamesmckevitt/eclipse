@@ -724,3 +724,14 @@ def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
         np.full((3, 1), 2.0), [195.0, 196.0, 197.0] * u.AA, 1.0 * u.s, one)
     assert photons.shape == mean.shape == (3, 6)
     assert np.allclose(mean.to_value(u.AA), [[195.0], [196.0], [197.0]])
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+def test_a_lines_rows_are_never_below_zero(spectral_psf):
+    """The line correction rounds a few far-wing rows just below zero; a Poisson draw needs none."""
+    rows = photons_from_lines(FocalPlane_SWC(), "right", Telescope_EUVST(), SLIT_WIDTH * u.arcsec,
+                              [211.317] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
+                              [0.03] * u.Angstrom, det=Detector_SWC(),
+                              spectral_psf=spectral_psf).value
+    assert (rows >= 0).all() and rows.max() > 0
+    np.random.default_rng(0).poisson(rows)

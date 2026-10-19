@@ -400,3 +400,17 @@ def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthe
     moving = full_ccd_frame(fast_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
     assert at_rest.rate["left"].any()
     assert np.allclose(moving.rate["left"], at_rest.rate["left"], rtol=1e-12, atol=0)
+
+
+def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):
+    """The line correction leaves some rates a rounding error below zero, which the draw refuses."""
+    products = read_synthesis_products(uniform_synthesis)
+    np.random.seed(0)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
+    for ccd in ("left", "right"):
+        assert (frame.rate[ccd] >= 0).all()
+        lit = frame.rate[ccd] > 0
+        image = frame.photon_wavelength[ccd][:lit.shape[0]]
+        assert np.all(image[~lit] == np.broadcast_to(
+            frame.wavelength[ccd].to_value(u.AA)[:, np.newaxis], lit.shape)[~lit] * u.AA)
