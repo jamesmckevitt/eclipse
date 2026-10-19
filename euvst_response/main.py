@@ -25,7 +25,8 @@ from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
 from .pinhole_diffraction import _pinholes_on
-from .radiometric import spectral_optics_fwhm, spectral_psf_margin
+from .radiometric import (across_slit_fwhm, spectral_optics_fwhm, spectral_psf_fwhm,
+                          spectral_psf_margin)
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
@@ -1204,10 +1205,14 @@ def main() -> None:
         # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
         # so cube_reb_cache is keyed by the sampling alone to avoid redundant rebin calls
         # when sweeping multiple binning values at fixed spatial/spectral sampling.
+        # The spectral PSF's width sets how far the rebinned cube's wavelength
+        # grid reaches, and it changes with the telescope's resolution budget,
+        # which may be swept.
         sampling_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
+            spectral_psf_fwhm(TEL, DET, slit_width),
         )
         # In uniform-intensity mode the cube has offchip_bin_slit pixels along the
         # slit, giving rebin_slit_offchip independent noise realisations to sum, so
@@ -1342,7 +1347,7 @@ def main() -> None:
                                      pinhole_positions=list(SIM.pinhole_positions),
                                      pinhole_positions_spectral=list(
                                          SIM.pinhole_positions_spectral))
-                across = TEL.psf_across_slit if psf else None
+                across = across_slit_fwhm(TEL) if psf else None
                 extend = psf_boundary == "replicate"
                 if atmosphere_series_mode:
                     scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(

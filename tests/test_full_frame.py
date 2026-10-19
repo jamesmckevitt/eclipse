@@ -87,9 +87,11 @@ def _one_line(products, logN=None, g_off_the_synthesis=None):
 @pytest.mark.parametrize("psf", [False, True])
 def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesis, psf):
     products = read_synthesis_products(uniform_synthesis)
+    # Without the resolution budget's blur across the slit, which would carry
+    # light past the edges of this small scene.
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
-                           psf=psf, noise=False, n_workers=1)
-    det, tel = Detector_SWC(), Telescope_EUVST()
+                           telescope=tel, psf=psf, noise=False, n_workers=1)
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
     # all at 1 MK and at rest.
@@ -323,8 +325,8 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
                   * (REST / wavelength) ** 2 * np.ones((1, n_t, 1)))
     frame = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, psf=psf,
                            continuum=(wavelength * u.AA, free, two_photon), noise=False,
-                           n_workers=1)
-    det, tel = Detector_SWC(), Telescope_EUVST()
+                           n_workers=1, telescope=Telescope_EUVST(resolution_budget="none"))
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
     # all at 1e9 cm^-3, from the DEM per unit log T. The continuum is per unit

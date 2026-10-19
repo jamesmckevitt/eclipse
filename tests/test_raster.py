@@ -925,6 +925,7 @@ def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypat
 
     from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
     from euvst_response.data_processing import rebin_atmosphere
+    from euvst_response.radiometric import across_slit_fwhm
 
     snapshots = [_snapshot(t, columns={6: (3.0, 0.0)}) for t in (0.0, 10.0)]
     paths = _series(tmp_path / "series", snapshots)
@@ -946,9 +947,11 @@ def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypat
     main_module.main()
 
     assert len(observed) == 1 and observed[0].meta["psf_applied"]
+    # The resolution budget's blur across the slit adds to the optics'.
+    across = across_slit_fwhm(Telescope_EUVST(psf_across_slit=1 * u.arcsec))
     synthesiser = RasterSynthesiser(AtmosphereSeries(paths), _settings())
     scene = synthesiser.summed_cube(RasterPlan(start=0 * u.s, steps=2), 0.4 * u.arcsec, 5 * u.s,
-                                    LINE, across_slit=1 * u.arcsec)
+                                    LINE, across_slit=across)
     expected = rebin_atmosphere(
         scene, Detector_SWC(),
         Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, psf=True, ncpu=1),

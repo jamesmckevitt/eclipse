@@ -11,6 +11,7 @@ from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.special import erf
 from scipy.stats import binom, poisson
+from . import resolution_budget
 from .sampling import _carry_photon_wavelengths
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
@@ -401,6 +402,57 @@ def slit_image_width(slit_width: u.Quantity, det) -> float:
     return (slit_width / (det.plate_scale_angle * u.pixel)).to_value(u.dimensionless_unscaled)
 
 
+def _budget(tel):
+    """`resolution_budget` and `pointing_jitter` in arcsec, for the resolution_budget functions."""
+    jitter = getattr(tel, "pointing_jitter", None)
+    return (getattr(tel, "resolution_budget", "none"),
+            None if jitter is None else jitter.to_value(u.arcsec))
+
+
+def _budget_pixels(tel, det, part) -> float:
+    """FWHM in pixels of the resolution budget's blur, `part` one of its functions."""
+    return part(*_budget(tel)) / (det.plate_scale_angle * u.pixel).to_value(u.arcsec)
+
+
+def spatial_psf_fwhm(tel, det) -> float:
+    """
+    FWHM of the PSF along the slit, in detector pixels.
+
+    `tel.psf_params[0]`, the optical design, and the resolution budget's
+    other terms (:func:`~euvst_response.resolution_budget.along_slit_fwhm`)
+    added in quadrature.
+    """
+    optics = tel.psf_params[0].to_value(u.pixel)
+    return float(np.hypot(optics, _budget_pixels(tel, det, resolution_budget.along_slit_fwhm)))
+
+
+def across_slit_fwhm(tel) -> u.Quantity | None:
+    """
+    FWHM of the telescope's blur across the slit, or None for none.
+
+    `tel.psf_across_slit` and the resolution budget's terms before the slit
+    (:func:`~euvst_response.resolution_budget.across_slit_fwhm`) added in
+    quadrature.
+    """
+    optics = getattr(tel, "psf_across_slit", None)
+    optics = 0.0 if optics is None else optics.to_value(u.arcsec)
+    fwhm = np.hypot(optics, resolution_budget.across_slit_fwhm(*_budget(tel)))
+    return None if fwhm == 0 else float(fwhm) * u.arcsec
+
+
+def spectral_blur_fwhm(tel, det) -> float:
+    """
+    FWHM of the spectral PSF without the slit, in detector pixels.
+
+    The optics (:func:`spectral_optics_fwhm`) and the resolution budget's
+    other terms (:func:`~euvst_response.resolution_budget.spectral_fwhm`)
+    added in quadrature. This is the Gaussian convolved with the slit's
+    image for `spectral_psf="convolution"`.
+    """
+    return float(np.hypot(spectral_optics_fwhm(tel, det),
+                          _budget_pixels(tel, det, resolution_budget.spectral_fwhm)))
+
+
 def spectral_optics_fwhm(tel, det) -> float:
     """
     FWHM of the optics alone along the dispersion, in detector pixels.
@@ -436,10 +488,13 @@ def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
 
     The slit's image is part of the spectral PSF, so the PSF widens with the
     slit. The optics FWHM and the slit image width add in quadrature, and
-    `tel.psf_params[1]` is the FWHM for the slit `tel.psf_slit_width`. For
-    EUVST-SW's defaults this gives 2.54, 3.35, 5.49 and 10.30 pixels for the
-    0.2, 0.4, 0.8 and 1.6 arcsec slits. A telescope without `psf_slit_width`
-    has the same FWHM for every slit.
+    `tel.psf_params[1]` is the FWHM for the slit `tel.psf_slit_width`. The
+    resolution budget's other terms
+    (:func:`~euvst_response.resolution_budget.spectral_fwhm`) are added in
+    quadrature too. For EUVST-SW's optics alone this gives 2.54, 3.35, 5.49
+    and 10.30 pixels for the 0.2, 0.4, 0.8 and 1.6 arcsec slits. A
+    telescope without `psf_slit_width` has the same optics FWHM for every
+    slit.
 
     Parameters
     ----------
@@ -459,15 +514,24 @@ def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
     # the reference slit and s the slit image width (slit_image_width), as
     # RSC-2022021C combines them for its quoted spectral resolution.
     measured = tel.psf_params[1].to_value(u.pixel)
+    budget = _budget_pixels(tel, det, resolution_budget.spectral_fwhm)
     reference = getattr(tel, "psf_slit_width", None)
     if reference is None:
-        return measured
+        return float(np.hypot(measured, budget))
     # Raises if the FWHM leaves nothing for the optics.
     spectral_optics_fwhm(tel, det)
     # Take the difference of squares first so it is exactly zero for the
     # reference slit, which then gets psf_params[1] to the last bit.
     difference = slit_image_width(slit_width, det)**2 - slit_image_width(reference, det)**2
-    return float(np.sqrt(measured**2 + difference))
+    return float(np.sqrt(measured**2 + difference + budget**2))
+
+
+def _reach(fwhm: float) -> int:
+    """Pixels a kernel six sigma wide reaches either side of its centre, at least three."""
+    n = max(7, int(np.ceil(6 * _fwhm_to_sigma(fwhm))))
+    if n % 2 == 0:
+        n += 1
+    return n // 2
 
 
 def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
@@ -480,36 +544,30 @@ def spectral_psf_reach(tel, det, slit_width: u.Quantity) -> int:
     Gaussian, and the pixels left out hold at most a few parts in ten
     thousand of it, for the narrowest slit.
     """
-    sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width))
-    n = max(7, int(np.ceil(6 * sigma)))
-    if n % 2 == 0:
-        n += 1
-    return n // 2
+    return _reach(spectral_psf_fwhm(tel, det, slit_width))
 
 
 def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
     """
-    Pixels by which the spectral PSF of a slit reaches beyond the reference slit's.
+    Pixels by which the spectral PSF reaches beyond that of the optics alone with the reference slit.
 
-    The wavelength window of a synthesis has some margin around its lines.
-    A slit wider than `tel.psf_slit_width` spreads them further, and light
-    spread past the ends of the window is lost. The window is therefore
-    widened by this many pixels at each end, to give every slit the margin
-    of the reference slit. Zero for the reference slit, and for a telescope
-    whose PSF does not depend on the slit.
+    The wavelength window of a synthesis has some margin around its lines,
+    enough for the optics' PSF, `tel.psf_params[1]`. A wider slit, the
+    resolution budget and the pointing jitter spread the lines further, and
+    light spread past the ends of the window is lost. The window is
+    therefore widened by this many pixels at each end. Zero when the PSF is
+    the optics' alone with the reference slit.
     """
-    reference = getattr(tel, "psf_slit_width", None)
-    if reference is None:
-        return 0
-    return max(0, spectral_psf_reach(tel, det, slit_width)
-               - spectral_psf_reach(tel, det, reference))
+    optics = _reach(tel.psf_params[1].to_value(u.pixel))
+    return max(0, spectral_psf_reach(tel, det, slit_width) - optics)
 
 
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
-    Spectral PSF as the optics Gaussian convolved with the slit's image, per pixel.
+    Spectral PSF as a Gaussian convolved with the slit's image, per pixel.
 
-    This is the PSF used with `spectral_psf="convolution"`. A wide slit
+    The Gaussian's FWHM is :func:`spectral_blur_fwhm`. This is the PSF
+    used with `spectral_psf="convolution"`. A wide slit
     gives it a flat top. For the 0.2 arcsec slit it is narrower than the
     Gaussian of `spectral_psf_fwhm`, because a rectangle adds less to a
     width than a Gaussian of the same FWHM.
@@ -532,7 +590,7 @@ def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     # the slit, convolved with a rectangle the width of the slit. Like the
     # Gaussian kernel, it is taken at pixel centres over the same pixels
     # (spectral_psf_reach).
-    sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det))
+    sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det))
     half = 0.5 * slit_image_width(slit_width, det)
     reach = spectral_psf_reach(tel, det, slit_width)
     x = np.arange(-reach, reach + 1)
@@ -559,7 +617,7 @@ def apply_focusing_optics_psf(
     `simulate_once` uses it for a cube not yet blurred, such as a single
     line of known intensity.
 
-    Along the slit the PSF is a Gaussian of FWHM `tel.psf_params[0]`. In
+    Along the slit the PSF is a Gaussian of FWHM `spatial_psf_fwhm`. In
     wavelength it depends on `sim.spectral_psf`: a Gaussian of
     `spectral_psf_fwhm` for `"quadrature"`, or `spectral_line_spread` for
     `"convolution"`.
@@ -590,9 +648,9 @@ def apply_focusing_optics_psf(
     # A uniform scene is blurred in wavelength only: along the slit,
     # "replicate" changes nothing and "zero" removes light from the ends that
     # the scene does have. Zero fill is wrong for a raster too, as the Sun
-    # continues past the field of view. With the default SWC PSF, seven rows
+    # continues past the field of view. With the default SWC PSF, nine rows
     # wide, it costs the end row about a third of the kernel's weight, the
-    # next row 8 per cent and the one after 1 per cent.
+    # next row 13 per cent and the one after 3 per cent.
     if boundary not in ("replicate", "zero"):
         raise ValueError(
             f"boundary must be 'replicate' or 'zero', got {boundary!r}."
@@ -621,7 +679,7 @@ def apply_focusing_optics_psf(
     quadrature = sim.spectral_psf == "quadrature"
 
     # FWHM in pixels along the slit (axis 0 of each frame)
-    spatial_fwhm = psf_params[0].to(u.pixel).value
+    spatial_fwhm = spatial_psf_fwhm(tel, det)
     sigma_spatial = _fwhm_to_sigma(spatial_fwhm)
 
     # Kernel size: 6*sigma rounded up to next odd integer, minimum 7

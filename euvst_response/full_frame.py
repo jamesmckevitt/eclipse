@@ -25,7 +25,7 @@ from .band import BandLines
 from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
                     detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
-from .radiometric import photons_per_energy
+from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
 from .utils import _fwhm_to_sigma, distance_to_angle
@@ -558,7 +558,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if any(value != 0.0 for value in focal_plane.slit_image_tilt):
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
-    across = telescope.psf_across_slit if psf else None
+    across = across_slit_fwhm(telescope) if psf else None
     scene = read_slit_scene(synthesis_path, slit_position, slit_width, across)
     if not np.array_equal(scene.logT_grid, lines.logT_grid):
         raise ValueError("The band's lines are on another grid of temperature than the "
@@ -591,7 +591,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     # Along the slit: weight of each image row in each detector column.
     columns = np.arange(focal_plane.n_columns + 1) - 0.5
     column_edges = focal_plane.field_angle(columns).to_value(u.arcsec)
-    sigma = (_fwhm_to_sigma(telescope.psf_params[0].to_value(u.pix))
+    sigma = (_fwhm_to_sigma(spatial_psf_fwhm(telescope, det))
              * focal_plane.plate_scale.to_value(u.arcsec) if psf else 0.0)
     along = pixel_weights(scene.y_edges, column_edges, sigma)        # (columns, image rows)
 

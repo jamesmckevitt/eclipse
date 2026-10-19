@@ -182,7 +182,8 @@ def test_a_flat_spectrum_matches_the_radiometric_chain():
 
 def test_the_spectral_psf_conserves_flux_and_widens_a_line():
     fp = FocalPlane_SWC()
-    telescope, det, slit = Telescope_EUVST(), Detector_SWC(), SLIT_WIDTH * u.arcsec
+    telescope, det, slit = (Telescope_EUVST(resolution_budget="none"), Detector_SWC(),
+                            SLIT_WIDTH * u.arcsec)
     rows = photons_from_lines(fp, "left", StubTelescope(), slit,
                               [195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
                               [0.001] * u.Angstrom)
