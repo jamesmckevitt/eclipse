@@ -801,6 +801,43 @@ def test_the_variance_of_charge_left_behind_is_that_of_draws_of_every_electron()
     assert read.var(axis=0) == pytest.approx(variance, rel=0.035)
 
 
+@pytest.mark.parametrize("cte_parallel", [1.0, 0.8])
+def test_the_variance_along_the_register_is_that_of_draws_of_every_electron(cte_parallel):
+    """Variance with charge left behind along the register, alone and with the columns."""
+    rng = np.random.default_rng(5)
+    rate = np.array([[4.0, 0.5, 9.0, 1.0], [2.0, 6.0, 0.2, 3.0], [1.0, 1.0, 5.0, 0.5]])
+    cte, per_photon, draws, prescan = 0.8, 3, 40000, 2
+    sequence = ReadoutSequence(shutter=True, parallel_overscan_rows=1, serial_prescan=prescan,
+                               serial_image_pixels=2, serial_overscan=40,
+                               cte_parallel=cte_parallel, cte_serial=cte)
+
+    def move(wells, efficiency):
+        kept = rng.binomial(wells, efficiency)
+        after = np.empty_like(wells)
+        after[:, :-1] = kept[:, 1:] + wells[:, :-1] - kept[:, :-1]
+        after[:, -1] = wells[:, -1] - kept[:, -1]
+        return kept[:, 0], after
+
+    wells = per_photon * rng.poisson(rate, size=(draws,) + rate.shape)
+    read = np.zeros((draws, rate.shape[0] + 1, rate.shape[1]))
+    for row in range(read.shape[1]):
+        # One row into the register, along the columns.
+        packet = np.empty((draws, rate.shape[1]), dtype=np.int64)
+        for column in range(rate.shape[1]):
+            packet[:, column], wells[:, :, column] = move(wells[:, :, column], cte_parallel)
+        # Each half read from its own end, through the prescan.
+        for columns in ([0, 1], [3, 2]):
+            register = np.concatenate([np.zeros((draws, prescan), dtype=np.int64),
+                                       packet[:, columns]], axis=1)
+            for step in range(register.shape[1]):
+                out, register = move(register, cte)
+                if step >= prescan:
+                    read[:, row, columns[step - prescan]] = out
+    variance = expose_variance(per_photon ** 2 * rate, per_photon * rate, 1.0 * u.s, sequence)
+    # Each drawn variance has a relative error of about sqrt(2 / draws), 0.7 percent.
+    assert read.var(axis=0) == pytest.approx(variance, rel=0.035)
+
+
 def test_dark_charge_is_left_behind_like_any_other():
     """Dark current time equals the exposure of a uniform light, with or without a shutter."""
     sequence = ReadoutSequence(windows=[(10, 19)], parallel_overscan_rows=5, cte_parallel=0.99)
