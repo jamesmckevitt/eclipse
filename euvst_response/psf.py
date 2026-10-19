@@ -1,13 +1,22 @@
 """
-Telescope and detector point spread functions (PSFs).
+Telescope and detector point spread functions (PSFs), from tabulated PSF files.
+
+Nothing in ECLIPSE uses this module, and it will be removed in a future
+release. The PSF ECLIPSE applies is set by `Telescope_EUVST` and
+`Telescope_EIS` (see `radiometric.spatial_psf_fwhm` and
+`radiometric.spectral_psf_fwhm`).
 """
 
 from __future__ import annotations
+import warnings
 from pathlib import Path
 import numpy as np
 import astropy.units as u
 from scipy.ndimage import zoom
 from scipy.signal import convolve2d
+
+warnings.warn("euvst_response.psf is not used by ECLIPSE and will be removed in a future "
+              "release.", FutureWarning, stacklevel=2)
 
 
 def _load_psf_ascii(fname: Path, skip: int) -> np.ndarray:
