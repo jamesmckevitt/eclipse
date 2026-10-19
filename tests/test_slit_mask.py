@@ -12,7 +12,7 @@ from ndcube import NDCube
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import rebin_atmosphere
 from euvst_response.sampling import centred_edges, pixel_weights, pixel_weights_through
-from euvst_response.utils import _parse_section, angle_to_distance
+from euvst_response.utils import VELOCITY_CONVENTION, _parse_section, angle_to_distance
 
 REST = 195.119 * u.AA
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
@@ -139,3 +139,72 @@ def test_the_rebinned_scene_is_dark_past_the_ends_and_in_the_fiducials(psf):
     ratio = masked.data.sum(axis=(1, 2)) / plain.data.sum(axis=(1, 2))
     assert ratio == pytest.approx(share, rel=1e-9, abs=1e-12)
     assert np.count_nonzero(share == 0.0) > 0
+
+
+def test_a_rebinned_scene_says_whether_it_was_masked():
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    scene = _scene(np.ones((40, 4, 21)), 0.1 * u.arcsec)
+    common = dict(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1)
+    assert rebin_atmosphere(scene, det, Simulation(**common, slit_mask=True),
+                            tel=tel).meta["slit_mask_applied"] is True
+    assert "slit_mask_applied" not in rebin_atmosphere(scene, det, Simulation(**common),
+                                                       tel=tel).meta
+
+
+def test_the_mask_is_refused_for_a_cube_it_was_not_applied_to():
+    """Such as a uniform intensity from Python, which would otherwise come out unmasked."""
+    from euvst_response.data_processing import create_uniform_intensity_cube
+    from euvst_response.monte_carlo import monte_carlo, simulate_once
+
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, slit_mask=True)
+    cube = create_uniform_intensity_cube(total_intensity=1000 * u.erg / (u.s * u.cm**2 * u.sr),
+                                         rest_wavelength=REST, thermal_width=20 * u.km / u.s,
+                                         det=det, sim=sim, n_slit_pixels=1, tel=tel)
+    with pytest.raises(ValueError, match="slit's ends and fiducials were not cut out"):
+        simulate_once(cube, 1 * u.s, det, tel, sim, uniform_mode=True)
+    with pytest.raises(ValueError, match="slit's ends and fiducials were not cut out"):
+        monte_carlo(cube, 1 * u.s, det, tel, sim, n_iter=1, uniform_mode=True)
+
+
+@pytest.mark.parametrize("psf", [False, True])
+def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
+    """End to end from a synthesis file, binned off-chip or not, so the mask reaches the fits."""
+    import sys
+
+    import astropy.constants as const
+    import yaml
+
+    from euvst_response.analysis import load_instrument_response_results
+    from euvst_response.main import main
+    from euvst_response.synthesis_file import write_line_cubes
+
+    n_spec, n_cells = 121, 8
+    step = (5 * u.km / u.s / const.c * REST).to_value(u.cm)
+    sigma = (20 * u.km / u.s / const.c * REST).to_value(u.cm)
+    offsets = (np.arange(n_spec) - n_spec // 2) * step
+    wcs = WCS(naxis=3)
+    wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
+    wcs.wcs.cunit = ["cm", "Mm", "Mm"]
+    wcs.wcs.cdelt = [step, 0.192, 0.192]
+    wcs.wcs.crpix = [(n_spec + 1) / 2, (n_cells + 1) / 2, (n_cells + 1) / 2]
+    wcs.wcs.crval = [REST.to_value(u.cm), 0.0, 0.0]
+    line = 1e13 * np.exp(-0.5 * (offsets / sigma) ** 2)
+    cube = NDCube(np.tile(line, (n_cells, n_cells, 1)), wcs=wcs,
+                  unit=u.erg / (u.s * u.cm**3 * u.sr),
+                  meta={"rest_wav": REST, "integration_axis": "z",
+                        "velocity_convention": VELOCITY_CONVENTION})
+    synthesis_file = write_line_cubes({"Fe12_195.1190": cube}, tmp_path / "synthesis.h5")
+    config = tmp_path / "masked.yaml"
+    config.write_text(yaml.safe_dump({
+        "instrument": "SWC", "synthesis_file": str(synthesis_file),
+        "reference_line": "Fe12_195.1190", "n_iter": 1, "ncpu": 1,
+        "offchip_bin_slit": [1, 2],
+        "simulation": {"slit_width": "0.4 arcsec", "expos": "10 s", "psf": psf,
+                       "noise": False, "slit_mask": True},
+    }))
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.chdir(tmp_path)
+    main()
+    results = load_instrument_response_results(tmp_path / "run" / "result" / "masked.h5")
+    assert len(results["results"]["all_combinations"]) == 2

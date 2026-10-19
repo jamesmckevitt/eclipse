@@ -423,9 +423,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     # cubes are expected to be.
     wcs_tgt.wcs.set()
     # Record the scene's extent along the slit, which gives the rows it
-    # covers at any plate scale, for main to check off-chip binning against.
+    # covers at any plate scale, for main to check off-chip binning against,
+    # and whether the slit's ends and fiducials were cut out.
     return NDCube(data, wcs=wcs_tgt, unit=new_cube_spec.unit,
-                  meta={**meta, "fov_along_slit": fov_y.to(u.arcsec)})
+                  meta={**meta, "fov_along_slit": fov_y.to(u.arcsec),
+                        **({"slit_mask_applied": True} if openings is not None else {})})
 
 
 def _through_the_optics(tel, sim) -> bool:
