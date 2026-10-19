@@ -112,6 +112,13 @@ simulation:
 
 Setting `telescope.psf_params` gives the optical design's widths directly, in place of `field_of_view`.
 
+The budget's pointing jitter is 0.110 arcsec FWHM. `telescope.pointing_jitter` replaces it with another FWHM, which can be swept. The jitter blurs the scene along and across the slit. The budget takes the grating's vibration as two thirds of the jitter, so that changes with it too. A jitter given as a 3-sigma amplitude is converted with FWHM = 2.3548 sigma.
+
+```yaml
+telescope:
+  pointing_jitter: [0 arcsec, 0.110 arcsec, 0.2 arcsec]
+```
+
 ### The spectral PSF and the slit
 
 With `psf: True`, each line is blurred in wavelength by the optics and by the image of the slit, so the blur depends on the slit width. `telescope.psf_params` gives the optical design's FWHM in pixels, along the slit and in wavelength. For SWC, the one in wavelength is for the 0.2 arcsec slit.

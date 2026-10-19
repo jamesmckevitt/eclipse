@@ -163,3 +163,69 @@ def test_a_telescope_reads_back_the_same(tmp_path):
     restored = load_results(path)["telescope"]
     assert restored.field_of_view == "70x70" and restored.resolution_budget == "current_estimate"
     assert restored.psf_params == [1.01 * u.pix, 2.54 * u.pix]
+
+
+@pytest.mark.parametrize("budget", ["current_estimate", "allocation"])
+def test_the_budgets_own_jitter_changes_nothing(budget):
+    own = Telescope_EUVST(resolution_budget=budget, pointing_jitter=0.110 * u.arcsec)
+    tel = Telescope_EUVST(resolution_budget=budget)
+    assert spatial_psf_fwhm(own, DET) == pytest.approx(spatial_psf_fwhm(tel, DET), rel=1e-12)
+    assert across_slit_fwhm(own).value == pytest.approx(across_slit_fwhm(tel).value, rel=1e-12)
+    # Row 5 is printed as 0.073 in the allocation, 2/3 of 0.110 to the rounding.
+    assert spectral_psf_fwhm(own, DET, 0.2 * u.arcsec) == pytest.approx(
+        spectral_psf_fwhm(tel, DET, 0.2 * u.arcsec), rel=2e-4)
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.2, 0.5])
+def test_a_jitter_replaces_the_budgets_row_20(jitter):
+    """Along and across the slit, and 2/3 of it in place of row 5 in wavelength."""
+    tel = Telescope_EUVST(pointing_jitter=jitter * u.arcsec)
+    budget = "current_estimate"
+    along = np.sqrt(resolution_budget.along_slit_fwhm(budget) ** 2 - 0.110**2 + jitter**2)
+    across = np.sqrt(resolution_budget.across_slit_fwhm(budget) ** 2 - 0.110**2 + jitter**2)
+    spectral = np.sqrt(resolution_budget.spectral_fwhm(budget) ** 2 - (2 / 3 * 0.110) ** 2
+                       + (2 / 3 * jitter) ** 2)
+    assert spatial_psf_fwhm(tel, DET) == pytest.approx(np.hypot(2.66, along / PLATE_SCALE))
+    assert across_slit_fwhm(tel).to_value(u.arcsec) == pytest.approx(across)
+    assert spectral_blur_fwhm(tel, DET) == pytest.approx(
+        np.hypot(spectral_optics_fwhm(tel, DET), spectral / PLATE_SCALE))
+
+
+def test_a_jitter_is_added_without_the_budget():
+    tel = Telescope_EUVST(resolution_budget="none", pointing_jitter=0.3 * u.arcsec)
+    assert spatial_psf_fwhm(tel, DET) == pytest.approx(np.hypot(2.66, 0.3 / PLATE_SCALE))
+    assert across_slit_fwhm(tel).to_value(u.arcsec) == pytest.approx(0.3)
+    assert across_slit_fwhm(Telescope_EUVST(resolution_budget="none",
+                                            pointing_jitter=0 * u.arcsec)) is None
+
+
+@pytest.mark.parametrize("jitter", [0.2, -0.1 * u.arcsec, 2 * u.pix, [0.1, 0.2] * u.arcsec,
+                                    np.nan * u.arcsec])
+def test_a_bad_jitter_is_refused(jitter):
+    with pytest.raises(ValueError, match="pointing_jitter must be a FWHM in an angle"):
+        Telescope_EUVST(pointing_jitter=jitter)
+
+
+def test_a_pickled_telescope_from_before_the_budget_reads_back_without_it(tmp_path):
+    """An old pickle's telescope lacks the setting, and would otherwise read the class default."""
+    import dill
+
+    tel = Telescope_EUVST(psf_params=[2.66 * u.pix, 2.54 * u.pix])
+    for name in ("resolution_budget", "field_of_view", "pointing_jitter"):
+        del tel.__dict__[name]
+    path = tmp_path / "old.pkl"
+    with open(path, "wb") as handle:
+        dill.dump({"results": {"all_combinations": {"a": {"config_objects": {"telescope": tel}}},
+                               "fit_weighted": True}}, handle)
+    with pytest.warns(FutureWarning, match="results pickle"):
+        results = load_results(path)["results"]
+    restored = results["all_combinations"]["a"]["config_objects"]["telescope"]
+    assert restored.resolution_budget == "none"
+    assert spatial_psf_fwhm(restored, DET) == 2.66 and across_slit_fwhm(restored) is None
+
+
+def test_telescopes_of_one_field_do_not_share_their_widths():
+    one, other = Telescope_EUVST(field_of_view="70x70"), Telescope_EUVST(field_of_view="70x70")
+    one.psf_params[0] *= 2
+    assert other.psf_params[0] == 1.01 * u.pix
+    assert Telescope_EUVST.FIELDS_OF_VIEW["70x70"][0] == 1.01 * u.pix

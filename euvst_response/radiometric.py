@@ -402,10 +402,16 @@ def slit_image_width(slit_width: u.Quantity, det) -> float:
     return (slit_width / (det.plate_scale_angle * u.pixel)).to_value(u.dimensionless_unscaled)
 
 
+def _budget(tel):
+    """`resolution_budget` and `pointing_jitter` in arcsec, for the resolution_budget functions."""
+    jitter = getattr(tel, "pointing_jitter", None)
+    return (getattr(tel, "resolution_budget", "none"),
+            None if jitter is None else jitter.to_value(u.arcsec))
+
+
 def _budget_pixels(tel, det, part) -> float:
     """FWHM in pixels of the resolution budget's blur, `part` one of its functions."""
-    budget = getattr(tel, "resolution_budget", "none")
-    return part(budget) / (det.plate_scale_angle * u.pixel).to_value(u.arcsec)
+    return part(*_budget(tel)) / (det.plate_scale_angle * u.pixel).to_value(u.arcsec)
 
 
 def spatial_psf_fwhm(tel, det) -> float:
@@ -430,8 +436,7 @@ def across_slit_fwhm(tel) -> u.Quantity | None:
     """
     optics = getattr(tel, "psf_across_slit", None)
     optics = 0.0 if optics is None else optics.to_value(u.arcsec)
-    fwhm = np.hypot(optics, resolution_budget.across_slit_fwhm(
-        getattr(tel, "resolution_budget", "none")))
+    fwhm = np.hypot(optics, resolution_budget.across_slit_fwhm(*_budget(tel)))
     return None if fwhm == 0 else float(fwhm) * u.arcsec
 
 

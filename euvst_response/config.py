@@ -109,12 +109,18 @@ def _same_widths(given, widths) -> bool:
 
 
 def _check_resolution_budget(tel, section: str = "telescope") -> None:
-    """Check `resolution_budget` is one the budget has."""
+    """Check `resolution_budget` is one the budget has, and `pointing_jitter` None or an angle."""
     from .resolution_budget import BUDGETS
 
     if not isinstance(tel.resolution_budget, str) or tel.resolution_budget not in BUDGETS:
         raise ValueError(f"{section}.resolution_budget must be one of {', '.join(BUDGETS)}, "
                          f"got {tel.resolution_budget!r}.")
+    jitter = tel.pointing_jitter
+    if jitter is not None and not (isinstance(jitter, u.Quantity) and jitter.isscalar
+                                   and jitter.unit.is_equivalent(u.arcsec)
+                                   and np.isfinite(jitter.value) and jitter.value >= 0):
+        raise ValueError(f"{section}.pointing_jitter must be a FWHM in an angle, zero or more, "
+                         f"such as 0.2 arcsec, or left out for the budget's; got {jitter!r}.")
 
 
 def _check_tables(obj, names: tuple, section: str) -> None:
@@ -672,6 +678,12 @@ class Telescope_EUVST:
         Blur added in quadrature to the optical design's PSF, from the
         resolution budget RSC-2022033B: `"current_estimate"`, `"allocation"`
         or `"none"`. Default `"current_estimate"`. Keyword only.
+    pointing_jitter : u.Quantity or None
+        FWHM of the spacecraft's pointing jitter, in place of the budget's
+        0.110 arcsec. It blurs along and across the slit, and the grating's
+        micro-vibration is taken as 2/3 of it, as in the budget. It is added
+        even with `resolution_budget="none"`. Default None, the budget's
+        own. Keyword only.
     psf_across_slit : u.Quantity or None
         FWHM of the telescope optics' blur across the slit, which brings in
         light from either side of it. The budget's blur before the slit is
@@ -702,6 +714,7 @@ class Telescope_EUVST:
     psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
     field_of_view: str | None = field(default=None, kw_only=True)
     resolution_budget: str = field(default="current_estimate", kw_only=True)
+    pointing_jitter: u.Quantity | None = field(default=None, kw_only=True)
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
@@ -725,7 +738,7 @@ class Telescope_EUVST:
                              f"{', '.join(self.FIELDS_OF_VIEW)}, got {self.field_of_view!r}.")
         if self.psf_params is None:
             self.field_of_view = self.field_of_view or "280x280"
-            self.psf_params = list(self.FIELDS_OF_VIEW[self.field_of_view])
+            self.psf_params = [q.copy() for q in self.FIELDS_OF_VIEW[self.field_of_view]]
         elif (self.field_of_view is not None
               and not _same_widths(self.psf_params, self.FIELDS_OF_VIEW[self.field_of_view])):
             raise ValueError(f"telescope.field_of_view sets psf_params, so give one or the "
