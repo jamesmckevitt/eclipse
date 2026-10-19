@@ -40,6 +40,7 @@ nav:
       - Time series: time-series.md
       - A full-CCD frame: full-ccd-frame.md
       - Instruments: instruments.md
+      - Where the settings come from: instrument-sources.md
   - 3. Analysing the results: analysis.md
   - Python:
       - Using ECLIPSE from Python: python.md
