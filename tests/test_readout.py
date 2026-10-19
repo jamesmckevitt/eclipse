@@ -613,6 +613,9 @@ def test_transfer_probabilities_count_the_ways_charge_can_be_held_back():
     assert transfer_probabilities(m, 1.0).tolist() == [[1.0, 1.0, 1.0]]
     # `most` stops the terms at the latest arrival wanted.
     assert transfer_probabilities(m, cte, most=2).shape == (3, 3)
+    for bad in (np.nan, np.inf):
+        with pytest.raises(ValueError, match="must be finite"):
+            transfer_probabilities([bad], cte)
     with pytest.raises(ValueError, match="at least one transfer"):
         transfer_probabilities([0], cte)
 

@@ -564,10 +564,12 @@ def transfer_probabilities(transfers, cte: float, most: int | None = None) -> np
     Raises
     ------
     ValueError
-        If a charge has no transfer to go, or `cte` is not above 0 and at
-        most 1.
+        If a transfer count is not finite, a charge has no transfer to go,
+        or `cte` is not above 0 and at most 1.
     """
     m = np.asarray(transfers, dtype=float)
+    if not np.all(np.isfinite(m)):
+        raise ValueError("Transfers must be finite.")
     if np.any(m < 1):
         raise ValueError("A charge has at least one transfer to go.")
     if not 0 < cte <= 1:
