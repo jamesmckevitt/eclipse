@@ -14,10 +14,10 @@ import yaml
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.analysis import load_instrument_response_results, summary_table
-from euvst_response.results_file import (_holds_array, convert_results_pickle, is_results_file,
+from eclipse.analysis import load_instrument_response_results, summary_table
+from eclipse.results_file import (_holds_array, convert_results_pickle, is_results_file,
                                          load_results)
-from euvst_response.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
+from eclipse.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -42,7 +42,7 @@ def _synthesis_file(path, time=None, scale=1.0):
 
 def _run(tmp_path, monkeypatch, name, **config):
     """Run the instrument simulation and return the saved payload and its path."""
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
 
     saved = {}
 
@@ -192,9 +192,9 @@ def test_a_synthesis_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
 
 def test_an_atmosphere_series_run_reads_back_what_it_saved(tmp_path, monkeypatch):
     """Including the synthesis settings, whose precision is a NumPy type."""
-    from euvst_response import raster as raster_module
-    from euvst_response.atmosphere import Atmosphere, write_atmosphere
-    from euvst_response.utils import angle_to_distance
+    from eclipse import raster as raster_module
+    from eclipse.atmosphere import Atmosphere, write_atmosphere
+    from eclipse.utils import angle_to_distance
 
     def flat_goft(lines, **kwargs):
         logT, logN = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
@@ -258,7 +258,7 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
         convert_results_pickle(old)
     assert convert_results_pickle(old, overwrite=True) == converted
     # A conversion that cannot be read back leaves the existing file unchanged.
-    from euvst_response import results_file
+    from eclipse import results_file
 
     before, real = converted.read_bytes(), results_file.load_results
 
@@ -300,7 +300,7 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
 
     # A configuration object missing a later setting, as in a 0.8.0 pickle,
     # gets the current default for it.
-    from euvst_response.config import Simulation
+    from eclipse.config import Simulation
     simulation = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec)
     del simulation.__dict__["pinhole_positions_spectral"]
     with open(tmp_path / "v080.pkl", "wb") as f:
@@ -333,7 +333,7 @@ def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsy
               "simulation": {"slit_width": "0.2 arcsec", "expos": "5 s"}}
 
     # The pickle is moved only after the results are saved, so a failed save leaves it.
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
     real = main_module.save_results
 
     def fails(path, payload, **kwargs):
@@ -384,7 +384,7 @@ def test_a_config_the_results_file_cannot_hold_is_refused_before_the_run(tmp_pat
     """For example a YAML alias inside itself, which would otherwise fail only at the save."""
     loop = ["x"]
     loop.append(loop)
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
     monkeypatch.setattr(main_module, "monte_carlo", lambda *args, **kwargs: pytest.fail("ran"))
     # The loop is found by recursing until Python runs out of stack. Garbage
     # from earlier tests collected there cannot run its finalisers, which

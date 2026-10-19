@@ -2,8 +2,8 @@
 import numpy as np
 import pytest
 
-from euvst_response.fitting import _fit_one, _guess_params
-from euvst_response.utils import gaussian
+from eclipse.fitting import _fit_one, _guess_params
+from eclipse.utils import gaussian
 
 C = 299792.458
 REST, STEP, SIGMA, BACK = 195.119, 0.0169, 0.03, 5.0

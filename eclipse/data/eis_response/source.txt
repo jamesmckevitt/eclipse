@@ -1,4 +1,4 @@
-Hinode/EIS effective-area data, used by euvst_response/eis_calibration.py.
+Hinode/EIS effective-area data, used by eclipse/eis_calibration.py.
 
 EIS_EffArea_A.004  (long-wavelength channel, 245-292 Angstrom)
 EIS_EffArea_B.004  (short-wavelength channel, 165-212 Angstrom)

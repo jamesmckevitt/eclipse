@@ -6,12 +6,12 @@ import h5py
 import numpy as np
 import pytest
 
-from euvst_response import resolution_budget, results_file
-from euvst_response.config import Detector_SWC, Telescope_EUVST
-from euvst_response.radiometric import (across_slit_fwhm, spatial_psf_fwhm, spectral_blur_fwhm,
+from eclipse import resolution_budget, results_file
+from eclipse.config import Detector_SWC, Telescope_EUVST
+from eclipse.radiometric import (across_slit_fwhm, spatial_psf_fwhm, spectral_blur_fwhm,
                                         spectral_line_spread, spectral_optics_fwhm,
                                         spectral_psf_fwhm)
-from euvst_response.results_file import load_results, save_results
+from eclipse.results_file import load_results, save_results
 
 DET = Detector_SWC()
 PLATE_SCALE = DET.plate_scale_angle.to_value(u.arcsec / u.pix)

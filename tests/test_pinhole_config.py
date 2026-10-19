@@ -4,8 +4,8 @@ import sys
 import astropy.units as u
 import pytest
 
-from euvst_response.config import Simulation
-from euvst_response.main import _parse_pinhole_config
+from eclipse.config import Simulation
+from eclipse.main import _parse_pinhole_config
 
 VALID = {
     "pinhole_sizes": ["20 um", "5 um"],
@@ -137,7 +137,7 @@ def _run_main(tmp_path, monkeypatch, extra):
     Uniform-intensity mode needs no synthesis file, and every case here is
     rejected during configuration, so nothing is simulated.
     """
-    from euvst_response.main import main
+    from eclipse.main import main
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text(EIS_UNIFORM + extra)

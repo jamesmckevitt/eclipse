@@ -64,12 +64,12 @@ docs = [
 ]
 
 [project.scripts]
-eclipse = "euvst_response.cli:main"
-solarc-eclipse = "euvst_response.cli:main"
-synthesise-spectra = "euvst_response.synthesis_cli:main"
-synthesise_spectra = "euvst_response.synthesis_cli:main"
-eclipse-science-cases = "euvst_response.science_cases:main"
-eclipse-atmosphere = "euvst_response.atmosphere:main"
+eclipse = "eclipse.cli:main"
+solarc-eclipse = "eclipse.cli:main"
+synthesise-spectra = "eclipse.synthesis_cli:main"
+synthesise_spectra = "eclipse.synthesis_cli:main"
+eclipse-science-cases = "eclipse.science_cases:main"
+eclipse-atmosphere = "eclipse.atmosphere:main"
 
 [project.urls]
 Homepage = "https://github.com/jamesmckevitt/eclipse"
@@ -77,10 +77,10 @@ Repository = "https://github.com/jamesmckevitt/eclipse"
 Documentation = "https://solarc-eclipse.readthedocs.io"
 
 [tool.setuptools.packages.find]
-include = ["euvst_response*"]
+include = ["eclipse*", "euvst_response"]
 
 [tool.setuptools.dynamic]
-version = {attr = "euvst_response.__version__"}
+version = {attr = "eclipse.__version__"}
 
 [tool.setuptools.package-data]
-euvst_response = ["data/**/*"]
+eclipse = ["data/**/*"]

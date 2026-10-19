@@ -22,7 +22,7 @@ import numpy as np
 
 from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
                          _text_attribute, _write_dataset)
-from .utils import (_bin_edges, angle_to_distance, onto_wavelength_bins, require_uniform_grid,
+from .utils import (_bin_edges, _unpickle, angle_to_distance, onto_wavelength_bins, require_uniform_grid,
                     view_axis_and_side, view_name)
 
 __all__ = [
@@ -866,7 +866,7 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
         raise ValueError(f"{path} is the pickle being converted; give the synthesis file "
                          f"another name, such as {Path(pickle_path).with_suffix('.h5').name}.")
     with open(pickle_path, "rb") as f:
-        saved = dill.load(f)
+        saved = _unpickle(f)
     if "line_cubes" not in saved or not saved["line_cubes"]:
         raise ValueError(f"{pickle_path} holds no line cubes.")
     check_old_line_cubes(saved["line_cubes"], pickle_path)

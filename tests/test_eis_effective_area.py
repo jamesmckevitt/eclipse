@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import astropy.units as u
 
-from euvst_response import eis_calibration
-from euvst_response.config import Detector_EIS, Telescope_EIS
+from eclipse import eis_calibration
+from eclipse.config import Detector_EIS, Telescope_EIS
 
 
 # IDL eis_ea.pro, pre-flight tables.

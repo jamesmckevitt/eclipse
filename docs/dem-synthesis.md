@@ -23,15 +23,15 @@ from pathlib import Path
 import numpy as np
 import astropy.units as u
 
-from euvst_response.synthesis import (
+from eclipse.synthesis import (
     compute_goft_fiasco,
     interpolate_g_on_dem,
     synthesise_spectra,
     create_line_cube,
     create_atmosphere_ndcube,
 )
-from euvst_response.synthesis_file import write_line_cubes
-from euvst_response.utils import angle_to_distance
+from eclipse.synthesis_file import write_line_cubes
+from eclipse.utils import angle_to_distance
 
 INTENSITY_UNIT = u.erg / u.s / u.cm ** 2 / u.sr / u.cm
 
@@ -111,7 +111,7 @@ if __name__ == "__main__":
 
 **Scene size.** A scene can be as small as one pixel, `nx, ny = 1, 1`, for a single DEM.
 
-**Continuum.** `euvst_response.continuum.compute_continuum_fiasco` gives the continuum per unit of emission measure, on a temperature and wavelength grid, and `continuum_spectra` gives each pixel's continuum from its emission measure in each temperature bin.
+**Continuum.** `eclipse.continuum.compute_continuum_fiasco` gives the continuum per unit of emission measure, on a temperature and wavelength grid, and `continuum_spectra` gives each pixel's continuum from its emission measure in each temperature bin.
 
 **Abundance.** `abundance` chooses the element abundances, which set how bright the low-FIP lines are compared with the high-FIP ones. For FIP studies, synthesise once with each set, for example `sun_coronal_2021_chianti` and `sun_photospheric_2021_asplund`. The ratio of a line's intensity in the two is the FIP bias you are trying to measure.
 

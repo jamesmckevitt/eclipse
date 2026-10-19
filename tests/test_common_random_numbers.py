@@ -9,8 +9,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC
-from euvst_response.radiometric import (_binomial_inverse_transform, _vectorized_fano_noise,
+from eclipse.config import Detector_SWC
+from eclipse.radiometric import (_binomial_inverse_transform, _vectorized_fano_noise,
                                         sample_photon_arrivals, to_electrons)
 
 REST = 195.119 * u.Angstrom

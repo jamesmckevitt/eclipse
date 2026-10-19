@@ -2077,7 +2077,7 @@ def main(args=None) -> None:
       from MURaM's own files (deprecated).
     - Dynamic mode (deprecated): time-varying synthesis with raster
       scanning, from MURaM's own files. The instrument run observes a time
-      series of atmosphere files instead (see euvst_response.raster).
+      series of atmosphere files instead (see eclipse.raster).
 
     Parameters
     ----------

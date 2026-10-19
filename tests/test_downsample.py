@@ -11,10 +11,10 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.synthesis import load_cube
-from euvst_response.synthesis_file import load_synthesis
+from eclipse import synthesis
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.synthesis import load_cube
+from eclipse.synthesis_file import load_synthesis
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom

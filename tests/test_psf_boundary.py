@@ -9,8 +9,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.radiometric import apply_focusing_optics_psf, spatial_psf_fwhm
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.radiometric import apply_focusing_optics_psf, spatial_psf_fwhm
 
 REST = 195.119 * u.Angstrom
 N_SCAN, N_SLIT, N_WAVE = 2, 24, 32

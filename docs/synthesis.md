@@ -19,7 +19,7 @@ An atmosphere file holds the simulation's temperature, its mass density or elect
 ```python
 import astropy.units as u
 import numpy as np
-from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+from eclipse import Atmosphere, write_atmosphere, edges_from_centres
 
 atmosphere = Atmosphere(
     temperature=temperature * u.K,                # (nz, ny, nx)
@@ -74,7 +74,7 @@ Then write them to an atmosphere file:
 import astropy.units as u
 import numpy as np
 from astropy.io import fits
-from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+from eclipse import Atmosphere, write_atmosphere, edges_from_centres
 
 def variable(name, snapshot=300000):
     with fits.open(f"MURaM_ar098192_{name}_{snapshot}.fits") as hdul:
@@ -126,7 +126,7 @@ Then write them to an atmosphere file:
 import astropy.units as u
 import numpy as np
 from astropy.io import fits
-from euvst_response import Atmosphere, write_atmosphere, edges_from_centres
+from eclipse import Atmosphere, write_atmosphere, edges_from_centres
 
 def variable(name, snapshot=385):
     with fits.open(f"BIFROST_en024048_hion_{name}_{snapshot}.fits") as hdul:

@@ -64,14 +64,14 @@ jobs:
           # Compare against the source tree rather than a hardcoded list, so
           # this keeps working when data files are added, and so partial
           # inclusion fails rather than passing on the strength of one file.
-          source = pathlib.Path("euvst_response/data")
+          source = pathlib.Path("eclipse/data")
           expected = {
               str(path.as_posix())
               for path in source.rglob("*")
               if path.is_file()
           }
           if not expected:
-              raise SystemExit("no euvst_response/data files in the checkout")
+              raise SystemExit("no eclipse/data files in the checkout")
 
           wheel = glob.glob("dist/*.whl")[0]
           packaged = set(zipfile.ZipFile(wheel).namelist())

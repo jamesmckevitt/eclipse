@@ -10,7 +10,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import FitComponent, FitConfig, fit_cube_gauss
+from eclipse.fitting import FitComponent, FitConfig, fit_cube_gauss
 
 STEP = 0.0169 * u.Angstrom
 N_WAVE = 41

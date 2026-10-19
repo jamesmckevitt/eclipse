@@ -420,9 +420,9 @@ class AluminiumFilter:
     oxide_thickness: u.Quantity = 95 * u.angstrom
     c_thickness: u.Quantity = 0 * u.angstrom
     mesh_throughput: float = 0.8
-    al_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat')
-    oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
-    c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
+    al_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat')
+    oxide_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
+    c_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
 
     def __post_init__(self):
@@ -508,7 +508,7 @@ class Detector_SWC:
         Whether frames are taken with the mechanical shutter, which keeps the
         CCDs dark while a frame is cleared and read. Default True. An
         instrument run models frames taken with it and refuses False; the
-        read-out model, :mod:`euvst_response.readout`, takes either. Keyword
+        read-out model, :mod:`eclipse.readout`, takes either. Keyword
         only, as are the settings below, which describe the SW camera's CCDs
         and their read-out.
     n_rows, n_columns : int
@@ -562,7 +562,7 @@ class Detector_SWC:
     material: str = "silicon"
     filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
     # Settings of the camera's CCDs and their read-out, which
-    # euvst_response.readout models. An instrument run only checks and
+    # eclipse.readout models. An instrument run only checks and
     # records them.
     shutter: bool = field(default=True, kw_only=True)
     n_rows: int = field(default=2048, kw_only=True)
@@ -785,8 +785,8 @@ class Telescope_EUVST:
         kw_only=True)
 
     # Wavelength-dependent efficiency tables
-    pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
-    grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
+    pm_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
+    grating_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
 
     # Worst-case FWHMs of the optical design's PSF in each field, in pixels
     # at 0.159 arcsec per pixel, from RSC-2022021C (Mar 2025). Along the slit,

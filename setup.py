@@ -13,7 +13,7 @@ long_description = (this_directory / "README.md").read_text()
 # Get version from __init__.py
 def get_version():
     """Extract version from __init__.py file."""
-    init_file = this_directory / "euvst_response" / "__init__.py"
+    init_file = this_directory / "eclipse" / "__init__.py"
     content = init_file.read_text()
     match = re.search(r'^__version__ = [\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     if match:
@@ -44,17 +44,17 @@ setup(
     # Dependencies are defined in pyproject.toml.
     entry_points={
         "console_scripts": [
-            "eclipse=euvst_response.cli:main",
-            "solarc-eclipse=euvst_response.cli:main",
-            "synthesise-spectra=euvst_response.synthesis_cli:main",
-            "synthesise_spectra=euvst_response.synthesis_cli:main",
-            "eclipse-science-cases=euvst_response.science_cases:main",
-            "eclipse-atmosphere=euvst_response.atmosphere:main",
+            "eclipse=eclipse.cli:main",
+            "solarc-eclipse=eclipse.cli:main",
+            "synthesise-spectra=eclipse.synthesis_cli:main",
+            "synthesise_spectra=eclipse.synthesis_cli:main",
+            "eclipse-science-cases=eclipse.science_cases:main",
+            "eclipse-atmosphere=eclipse.atmosphere:main",
         ],
     },
     include_package_data=True,
     package_data={
-        "euvst_response": ["data/**/*"],
+        "eclipse": ["data/**/*"],
     },
     zip_safe=False,
 )

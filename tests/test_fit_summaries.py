@@ -10,16 +10,16 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 from sunpy.util.exceptions import SunpyMetadataWarning
 
-from euvst_response import fitting
-from euvst_response.analysis import (
+from eclipse import fitting
+from eclipse.analysis import (
     analyse_fit_statistics,
     create_sunpy_maps_from_combo,
     list_fit_components,
     load_instrument_response_results,
     summary_table,
 )
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.fitting import (
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.fitting import (
     FitComponent,
     FitConfig,
     fit_cube_gauss,
@@ -27,7 +27,7 @@ from euvst_response.fitting import (
     spectral_pixel_width,
     summarise_fits,
 )
-from euvst_response.monte_carlo import monte_carlo
+from eclipse.monte_carlo import monte_carlo
 
 REST0 = 195.119 * u.AA
 REST1 = 195.179 * u.AA
@@ -316,7 +316,7 @@ def test_the_monte_carlo_stores_named_statistics_and_reports_failures(capsys):
 
 
 def test_the_run_says_how_many_fits_failed_and_in_how_many_pixels(capsys):
-    from euvst_response.monte_carlo import _fit_results
+    from eclipse.monte_carlo import _fit_results
 
     fit_data, failed = _single_run(
         [[10.0, 50.0]] * 4, [[0.03, 0.03]] * 4,
@@ -349,7 +349,7 @@ fitting:
 def test_a_run_writes_named_results_that_the_analysis_reads(tmp_path,
                                                              monkeypatch,
                                                              capsys):
-    from euvst_response.main import main
+    from eclipse.main import main
 
     config = tmp_path / "uniform.yaml"
     config.write_text(UNIFORM_RUN)

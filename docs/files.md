@@ -94,9 +94,9 @@ x runs across the slit, the direction a raster steps in, and y runs along it. Th
 A synthesis file from ECLIPSE holds each line's spectra over the image, and also what the synthesis worked out on the way: the DEM, the emission measure by temperature and velocity, the electron density at each temperature of each pixel, the contribution functions, and the settings it ran with. `load_synthesis` reads all of it:
 
 ```python
-import euvst_response
+import eclipse
 
-data = euvst_response.load_synthesis("./run/input/synthesised_spectra.h5")
+data = eclipse.load_synthesis("./run/input/synthesised_spectra.h5")
 
 # A line cube for each line, indexed [y, x, wavelength]
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]

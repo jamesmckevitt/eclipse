@@ -11,9 +11,9 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.synthesis import compute_goft_fiasco
+from eclipse import synthesis
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.synthesis import compute_goft_fiasco
 
 LINES = ["Fe12_195.1190", "Fe12_195.1790"]
 
@@ -141,7 +141,7 @@ def test_a_density_grid_carried_on_from_the_default_has_its_values_at_its_points
 
     Each density is computed on its own, so the grid range changes nothing.
     """
-    from euvst_response.synthesis import _density_point
+    from eclipse.synthesis import _density_point
 
     whole, _, logn = compute_goft_fiasco(LINES, n_workers=1)
     part, _, logn_part = compute_goft_fiasco(LINES, n_workers=1, logN_min=_density_point(4),

@@ -10,14 +10,14 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import rebin_atmosphere
-from euvst_response.monte_carlo import simulate_once
-from euvst_response.pinhole_diffraction import apply_euv_pinhole_diffraction
-from euvst_response.radiometric import (_vectorized_fano_noise, electrons_per_photon,
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import rebin_atmosphere
+from eclipse.monte_carlo import simulate_once
+from eclipse.pinhole_diffraction import apply_euv_pinhole_diffraction
+from eclipse.radiometric import (_vectorized_fano_noise, electrons_per_photon,
                                          photons_per_energy, to_electrons)
-from euvst_response.sampling import light_onto_pixels, photons_onto_pixels
-from euvst_response.utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip
+from eclipse.sampling import light_onto_pixels, photons_onto_pixels
+from eclipse.utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip
 
 REST = 195.119 * u.AA
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
@@ -64,7 +64,7 @@ def test_a_pixel_whose_photons_vanish_keeps_its_own_wavelength():
     do not. Such pixels keep their own wavelength, not 0 or a ratio of
     rounding errors.
     """
-    from euvst_response.sampling import _carry_photon_wavelengths
+    from eclipse.sampling import _carry_photon_wavelengths
 
     wavelength = 1.95e-6  # cm
     # Photons just above the smallest normal float keep their wavelength.
@@ -216,8 +216,8 @@ def test_with_the_psf_off_a_run_still_observes_through_the_telescope(tmp_path, m
 
     import yaml
 
-    from euvst_response.data_processing import rebin_spectra
-    from euvst_response.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
+    from eclipse.data_processing import rebin_spectra
+    from eclipse.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
                                                write_synthesis)
 
     edges = np.arange(5) * 0.3 * u.Mm
@@ -230,7 +230,7 @@ def test_with_the_psf_off_a_run_still_observes_through_the_telescope(tmp_path, m
     (tmp_path / "run.yaml").write_text(yaml.safe_dump({
         "instrument": "SWC", "n_iter": 1, "ncpu": 1, "synthesis_file": str(tmp_path / "file.h5"),
         "simulation": {"expos": "5 s", "slit_width": "0.4 arcsec", "psf": False}}))
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
     observed = []
     real = main_module.monte_carlo
 
@@ -255,7 +255,7 @@ def test_with_the_psf_off_a_run_still_observes_through_the_telescope(tmp_path, m
 
 
 def test_rows_binned_off_the_chip_vary_as_their_own_photons_electrons_add_up():
-    from euvst_response.radiometric import dn_variance
+    from eclipse.radiometric import dn_variance
 
     det = Detector_SWC()
     # Two rows, each holding photons of two wavelengths.
@@ -310,7 +310,7 @@ def _pinhole_weights(photons, det, sim, tel):
 
 @pytest.mark.parametrize("psf", [False, True])
 def test_a_pinhole_lets_through_the_light_the_filter_blocked_from_each_photon(psf):
-    from euvst_response.monte_carlo import _photons_on_the_detector
+    from eclipse.monte_carlo import _photons_on_the_detector
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=psf, noise=False,
@@ -351,7 +351,7 @@ def test_a_pinhole_lets_through_the_light_the_filter_blocked_from_each_photon(ps
 
 
 def test_photons_counted_at_their_own_wavelengths_need_the_filter_for_the_pinholes():
-    from euvst_response.monte_carlo import _photons_on_the_detector
+    from eclipse.monte_carlo import _photons_on_the_detector
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     no_pinholes = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False)
@@ -363,7 +363,7 @@ def test_photons_counted_at_their_own_wavelengths_need_the_filter_for_the_pinhol
 
 
 def test_photons_counted_at_their_pixels_wavelength_passed_the_filter_there():
-    from euvst_response.monte_carlo import _photons_on_the_detector
+    from eclipse.monte_carlo import _photons_on_the_detector
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, noise=False,
@@ -381,8 +381,8 @@ def test_photons_counted_at_their_pixels_wavelength_passed_the_filter_there():
 def test_the_pinholes_refuse_a_filter_that_passes_no_euv():
     # The pinhole light is worked out from the light the filter passes, and
     # here there is none.
-    from euvst_response.config import AluminiumFilter
-    from euvst_response.monte_carlo import _photons_on_the_detector
+    from eclipse.config import AluminiumFilter
+    from eclipse.monte_carlo import _photons_on_the_detector
 
     det = Detector_SWC()
     opaque = Telescope_EUVST(filter=AluminiumFilter(mesh_throughput=0.0))

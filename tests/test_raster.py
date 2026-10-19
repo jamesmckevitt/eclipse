@@ -14,10 +14,10 @@ import numpy as np
 import pytest
 import yaml
 
-from euvst_response import raster as raster_module
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.results_file import load_results
-from euvst_response.raster import (
+from eclipse import raster as raster_module
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.results_file import load_results
+from eclipse.raster import (
     AtmosphereSeries,
     RasterPlan,
     RasterSynthesiser,
@@ -25,9 +25,9 @@ from euvst_response.raster import (
     SynthesisSeries,
     SynthesisSettings,
 )
-from euvst_response.synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, load_synthesis,
+from eclipse.synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, load_synthesis,
                                            read_synthesis, write_synthesis)
-from euvst_response.utils import angle_to_distance
+from eclipse.utils import angle_to_distance
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -271,9 +271,9 @@ def test_every_snapshot_must_share_the_first_ones_grid(tmp_path, flat_goft):
 
 def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
     """Spatial rebinning keeps the columns at their slit positions."""
-    from euvst_response.config import Detector_SWC, Simulation
-    from euvst_response.data_processing import rebin_atmosphere
-    from euvst_response.utils import distance_to_angle
+    from eclipse.config import Detector_SWC, Simulation
+    from eclipse.data_processing import rebin_atmosphere
+    from eclipse.utils import distance_to_angle
 
     series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
     synthesiser = RasterSynthesiser(series, _settings())
@@ -292,7 +292,7 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
     # A strip cropped to one 0.2 arcsec row along the slit is smaller than a
     # 1 arcsec EIS pixel, and the rebinning says so rather than returning
     # nothing. Two 1 arcsec slit positions keep the raster inside the box.
-    from euvst_response.config import Detector_EIS
+    from eclipse.config import Detector_EIS
     one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
     narrow = one_row.summed_cube(RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL),
                                  1 * u.arcsec, 2 * u.s, LINE)
@@ -304,7 +304,7 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
 
 def test_a_static_atmosphere_one_cell_wide_synthesises(tmp_path, monkeypatch):
     """A single column takes its width from its edges, so the line cube still has a WCS."""
-    from euvst_response import synthesis
+    from eclipse import synthesis
     column = Atmosphere(temperature=np.full((4, 6, 1), TEMPERATURE.value) * u.K,
                         electron_density=np.full((4, 6, 1), ELECTRON_DENSITY.value) / u.cm**3,
                         velocity_z=np.zeros((4, 6, 1)) * u.km / u.s,
@@ -434,7 +434,7 @@ def _config(tmp_path, series_glob, **extra):
 
 def test_the_contribution_functions_can_be_computed_in_temperature_chunks(tmp_path, monkeypatch):
     """The `synthesis` section accepts `goft_temperature_chunk`, as synthesise-spectra does."""
-    from euvst_response.main import _parse_synthesis_settings
+    from eclipse.main import _parse_synthesis_settings
     received = {}
 
     def recording_goft(lines, **kwargs):
@@ -455,7 +455,7 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     config = _config(tmp_path, str(tmp_path / "series" / "*.h5"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
-    from euvst_response.main import main as run_main
+    from eclipse.main import main as run_main
     run_main()
 
     saved = load_results(tmp_path / "run" / "result" / "series.h5")
@@ -480,7 +480,7 @@ def test_an_instrument_run_sweeps_the_exposure_over_a_series(tmp_path, monkeypat
     assert second.data.sum() > raster["cubes"][keys[0]].data.sum()
     assert saved["cube_sim"].meta["raster"] is True
 
-    from euvst_response import get_results_for_combination, load_instrument_response_results
+    from eclipse import get_results_for_combination, load_instrument_response_results
     results = load_instrument_response_results(tmp_path / "run" / "result" / "series.h5")
     chosen = get_results_for_combination(results, **{
         "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 5 * u.s,
@@ -492,7 +492,7 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
     _series(tmp_path / "series", [_snapshot(0.0), _snapshot(10.0)])
     glob_pattern = str(tmp_path / "series" / "*.h5")
     monkeypatch.chdir(tmp_path)
-    from euvst_response.main import main as run_main
+    from eclipse.main import main as run_main
 
     def run(**extra):
         config = _config(tmp_path, glob_pattern, **extra)
@@ -550,7 +550,7 @@ def _assert_close(found, expected, rel=1e-12):
 
 def _synthesise(out_dir, atmospheres, monkeypatch):
     """Synthesise each atmosphere file with ECLIPSE and the flat contribution function."""
-    from euvst_response import synthesis
+    from eclipse import synthesis
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     paths = []
     for index, atmosphere in enumerate(atmospheres):
@@ -571,8 +571,8 @@ def _ramp(times=(0.0, 10.0, 20.0, 30.0)):
 
 def test_a_series_of_eclipse_syntheses_is_seen_as_the_atmospheres_they_came_from(tmp_path, monkeypatch, flat_goft):
     """Observing a synthesis file per snapshot matches synthesising under the slit."""
-    from euvst_response.config import Detector_SWC, Simulation
-    from euvst_response.data_processing import rebin_atmosphere, rebin_spectra
+    from eclipse.config import Detector_SWC, Simulation
+    from eclipse.data_processing import rebin_atmosphere, rebin_spectra
 
     atmospheres = _series(tmp_path / "atmospheres", _ramp())
     syntheses = _synthesise(tmp_path / "syntheses", atmospheres, monkeypatch)
@@ -615,7 +615,7 @@ def test_an_instrument_run_observes_a_synthesis_series_as_its_atmosphere_series(
     by_synthesis.write_text(yaml.safe_dump(config))
 
     monkeypatch.chdir(tmp_path)
-    from euvst_response.main import main as run_main
+    from eclipse.main import main as run_main
     saved = {}
     for path in (by_atmosphere, by_synthesis):
         monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
@@ -688,9 +688,9 @@ def test_an_exposure_of_a_synthesis_series_averages_over_the_slit_and_over_time(
 
 
 def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_path):
-    from euvst_response.config import Detector_SWC, Simulation
-    from euvst_response.data_processing import rebin_spectra
-    from euvst_response.utils import distance_to_angle
+    from eclipse.config import Detector_SWC, Simulation
+    from eclipse.data_processing import rebin_spectra
+    from eclipse.utils import distance_to_angle
 
     nx = SHAPE[2]
     paths = [_other_code_file(tmp_path / f"{i}.h5", t, (1.0 + t / 10) * np.ones(nx))
@@ -737,7 +737,7 @@ def test_a_synthesis_series_goes_onto_the_detector_one_column_per_exposure(tmp_p
 def test_a_synthesis_series_refuses_files_that_do_not_fit_together(tmp_path):
     import dataclasses
 
-    from euvst_response.utils import distance_to_angle
+    from eclipse.utils import distance_to_angle
 
     nx = SHAPE[2]
     ones = np.ones(nx)
@@ -812,7 +812,7 @@ def test_an_instrument_run_observes_another_codes_series(tmp_path, monkeypatch):
     path.write_text(yaml.safe_dump(config))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
-    from euvst_response.main import main as run_main
+    from eclipse.main import main as run_main
     run_main()
 
     saved = load_results(tmp_path / "run" / "result" / "other.h5")
@@ -835,7 +835,7 @@ def test_a_synthesis_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch)
     for index, time in enumerate((0.0, 10.0)):
         _other_code_file(tmp_path / "other" / f"snap_{index}.h5", time, np.ones(nx))
     monkeypatch.chdir(tmp_path)
-    from euvst_response.main import main as run_main
+    from eclipse.main import main as run_main
 
     def run(**changes):
         config = {"instrument": "SWC", "synthesis_series": str(tmp_path / "other" / "*.h5"),
@@ -898,8 +898,8 @@ def test_a_raster_cube_is_labelled_with_the_wavelengths_it_was_synthesised_on(tm
 
 
 def test_the_telescopes_blur_across_the_slit_brings_in_the_columns_beside_it(tmp_path, flat_goft):
-    from euvst_response.sampling import pixel_weights
-    from euvst_response.utils import _fwhm_to_sigma
+    from eclipse.sampling import pixel_weights
+    from eclipse.utils import _fwhm_to_sigma
 
     series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
     synthesiser = RasterSynthesiser(series, _settings())
@@ -921,9 +921,9 @@ def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypat
     """Exposures are collected through the telescope's blur and put onto the pixels by the PSF."""
     import importlib
 
-    from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-    from euvst_response.data_processing import rebin_atmosphere
-    from euvst_response.radiometric import across_slit_fwhm
+    from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+    from eclipse.data_processing import rebin_atmosphere
+    from eclipse.radiometric import across_slit_fwhm
 
     snapshots = [_snapshot(t, columns={6: (3.0, 0.0)}) for t in (0.0, 10.0)]
     paths = _series(tmp_path / "series", snapshots)
@@ -931,7 +931,7 @@ def test_an_instrument_run_observes_a_series_through_the_psf(tmp_path, monkeypat
                      raster={"start": "0 s", "steps": 2},
                      simulation={"slit_width": "0.4 arcsec", "expos": "5 s", "psf": True},
                      telescope={"psf_across_slit": "1 arcsec"})
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
     observed = []
     real = main_module.monte_carlo
 

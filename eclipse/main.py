@@ -52,7 +52,7 @@ _TOP_LEVEL_KEYS = {
 # Keys of the 'synthesis:' section, the settings an atmosphere time series is
 # synthesised with (as in synthesise-spectra), and of the 'raster:' section,
 # the observing plan of an atmosphere or synthesis time series
-# (euvst_response.raster.RasterPlan).
+# (eclipse.raster.RasterPlan).
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
                    "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
                    "goft_temperature_chunk"}
@@ -718,13 +718,13 @@ def main() -> None:
             raise ValueError(
                 f"{synthesis_file} is neither a synthesis file, which is HDF5, nor a synthesis "
                 f"pickle as older versions of ECLIPSE wrote. A synthesis from another code is "
-                f"written as a synthesis file with euvst_response.write_synthesis.")
+                f"written as a synthesis file with eclipse.write_synthesis.")
         else:
             warnings.warn(
                 f"{synthesis_file} is a synthesis pickle, as older versions of ECLIPSE "
                 f"wrote them. Pickles are deprecated and will not be read in a future "
                 f"release: re-run the synthesis, or convert the file with "
-                f"euvst_response.convert_synthesis_pickle.", FutureWarning, stacklevel=2)
+                f"eclipse.convert_synthesis_pickle.", FutureWarning, stacklevel=2)
             reference_line = config.get("reference_line", DEFAULT_REFERENCE_LINE)
 
     # Pinhole config (fixed paired lists, not swept)
@@ -746,14 +746,14 @@ def main() -> None:
         raise ValueError(
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
-            "modelled by euvst_response.readout, which takes the detector's settings.")
+            "modelled by eclipse.readout, which takes the detector's settings.")
     # A run does not model the read-out either, so a CTE below 1 would be ignored.
     for name in ("cte_parallel", "cte_serial"):
         if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
             raise ValueError(
                 f"detector.{name} must be 1 for an instrument run, which does not model the "
                 f"read-out. Charge left behind as a frame is read is modelled by "
-                f"euvst_response.readout, which takes the detector's settings.")
+                f"eclipse.readout, which takes the detector's settings.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
     # sized for the slit's spectral PSF, which also depends on the slit

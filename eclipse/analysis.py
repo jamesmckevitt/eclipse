@@ -467,13 +467,13 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
                   "release: no released version wrote DEM data into the results. The DEM is "
                   "in the synthesis file; read it with "
-                  "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
+                  "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
                   FutureWarning, stacklevel=2)
     if "dem_data" not in results:
         raise KeyError(
             "DEM data is not in the results, as no released version wrote it there. It is "
             "in the synthesis file: read it with "
-            "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
+            "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
         )
     
     return results["dem_data"]

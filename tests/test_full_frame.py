@@ -6,15 +6,15 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.band import BandLines, IonLines
-from euvst_response.config import Detector_SWC, Telescope_EUVST
-from euvst_response.frame import photons_from_lines
-from euvst_response.full_frame import (_density_shares, full_ccd_frame, lay_out_register,
+from eclipse import synthesis
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.band import BandLines, IonLines
+from eclipse.config import Detector_SWC, Telescope_EUVST
+from eclipse.frame import photons_from_lines
+from eclipse.full_frame import (_density_shares, full_ccd_frame, lay_out_register,
                                        write_full_frame)
-from euvst_response.readout import FocalPlane_SWC
-from euvst_response.synthesis_file import read_synthesis_products
+from eclipse.readout import FocalPlane_SWC
+from eclipse.synthesis_file import read_synthesis_products
 
 REST = 195.119
 G0 = 1e-24  # erg cm3 / s, at every temperature and density
@@ -184,7 +184,7 @@ def test_a_frame_with_imperfect_serial_transfer_trails_into_the_overscan(uniform
     A long exposure gives the line hundreds of DN. In rows the line does not
     reach, the overscan holds the dark charge alone.
     """
-    from euvst_response.readout import ReadoutSequence, dark_current_time, serial_dark_shares
+    from eclipse.readout import ReadoutSequence, dark_current_time, serial_dark_shares
 
     products = read_synthesis_products(uniform_synthesis)
     det = Detector_SWC(cte_serial=0.999)
@@ -280,7 +280,7 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
                                                                     blurred_frame):
     from scipy.stats import norm
 
-    from euvst_response.frame import _response
+    from eclipse.frame import _response
 
     products = read_synthesis_products(uniform_synthesis)
     det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
@@ -322,7 +322,7 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
 @pytest.mark.parametrize("psf", [False, True])
 def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(uniform_synthesis,
                                                                            psf):
-    from euvst_response.frame import photons_from_spectrum
+    from eclipse.frame import photons_from_spectrum
 
     products = read_synthesis_products(uniform_synthesis)
     grid = products["logN_grid"]

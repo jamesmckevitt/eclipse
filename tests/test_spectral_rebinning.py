@@ -10,12 +10,12 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation
-from euvst_response.data_processing import (
+from eclipse.config import Detector_SWC, Simulation
+from eclipse.data_processing import (
     rebin_atmosphere,
     resample_ndcube_spectral_axis,
 )
-from euvst_response.fitting import fit_cube_gauss
+from eclipse.fitting import fit_cube_gauss
 
 REST = 171.073 * u.Angstrom
 C = const.c.to_value(u.km / u.s)

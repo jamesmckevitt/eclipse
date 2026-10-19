@@ -13,11 +13,11 @@ import yaml
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.analysis import load_instrument_response_results
-from euvst_response.atmosphere import Atmosphere, edges_from_centres, write_atmosphere
-from euvst_response.config import Detector_SWC, Simulation
-from euvst_response.data_processing import rebin_spectra, resample_spectra, sum_line_cubes
-from euvst_response.synthesis_file import (
+from eclipse.analysis import load_instrument_response_results
+from eclipse.atmosphere import Atmosphere, edges_from_centres, write_atmosphere
+from eclipse.config import Detector_SWC, Simulation
+from eclipse.data_processing import rebin_spectra, resample_spectra, sum_line_cubes
+from eclipse.synthesis_file import (
     RADIANCE_UNIT,
     SpectralLine,
     Synthesis,
@@ -28,7 +28,7 @@ from euvst_response.synthesis_file import (
     write_line_cubes,
     write_synthesis,
 )
-from euvst_response.utils import VELOCITY_CONVENTION, angle_to_distance
+from eclipse.utils import VELOCITY_CONVENTION, angle_to_distance
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -387,7 +387,7 @@ def test_uneven_wavelengths_are_read_with_read_synthesis_not_as_line_cubes(tmp_p
 
 def test_blends_keep_their_flux_on_the_reference_wavelengths():
     """A narrow blend between two of the reference line's wavelengths is added, not lost."""
-    from euvst_response.utils import onto_wavelength_bins
+    from eclipse.utils import onto_wavelength_bins
 
     # By hand: samples covering 0.5-1.5, 1.5-2.5 and 2.5-3.5, averaged over
     # bins 0.5-2.5 and 2.5-4.5, with zero beyond 3.5.
@@ -461,7 +461,7 @@ def _flat_goft(lines, **kwargs):
 
 
 def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monkeypatch):
-    from euvst_response import synthesis
+    from eclipse import synthesis
 
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     atmosphere = write_atmosphere(Atmosphere(
@@ -604,7 +604,7 @@ def test_angles_give_the_same_cube_as_the_lengths_they_stand_for():
 # An instrument run
 # ----------------------------------------------------------------------
 def _run(tmp_path, monkeypatch, name, **inputs):
-    from euvst_response.main import main
+    from eclipse.main import main
 
     config = tmp_path / f"{name}.yaml"
     config.write_text(yaml.safe_dump({
@@ -682,7 +682,7 @@ def test_a_file_of_several_lines_needs_the_reference_line_it_lacks(tmp_path, mon
 
 
 def test_load_atmosphere_reads_a_synthesis_file_as_it_read_the_pickle(tmp_path):
-    from euvst_response.data_processing import load_atmosphere
+    from eclipse.data_processing import load_atmosphere
 
     with open(tmp_path / "synthesis.pkl", "wb") as f:
         dill.dump({"line_cubes": _line_cubes(), "dynamic_mode": {"enabled": False}}, f)
@@ -719,7 +719,7 @@ def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind
     import importlib
 
     module, name = reader.split(":")
-    read = getattr(importlib.import_module(f"euvst_response.{module}"), name)
+    read = getattr(importlib.import_module(f"eclipse.{module}"), name)
     path = tmp_path / "notes.txt"
     path.write_text("temperature, density\n")
     with pytest.raises(ValueError, match=f"notes.txt is not an HDF5 file, so it is not an "
@@ -729,7 +729,7 @@ def test_a_file_that_is_not_hdf5_is_refused_in_a_sentence(tmp_path, reader, kind
 
 def test_a_write_cut_short_leaves_the_synthesis_file_that_was_there(tmp_path, monkeypatch):
     """For example when a job is killed or the disk fills during the write."""
-    import euvst_response.synthesis_file as synthesis_file
+    import eclipse.synthesis_file as synthesis_file
 
     path = write_synthesis(_synthesis(), tmp_path / "spectra.h5")
     before = path.read_bytes()
@@ -745,7 +745,7 @@ def test_a_write_cut_short_leaves_the_synthesis_file_that_was_there(tmp_path, mo
 
 
 def test_a_write_cut_short_leaves_the_atmosphere_file_that_was_there(tmp_path, monkeypatch):
-    import euvst_response.atmosphere as atmosphere_module
+    import eclipse.atmosphere as atmosphere_module
 
     box = Atmosphere(temperature=np.full((2, 2, 2), 1e6) * u.K,
                      electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
@@ -778,7 +778,7 @@ def test_a_read_only_file_is_not_written_over(tmp_path):
 def test_a_file_that_is_neither_a_synthesis_file_nor_a_pickle_is_called_neither(
         tmp_path, monkeypatch):
     """Rather than being called an ECLIPSE synthesis pickle and then failing to unpickle."""
-    from euvst_response.data_processing import load_atmosphere
+    from eclipse.data_processing import load_atmosphere
 
     (tmp_path / "spectra.fits").write_bytes(b"SIMPLE  =                    T")
     with pytest.raises(ValueError, match="neither a synthesis file, which is HDF5, nor a"):

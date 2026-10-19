@@ -8,7 +8,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response.synthesis import create_atmosphere_ndcube, create_line_cube
+from eclipse.synthesis import create_atmosphere_ndcube, create_line_cube
 
 REST = 195.119 * u.Angstrom
 INTENSITY_UNIT = u.erg / u.s / u.cm**2 / u.sr / u.cm

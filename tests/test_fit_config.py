@@ -8,9 +8,9 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response import fitting
-from euvst_response.fitting import FitComponent, FitConfig, fit_cube_gauss
-from euvst_response.main import _parse_fitting_config
+from eclipse import fitting
+from eclipse.fitting import FitComponent, FitConfig, fit_cube_gauss
+from eclipse.main import _parse_fitting_config
 
 REST = 195.119 * u.Angstrom
 N_WAVE = 25

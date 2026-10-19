@@ -19,8 +19,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_EIS, Detector_SWC, Simulation
-from euvst_response.radiometric import (
+from eclipse.config import Detector_EIS, Detector_SWC, Simulation
+from eclipse.radiometric import (
     add_telescope_throughput,
     apply_exposure,
     intensity_to_photons,
@@ -29,7 +29,7 @@ from euvst_response.radiometric import (
     to_dn,
     to_electrons,
 )
-from euvst_response.utils import angle_to_distance
+from eclipse.utils import angle_to_distance
 
 # CODATA values and the IAU astronomical unit, written out rather than taken
 # from astropy so the expected values do not depend on the code under test.
@@ -443,7 +443,7 @@ def test_an_iteration_raises_no_warnings_about_the_cube_having_no_observer():
     """
     import warnings
 
-    from euvst_response import Telescope_EUVST, create_uniform_intensity_cube, simulate_once
+    from eclipse import Telescope_EUVST, create_uniform_intensity_cube, simulate_once
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(slit_width=0.2 * u.arcsec, expos=1 * u.s, psf=True)

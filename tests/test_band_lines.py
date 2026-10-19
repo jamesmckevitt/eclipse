@@ -7,12 +7,12 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.band import (BandLines, IonLines, _solve_dropping_unfed_levels,
+from eclipse import synthesis
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.band import (BandLines, IonLines, _solve_dropping_unfed_levels,
                                  _unfed_levels_dropped, band_contribution_functions,
                                  read_band_lines, write_band_lines)
-from euvst_response.synthesis_file import read_synthesis_products
+from eclipse.synthesis_file import read_synthesis_products
 
 
 def _rates_with_an_unfed_level():
@@ -143,7 +143,7 @@ def test_a_line_of_the_band_has_the_contribution_function_the_synthesis_gives_it
 def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys):
     from fiasco.util.exceptions import MissingDatasetException
 
-    from euvst_response import band as band_module
+    from eclipse import band as band_module
 
     def missing(*args, **kwargs):
         raise MissingDatasetException("no such data")
@@ -172,7 +172,7 @@ def test_a_band_with_no_lines_still_names_its_database():
 @pytest.mark.chianti
 def test_levels_dropped_on_both_sides_of_where_the_rates_stop_are_all_counted(monkeypatch,
                                                                               capsys):
-    from euvst_response import band as band_module
+    from eclipse import band as band_module
 
     logT = np.linspace(5.8, 6.6, 9)
     end = 10 ** logT[4] * (1 - 1e-9)

@@ -15,13 +15,13 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response import synthesis
-from euvst_response.analysis import load_instrument_response_results
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.data_processing import load_atmosphere
-from euvst_response.results_file import save_results
-from euvst_response.synthesis_file import load_synthesis, read_synthesis
-from euvst_response.utils import VELOCITY_CONVENTION, view_axis_and_side
+from eclipse import synthesis
+from eclipse.analysis import load_instrument_response_results
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.data_processing import load_atmosphere
+from eclipse.results_file import save_results
+from eclipse.synthesis_file import load_synthesis, read_synthesis
+from eclipse.utils import VELOCITY_CONVENTION, view_axis_and_side
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom

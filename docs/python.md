@@ -1,6 +1,6 @@
 # Python
 
-Everything `synthesise-spectra` and `eclipse` do is available from Python, in the `euvst_response` package. This page shows the parts most often used on their own, and the [API reference](api.md) describes every function and class.
+Everything `synthesise-spectra` and `eclipse` do is available from Python, in the `eclipse` package. This page shows the parts most often used on their own, and the [API reference](api.md) describes every function and class.
 
 ## The instrument
 
@@ -14,7 +14,7 @@ The effective area of EUVST-SW across its band:
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
-from euvst_response import Detector_SWC, Telescope_EUVST
+from eclipse import Detector_SWC, Telescope_EUVST
 
 telescope = Telescope_EUVST()
 detector = Detector_SWC()
@@ -59,14 +59,14 @@ plt.show()
 
 ![The throughput of the primary mirror, its roughness, the grating and the filter, from 170 to 214 Angstrom](images/python-throughput.png)
 
-To try another filter, give the telescope one, such as `Telescope_EUVST(filter=AluminiumFilter(al_thickness=1200 * u.AA))`, with `AluminiumFilter` imported from `euvst_response`.
+To try another filter, give the telescope one, such as `Telescope_EUVST(filter=AluminiumFilter(al_thickness=1200 * u.AA))`, with `AluminiumFilter` imported from `eclipse`.
 
 ### The spectral PSF
 
 The width of the spectral PSF depends on the slit, since the slit's image is part of it:
 
 ```python
-from euvst_response import spectral_psf_fwhm
+from eclipse import spectral_psf_fwhm
 
 for slit in [0.2, 0.4, 0.8, 1.6] * u.arcsec:
     fwhm = spectral_psf_fwhm(telescope, detector, slit) * u.pix   # in detector pixels
@@ -100,7 +100,7 @@ for temperature in [-70, -60, -50] * u.deg_C:
 `monte_carlo` runs the instrument simulation on a cube of spectra already on the detector's pixels, as `eclipse` does for each combination of settings. The simplest such cube is a single line of known intensity:
 
 ```python
-from euvst_response import Simulation, create_uniform_intensity_cube, monte_carlo
+from eclipse import Simulation, create_uniform_intensity_cube, monte_carlo
 
 simulation = Simulation(slit_width=0.2 * u.arcsec, expos=20 * u.s, psf=True)
 cube = create_uniform_intensity_cube(5000 * u.erg / (u.s * u.cm**2 * u.sr), 195.119 * u.AA,

@@ -561,7 +561,7 @@ def get_git_commit_id() -> str:
     """
     try:
         from importlib.resources import files
-        pkg_path = Path(str(files("euvst_response"))).parent
+        pkg_path = Path(str(files("eclipse"))).parent
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,
@@ -584,8 +584,8 @@ def get_git_commit_id() -> str:
 def _get_software_version() -> str:
     """Get the installed package version."""
     try:
-        import euvst_response
-        return euvst_response.__version__
+        import eclipse
+        return eclipse.__version__
     except Exception:
         return "unknown"
 
@@ -1100,3 +1100,16 @@ def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
             f"a factor that divides every dimension."
         )
 
+
+def _unpickle(handle):
+    """
+    Object from an older version's pickle, which may name the package's former modules.
+
+    Those load through `euvst_response`, whose warning to change an import is
+    not for the reader of a file, so it is not shown here.
+    """
+    import dill
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="The euvst_response package is now called")
+        return dill.load(handle)

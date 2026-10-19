@@ -14,8 +14,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.frame import (
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.frame import (
     apply_spectral_psf,
     detect,
     digitise,
@@ -26,14 +26,14 @@ from euvst_response.frame import (
     pixel_solid_angle,
     thermal_width,
 )
-from euvst_response.radiometric import (
+from eclipse.radiometric import (
     apply_focusing_optics_psf,
     spectral_psf_fwhm,
     spectral_psf_reach,
     to_electrons,
 )
-from euvst_response.readout import FocalPlane_SWC, ReadoutSequence, expose
-from euvst_response.utils import _fwhm_to_sigma
+from eclipse.readout import FocalPlane_SWC, ReadoutSequence, expose
+from eclipse.utils import _fwhm_to_sigma
 
 # apply_spectral_psf is deprecated but still tested here. Its warning has its
 # own test.
@@ -384,7 +384,7 @@ def test_the_throughput_tables_are_read_once(monkeypatch):
     # Rereading all five for every wavelength would make a spectrum take minutes.
     import pathlib
 
-    from euvst_response import config
+    from eclipse import config
 
     monkeypatch.setattr(config, "_THROUGHPUT_TABLES", {})
     reads = []
@@ -700,7 +700,7 @@ def test_no_lines_give_no_photons(spectral_psf):
 
 
 def test_lines_laid_a_block_at_a_time_give_what_they_give_all_at_once(monkeypatch):
-    from euvst_response import frame
+    from eclipse import frame
 
     lines = ([195.119, 195.179, 192.394] * u.Angstrom,
              [1.0, 0.5, 0.2] * u.erg / (u.s * u.cm**2 * u.sr), [0.004, 0.01, 0.006] * u.Angstrom)
@@ -715,8 +715,8 @@ def test_lines_laid_a_block_at_a_time_give_what_they_give_all_at_once(monkeypatc
 
 def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
     """The one column stands in for the empty second half."""
-    from euvst_response.frame import expose_serial_overscan_with_wavelengths
-    from euvst_response.readout import ReadoutSequence
+    from eclipse.frame import expose_serial_overscan_with_wavelengths
+    from eclipse.readout import ReadoutSequence
 
     one = ReadoutSequence(serial_prescan=2, serial_image_pixels=1, serial_overscan=3,
                           parallel_overscan_rows=0, cte_serial=0.9)

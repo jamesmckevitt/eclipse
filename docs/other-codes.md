@@ -8,7 +8,7 @@ A synthesis file holds the spectral radiance at each pixel and wavelength, for e
 
 ```python
 import astropy.units as u
-from euvst_response import SpectralLine, Synthesis, edges_from_centres, write_synthesis
+from eclipse import SpectralLine, Synthesis, edges_from_centres, write_synthesis
 
 # intensity[y, x, wavelength] from your code, with its wavelengths and pixel centres
 synthesis = Synthesis(
@@ -54,7 +54,7 @@ import gzip
 
 import astropy.units as u
 import numpy as np
-from euvst_response import SpectralLine, Synthesis, edges_from_centres, write_synthesis
+from eclipse import SpectralLine, Synthesis, edges_from_centres, write_synthesis
 
 
 def read_fomo(path):
@@ -139,7 +139,7 @@ import numpy as np
 from mendeleev import element
 from scipy.io import readsav
 from scipy.special import erf
-from euvst_response import SpectralLine, Synthesis, write_synthesis
+from eclipse import SpectralLine, Synthesis, write_synthesis
 
 poa = readsav("pintofale_lines.sav")
 rest = np.abs(poa["wvl"]) * u.AA  # PINTofALE marks theoretical wavelengths negative

@@ -22,8 +22,8 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response.config import Detector_SWC
-from euvst_response.readout import (
+from eclipse.config import Detector_SWC
+from eclipse.readout import (
     MEASURED_SLIT_IMAGE_TILT,
     FocalPlane_SWC,
     ReadoutSequence,
