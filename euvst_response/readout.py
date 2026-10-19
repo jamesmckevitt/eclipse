@@ -849,7 +849,7 @@ def expose_serial_overscan(rate: np.ndarray, exposure: u.Quantity,
 
 def serial_dark_shares(sequence: ReadoutSequence, n_columns: int) -> tuple:
     """
-    Share of each image pixel's dark charge that each sample of a row receives along the serial register.
+    Share of a row's dark charge per pixel that each sample receives along the register.
 
     Dark current is the same in every column of a row, so with `cte_serial`
     below 1 each sample gets the row's dark charge per pixel times a share
