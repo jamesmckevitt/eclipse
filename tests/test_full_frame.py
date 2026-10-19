@@ -73,18 +73,22 @@ def sharp_frame(uniform_synthesis):
     """Frame of the uniform corona for 1 s, without the PSF or noise. Tests must not change it."""
     products = read_synthesis_products(uniform_synthesis)
     return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
-                          psf=False, noise=False, n_workers=1)
+                          telescope=Telescope_EUVST(resolution_budget="none"), psf=False,
+                          noise=False, n_workers=1)
 
 
 @pytest.fixture(scope="module")
 def blurred_frame(uniform_synthesis):
     """Frame of the uniform corona with the PSF and no noise. Tests must not change it.
 
-    The exposure is long, 1000 s, so the read-out smear adds little light.
+    The exposure is long, 1000 s, so the read-out smear adds little light. The
+    telescope leaves out the resolution budget, whose blur across the slit would
+    carry light past the edges of this small scene.
     """
     products = read_synthesis_products(uniform_synthesis)
     return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
-                          noise=False, n_workers=1)
+                          telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
+                          n_workers=1)
 
 
 def _one_line(products, logN=None, g_off_the_synthesis=None):
@@ -108,7 +112,7 @@ def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesi
     products = read_synthesis_products(uniform_synthesis)
     # The rate does not depend on the exposure, so the 1000 s frame serves.
     frame = request.getfixturevalue("blurred_frame" if psf else "sharp_frame")
-    det, tel = Detector_SWC(), Telescope_EUVST()
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
     # all at 1 MK and at rest.
@@ -161,6 +165,50 @@ def test_the_prescan_and_overscan_hold_only_the_read_noise():
     assert np.all(laid[:, pre:pre + 4] == 7.0)
     assert np.all(laid[:, pre + 4 + 2 * over:pre + 8 + 2 * over] == 7.0)
     assert np.all(laid[:, :pre] == 0.0) and np.all(laid[:, -pre:] == 0.0)
+
+
+def test_the_overscan_holds_what_the_register_leaves_behind():
+    det = Detector_SWC()
+    image = np.full((5, 8), 7.0)
+    pre, over = det.serial_prescan, det.serial_overscan
+    overscan = np.arange(5 * 2 * over, dtype=float).reshape(5, 2 * over)
+    laid = lay_out_register(image, det, noise=False, overscan_dn=overscan)
+    assert np.array_equal(laid[:, pre + 4:pre + 4 + 2 * over], overscan)
+    with pytest.raises(ValueError, match="overscan_dn must be shaped"):
+        lay_out_register(image, det, noise=False, overscan_dn=overscan[:, 1:])
+
+
+def test_a_frame_with_imperfect_serial_transfer_trails_into_the_overscan(uniform_synthesis):
+    """The line and the dark charge in each half's last image pixels trail into the overscan.
+
+    A long exposure gives the line hundreds of DN. In rows the line does not
+    reach, the overscan holds the dark charge alone.
+    """
+    from euvst_response.readout import ReadoutSequence, dark_current_time, serial_dark_shares
+
+    products = read_synthesis_products(uniform_synthesis)
+    det = Detector_SWC(cte_serial=0.999)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+                           det=det, noise=False, n_workers=1)
+    perfect = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+                             noise=False, n_workers=1)
+    pre, over, half = det.serial_prescan, det.serial_overscan, det.n_columns // 2
+    sequence = ReadoutSequence.from_detector(det)
+    dark = (det.dark_current * dark_current_time(500 * u.s, sequence, det.n_rows)).to_value(
+        u.electron / u.pix)[:det.n_rows]
+    _, shares = serial_dark_shares(sequence, det.n_columns)
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    photons = perfect.photons["left"][:det.n_rows]
+    for column, sample, share in ((half - 1, pre + half, shares[0]),
+                                  (half, pre + half + 2 * over - 1, shares[-1])):
+        assert photons[:, column].max() > 0
+        dn = frame.dn["left"][:det.n_rows, sample]
+        dark_only = np.round(dark * share / gain)
+        lit = photons[:, column] >= photons[:, column].max() / 2
+        assert np.all(dn[lit] > dark_only[lit])
+        unlit = photons[:, column] == 0
+        assert np.array_equal(dn[unlit], dark_only[unlit])
+        assert np.all(perfect.dn["left"][:, sample] == 0)
 
 
 def test_a_pixels_emission_measure_is_shared_between_the_densities_either_side():
@@ -235,7 +283,7 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     from euvst_response.frame import _response
 
     products = read_synthesis_products(uniform_synthesis)
-    det, tel = Detector_SWC(), Telescope_EUVST()
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     frame = blurred_frame
     focal_plane = FocalPlane_SWC.from_detector(det)
     middle = focal_plane.n_columns // 2
@@ -292,8 +340,8 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
                   * (REST / wavelength) ** 2 * np.ones((1, n_t, 1)))
     frame = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, psf=psf,
                            continuum=(wavelength * u.AA, free, two_photon), noise=False,
-                           n_workers=1)
-    det, tel = Detector_SWC(), Telescope_EUVST()
+                           n_workers=1, telescope=Telescope_EUVST(resolution_budget="none"))
+    det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
     # all at 1e9 cm^-3, from the DEM per unit log T. The continuum is per unit

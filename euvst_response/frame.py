@@ -28,11 +28,11 @@ from .radiometric import (
     photons_per_energy,
     slit_image_width,
     spectral_line_spread,
-    spectral_optics_fwhm,
+    spectral_blur_fwhm,
     spectral_psf_fwhm,
     spectral_psf_reach,
 )
-from .readout import FocalPlane_SWC, expose
+from .readout import FocalPlane_SWC, expose, expose_serial_overscan
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
 from .utils import angle_to_distance, _fwhm_to_sigma
@@ -120,7 +120,7 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
         sigma_rows = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
         box_rows = 0.0
     elif spectral_psf == "convolution":
-        sigma_rows = _fwhm_to_sigma(spectral_optics_fwhm(telescope, det))
+        sigma_rows = _fwhm_to_sigma(spectral_blur_fwhm(telescope, det))
         box_rows = slit_image_width(slit_width, det)
     else:
         raise ValueError(
@@ -545,6 +545,42 @@ def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: 
     return photons, mean * u.Angstrom, rms * u.Angstrom
 
 
+def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity,
+                                            exposure: u.Quantity, sequence,
+                                            rms_wavelength: Optional[u.Quantity] = None) -> tuple:
+    """
+    Photons the serial register carries into the overscan, with the
+    wavelengths of their mean and root mean square energies.
+
+    As :func:`expose_with_wavelengths`, for the samples of
+    :func:`~euvst_response.readout.expose_serial_overscan`. A sample no
+    photons reach takes the wavelength of the image pixel next to it.
+
+    Returns
+    -------
+    photons : np.ndarray
+        Photons per sample, `(n_rows + parallel_overscan_rows, 2 * serial_overscan)`.
+    wavelength, rms_wavelength : u.Quantity
+        Wavelengths of their mean and root mean square energies, same shape.
+    """
+    rate = np.asarray(rate, dtype=float)
+    if rate.ndim != 2:
+        raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
+    own = _per_pixel(wavelength, rate.shape)
+    rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
+    n_more, overscan = sequence.parallel_overscan_rows, sequence.serial_overscan
+    # The image columns next to each half's overscan. A CCD one column wide
+    # has only the first half, whose column stands in for both.
+    half = (rate.shape[1] + 1) // 2
+    edges = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])[
+        :, [half - 1, min(half, rate.shape[1] - 1)]]
+    fallback = np.repeat(edges, overscan, axis=1)
+    photons, mean, rms = _carry_photon_wavelengths(
+        lambda values: expose_serial_overscan(values, exposure, sequence), rate, own, rms,
+        fallback)
+    return photons, mean * u.Angstrom, rms * u.Angstrom
+
+
 def _per_pixel(wavelength: u.Quantity, shape: tuple) -> np.ndarray:
     """Wavelengths per row or per pixel, broadcast to a frame of `shape`, in Angstrom."""
     values = np.asarray(u.Quantity(wavelength).to_value(u.Angstrom), dtype=float)
@@ -579,7 +615,8 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         energy, as from :func:`expose_with_wavelengths`.
     dark_time : u.Quantity
         Time each row collects dark current, one per row or one for all, as
-        from :func:`euvst_response.readout.dark_current_time`.
+        from :func:`euvst_response.readout.dark_current_time`, or one per
+        pixel, same shape as `photons`.
     det : Detector_SWC
         Detector.
     noise : bool
@@ -611,7 +648,9 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
                                        rms_wavelength=rms * u.Angstrom)
 
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
-    dark = np.broadcast_to(np.reshape(dark, (-1, 1)) if np.ndim(dark) else dark, photons.shape)
+    if np.ndim(dark) == 1:
+        dark = np.reshape(dark, (-1, 1))
+    dark = np.broadcast_to(dark, photons.shape)
     if noise:
         electrons = (electrons + np.random.poisson(dark)
                      + np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel),

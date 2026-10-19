@@ -14,9 +14,11 @@ from scipy.sparse import csr_matrix
 from scipy.special import erf
 from tqdm import tqdm
 from .pinhole_diffraction import _filter_transmission, _pinholes_on
-from .radiometric import (_carry_photon_meta, photons_per_energy, slit_image_width,
-                          spectral_optics_fwhm, spectral_psf_fwhm, spectral_psf_margin)
-from .sampling import centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights
+from .radiometric import (_carry_photon_meta, across_slit_fwhm, photons_per_energy,
+                          slit_image_width, spatial_psf_fwhm, spectral_blur_fwhm,
+                          spectral_psf_fwhm, spectral_psf_margin)
+from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
+                       pixel_weights_through)
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
 
@@ -300,7 +302,8 @@ def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
 
 
 def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1, *,
-                                                     sigma_x=0.0, sigma_y=0.0, extend=False):
+                                                     sigma_x=0.0, sigma_y=0.0, extend=False,
+                                                     openings=None):
     """Reproject an NDCube from heliocentric to helioprojective coordinates.
 
     Pixels are the plate scale apart along the slit and the slit width
@@ -327,6 +330,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     extend : bool, optional
         Extend the scene past its edges with its edge cells, for the blur
         to bring in.
+    openings : array, optional
+        `(n, 2)` stretches where light gets through the slit, in arcsec along
+        it from the middle of the scene, as from `Telescope_EUVST.slit_openings`.
+        The blur along the slit comes before them. Default None, for a slit
+        open along the whole scene.
     """
 
     ny, nx, _ = new_cube_spec.shape
@@ -390,9 +398,12 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     # Each pixel holds the mean of the uniform cells over its footprint,
     # after the optics blur if given. Both grids are centred on the middle
     # of the input.
-    rows = pixel_weights(centred_edges(ny_in, y_angle.to_value(u.arcsec)),
-                         centred_edges(ny_out, (pitch_y * u.pix).to_value(u.arcsec)),
-                         sigma_y, extend=extend)
+    cell_rows = centred_edges(ny_in, y_angle.to_value(u.arcsec))
+    pixel_rows = centred_edges(ny_out, (pitch_y * u.pix).to_value(u.arcsec))
+    if openings is None:
+        rows = pixel_weights(cell_rows, pixel_rows, sigma_y, extend=extend)
+    else:
+        rows = pixel_weights_through(cell_rows, pixel_rows, openings, sigma_y, extend=extend)
     columns = pixel_weights(centred_edges(nx_in, x_angle.to_value(u.arcsec)),
                             centred_edges(nx_out, pitch_x.to_value(u.arcsec)),
                             0.0 if raster else sigma_x, extend=extend)
@@ -413,9 +424,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     # cubes are expected to be.
     wcs_tgt.wcs.set()
     # Record the scene's extent along the slit, which gives the rows it
-    # covers at any plate scale, for main to check off-chip binning against.
+    # covers at any plate scale, for main to check off-chip binning against,
+    # and whether the slit's ends and fiducials were cut out.
     return NDCube(data, wcs=wcs_tgt, unit=new_cube_spec.unit,
-                  meta={**meta, "fov_along_slit": fov_y.to(u.arcsec)})
+                  meta={**meta, "fov_along_slit": fov_y.to(u.arcsec),
+                        **({"slit_mask_applied": True} if openings is not None else {})})
 
 
 def _through_the_optics(tel, sim) -> bool:
@@ -463,7 +476,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     if sim.psf and sim.spectral_psf == "quadrature":
         sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * step
     elif sim.psf:
-        sigma = _fwhm_to_sigma(spectral_optics_fwhm(tel, det)) * step
+        sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det)) * step
         width = slit_image_width(sim.slit_width, det) * step
     pixel_edges = np.concatenate([grid - step / 2, [grid[-1] + step / 2]])
     cells = _bin_edges(centres)
@@ -501,14 +514,28 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     return spectra, grid * u.cm, meta
 
 
+def _slit_openings(tel, sim) -> dict:
+    """
+    Stretches where light gets through the slit, for
+    `reproject_ndcube_heliocentric_to_helioprojective`, when `sim.slit_mask`
+    is on.
+    """
+    if not getattr(sim, "slit_mask", False):
+        return {}
+    if tel is None or not hasattr(tel, "slit_openings"):
+        raise ValueError("slit_mask needs the SWC telescope, which describes the slit's "
+                         "ends and fiducials.")
+    return {"openings": tel.slit_openings(sim.slit_width).to_value(u.arcsec)}
+
+
 def _spatial_blur(tel, det, sim) -> dict:
     """
     Blur along and across the slit, as standard deviations in arcsec, for
     :func:`reproject_ndcube_heliocentric_to_helioprojective`.
     """
-    along = (_fwhm_to_sigma(tel.psf_params[0].to_value(u.pix))
+    along = (_fwhm_to_sigma(spatial_psf_fwhm(tel, det))
              * (det.plate_scale_angle * u.pix).to_value(u.arcsec))
-    across = getattr(tel, "psf_across_slit", None)
+    across = across_slit_fwhm(tel)
     return {"sigma_y": along,
             "sigma_x": 0.0 if across is None else _fwhm_to_sigma(across.to_value(u.arcsec)),
             "extend": sim.psf_boundary == "replicate"}
@@ -555,7 +582,8 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
                                                   ncpu=sim.ncpu)
         print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
         return reproject_ndcube_heliocentric_to_helioprojective(cube_spec, sim, det,
-                                                                ncpu=sim.ncpu)
+                                                                ncpu=sim.ncpu,
+                                                                **_slit_openings(tel, sim))
 
     blurred = _through_the_optics(tel, sim)
     data, grid, photon_meta = _spectra_on_the_detector(
@@ -568,7 +596,8 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
                              **({"psf_applied": True} if blurred else {})})
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     return reproject_ndcube_heliocentric_to_helioprojective(
-        cube_spec, sim, det, ncpu=sim.ncpu, **(_spatial_blur(tel, det, sim) if blurred else {}))
+        cube_spec, sim, det, ncpu=sim.ncpu, **(_spatial_blur(tel, det, sim) if blurred else {}),
+        **_slit_openings(tel, sim))
 
 
 def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=None, *,
@@ -639,7 +668,8 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
 
     print("  Spatially rebinning to plate scale (*ny*,nx,nl) and slit width (ny,*nx*,nl)...")
     return reproject_ndcube_heliocentric_to_helioprojective(
-        cube_spec, sim, det, ncpu=sim.ncpu, **(_spatial_blur(tel, det, sim) if blurred else {}))
+        cube_spec, sim, det, ncpu=sim.ncpu, **(_spatial_blur(tel, det, sim) if blurred else {}),
+        **_slit_openings(tel, sim))
 
 
 def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:

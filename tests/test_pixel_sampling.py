@@ -15,8 +15,8 @@ from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.data_processing import rebin_atmosphere
 from euvst_response.fitting import fit_cube_gauss
 from euvst_response.monte_carlo import simulate_once
-from euvst_response.radiometric import (apply_focusing_optics_psf, spectral_psf_fwhm,
-                                        spectral_psf_margin)
+from euvst_response.radiometric import (across_slit_fwhm, apply_focusing_optics_psf,
+                                        spectral_psf_fwhm, spectral_psf_margin)
 from euvst_response.sampling import centred_edges, pixel_weights
 from euvst_response.utils import _fwhm_to_sigma, angle_to_distance
 
@@ -180,14 +180,16 @@ def test_the_telescopes_blur_across_the_slit_brings_in_light_from_beside_it():
     scene = _scene(data, 0.1 * u.arcsec)
     sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, psf=True,
                      psf_boundary="zero")
-    sharp = rebin_atmosphere(scene, det, sim, tel=Telescope_EUVST())
-    blurred = rebin_atmosphere(scene, det, sim, tel=Telescope_EUVST(psf_across_slit=1.0 * u.arcsec))
+    sharp = rebin_atmosphere(scene, det, sim, tel=Telescope_EUVST(resolution_budget="none"))
+    tel = Telescope_EUVST(psf_across_slit=1.0 * u.arcsec, resolution_budget="none")
+    blurred = rebin_atmosphere(scene, det, sim, tel=tel)
     row = sharp.data.shape[0] // 2
     columns = sharp.data[row].sum(axis=-1)
     assert np.count_nonzero(columns > 1e-12 * columns.max()) == 1
     seen = blurred.data[row].sum(axis=-1) / columns.max()
     expected = pixel_weights(centred_edges(64, 0.1), centred_edges(16, 0.4),
-                             _fwhm_to_sigma(1.0)) @ ((np.arange(64) >= 28) & (np.arange(64) < 32))
+                             _fwhm_to_sigma(across_slit_fwhm(tel).to_value(u.arcsec))
+                             ) @ ((np.arange(64) >= 28) & (np.arange(64) < 32))
     assert seen == pytest.approx(expected, rel=1e-9, abs=1e-15)
     assert np.count_nonzero(seen > 0.01) >= 3
 

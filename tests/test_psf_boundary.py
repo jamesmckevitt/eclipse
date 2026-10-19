@@ -10,7 +10,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.radiometric import apply_focusing_optics_psf
+from euvst_response.radiometric import apply_focusing_optics_psf, spatial_psf_fwhm
 
 REST = 195.119 * u.Angstrom
 N_SCAN, N_SLIT, N_WAVE = 2, 24, 32
@@ -64,7 +64,7 @@ def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
     zero_filled = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="zero")
     replicated = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="replicate")
 
-    fwhm = TEL.psf_params[0].to_value(u.pixel)
+    fwhm = spatial_psf_fwhm(TEL, DET)
     sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     half = max(7, int(np.ceil(6 * sigma)))
     half = (half + 1) // 2 if half % 2 == 0 else half // 2
@@ -78,8 +78,8 @@ def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
                  / replicated.data[row, 0, :].sum())
         assert ratio == pytest.approx(1.0 - lost, abs=1e-6)
 
-    # The edge row loses about a third of the kernel, as the issue reports.
-    assert kernel[offsets < 0].sum() == pytest.approx(0.32, abs=0.02)
+    # The edge row loses about a third of the kernel.
+    assert kernel[offsets < 0].sum() == pytest.approx(0.355, abs=0.01)
 
 
 def test_the_interior_is_untouched_by_the_choice():

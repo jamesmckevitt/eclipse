@@ -141,6 +141,24 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     collected by the telescope, the photons per pixel, those after the PSF,
     and those with the pinholes' light.
     """
+    # The slit's ends and fiducials are cut out as the scene is laid onto the
+    # pixels, so a cube laid on without them, or a uniform intensity, which
+    # has no position along the slit, would silently be left unmasked.
+    if getattr(sim, "slit_mask", False) and not (I_cube.meta or {}).get("slit_mask_applied"):
+        raise ValueError(
+            "simulation.slit_mask is on, but the slit's ends and fiducials were not cut out of "
+            "this cube. They are cut out as a scene is laid onto the pixels by rebin_atmosphere "
+            "or rebin_spectra, given the telescope and this simulation. A uniform intensity has "
+            "no position along the slit, so it cannot have them.")
+    # The blur comes before the slit, so a masked cube blurred afterwards would
+    # spread light back into the fiducials and past the slit's ends.
+    if (getattr(sim, "slit_mask", False) and sim.psf
+            and not (I_cube.meta or {}).get("psf_applied")):
+        raise ValueError(
+            "simulation.slit_mask and psf are both on, but this cube was masked without the "
+            "PSF, so blurring it now would put light back behind the fiducials. Lay the scene "
+            "onto the pixels again with rebin_atmosphere or rebin_spectra, with both on.")
+
     # Apply exposure time
     intensity_exp = apply_exposure(I_cube, t_exp)
 

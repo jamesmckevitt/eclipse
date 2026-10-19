@@ -25,7 +25,8 @@ from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
 from .pinhole_diffraction import _pinholes_on
-from .radiometric import spectral_optics_fwhm, spectral_psf_margin
+from .radiometric import (across_slit_fwhm, spectral_optics_fwhm, spectral_psf_fwhm,
+                          spectral_psf_margin)
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
@@ -129,7 +130,7 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "noise", "enable_pinholes"}
+                    "spectral_psf", "slit_mask", "noise", "enable_pinholes"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -746,6 +747,13 @@ def main() -> None:
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
             "modelled by euvst_response.readout, which takes the detector's settings.")
+    # A run does not model the read-out either, so a CTE below 1 would be ignored.
+    for name in ("cte_parallel", "cte_serial"):
+        if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
+            raise ValueError(
+                f"detector.{name} must be 1 for an instrument run, which does not model the "
+                f"read-out. Charge left behind as a frame is read is modelled by "
+                f"euvst_response.readout, which takes the detector's settings.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
     # sized for the slit's spectral PSF, which also depends on the slit
@@ -863,6 +871,7 @@ def main() -> None:
         "psf": False,
         "psf_boundary": "replicate",
         "spectral_psf": "quadrature",
+        "slit_mask": False,
         "noise": True,
         "enable_pinholes": False,
     }
@@ -958,6 +967,11 @@ def main() -> None:
     # pickle: its dynamic mode.
     file_meta = {}
     if uniform_intensity_mode:
+        # A uniform intensity has no position along the slit for the slit's
+        # fiducials to block, so the option is refused rather than ignored.
+        if sim_fixed.get("slit_mask") or True in sim_sweep.get("slit_mask", []):
+            raise ValueError("simulation.slit_mask needs a scene along the slit, from a "
+                             "synthesis or an atmosphere, not a uniform intensity.")
         cube_sim = None
         print("\nSkipping atmosphere loading (uniform intensity mode).")
     elif atmosphere_series_mode:
@@ -1139,6 +1153,7 @@ def main() -> None:
             psf=all_sim.get("psf", False),
             psf_boundary=all_sim.get("psf_boundary", "replicate"),
             spectral_psf=all_sim.get("spectral_psf", "quadrature"),
+            slit_mask=all_sim.get("slit_mask", False),
             noise=all_sim.get("noise", True),
             enable_pinholes=enable,
             pinhole_sizes=pinhole_sizes if enable else [],
@@ -1189,6 +1204,7 @@ def main() -> None:
         expos = SIM.expos
         vis_sl = SIM.vis_sl
         psf = SIM.psf
+        slit_mask = SIM.slit_mask
         psf_boundary = SIM.psf_boundary
         spectral_psf = SIM.spectral_psf
         noise = SIM.noise
@@ -1197,10 +1213,14 @@ def main() -> None:
         # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
         # so cube_reb_cache is keyed by the sampling alone to avoid redundant rebin calls
         # when sweeping multiple binning values at fixed spatial/spectral sampling.
+        # The spectral PSF's width sets how far the rebinned cube's wavelength
+        # grid reaches, and it changes with the telescope's resolution budget,
+        # which may be swept.
         sampling_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
+            spectral_psf_fwhm(TEL, DET, slit_width),
         )
         # In uniform-intensity mode the cube has offchip_bin_slit pixels along the
         # slit, giving rebin_slit_offchip independent noise realisations to sum, so
@@ -1310,10 +1330,11 @@ def main() -> None:
         # through the telescope, with each photon counted at its own
         # wavelength. With the PSF on, the scene is also blurred by the PSF
         # before it is laid onto the pixels. This is exact, whereas blurring
-        # the pixels afterwards moves a narrow line within its pixel. The
-        # ground truth is the scene without either. A uniform intensity is
-        # centred on a pixel and uniform along the slit, and the Monte Carlo
-        # blurs it.
+        # the pixels afterwards moves a narrow line within its pixel. With
+        # slit_mask on, the slit's ends and fiducials are cut out in the same
+        # step. The ground truth is the scene without any of these. A uniform
+        # intensity is centred on a pixel and uniform along the slit, and the
+        # Monte Carlo blurs it.
         cube_obs = cube_reb
         if not uniform_intensity_mode:
             # The observed cube includes the telescope's throughput as well as
@@ -1324,18 +1345,20 @@ def main() -> None:
             # With the pinholes on, it also includes the light they let past
             # the filter.
             pinholes = _pinholes_on(SIM)
-            psf_key = (*cube_reb_key, psf, spectral_psf, psf_boundary, telescope_key, pinholes)
+            psf_key = (*cube_reb_key, psf, slit_mask, spectral_psf, psf_boundary, telescope_key,
+                       pinholes)
             if psf_key not in observed_cache:
                 print("Laying the scene onto the detector through the telescope...")
                 SIM_obs = Simulation(expos=1.0 * u.s, n_iter=n_iter, slit_width=slit_width,
                                      ncpu=ncpu, instrument=instrument, psf=psf,
                                      psf_boundary=psf_boundary, spectral_psf=spectral_psf,
+                                     slit_mask=slit_mask,
                                      enable_pinholes=SIM.enable_pinholes,
                                      pinhole_sizes=list(SIM.pinhole_sizes),
                                      pinhole_positions=list(SIM.pinhole_positions),
                                      pinhole_positions_spectral=list(
                                          SIM.pinhole_positions_spectral))
-                across = TEL.psf_across_slit if psf else None
+                across = across_slit_fwhm(TEL) if psf else None
                 extend = psf_boundary == "replicate"
                 if atmosphere_series_mode:
                     scene = raster_summed[cube_reb_key] if across is None else raster.summed_cube(
