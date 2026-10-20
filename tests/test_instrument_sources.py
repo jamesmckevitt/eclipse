@@ -3,6 +3,7 @@ import dataclasses
 import importlib.util
 from pathlib import Path
 
+import astropy.units as u
 import pytest
 
 from euvst_response.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
@@ -79,7 +80,7 @@ def test_page_shows_every_setting_with_a_source():
      "3.71 eV and -0.0006 eV per K, for silicon"),
     ("SWC", ["detector.shutter"], "true"),
     ("SWC", ["detector.lit_band"], "170 to 212.3 Angstrom"),
-    ("EIS", ["telescope.psf_params"], "3 pixels FWHM"),
+    ("EIS", ["telescope.psf_params"], "3 and 3 pixels FWHM"),
     ("EIS", ["telescope.calibration"], "`ground`"),
 ])
 def test_defaults_in_their_display_units(instrument, keys, row):
@@ -105,3 +106,14 @@ def test_row_escapes_pipes(monkeypatch):
     f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "max_dn")
     monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2, `a|b`"})
     assert hook.setting_row("SWC", ["detector.max_dn"]).endswith("| Table 6-1 \\| 6-2, `a|b` |")
+    # With an unpaired backtick there is no code span, so every pipe is escaped.
+    assert hook._escape_pipes("a ` b | c") == "a ` b \\| c"
+
+
+def test_range_needs_two_values(monkeypatch):
+    f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "lit_band")
+    monkeypatch.setattr(f, "default", (170.0 * u.AA, 190.0 * u.AA, 212.3 * u.AA))
+    with pytest.raises(ValueError, match="range"):
+        hook.setting_row("SWC", ["detector.lit_band"])
+    monkeypatch.setattr(f, "default", [170.0, 212.3] * u.AA)
+    assert "170 to 212.3 Angstrom" in hook.setting_row("SWC", ["detector.lit_band"])

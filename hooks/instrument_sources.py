@@ -13,6 +13,7 @@ import dataclasses
 import re
 
 import astropy.units as u
+import numpy as np
 
 from euvst_response.config import (DETECTOR_MATERIALS, AluminiumFilter, Detector_EIS,
                                    Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST)
@@ -56,7 +57,7 @@ def _unit(label):
 
 def _number(value):
     """Number as it reads in the docs: 13.5, 2048, -0.0006."""
-    return f"{value:.9g}"
+    return f"{value:.12g}"
 
 
 def _default(cls, f):
@@ -102,7 +103,7 @@ def default_value(cls, f):
         return "packaged table", ""
     label = meta.get("unit", "")
     unit = _unit(label) if label else None
-    values = list(value) if isinstance(value, (list, tuple)) else [value]
+    values = list(value) if isinstance(value, (list, tuple)) or np.ndim(value) else [value]
     if unit is not None:
         converted = []
         for v in values:
@@ -117,8 +118,6 @@ def default_value(cls, f):
         if len(numbers) != 2:
             raise ValueError(f"{f.name} is shown as a range, so needs two values.")
         return f"{numbers[0]} to {numbers[1]}", label
-    if len(set(numbers)) == 1:
-        numbers = numbers[:1]
     return _join(numbers), label
 
 
@@ -183,6 +182,8 @@ def setting_row(instrument, keys):
 def _escape_pipes(text):
     """`text` with each `|` outside code spans escaped, so it stays in its table cell."""
     pieces = text.split("`")
+    if len(pieces) % 2 == 0:
+        return text.replace("|", "\\|")
     pieces[::2] = [piece.replace("|", "\\|") for piece in pieces[::2]]
     return "`".join(pieces)
 
