@@ -561,7 +561,10 @@ def get_git_commit_id() -> str:
     """
     try:
         from importlib.resources import files
-        pkg_path = Path(str(files("eclipse"))).parent.parent
+        package = Path(str(files("eclipse"))).resolve()
+        pkg_path = package.parent.parent
+        if pkg_path / "src" / "eclipse" != package:
+            return "unknown (not installed from a git checkout of ECLIPSE)"
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,

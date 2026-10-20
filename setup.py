@@ -2,7 +2,7 @@
 Setup script for ECLIPSE package.
 """
 
-from setuptools import setup, find_packages
+from setuptools import setup
 from pathlib import Path
 import re
 
@@ -29,8 +29,6 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/jamesmckevitt/eclipse",
-    package_dir={"": "src"},
-    packages=find_packages("src"),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",

@@ -120,7 +120,8 @@ def test_the_git_commit_of_a_checkout_with_the_package_in_src(monkeypatch, tmp_p
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("")
     for command in (["init", "-q"], ["add", "."],
-                    ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "t"]):
+                    ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                     "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "t"]):
         subprocess.run(["git", "-C", str(checkout), *command], check=True)
     head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
