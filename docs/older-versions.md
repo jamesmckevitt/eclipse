@@ -1,10 +1,14 @@
 # Older versions
 
-ECLIPSE 0.11.0 and earlier wrote pickles rather than HDF5 files, and read MURaM's own files directly. These still work, with a warning, until a future release stops them. This page says how to move over.
+ECLIPSE 0.12 and earlier were imported as `euvst_response`. ECLIPSE 0.11.0 and earlier also wrote pickles rather than HDF5 files, and read MURaM's own files directly. These still work, with a warning, until a future release stops them. This page says how to move over.
 
 ## The package's name
 
-ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it, and its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name. The package is still installed with `pip install solarc-eclipse`.
+ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it. Its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name. The package is still installed with `pip install solarc-eclipse`.
+
+The package's code is now in the `src` folder of the repository. If you installed ECLIPSE from a clone with `pip install -e .`, run that command in the clone again after updating it. If you use a clone without installing it, by putting the clone on `PYTHONPATH`, put `<clone>/src` on `PYTHONPATH` instead.
+
+A file of your own named `eclipse.py`, in the folder you run Python from or on `PYTHONPATH`, is now imported in place of the package. Rename the file if you have one.
 
 ## Synthesis files
 
