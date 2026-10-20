@@ -358,7 +358,8 @@ def test_a_sweep_of_the_visible_decade_thickness_lays_the_scene_once(tmp_path, m
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
-    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+    radiance = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * radiance,
                         wavelength=wavelength, rest_wavelength=195.119 * u.AA)
     write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
                     tmp_path / "file.h5")
