@@ -283,8 +283,9 @@ def _tie_root(fit_config: FitConfig, key: str, index: int) -> int:
     return index
 
 
-# Fraction of the background-subtracted peak: the starting amplitude of
-# components with a tied centre, and the lowest start of the others.
+# Fraction of the background-subtracted peak: the starting amplitude of a
+# component whose centre is tied or shared with an earlier one, and the
+# lowest start of the others.
 _GUESS_FRACTION = 0.15
 
 
@@ -294,17 +295,22 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     Starting amplitude ratio of a component held fainter than its parent.
 
     The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres. The guess itself starts tied components at the same
-    fraction of the peak, so two of them held one below the other would
-    start equal, at the bound. If the spectrum makes the child the
-    brighter, `_GUESS_FRACTION` is used, strictly inside the bounds. `child`
-    and `parent` index the amplitudes in the full `guess`.
+    two guessed centres, with NaN pixels counted as background. The guess
+    itself starts tied components at the same fraction of the peak, so two
+    of them held one below the other would start equal, at the bound, and a
+    primary held below a tied component would start above it. If the
+    spectrum makes the child the brighter, `_GUESS_FRACTION` is used,
+    strictly inside the bounds. `child` and `parent` index the amplitudes in
+    the full `guess`.
     """
+    wv = np.asarray(wv, dtype=float)
+    prof = np.asarray(prof, dtype=float)
     if len(wv) > 1 and wv[0] > wv[-1]:
         wv, prof = wv[::-1], prof[::-1]
+    height = np.where(np.isfinite(prof), prof - guess[-1], 0.0)
 
     def level(index):
-        return float(np.interp(guess[index + 1], wv, prof - guess[-1]))
+        return float(np.interp(guess[index + 1], wv, height))
 
     child_level, parent_level = level(child), level(parent)
     if parent_level > 0 and 0 < child_level / parent_level < 1:

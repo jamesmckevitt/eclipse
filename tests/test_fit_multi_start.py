@@ -6,7 +6,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import FitComponent, FitConfig, _guess_multi_params, fit_cube_gauss
+from euvst_response.fitting import (FitComponent, FitConfig, _guess_multi_params, _start_ratio,
+                                   fit_cube_gauss)
 from euvst_response.utils import _fwhm_to_sigma
 
 C = const.c.to_value(u.km / u.s)
@@ -69,6 +70,19 @@ def test_an_all_nan_spectrum_starts_at_zero():
     guess = _guess_multi_params(WV, np.full(N_WAVE, np.nan), CONFIG)
     assert guess[0] == 0 and guess[-1] == 0
     assert np.all(np.isfinite(guess))
+
+
+def test_a_nan_pixel_counts_as_background_in_the_starting_ratio():
+    """A NaN beside the fainter line's centre gives the ratio of a background pixel there."""
+    prof = _blend(WV)
+    guess = _guess_multi_params(WV, prof, CONFIG)
+    beside = int(np.searchsorted(WV, guess[4]))
+    with_nan, with_background = prof.copy(), prof.copy()
+    with_nan[beside] = np.nan
+    with_background[beside] = guess[-1]
+    ratio = _start_ratio(WV, with_nan, guess, 3, 0)
+    assert 0 < ratio < 1
+    assert ratio == pytest.approx(_start_ratio(WV, with_background, guess, 3, 0), rel=1e-12)
 
 
 def test_two_components_at_one_wavelength_start_apart():
