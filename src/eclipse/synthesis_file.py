@@ -857,8 +857,6 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
     # Only duplicates of kept data are dropped: each line's spectra (si) and
     # wavelengths (wl_grid) in goft, and the atmosphere metadata each line
     # cube carried as spatial_reference.
-    import dill
-
     from .data_processing import check_old_line_cubes
 
     # Writing over the pickle would destroy the only copy of its synthesis.

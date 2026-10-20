@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from scipy.sparse import csr_matrix
