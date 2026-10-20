@@ -41,12 +41,14 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-response.md#the-slits-fiducials) | `False` |
 | `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](instrument-response.md#turning-the-noise-off) | `True` |
 | `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
+| `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
 
 ## detector
 
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
 | `ccd_temperature` | The CCD's temperature, from which ECLIPSE works out the dark current. Below 198 K (-75.15 Celsius) the dark current is taken as it is at 198 K, and above 300 K (26.85 Celsius) the temperature is refused. | `-60 Celsius` | `-60 Celsius` |
+| `dark_current_293k` | The dark current at 293 K. ECLIPSE scales it to `ccd_temperature`, by the law for non-inverted mode CCDs for SWC and for advanced inverted mode CCDs for EIS. | `20000 electron / (pix s)` | `250 electron / (pix s)` |
 | `qe_euv` | The quantum efficiency for EUV: the fraction of photons detected | `0.76` | `0.64` |
 | `qe_vis` | The quantum efficiency for the visible stray light | `1.0` | `0.65` |
 | `read_noise_rms` | The read noise | `10 electron / pix` | `5 electron / pix` |
@@ -57,6 +59,9 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `wvl_res` | The wavelength step from one pixel to the next | `16.9 mAA / pix` | `22.3 mAA / pix` |
 | `plate_scale_angle` | The angle on the sky of one pixel along the slit | `0.159 arcsec / pix` | `1 arcsec / pix` |
 | `material` | The detector's material; only `silicon` is modelled | `silicon` | `silicon` |
+| `fano_factor` | The Fano factor, which sets the spread in the electrons each photon frees | the material's, `0.115` for silicon | the material's |
+| `pair_energy_300k` | The energy to free one electron-hole pair at 300 K | the material's, `3.71 eV` for silicon | the material's |
+| `pair_energy_slope` | The change in that energy per kelvin. The energy at the CCD's temperature T is `pair_energy_300k + pair_energy_slope * (T - 300 K)`. | the material's, `-0.0006 eV / K` for silicon | the material's |
 | `filter_distance` | The distance from the filter to the detector, for the pinholes' diffraction | `250 mm` | - |
 | `shutter` | Whether frames are taken with the mechanical shutter, which keeps the CCDs dark while a frame is cleared and read. A run models frames taken with it, so `false` is refused. | `true` | - |
 | `n_rows` | The pixels of each CCD along the dispersion | `2048` | - |
@@ -69,6 +74,12 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
 | `cte_parallel` | The charge transfer efficiency of a row transfer: the fraction of a packet's charge that moves with it. A run does not model the read-out, so a value below 1 is refused. | `1` | - |
 | `cte_serial` | The same for a transfer along the serial register | `1` | - |
+| `dispersion` | The wavelength in Angstrom against the position along the dispersion in mm from the middle of the gap between the CCDs: polynomial coefficients, lowest order first. | `[198.885944, 1.2516577, -1.361114e-4]` | - |
+| `wavelength_offset` | A shift added to every row's wavelength, for a wavelength calibration of the camera. | `0 Angstrom` | - |
+| `lit_band` | The wavelengths between which light reaches the CCDs; a baffle blocks the light outside them. | `[170.0 Angstrom, 212.3 Angstrom]` | - |
+| `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. Measured from the ray-traced spots in the SW footprint figure of the optical design summary, RSC-2022021C, it is about `[0.991, 0.605]`; no document gives it. | `[0, 0]`, a line on the same row all along the slit | - |
+
+The last four settings describe the SW focal plane. A run does not use the focal plane yet, so it refuses values other than the defaults. [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
 
 ## telescope
 
@@ -93,6 +104,8 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 
 A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. Lines starting with `#`, and any lines before the data, are skipped.
 
+The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/euvst_response/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/euvst_response/resolution_budget.py).
+
 ## filter
 
 The filter is SWC's; for EIS the section is ignored, with a warning.
@@ -105,8 +118,9 @@ The filter is SWC's; for EIS the section is ignored, with a warning.
 | `mesh_throughput` | The fraction of light the filter's supporting mesh lets through | `0.8` |
 | `al_table`, `oxide_table`, `c_table` | Tables of the transmission of a layer `table_thickness` thick, in the format above | packaged |
 | `table_thickness` | The thickness the tables are for | `1000 angstrom` |
+| `visible_decade_thickness` | The thickness of aluminium that cuts visible light by a factor of 10 | `170 angstrom` |
 
-For visible light, the filter's transmission is 10^(-t / 170 angstrom) for a thickness t of aluminium, times `mesh_throughput`.
+For visible light, the filter's transmission is 10^(-t / `visible_decade_thickness`) for a thickness t of aluminium, times `mesh_throughput`.
 
 ## fitting
 

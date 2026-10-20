@@ -326,11 +326,43 @@ def _jsonable(value):
     raise TypeError(f"Values of type {type(value).__name__} cannot be written to a results file.")
 
 
-# Settings whose value in runs made before they existed differs from
-# today's default. An object or file from then that lacks one gets the old
-# value, not the default. Fits were unweighted before FitConfig.weighted.
-_EARLIER_VALUES = {"FitConfig": {"weighted": False},
-                   "Telescope_EUVST": {"resolution_budget": "none"}}
+# The value each setting had in runs made before it existed. An object or
+# file from then that lacks one gets this value, with a warning only where it
+# differs from today's default. Fits were unweighted before
+# FitConfig.weighted, and None is the detector material's value.
+_MATERIAL = {"fano_factor": None, "pair_energy_300k": None, "pair_energy_slope": None}
+_EARLIER_VALUES = {
+    "FitConfig": {"weighted": False},
+    "Telescope_EUVST": {"resolution_budget": "none"},
+    "Detector_SWC": {**_MATERIAL,
+                     "dispersion": (198.885944, 1.2516577, -1.361114e-4),
+                     "wavelength_offset": 0.0 * u.Angstrom,
+                     "lit_band": (170.0 * u.Angstrom, 212.3 * u.Angstrom),
+                     "slit_image_tilt": (0.0, 0.0)},
+    "Detector_EIS": dict(_MATERIAL),
+    "AluminiumFilter": {"visible_decade_thickness": 170.0 * u.angstrom},
+    "Simulation": {"pinhole_visible_wavelength": 600.0 * u.nm},
+}
+
+
+def _is_default(cls, name: str, value) -> bool:
+    """Whether `value` is the default of `cls`'s setting `name`."""
+    field = next(field for field in dataclasses.fields(cls) if field.name == name)
+    if field.default is not dataclasses.MISSING:
+        default = field.default
+    elif field.default_factory is not dataclasses.MISSING:
+        default = field.default_factory()
+    else:
+        return False
+    if value is None or default is None:
+        return value is None and default is None
+    if isinstance(value, str) or isinstance(default, str):
+        return value == default
+    try:
+        value, default = u.Quantity(value), u.Quantity(default)
+    except (TypeError, ValueError):
+        return False
+    return value.shape == default.shape and bool(np.all(value == default))
 
 
 def _init_fields(value) -> dict:
@@ -363,6 +395,8 @@ def _init_fields(value) -> dict:
         else:
             missing.append(field.name)
     for name in earlier:
+        if _is_default(type(value), name, before[name]):
+            continue
         _warn(f"This {type(value).__name__} has no {name}, which ECLIPSE added after it "
               f"was made; it gets {before[name]!r}, as runs then had.")
     if own is not None:
@@ -471,11 +505,15 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     as stored, unchecked, with a warning given once `reading` is done.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
+    # A setting stored under an old name is read under its new one.
+    stored = {getattr(cls, "_OLD_NAMES", {}).get(key, key): item for key, item in stored.items()}
     # A setting in _EARLIER_VALUES that the file lacks gets the value runs
     # had before it existed.
     before = {name: item for name, item in _EARLIER_VALUES.get(cls.__name__, {}).items()
               if name not in stored}
     for name, item in before.items():
+        if _is_default(cls, name, item):
+            continue
         reading.notes[f"The {cls.__name__} in the results file has no {name}, which ECLIPSE "
                       f"added after it was made; it gets {item!r}, as runs then had."] = None
     stored = {**stored, **before}

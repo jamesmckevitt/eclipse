@@ -29,6 +29,7 @@ from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _so
                     detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
+from .config import _FOCAL_PLANE_SETTINGS, _same_setting
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
 from .utils import _fwhm_to_sigma, distance_to_angle
@@ -497,11 +498,11 @@ _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 # is replaced by the `exposure` argument.
 _IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
 
-# Fields not checked one by one. The pinhole lists are checked through
+# Fields not checked one by one. The pinhole settings are checked through
 # `enable_pinholes`.
 _UNCHECKED_FIELDS = frozenset(_FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS
                               + ("pinhole_sizes", "pinhole_positions",
-                                 "pinhole_positions_spectral"))
+                                 "pinhole_positions_spectral", "pinhole_visible_wavelength"))
 
 
 def _same(a, b) -> bool:
@@ -602,7 +603,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     det, telescope : optional
         Default `Detector_SWC()` and `Telescope_EUVST()`.
     focal_plane : FocalPlane_SWC, optional
-        Default `FocalPlane_SWC.from_detector(det)`.
+        Default `FocalPlane_SWC.from_detector(det)`. Its `dispersion`,
+        `wavelength_offset`, `lit_band` and `slit_image_tilt` must be the
+        detector's.
     psf : bool, optional
         Blur with the telescope's PSF along the slit and in wavelength, and
         across the slit if the telescope gives that. Beyond the synthesis's
@@ -628,7 +631,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         the `Simulation`'s value is used; any other value must agree with
         it. A `Simulation` has the PSF off unless made with `psf=True`. Its
         `expos`, `n_iter` and `ncpu` are not used, nor `psf_boundary` with
-        the PSF off, nor the pinhole lists with pinholes off. Default None.
+        the PSF off, nor the pinhole settings with pinholes off. Default None.
 
     Returns
     -------
@@ -680,6 +683,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if any(value != 0.0 for value in focal_plane.slit_image_tilt):
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
+    differ = [name for name in _FOCAL_PLANE_SETTINGS
+              if not _same_setting(getattr(det, name), getattr(focal_plane, name))]
+    if differ:
+        raise ValueError(
+            f"The detector and the focal plane give different {', '.join(differ)}. Set them on "
+            f"the detector, Detector_SWC, and leave out focal_plane, or make it with "
+            f"FocalPlane_SWC.from_detector(det).")
     across = across_slit_fwhm(telescope) if psf else None
     scene = read_slit_scene(synthesis_path, slit_position, slit_width, across)
     if not np.array_equal(scene.logT_grid, lines.logT_grid):
