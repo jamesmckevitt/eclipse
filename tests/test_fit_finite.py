@@ -353,10 +353,31 @@ def test_a_missing_pixel_may_carry_any_uncertainty():
                        uncertainty=uncertainty[None, None])
 
 
-def test_an_uncertainty_that_is_nan_everywhere_is_refused():
-    with pytest.raises(ValueError, match="NaN or infinite everywhere"):
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_an_uncertainty_that_leaves_out_every_value_is_refused(bad):
+    with pytest.raises(ValueError, match="No finite value has a finite uncertainty"):
         fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
-                       uncertainty=np.full((1, 1, N_WAVE), np.nan))
+                       uncertainty=np.full((1, 1, N_WAVE), bad))
+
+
+def test_a_negative_infinite_uncertainty_is_refused_and_a_positive_one_left_out():
+    uncertainty = np.ones((1, 1, N_WAVE))
+    uncertainty[0, 0, 30] = -np.inf
+    with pytest.raises(ValueError, match="above zero"):
+        fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1, uncertainty=uncertainty)
+    uncertainty[0, 0, 30] = np.inf
+    data, _, failed = fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
+                                     return_failed=True, uncertainty=uncertainty)
+    assert not failed.any()
+    assert _velocity(data[0, 0]) == pytest.approx(20, abs=1e-2)
+
+
+def test_values_that_are_all_nan_with_nan_uncertainties_fail_without_stopping():
+    """As a run gives them: a NaN DN has a NaN uncertainty."""
+    rows = np.full((1, N_WAVE), np.nan)
+    _, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, return_failed=True,
+                                  uncertainty=np.full((1, 1, N_WAVE), np.nan))
+    assert failed.all()
 
 
 def test_values_that_are_all_nan_fail_in_a_weighted_fit_as_in_an_unweighted_one():
@@ -379,3 +400,11 @@ def test_a_centre_in_end_pixels_left_out_for_their_uncertainty_fails(backend):
                                      return_failed=True, uncertainty=uncertainty)
     assert data[0, 0, 1] > wave[14] + 0.5 * STEP
     assert failed[0, 0]
+    # The same pixels as a window of their own fit to the same centre and do
+    # not fail, so the end rule alone failed the fit above.
+    short, _, short_failed = fit_cube_gauss(_cube([prof[:15]]), n_jobs=1,
+                                            fit_config=_config(True, backend),
+                                            return_failed=True,
+                                            uncertainty=np.ones((1, 1, 15)))
+    assert not short_failed[0, 0]
+    assert short[0, 0, 1] == pytest.approx(data[0, 0, 1], rel=1e-9)

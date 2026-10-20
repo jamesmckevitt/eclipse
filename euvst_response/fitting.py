@@ -1210,10 +1210,11 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Fit the Gaussians' mean over each pixel. Keyword only. Default False.
     uncertainty : np.ndarray, optional
         Uncertainty of every value in the cube, same shape as its data or
-        broadcastable to it. Where the value is finite, the uncertainty must
-        be above zero or NaN; a pixel whose uncertainty is NaN or infinite is
-        left out. An uncertainty that is NaN or infinite everywhere is
-        refused. Keyword only. Default None, for an unweighted fit.
+        broadcastable to it. A pixel whose uncertainty is NaN or positive
+        infinity is left out. Where the value is finite, an uncertainty at or
+        below zero, negative infinity included, is refused, and so are
+        uncertainties that leave out every finite value. Keyword only.
+        Default None, for an unweighted fit.
     poisson : bool, optional
         Fit the spectra as counts by their Poisson likelihood, with every
         amplitude and the background held at zero or above. Each finite
@@ -1281,12 +1282,12 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
                 f"spectra, shaped {signal_cube.data.shape}.") from None
         if np.any(kept & (uncertainty <= 0)):
-            raise ValueError("Every uncertainty must be above zero, as each pixel is "
-                             "weighted by one over its square.")
+            raise ValueError("Every uncertainty of a finite value must be above zero, as "
+                             "each pixel is weighted by one over its square.")
         finite_uncertainty = np.isfinite(uncertainty)
-        if not finite_uncertainty.any():
-            raise ValueError("The uncertainty is NaN or infinite everywhere, so there is "
-                             "nothing to weight the fits by.")
+        if kept.any() and not np.any(kept & finite_uncertainty):
+            raise ValueError("No finite value has a finite uncertainty, so there is nothing "
+                             "to weight the fits by.")
         kept &= finite_uncertainty
 
     min_pixels = _n_free_params(fit_config)
