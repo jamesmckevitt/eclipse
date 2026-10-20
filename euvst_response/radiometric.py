@@ -562,6 +562,41 @@ def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
     return max(0, spectral_psf_reach(tel, det, slit_width) - optics)
 
 
+def _spectral_response(tel, det, slit_width: u.Quantity, spectral_psf: str) -> tuple:
+    """
+    Spectral response as a Gaussian convolved with a rectangle, in pixels.
+
+    Returns the Gaussian's standard deviation and the rectangle's width. For
+    `spectral_psf` `"quadrature"` the slit is in the Gaussian, of FWHM
+    :func:`spectral_psf_fwhm`, and the width is 0. For `"convolution"` the
+    Gaussian is the optics, of FWHM :func:`spectral_blur_fwhm`, and the
+    rectangle is the slit's image.
+    """
+    if spectral_psf == "quadrature":
+        return _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width)), 0.0
+    if spectral_psf == "convolution":
+        return _fwhm_to_sigma(spectral_blur_fwhm(tel, det)), slit_image_width(slit_width, det)
+    raise ValueError(
+        f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
+    )
+
+
+def _spectral_kernel(tel, det, slit_width: u.Quantity, spectral_psf: str) -> np.ndarray:
+    """
+    Spectral response at whole pixels out to :func:`spectral_psf_reach`.
+
+    For `"quadrature"` a Gaussian, not normalised; for `"convolution"`
+    :func:`spectral_line_spread`, which sums to one. Raises ValueError for
+    any other `spectral_psf`.
+    """
+    if spectral_psf == "convolution":
+        return spectral_line_spread(tel, det, slit_width)
+    sigma, _ = _spectral_response(tel, det, slit_width, spectral_psf)
+    reach = spectral_psf_reach(tel, det, slit_width)
+    offsets = np.arange(-reach, reach + 1)
+    return np.exp(-0.5 * (offsets / sigma) ** 2)
+
+
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
     Spectral PSF as a Gaussian convolved with the slit's image, per pixel.
@@ -590,8 +625,8 @@ def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     # the slit, convolved with a rectangle the width of the slit. Like the
     # Gaussian kernel, it is taken at pixel centres over the same pixels
     # (spectral_psf_reach).
-    sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det))
-    half = 0.5 * slit_image_width(slit_width, det)
+    sigma, width = _spectral_response(tel, det, slit_width, "convolution")
+    half = 0.5 * width
     reach = spectral_psf_reach(tel, det, slit_width)
     x = np.arange(-reach, reach + 1)
     scale = np.sqrt(2.0) * sigma
@@ -671,11 +706,9 @@ def apply_focusing_optics_psf(
             "[spatial_fwhm, spectral_fwhm] in pixel units."
         )
 
-    if sim.spectral_psf not in ("quadrature", "convolution"):
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got "
-            f"{sim.spectral_psf!r}."
-        )
+    # Along lambda (axis 1 of each frame) the profile depends on the slit.
+    spectral_1d = _spectral_kernel(tel, det, sim.slit_width, sim.spectral_psf)
+    kx = spectral_1d.size
     quadrature = sim.spectral_psf == "quadrature"
 
     # FWHM in pixels along the slit (axis 0 of each frame)
@@ -686,16 +719,6 @@ def apply_focusing_optics_psf(
     ky = max(7, int(np.ceil(6 * sigma_spatial)))
     if ky % 2 == 0:
         ky += 1
-
-    # Along lambda (axis 1 of each frame) the profile depends on the slit.
-    if quadrature:
-        sigma_spectral = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width))
-        kx = 2 * spectral_psf_reach(tel, det, sim.slit_width) + 1
-        x_1d = np.arange(kx) - kx // 2
-        spectral_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
-    else:
-        spectral_1d = spectral_line_spread(tel, det, sim.slit_width)
-        kx = spectral_1d.size
 
     if not convolve_spatial:
         # Spectral axis only. Zero padding is correct here: the wavelength
@@ -709,6 +732,7 @@ def apply_focusing_optics_psf(
         return _blurred_cube(signal, blur)
 
     if quadrature:
+        sigma_spectral, _ = _spectral_response(tel, det, sim.slit_width, "quadrature")
         # Coordinate grids centred at zero
         cy, cx = ky // 2, kx // 2
         y, x = np.mgrid[:ky, :kx]

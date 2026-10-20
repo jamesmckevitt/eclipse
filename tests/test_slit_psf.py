@@ -374,3 +374,35 @@ def test_a_widened_window_keeps_a_line_blurred_by_the_budget(jitter):
     kept = apply_focusing_optics_psf(pad_spectral_axis(cube, margin), tel, DET, sim,
                                      convolve_spatial=False)
     assert kept.data.sum() == pytest.approx(total, rel=1e-4)
+
+
+@pytest.mark.parametrize("tel, det, spectral_psf", [
+    (TEL, DET, "quadrature"), (TEL, DET, "convolution"),
+    (Telescope_EIS(), Detector_EIS(), "quadrature")])
+def test_one_spectral_response_for_runs_and_frames(tel, det, spectral_psf):
+    """Runs and frames share one response: the slit in the Gaussian, or convolved with it."""
+    from euvst_response.radiometric import _spectral_kernel, _spectral_response, spectral_blur_fwhm
+    slit = 0.4 * u.arcsec
+    sigma, width = _spectral_response(tel, det, slit, spectral_psf)
+    kernel = _spectral_kernel(tel, det, slit, spectral_psf)
+    reach = spectral_psf_reach(tel, det, slit)
+    if spectral_psf == "quadrature":
+        assert sigma == _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit)) and width == 0.0
+        np.testing.assert_array_equal(
+            kernel, np.exp(-0.5 * (np.arange(-reach, reach + 1) / sigma) ** 2))
+    else:
+        assert sigma == _fwhm_to_sigma(spectral_blur_fwhm(tel, det))
+        assert width == slit_image_width(slit, det)
+        np.testing.assert_array_equal(kernel, spectral_line_spread(tel, det, slit))
+        assert kernel.size == 2 * reach + 1
+
+
+def test_an_unknown_spectral_response_is_refused():
+    from euvst_response.radiometric import _spectral_kernel, _spectral_response
+    for function in (_spectral_response, _spectral_kernel):
+        with pytest.raises(ValueError, match="spectral_psf must be"):
+            function(TEL, DET, 0.2 * u.arcsec, "gaussian")
+    cube, sim = _frame(0.2)
+    sim.spectral_psf = "gaussian"
+    with pytest.raises(ValueError, match="spectral_psf must be"):
+        apply_focusing_optics_psf(cube, TEL, DET, sim)

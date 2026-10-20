@@ -24,18 +24,15 @@ import astropy.units as u
 import numpy as np
 
 from .radiometric import (
+    _spectral_kernel,
+    _spectral_response,
     _vectorized_fano_noise,
     photons_per_energy,
-    slit_image_width,
-    spectral_line_spread,
-    spectral_blur_fwhm,
-    spectral_psf_fwhm,
-    spectral_psf_reach,
 )
 from .readout import FocalPlane_SWC, expose, expose_serial_overscan
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
-from .utils import angle_to_distance, _fwhm_to_sigma
+from .utils import angle_to_distance
 
 
 def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.Quantity:
@@ -116,16 +113,7 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     in. The row width changes by less than a part in 1e4 across the
     response.
     """
-    if spectral_psf == "quadrature":
-        sigma_rows = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
-        box_rows = 0.0
-    elif spectral_psf == "convolution":
-        sigma_rows = _fwhm_to_sigma(spectral_blur_fwhm(telescope, det))
-        box_rows = slit_image_width(slit_width, det)
-    else:
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
-        )
+    sigma_rows, box_rows = _spectral_response(telescope, det, slit_width, spectral_psf)
     bounds = _row_bounds(focal_plane, ccd, column)
     centres = bounds.mean(axis=1)
     order = np.argsort(centres)
@@ -438,17 +426,7 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
         "middle of its row. Give spectral_psf and det to photons_from_lines or "
         "photons_from_spectrum instead.", FutureWarning, stacklevel=2)
     margin = int(margin)
-    if spectral_psf == "quadrature":
-        sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
-        reach = spectral_psf_reach(telescope, det, slit_width)
-        offsets = np.arange(-reach, reach + 1)
-        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    elif spectral_psf == "convolution":
-        kernel = spectral_line_spread(telescope, det, slit_width)
-    else:
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
-        )
+    kernel = _spectral_kernel(telescope, det, slit_width, spectral_psf)
     kernel = kernel / kernel.sum()
     half = kernel.size // 2
     if margin and margin < half:
