@@ -77,7 +77,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `dispersion` | The wavelength in Angstrom against the position along the dispersion in mm from the middle of the gap between the CCDs: polynomial coefficients, lowest order first. This is one value, not a sweep. | `[198.885944, 1.2516577, -1.361114e-4]` | - |
 | `wavelength_offset` | A shift added to every row's wavelength, for a wavelength calibration of the camera. This is one value, not a sweep. | `0 Angstrom` | - |
 | `lit_band` | The wavelengths between which light reaches the CCDs; a baffle blocks the light outside them. This is one value, not a sweep. | `[170.0 Angstrom, 212.3 Angstrom]` | - |
-| `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. The optical design gives `[0.991, 0.605]`. This is one value, not a sweep. | `[0, 0]`, a line on the same row all along the slit | - |
+| `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. Measured from the ray-traced spots in the SW footprint figure of the optical design summary, RSC-2022021C, it is about `[0.991, 0.605]`; no document gives it. This is one value, not a sweep. | `[0, 0]`, a line on the same row all along the slit | - |
 
 The last four settings describe the SW focal plane. A run does not use them, and only records them. [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
 

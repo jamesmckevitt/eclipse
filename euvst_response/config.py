@@ -733,8 +733,9 @@ class Detector_SWC:
     slit_image_tilt : tuple of float
         Drift of a line along the dispersion, in rows, between the field
         centre and 140 arcsec from it: a linear and a quadratic term.
-        Default (0, 0), a line on one row along the whole slit;
-        :data:`MEASURED_SLIT_IMAGE_TILT` is the optical design's.
+        Default (0, 0), a line on one row along the whole slit.
+        :data:`MEASURED_SLIT_IMAGE_TILT` is measured from the ray-traced
+        spots in the SW footprint figure of RSC-2022021C.
 
     The last four describe the SW focal plane, which
     :class:`euvst_response.readout.FocalPlane_SWC` models. An instrument run

@@ -42,7 +42,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `detector.qe_euv`, `detector.qe_vis` | 0.76 and 1.0 | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of 0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71 |
 | `detector.read_noise_rms` | 10 electrons | Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.1 requires 6 electrons rms; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, predicts 11.0 electrons at most |
 | `detector.gain_e_per_dn` | 2.78 electrons per DN | MSSL engineering model test results; SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5, gives the same design value |
-| Dark current at 293 K | 20000 electrons per pixel per second | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement) |
+| `detector.dark_current_293k` | 20000 electrons per pixel per second | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement) |
 | Dark current against temperature | the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value below 198 K | Not recorded for the law; MSSL test results for holding it below 198 K |
 | `detector.full_well` | 150000 electrons | Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1 (January 2024); SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.6.1 requires more than 100000, typically 150000. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, gives 75000 typical for the image area |
 | `detector.max_dn` | 65535 DN | SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5: a 16-bit converter |
@@ -56,26 +56,24 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST-SW focal plane
 
-These describe the focal plane in `FocalPlane_SWC`, which the [full-CCD frame](full-ccd-frame.md) uses. They are not yet settings in the configuration, and the frame does not yet take the slit image tilt.
+These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run records them but does not use them, and the frame does not yet take the slit image tilt.
 
-| Quantity | Value | Source |
+| Setting | Default | Source |
 | --- | --- | --- |
-| Wavelength of each row | quadratic in position along the dispersion | Fitted to RSC-2022021C: the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
-| Band reaching the detectors | 170.0 to 212.3 Angstrom | The required range, RSC-2022021C REQ-103 and SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the baffle's edges, so where the band stops to within a row or two is a modelling choice |
-| Alignment of the camera to the beam | +/-0.79 Angstrom; no offset by default | SOLC-EUVST-MSSL-RP-0007 v1.2, page 45 |
-| Slit image tilt, off unless asked for | a drift along the dispersion of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec | No document gives it. Measured from the ray-traced spots in the SW footprint figure of RSC-2022021C, where a row is about a quarter of a pixel of the figure |
-| Clear and read-out sequence | dump, exposure, row-by-row read with windows | SOLC-EUVST-MSSL-SP-0001 v1.4, SOLC-EUVST-MSSL-RS-0002 v2.0, SOLC-EUVST-MSSL-ICD-0003 v3.1 |
+| `detector.dispersion` | quadratic in position along the dispersion | Fitted to RSC-2022021C: the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
+| `detector.lit_band` | 170.0 to 212.3 Angstrom | The required range, RSC-2022021C REQ-103 and SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the baffle's edges, so where the band stops to within a row or two is a modelling choice |
+| `detector.wavelength_offset` | 0 Angstrom; the alignment of the camera to the beam is known to +/-0.79 Angstrom | SOLC-EUVST-MSSL-RP-0007 v1.2, page 45 |
+| `detector.slit_image_tilt` | none; measured as a drift along the dispersion of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec | No document gives it. Measured from the ray-traced spots in the SW footprint figure of RSC-2022021C, where a row is about a quarter of a pixel of the figure |
+| Clear and read-out sequence, set in the code | dump, exposure, row-by-row read with windows | SOLC-EUVST-MSSL-SP-0001 v1.4, SOLC-EUVST-MSSL-RS-0002 v2.0, SOLC-EUVST-MSSL-ICD-0003 v3.1 |
 
-## Constants and assumptions in the code
+## Detector material and visible light
 
-These are set in the code rather than in the configuration.
-
-| Quantity | Value | Source |
+| Setting | Default | Source |
 | --- | --- | --- |
-| Fano factor of silicon | 0.115 | Not recorded |
-| Energy to make one electron-hole pair in silicon | 3.71 - 0.0006 (T - 300 K) eV | Not recorded |
-| Visible light through the aluminium filter | a factor 10 less per 170 Angstrom of aluminium, times the mesh | Not recorded |
-| Wavelength of the visible light through a pinhole | 600 nm | Not recorded |
+| `detector.fano_factor` | 0.115, for silicon | Not recorded |
+| `detector.pair_energy_300k`, `detector.pair_energy_slope` | 3.71 eV and -0.0006 eV per K, for silicon | Not recorded |
+| `filter.visible_decade_thickness` | 170 Angstrom: visible light falls by a factor 10 per 170 Angstrom of aluminium, times the mesh | Not recorded |
+| `simulation.pinhole_visible_wavelength` | 600 nm | Not recorded |
 
 ## Hinode/EIS
 
@@ -86,6 +84,6 @@ These are set in the code rather than in the configuration.
 | `detector.qe_euv` | 0.64 | EIS Software Note 2 |
 | `detector.qe_vis` | 0.65 | MSSL engineering test report |
 | Dark current against temperature | the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K value below 198 K | MSSL test results |
-| `detector.read_noise_rms`, `detector.gain_e_per_dn`, dark current at 293 K | 5 electrons, 6.3 electrons per DN, 250 electrons per pixel per second | Not recorded |
+| `detector.read_noise_rms`, `detector.gain_e_per_dn`, `detector.dark_current_293k` | 5 electrons, 6.3 electrons per DN, 250 electrons per pixel per second | Not recorded |
 | `detector.wvl_res`, `detector.plate_scale_angle` | 22.3 mA per pixel, 1 arcsec per pixel | Not recorded |
 | `detector.ccd_temperature`, `detector.pix_size`, `detector.max_dn` | -60 Celsius, 13.5 micron, 65535 DN | Not recorded |
