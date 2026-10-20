@@ -16,7 +16,6 @@ frame's photons to electrons and DN.
 
 from __future__ import annotations
 
-import warnings
 from typing import Optional
 
 import astropy.constants as const
@@ -27,11 +26,12 @@ from .radiometric import (
     _vectorized_fano_noise,
     photons_per_energy,
     slit_image_width,
-    spectral_line_spread,
     spectral_blur_fwhm,
+    spectral_line_spread,  # noqa: F401
     spectral_psf_fwhm,
-    spectral_psf_reach,
+    spectral_psf_reach,  # noqa: F401
 )
+from .deprecated import apply_spectral_psf  # noqa: F401  (deprecated)
 from .readout import FocalPlane_SWC, expose, expose_serial_overscan
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
@@ -223,14 +223,14 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         Ignored otherwise.
     lit_only : bool
         Zero the rows the baffle keeps dark. They still pass charge, so the
-        smear model needs them present but empty. The baffle comes after the
-        grating, so to blur the rows with :func:`apply_spectral_psf`, leave
-        this off and empty the dark rows afterwards.
+        smear model needs them present but empty. Only for the deprecated
+        :func:`apply_spectral_psf`, leave this off, blur, and empty the dark
+        rows afterwards.
     margin : int
-        Rows to add past each end of the CCD for :func:`apply_spectral_psf`,
-        which blurs light from just off the chip onto its edge rows. Needs
-        `lit_only=False`. Not needed with `spectral_psf`, which blurs the
-        light of a line off the chip onto the edge rows as it is laid.
+        Rows to add past each end of the CCD, only for the deprecated
+        :func:`apply_spectral_psf`. Needs `lit_only=False`. Not needed with
+        `spectral_psf`, which blurs the light of a line off the chip onto
+        the edge rows as it is laid.
     det : Detector_SWC, optional
         Detector, for the spectral response in rows. Needed with
         `spectral_psf`.
@@ -397,73 +397,6 @@ def thermal_width(wavelength: u.Quantity, temperature: u.Quantity,
     if non_thermal is not None:
         speed = np.sqrt(speed**2 + u.Quantity(non_thermal).to(u.cm / u.s)**2)
     return (u.Quantity(wavelength) * speed / const.c).to(u.Angstrom)
-
-
-def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
-                       spectral_psf: str = "quadrature", margin: int = 0) -> u.Quantity:
-    """
-    Blur a frame's rows with the instrument's spectral response.
-
-    Along the dispersion a pixel is a row. The response is that of
-    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` for a
-    synthesis through the same slit, on the same rows: for `spectral_psf`
-    `"quadrature"` a Gaussian of
-    :func:`~euvst_response.radiometric.spectral_psf_fwhm`, and for
-    `"convolution"` :func:`~euvst_response.radiometric.spectral_line_spread`.
-    The slit's image is part of the line profile, so a wider slit gives a
-    wider response: a FWHM of 2.54 rows for the 0.2 arcsec slit and 3.35
-    for the 0.4 arcsec slit.
-
-    Nothing is assumed beyond the rows given: light blurred past either end
-    is lost, as off the edge of a detector, and none comes in. The edge rows
-    of a CCD do receive light from just off the chip, and at the butted edge
-    the spectrum continues across the gap. To include this, lay the spectrum
-    with a `margin` of at least
-    :func:`~euvst_response.radiometric.spectral_psf_reach` rows past each
-    end (:func:`photons_from_lines` and :func:`photons_from_spectrum` take
-    one), and pass the same margin here. The result is then the chip's own
-    rows. The kernel is normalised, so flux that stays within the rows is
-    conserved.
-
-    .. deprecated:: 0.12.0
-        Blurring the rows after the light is on them moves a line narrower
-        than a row toward the middle of its row, by up to a few km/s. Give
-        `spectral_psf` and `det` to :func:`photons_from_lines` or
-        :func:`photons_from_spectrum` instead, which blur the light as it is
-        laid onto the rows.
-    """
-    warnings.warn(
-        "apply_spectral_psf is deprecated and will be removed in a future release: blurring "
-        "the rows once the light is on them moves a line narrower than a row toward the "
-        "middle of its row. Give spectral_psf and det to photons_from_lines or "
-        "photons_from_spectrum instead.", FutureWarning, stacklevel=2)
-    margin = int(margin)
-    if spectral_psf == "quadrature":
-        sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
-        reach = spectral_psf_reach(telescope, det, slit_width)
-        offsets = np.arange(-reach, reach + 1)
-        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    elif spectral_psf == "convolution":
-        kernel = spectral_line_spread(telescope, det, slit_width)
-    else:
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
-        )
-    kernel = kernel / kernel.sum()
-    half = kernel.size // 2
-    if margin and margin < half:
-        raise ValueError(
-            f"A margin of {margin} rows is less than the {half} the spectral "
-            f"response reaches, so the edge rows would miss light."
-        )
-    unit = rows.unit if hasattr(rows, "unit") else 1
-    values = np.asarray(rows.value if hasattr(rows, "value") else rows, dtype=float)
-    if values.size <= 2 * margin:
-        raise ValueError(
-            f"{values.size} rows leave nothing inside a margin of {margin} at each end."
-        )
-    blurred = np.convolve(np.pad(values, half), kernel, mode="valid")
-    return blurred[margin:values.size - margin] * unit
 
 
 def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u.Quantity,
