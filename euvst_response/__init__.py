@@ -40,8 +40,8 @@ from .analysis import (
     get_results_for_combination,
     summary_table,
     create_sunpy_maps_from_combo,
-    get_dem_data_from_results
 )
+from .deprecated import get_dem_data_from_results
 
 __all__ = [
     "Detector_SWC", "Detector_EIS", "Telescope_EUVST", "Telescope_EIS", 

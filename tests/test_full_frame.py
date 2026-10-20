@@ -463,3 +463,17 @@ def test_the_frame_api_is_exported_from_the_package():
         for name in names:
             assert getattr(euvst_response, name) is getattr(module, name)
             assert name in euvst_response.__all__
+
+
+def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):
+    """No rate is below zero, so the Poisson draw takes them all."""
+    products = read_synthesis_products(uniform_synthesis)
+    np.random.seed(0)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
+    for ccd in ("left", "right"):
+        assert (frame.rate[ccd] >= 0).all()
+        lit = frame.rate[ccd] > 0
+        image = frame.photon_wavelength[ccd][:lit.shape[0]]
+        assert np.all(image[~lit] == np.broadcast_to(
+            frame.wavelength[ccd].to_value(u.AA)[:, np.newaxis], lit.shape)[~lit] * u.AA)
