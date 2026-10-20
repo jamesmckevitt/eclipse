@@ -12,7 +12,7 @@ from tqdm import tqdm
 from .radiometric import (
     apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput,
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
-    add_pinhole_visible_light, dn_variance
+    add_pinhole_visible_light, dn_variance, _digitise
 )
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
                                   apply_euv_pinhole_diffraction)
@@ -122,8 +122,7 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     electrons = steps[8]
     # Clip each pixel at the digitiser's maximum before binning, as to_dn
     # does, but do not round, as the mean DN is not rounded.
-    dn = (electrons.data * electrons.unit / det.gain_e_per_dn).to_value(det.max_dn.unit)
-    dn = np.minimum(dn, det.max_dn.value)
+    dn = _digitise(electrons.unit.to(u.electron / u.pixel) * electrons.data, det, rounded=False)
     dn = rebin_slit_offchip(NDCube(dn, wcs=electrons.wcs, meta=electrons.meta),
                             offchip_bin_slit).data
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)

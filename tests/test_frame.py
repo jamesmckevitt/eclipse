@@ -479,6 +479,20 @@ def test_detect_agrees_with_the_cube_chain_at_one_wavelength():
     assert mine == pytest.approx(chain, rel=1e-12)
 
 
+def test_detect_draws_as_the_cube_chain_does_with_noise_on():
+    # Both take their detection, Fano, dark current and read noise from the
+    # same shared stages, in the same order, so one seed gives one result.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    photons = np.random.default_rng(1).poisson(250.0, (4, 5)).astype(float)
+    np.random.seed(20261020)
+    mine = detect(photons, np.full(4, 195.119) * u.Angstrom, 2.0 * u.s, det)
+    cube = NDCube(photons[np.newaxis], wcs=WCS(naxis=3), unit=u.photon / u.pix,
+                  meta={"rest_wav": 195.119 * u.Angstrom})
+    np.random.seed(20261020)
+    chain = to_electrons(cube, 2.0 * u.s, det).data[0]
+    np.testing.assert_array_equal(mine, chain)
+
+
 def test_noise_draws_around_the_same_mean():
     np.random.seed(20260918)
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)

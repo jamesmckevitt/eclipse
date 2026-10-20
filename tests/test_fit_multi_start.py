@@ -20,7 +20,7 @@ DOPPLER = 1 + 20 / C
 
 
 def _blend(wave):
-    """Fe XII 195.119 and 195.179 at 20 km/s, 3:1, on a background of 10."""
+    """Fe XII 195.119 and 195.179 at 20 km/s, 10:3, on a background of 10."""
     return (10.0 + 100.0 * np.exp(-0.5 * ((wave - 195.119e-8 * DOPPLER) / 0.03e-8) ** 2)
             + 30.0 * np.exp(-0.5 * ((wave - 195.179e-8 * DOPPLER) / 0.03e-8) ** 2))
 
@@ -41,11 +41,10 @@ def test_a_decreasing_wavelength_axis_starts_as_an_increasing_one(n_pixels):
     assert decreasing == pytest.approx(increasing, rel=1e-12)
 
 
-def test_one_nan_pixel_leaves_the_start_finite():
+def test_one_nan_pixel_in_the_background_leaves_the_start_unchanged():
     prof = _box(3)
     prof[5] = np.nan
     guess = _guess_multi_params(WV, prof, CONFIG)
-    assert np.all(np.isfinite(guess))
     assert guess == pytest.approx(_guess_multi_params(WV, _box(3), CONFIG), rel=1e-12)
 
 
@@ -63,17 +62,30 @@ def test_an_all_nan_spectrum_starts_at_zero():
     assert np.all(np.isfinite(guess))
 
 
-def test_a_nan_pixel_counts_as_background_in_the_starting_ratio():
-    """A NaN beside the fainter line's centre gives the ratio of a background pixel there."""
+def test_a_nan_pixel_is_left_out_of_the_starting_ratio():
+    """
+    A NaN beside the fainter line's centre changes the ratio by under 5 per cent.
+
+    The ratio is read between the finite pixels either side, a pixel apart,
+    on a line 1.8 pixels wide.
+    """
     prof = _blend(WV)
     guess = _guess_multi_params(WV, prof, CONFIG)
     beside = int(np.searchsorted(WV, guess[4]))
-    with_nan, with_background = prof.copy(), prof.copy()
+    with_nan = prof.copy()
     with_nan[beside] = np.nan
-    with_background[beside] = guess[-1]
     ratio = _start_ratio(WV, with_nan, guess, 3, 0)
-    assert 0 < ratio < 1
-    assert ratio == pytest.approx(_start_ratio(WV, with_background, guess, 3, 0), rel=1e-12)
+    assert ratio == pytest.approx(_start_ratio(WV, prof, guess, 3, 0), rel=0.05)
+
+
+@pytest.mark.parametrize("decreasing", [False, True], ids=["increasing", "decreasing"])
+def test_a_centre_in_nan_pixels_at_the_end_has_zero_height(decreasing):
+    """The fainter line then has no height, so the ratio starts at the default fraction."""
+    prof = _blend(WV)
+    guess = _guess_multi_params(WV, prof, CONFIG)
+    prof[WV > 195.16e-8] = np.nan
+    wave = WV[::-1] if decreasing else WV
+    assert _start_ratio(wave, prof[::-1] if decreasing else prof, guess, 3, 0) == 0.15
 
 
 def _cube(data, centre=CENTRE, decreasing=False):
@@ -118,7 +130,7 @@ def test_a_blend_on_a_decreasing_wavelength_axis_fits_as_on_an_increasing_one(se
 @pytest.mark.parametrize("backend", ["mpfit", "scipy"])
 def test_nan_spectra_fail_alone(backend):
     """
-    An all-NaN first spectrum and one with a NaN on the line fail, and the rest are fitted.
+    An all-NaN first spectrum fails, and one with a NaN on the line is fitted without it.
 
     mpfit builds its parameter template from the first spectrum, so an
     all-NaN first spectrum must not stop the others.
@@ -129,21 +141,26 @@ def test_nan_spectra_fail_alone(backend):
     config = FitConfig(components=CONFIG.components, backend=backend)
     data, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, fit_config=config,
                                      return_failed=True)
-    assert failed[:, 0].tolist() == [True, False, True, False]
-    velocity = (data[[1, 3], 0, 1] / 195.119e-8 - 1) * C
+    assert failed[:, 0].tolist() == [True, False, False, False]
+    velocity = (data[1:, 0, 1] / 195.119e-8 - 1) * C
     assert velocity == pytest.approx(20, abs=1e-3)
 
 
 @pytest.mark.parametrize("backend", ["mpfit", "scipy"])
 @pytest.mark.parametrize("single", [True, False], ids=["single", "blend"])
-def test_a_spectrum_with_an_infinite_pixel_fails(backend, single):
-    """An infinite pixel far from the lines marks only its own spectrum failed."""
-    with_inf = _blend(WV)
-    with_inf[0] = np.inf
+def test_an_infinite_pixel_is_left_out(backend, single):
+    """An infinite pixel is left out, and the spectrum fits as the others do."""
     if single:
+        prof = 10.0 + 100.0 * np.exp(-0.5 * ((WV - 195.119e-8 * DOPPLER) / 0.03e-8) ** 2)
         config = FitConfig(backend=backend)
     else:
+        prof = _blend(WV)
         config = FitConfig(components=CONFIG.components, backend=backend)
-    _, _, failed = fit_cube_gauss(_cube([_blend(WV), with_inf]), n_jobs=1, fit_config=config,
-                                  return_failed=True)
-    assert failed[:, 0].tolist() == [False, True]
+    with_inf = prof.copy()
+    with_inf[0] = np.inf
+    data, _, failed = fit_cube_gauss(_cube([prof, with_inf]), n_jobs=1,
+                                     fit_config=config, return_failed=True)
+    assert not failed.any()
+    velocity = (data[:, 0, 1] / 195.119e-8 - 1) * C
+    assert velocity[1] == pytest.approx(velocity[0], abs=1e-3)
+    assert data[1, 0, [0, 2, -1]] == pytest.approx(data[0, 0, [0, 2, -1]], rel=1e-6)

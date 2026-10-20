@@ -15,8 +15,8 @@ import numpy as np
 from scipy.ndimage import zoom
 from scipy.signal import convolve2d
 
-from .radiometric import spectral_line_spread, spectral_psf_fwhm, spectral_psf_reach
-from .utils import _fwhm_to_sigma, _warn_outside
+from .radiometric import _spectral_kernel
+from .utils import _warn_outside
 
 
 def _warn(name: str, reason: str) -> None:
@@ -65,17 +65,7 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
           "toward the middle of its row. Give spectral_psf and det to photons_from_lines or "
           "photons_from_spectrum instead.")
     margin = int(margin)
-    if spectral_psf == "quadrature":
-        sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
-        reach = spectral_psf_reach(telescope, det, slit_width)
-        offsets = np.arange(-reach, reach + 1)
-        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    elif spectral_psf == "convolution":
-        kernel = spectral_line_spread(telescope, det, slit_width)
-    else:
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
-        )
+    kernel = _spectral_kernel(telescope, det, slit_width, spectral_psf)
     kernel = kernel / kernel.sum()
     half = kernel.size // 2
     if margin and margin < half:
