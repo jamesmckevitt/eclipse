@@ -33,9 +33,10 @@ INSTRUMENTS = {
 }
 
 TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
-# A comment that starts like a table mark, and so must be one: a name in
-# capitals and "settings", or any word, "settings" and a colon.
-MARK_LIKE = re.compile(r"<!--\s*(?:[A-Z]+\s+settings\b|\w+\s+settings\s*:)")
+# A comment that starts like a table mark, and so must be one: an
+# instrument's name and "settings", or any word, "settings" and a colon.
+MARK_LIKE = re.compile(rf" {{0,3}}<!--\s*(?:(?:{'|'.join(INSTRUMENTS)})\s+settings\b"
+                       rf"|\w+\s+settings\s*:)", re.IGNORECASE)
 FENCE = re.compile(r" {0,3}(```|~~~)")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
@@ -139,10 +140,15 @@ def _words(value):
     return "packaged table"
 
 
+def _reads_as_none(numbers):
+    """Whether numbers are a list of zeros, which the page gives as none."""
+    return len(numbers) > 1 and not any(numbers)
+
+
 def plain_default(name, value, label):
     """Default written as a plain Default cell: "13.5 micron", "true"."""
     numbers = display_numbers(name, value, label)
-    if not numbers or (len(numbers) > 1 and not any(numbers)):
+    if not numbers or _reads_as_none(numbers):
         # A list of zeros, such as no slit image tilt, reads as none.
         return _words(value if numbers is None else None)
     texts = [_number(n) for n in numbers]
@@ -254,7 +260,7 @@ def table_rows(lines):
             instrument, row = None, None
             continue
         if MARK_LIKE.match(line):
-            mark = TABLE_MARK.fullmatch(line)
+            mark = TABLE_MARK.fullmatch(line.strip())
             if not mark or mark.group(1) not in INSTRUMENTS:
                 raise ValueError(f"Line {index + 1} of {PAGE_NAME} looks like a table mark "
                                  f"but is not one: {line!r}. Marks read <!-- SWC settings: "
@@ -297,8 +303,8 @@ def _setting_rows(text):
         keys = SETTING.findall(cells[0]) if cells else []
         for key in keys:
             if (instrument, key) in seen:
-                raise ValueError(f"{key} is named twice in the {instrument} tables of "
-                                 f"{PAGE_NAME}; keep one row for it.")
+                raise ValueError(f"{key} is named more than once in the {instrument} tables "
+                                 f"of {PAGE_NAME}; name it in one row, once.")
             seen.add((instrument, key))
         if keys:
             if len(cells) != 3:
@@ -392,7 +398,7 @@ def _shows(cell, found):
     for key, f, value in found:
         label = f.metadata.get("unit", "")
         shown = display_numbers(key, value, label)
-        if not shown or (len(shown) > 1 and not any(shown)):
+        if not shown or _reads_as_none(shown):
             words.append("none" if shown is not None else _words(value))
         else:
             raw += shown

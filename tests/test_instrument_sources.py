@@ -180,6 +180,7 @@ def test_refuses_bad_units_marks_and_cells(monkeypatch):
         tool.setting("SW", "detector.qe_euv")
     for page in (SYNTHETIC.replace("SWC settings: written", "SWC settings written"),
                  SYNTHETIC.replace("SWC settings: written", "swc settings: written -- >"),
+                 SYNTHETIC.replace("SWC settings: written", "SWC Settings written"),
                  SYNTHETIC.replace("<!-- SWC settings", "<!-- SW settings"),
                  SYNTHETIC.replace("Text.\n\n", "Text.\n"),
                  SYNTHETIC.replace("script -->\n\n", "script -->\n\n```\ncode\n```\n\n"),
@@ -292,10 +293,11 @@ def test_script_keeps_hand_written_cells_and_refuses_repeats():
     lines = tool.updated_page(page).split("\n")
     assert lines[8].startswith("| `detector.slit_image_tilt` | none | ")
     assert lines[9].startswith("| `detector.dispersion` | quadratic | ")
-    assert not lines[10].startswith("| `detector.ccd_gap` |  |")
+    assert lines[10].startswith(
+        f"| `detector.ccd_gap` | {tool.plain_default('', Detector_SWC().ccd_gap, 'mm')} | ")
     assert not [p for p in tool.hand_written_problems(page) if "slit_image_tilt" in p
                 or "dispersion" in p]
     empty = page.replace("| `detector.dispersion` | quadratic |", "| `detector.dispersion` |  |")
     assert any("Write the Default cell" in p for p in tool.hand_written_problems(empty))
-    with pytest.raises(ValueError, match="named twice"):
+    with pytest.raises(ValueError, match="named more than once"):
         tool.updated_page(page.replace("`detector.ccd_gap`", "`detector.dispersion`"))
