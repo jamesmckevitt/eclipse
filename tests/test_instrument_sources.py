@@ -80,6 +80,8 @@ def test_page_shows_every_setting_with_a_source():
      "3.71 eV and -0.0006 eV per K, for silicon"),
     ("SWC", ["detector.shutter"], "true"),
     ("SWC", ["detector.lit_band"], "170 to 212.3 Angstrom"),
+    ("SWC", ["detector.slit_image_tilt"], "0 and 0 rows; measured as a drift along the dispersion"
+     " of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec"),
     ("EIS", ["telescope.psf_params"], "3 and 3 pixels FWHM"),
     ("EIS", ["telescope.calibration"], "`ground`"),
 ])
@@ -106,8 +108,8 @@ def test_row_escapes_pipes(monkeypatch):
     f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "max_dn")
     monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2, `a|b`"})
     assert hook.setting_row("SWC", ["detector.max_dn"]).endswith("| Table 6-1 \\| 6-2, `a|b` |")
-    # With an unpaired backtick there is no code span, so every pipe is escaped.
     assert hook._escape_pipes("a ` b | c") == "a ` b \\| c"
+    assert hook._escape_pipes("``a|b`` and ` | c") == "``a|b`` and ` \\| c"
 
 
 def test_range_needs_two_values(monkeypatch):

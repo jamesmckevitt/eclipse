@@ -27,6 +27,9 @@ INSTRUMENTS = {
     "EIS": {"detector": Detector_EIS, "telescope": Telescope_EIS, "simulation": Simulation},
 }
 
+# A code span as Python-Markdown finds one: a run of backticks, then the same run.
+_CODE_SPAN = re.compile(r"(?<!\\)(`+)(.+?)(?<!`)\1(?!`)")
+
 PLACEHOLDER = re.compile(r"^<!-- setting (\w+): (.+?) -->[ \t]*$", re.MULTILINE)
 
 # Words of the "unit" metadata, and the units they stand for.
@@ -181,11 +184,12 @@ def setting_row(instrument, keys):
 
 def _escape_pipes(text):
     """`text` with each `|` outside code spans escaped, so it stays in its table cell."""
-    pieces = text.split("`")
-    if len(pieces) % 2 == 0:
-        return text.replace("|", "\\|")
-    pieces[::2] = [piece.replace("|", "\\|") for piece in pieces[::2]]
-    return "`".join(pieces)
+    pieces = []
+    end = 0
+    for match in _CODE_SPAN.finditer(text):
+        pieces += [text[end:match.start()].replace("|", "\\|"), match.group(0)]
+        end = match.end()
+    return "".join(pieces) + text[end:].replace("|", "\\|")
 
 
 def render(markdown):
