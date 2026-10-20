@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import os
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +15,7 @@ import numpy as np
 import astropy.units as u
 import scipy.interpolate
 from . import eis_calibration
-from .utils import angle_to_distance
+from .utils import _warn_outside, angle_to_distance
 from importlib.resources import files
 
 
@@ -77,9 +78,10 @@ class _RenamedSetting:
     def __init__(self, old: str, new: str):
         self.old, self.new = old, new
 
-    def warn(self, stacklevel: int = 3) -> None:
-        warnings.warn(f"{self.old} is renamed {self.new}; the old name will be removed in a "
-                      f"future release.", FutureWarning, stacklevel=stacklevel)
+    def warn(self, section: str = "") -> None:
+        """Warn that the old name is used; `section`, such as "detector.", prefixes it."""
+        _warn_outside(f"{section}{self.old} is renamed {self.new}; the old name will be "
+                      f"removed in a future release.")
 
     def __get__(self, obj, owner=None):
         self.warn()
@@ -90,24 +92,41 @@ class _RenamedSetting:
         setattr(obj, self.new, value)
 
 
+def _old_names_used(cls, given, section: str = "", replacing: bool = False,
+                    error=TypeError) -> dict:
+    """
+    Old names of `cls`'s settings among the keys of `given`, mapped to their new names.
+
+    Each warns with a FutureWarning. Both names of one setting are refused
+    with `error`, unless `replacing`, when the old name's value is meant.
+    """
+    used = {}
+    for old, new in cls._OLD_NAMES.items():
+        if old in given:
+            if new in given and not replacing:
+                raise error(f"Give {section}{new} only, not {old} as well.")
+            _RenamedSetting(old, new).warn(section)
+            used[old] = new
+    return used
+
+
 def _keep_old_names(cls):
     """
     Accept the names in `cls._OLD_NAMES` for their new ones, with a FutureWarning.
 
     They work as constructor arguments and attributes, and an object
     pickled with an old name reads back with the new one.
+    `dataclasses.replace` with an old name passes both names, the new one
+    with the object's current value, so there the old name's value is used.
     """
-    renamed = {old: _RenamedSetting(old, new) for old, new in cls._OLD_NAMES.items()}
     init = cls.__init__
 
     @functools.wraps(init)
     def __init__(self, *args, **kwargs):
-        for old, setting in renamed.items():
-            if old in kwargs:
-                if setting.new in kwargs:
-                    raise TypeError(f"Give {setting.new} only, not {old} as well.")
-                setting.warn()
-                kwargs[setting.new] = kwargs.pop(old)
+        replacing = sys._getframe(1).f_globals.get("__name__") == "dataclasses"
+        for old, new in _old_names_used(cls, kwargs, replacing=replacing).items():
+            kwargs.pop(new, None)
+            kwargs[new] = kwargs.pop(old)
         init(self, *args, **kwargs)
 
     def __setstate__(self, state):
@@ -119,8 +138,8 @@ def _keep_old_names(cls):
 
     cls.__init__ = __init__
     cls.__setstate__ = __setstate__
-    for old, setting in renamed.items():
-        setattr(cls, old, setting)
+    for old, new in cls._OLD_NAMES.items():
+        setattr(cls, old, _RenamedSetting(old, new))
     return cls
 
 

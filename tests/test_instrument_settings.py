@@ -1,5 +1,7 @@
 """Instrument facts set in the configuration: defaults, checks, old names and results files."""
+import copy
 import copyreg
+import dataclasses
 import json
 import pickle
 import sys
@@ -145,6 +147,22 @@ def test_the_old_dark_current_name_still_works_with_a_warning():
         Detector_EIS(_dark_current_293k=1 * DARK, dark_current_293k=2 * DARK)
 
 
+@pytest.mark.parametrize("cls", [Detector_SWC, Detector_EIS])
+def test_replace_with_the_old_dark_current_name_uses_its_value(cls):
+    """`dataclasses.replace` passes both names; the one asked for is the old one."""
+    det = cls(dark_current_293k=7 * DARK)
+    replacers = [dataclasses.replace] + ([copy.replace] if hasattr(copy, "replace") else [])
+    for replace in replacers:
+        with pytest.warns(FutureWarning, match="_dark_current_293k is renamed") as seen:
+            changed = replace(det, _dark_current_293k=9 * DARK)
+        assert seen[0].filename == __file__
+        assert changed.dark_current_293k == 9 * DARK
+        assert changed.dark_current == cls(dark_current_293k=9 * DARK).dark_current
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            assert replace(det, ccd_temperature=-50 * u.deg_C).dark_current_293k == 7 * DARK
+
+
 def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
     """As pickled by an older version, before the new settings existed."""
     state = dict(Detector_SWC(dark_current_293k=7 * DARK).__dict__)
@@ -239,18 +257,26 @@ def test_a_run_records_the_settings_it_is_given(tmp_path, monkeypatch):
     assert det.wavelength_offset == 0.1 * u.AA
 
 
-def test_a_run_records_a_sweep_of_the_old_dark_current_key_under_its_new_name(
-        tmp_path, monkeypatch):
-    with pytest.warns(FutureWarning, match="detector._dark_current_293k is renamed"):
+def test_a_run_records_the_old_dark_current_key_as_the_config_gives_it(tmp_path, monkeypatch):
+    with pytest.warns(FutureWarning, match="detector._dark_current_293k is renamed") as seen:
         payload = _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {"noise": False},
                        "detector": {"_dark_current_293k": ["100 electron / (pix s)",
                                                            "200 electron / (pix s)"]}})
+    assert sum("_dark_current_293k is renamed" in str(w.message) for w in seen) == 1
     results = payload["results"]
-    assert "detector.dark_current_293k" in results["sweep_dimensions"]
-    assert not any("_dark_current_293k" in str(key) for key in results["sweep_dimensions"])
+    assert "detector._dark_current_293k" in results["sweep_dimensions"]
+    assert "detector.dark_current_293k" not in results["sweep_dimensions"]
     values = sorted(c["parameters"]["detector.dark_current_293k"].value
                     for c in results["all_combinations"].values())
     assert values == [100, 200]
+    with pytest.warns(FutureWarning):
+        payload = _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {"noise": False},
+                       "detector": {"_dark_current_293k": "100 electron / (pix s)"}})
+    assert payload["results"]["fixed_params"]["detector._dark_current_293k"] == 100 * DARK
+    with pytest.raises(ValueError, match="Give detector.dark_current_293k only"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {
+            "_dark_current_293k": "1 electron / (pix s)",
+            "dark_current_293k": ["1 electron / (pix s)", "2 electron / (pix s)"]}})
 
 
 def test_a_run_refuses_a_sweep_of_the_wavelength_offset(tmp_path, monkeypatch):

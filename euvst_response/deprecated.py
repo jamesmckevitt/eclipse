@@ -7,8 +7,6 @@ Each can still be imported from where it was before, such as
 
 from __future__ import annotations
 
-import sys
-import warnings
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,17 +16,12 @@ from scipy.ndimage import zoom
 from scipy.signal import convolve2d
 
 from .radiometric import spectral_line_spread, spectral_psf_fwhm, spectral_psf_reach
-from .utils import _fwhm_to_sigma
+from .utils import _fwhm_to_sigma, _warn_outside
 
 
 def _warn(name: str, reason: str) -> None:
     """Warn that `name` is deprecated, attributed to the first caller outside ECLIPSE."""
-    frame, level = sys._getframe(1), 2
-    package = __name__.split(".")[0] + "."
-    while frame is not None and frame.f_globals.get("__name__", "").startswith(package):
-        frame, level = frame.f_back, level + 1
-    warnings.warn(f"{name} is deprecated and will be removed in a future release: {reason}",
-                  FutureWarning, stacklevel=level)
+    _warn_outside(f"{name} is deprecated and will be removed in a future release: {reason}")
 
 
 

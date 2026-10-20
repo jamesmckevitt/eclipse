@@ -15,6 +15,7 @@ import gzip
 import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
+from .config import _old_names_used
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
@@ -736,15 +737,10 @@ def main() -> None:
     # Parse config sections
     sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
     det_fixed, det_sweep = _parse_section(config.get("detector", {}), "detector")
-    # An old name is read as its new one, so the results record the new one.
-    for old, new in (Detector_EIS if instrument == "EIS" else Detector_SWC)._OLD_NAMES.items():
-        for given in (det_fixed, det_sweep):
-            if old in given:
-                if new in det_fixed or new in det_sweep:
-                    raise ValueError(f"Give detector.{new} only, not {old} as well.")
-                warnings.warn(f"detector.{old} is renamed {new}; the old name will be removed "
-                              f"in a future release.", FutureWarning)
-                given[new] = given.pop(old)
+    # An old name, such as _dark_current_293k, is recorded as the config gives
+    # it and passed to the detector under its new one.
+    det_renamed = _old_names_used(Detector_EIS if instrument == "EIS" else Detector_SWC,
+                                  {**det_fixed, **det_sweep}, "detector.", error=ValueError)
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
@@ -1140,6 +1136,7 @@ def main() -> None:
             **det_fixed,
             **{k[len("detector."):]: v for k, v in combo.items() if k.startswith("detector.")},
         }
+        all_det = {det_renamed.get(k, k): v for k, v in all_det.items()}
         all_tel = {
             **tel_fixed,
             **{k[len("telescope."):]: v for k, v in combo.items() if k.startswith("telescope.")},
