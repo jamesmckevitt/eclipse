@@ -68,7 +68,7 @@ def test_hand_written_rows_are_kept():
             "| `detector.max_dn` | 1 DN | old |\n"
             "| Something set in the code | 0.5 | Not recorded |\n\n"
             "| `detector.max_dn` | outside a marked table | kept |\n")
-    lines = tool.updated_page(page, every_wording=False).split("\n")
+    lines = tool.updated_page(page).split("\n")
     assert lines[4] == ("| `detector.max_dn` | 65535 DN | SOLC-EUVST-MSSL-RP-0012 v2.0, "
                         "Table 5-5: a 16-bit converter |")
     assert lines[5] == "| Something set in the code | 0.5 | Not recorded |"
@@ -167,12 +167,14 @@ def test_wording_matches_the_code():
         Simulation(slit_width=0.3 * u.arcsec)
 
 
-def test_wording_must_match_a_row():
-    """Wording is found by the first setting of its row, so a reordered row is refused."""
-    page = tool.PAGE.read_text().replace("`detector.pix_size`, `detector.n_rows`",
-                                         "`detector.n_rows`, `detector.pix_size`")
-    with pytest.raises(ValueError, match="SWC detector.pix_size"):
-        tool.updated_page(page)
+def test_every_wording_has_a_row():
+    page = tool.PAGE.read_text()
+    assert tool.unused_wording(page) == []
+    reordered = page.replace("`detector.pix_size`, `detector.n_rows`",
+                             "`detector.n_rows`, `detector.pix_size`")
+    assert tool.updated_page(reordered) == reordered
+    assert tool.unused_wording(page.replace("`detector.lit_band`", "`detector.ccd_gap`")) == [
+        "SWC detector.lit_band"]
 
 
 def test_wording_names_only_its_row(monkeypatch):

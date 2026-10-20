@@ -4,8 +4,8 @@ Write the defaults and sources in docs/instrument-sources.md from the code.
 Each table of settings follows a comment line naming its instrument, such as
 `<!-- SWC settings: ... -->`. A row whose first cell names settings, such as
 `detector.pix_size`, gets the settings' defaults, in the `unit` of their field
-metadata, and their `source`. Other rows are left as they are. Run it from the
-repository root: `python tools/update_instrument_sources.py`.
+metadata, and their `source`. Other rows are left as they are. Run it with
+ECLIPSE installed from this checkout: `python tools/update_instrument_sources.py`.
 """
 
 import dataclasses
@@ -47,8 +47,8 @@ UNIT_WORDS = {
 EUVST_PSF = ("0.423 arcsec along the slit for the default 280 x 280 arcsec field (0.195 and "
              "0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit")
 
-# Wording of rows whose default needs more than the values, keyed by the row's
-# first setting. `{name}` is a setting of the row, `{all}` all of them as a
+# Wording of rows whose default needs more than the values, keyed by one
+# setting of the row. `{name}` is a setting of the row, `{all}` all of them as a
 # row without wording shows them, and the other names are those of
 # `_constants`. The format specs are those of `Value`.
 WORDING = {
@@ -201,20 +201,26 @@ def _default(cls, f):
     """Default of field `f` of `cls`, or its material's where the default is None."""
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
-    material = DETECTOR_MATERIALS.get(getattr(cls, "material", None), {})
-    return material.get(f.name) if f.default is None else f.default
+    if f.default is None and hasattr(cls, "material"):
+        return DETECTOR_MATERIALS[cls.material].get(f.name)
+    return f.default
 
 
-def _constants():
-    """Values from the code that the wording quotes besides the settings."""
+def _budget_jitter():
+    """Pointing jitter of the default resolution budget, in arcsec."""
     column = resolution_budget._column(Telescope_EUVST.resolution_budget)
     if column is None:
         raise ValueError("The pointing jitter wording quotes the default resolution budget, "
                          "which is none.")
-    budget = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][column]
-    return {"budget_jitter": Number(budget),
-            "tilt": Value("MEASURED_SLIT_IMAGE_TILT", MEASURED_SLIT_IMAGE_TILT),
-            "tilt_angle": Value("TILT_REFERENCE_ANGLE", TILT_REFERENCE_ANGLE, "arcsec")}
+    return Number(resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][column])
+
+
+# Values from the code that the wording quotes besides the settings.
+CONSTANTS = {
+    "budget_jitter": _budget_jitter,
+    "tilt": lambda: Value("MEASURED_SLIT_IMAGE_TILT", MEASURED_SLIT_IMAGE_TILT),
+    "tilt_angle": lambda: Value("TILT_REFERENCE_ANGLE", TILT_REFERENCE_ANGLE, "arcsec"),
+}
 
 
 def _plain(values):
@@ -271,7 +277,10 @@ def cells(instrument, keys):
     if len(sources) > 1:
         raise ValueError(f"{', '.join(keys)} have different sources, so need a row each.")
 
-    wording = WORDING[instrument].get(keys[0])
+    worded = [key for key in keys if key in WORDING[instrument]]
+    if len(worded) > 1:
+        raise ValueError(f"The row for {', '.join(keys)} has wording under {len(worded)} keys.")
+    wording = WORDING[instrument][worded[0]] if worded else None
     if wording is None:
         default = _plain(list(values.values()))
     else:
@@ -279,13 +288,19 @@ def cells(instrument, keys):
                 for _, name, _, _ in string.Formatter().parse(wording) if name}
         missing = [name for name in hidden if name not in used and "all" not in used]
         if missing:
-            raise ValueError(f"The wording for {keys[0]} leaves out {', '.join(missing)}.")
-        names = {**_constants(), "material": material, "all": _plain(list(values.values()))}
-        unknown = used - set(values) - {name for name in names if names[name] is not None}
+            raise ValueError(f"The wording for {worded[0]} leaves out {', '.join(missing)}.")
+        names = {"all": _plain(list(values.values()))}
+        if material is not None:
+            names["material"] = material
+        names.update({name: CONSTANTS[name]() for name in used if name in CONSTANTS})
+        if set(names) & set(values):
+            raise ValueError(f"The row for {', '.join(keys)} has a setting named as one of "
+                             f"{', '.join(names)}.")
+        unknown = used - set(values) - set(names)
         if unknown:
-            raise ValueError(f"The wording for {keys[0]} names {', '.join(sorted(unknown))}, "
-                             f"which are not in its row.")
-        default = wording.format(**{**names, **values})
+            raise ValueError(f"The wording for {worded[0]} names "
+                             f"{', '.join(sorted(unknown))}, which are not in its row.")
+        default = wording.format(**names, **values)
     row = (default, sources.pop())
     if any("|" in cell for cell in row):
         raise ValueError(f"A '|' in the row for {', '.join(keys)} would split its table cell.")
@@ -324,30 +339,29 @@ def setting_rows(lines):
                 yield index, instrument, row, keys
 
 
-def updated_page(text, every_wording=True):
-    """
-    Page `text` with the Default and Source cells of each setting's row rewritten.
-
-    With `every_wording`, wording for a row the page does not have, such as
-    one whose settings were reordered, is refused.
-    """
+def updated_page(text):
+    """Page `text` with the Default and Source cells of each setting's row rewritten."""
     lines = text.split("\n")
-    used = {instrument: set() for instrument in WORDING}
-    for index, instrument, row, keys in setting_rows(lines):
+    for index, instrument, row, keys in list(setting_rows(lines)):
         if len(row) != 3:
             raise ValueError(f"Row for {row[0]} has {len(row)} cells, not 3.")
         lines[index] = "| " + " | ".join([row[0], *cells(instrument, keys)]) + " |"
-        used[instrument].add(keys[0])
-    unused = [f"{instrument} {key}" for instrument, wording in WORDING.items()
-              for key in wording if key not in used[instrument]]
-    if every_wording and unused:
-        raise ValueError(f"No row starts with the setting of the wording for "
-                         f"{', '.join(unused)}.")
     return "\n".join(lines)
+
+
+def unused_wording(text):
+    """Keys of `WORDING`, such as "SWC detector.pix_size", that no row of `text` names."""
+    named = {(instrument, key) for _, instrument, _, keys in setting_rows(text.split("\n"))
+             for key in keys}
+    return [f"{instrument} {key}" for instrument, wording in WORDING.items()
+            for key in wording if (instrument, key) not in named]
 
 
 def main():
     text = PAGE.read_text()
+    unused = unused_wording(text)
+    if unused:
+        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     updated = updated_page(text)
     if updated == text:
         print(f"{PAGE.name} is up to date.")
