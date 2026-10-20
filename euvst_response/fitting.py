@@ -1361,9 +1361,9 @@ def component_names(fit_config: FitConfig | None,
 
 
 def spectral_pixel_width(cube: NDCube) -> u.Quantity:
-    """Width of one spectral pixel of a cube with wavelength on its last axis."""
+    """Width of one spectral pixel, above zero, of a cube with wavelength on its last axis."""
     wavelength = u.Quantity(cube.axis_world_coords_values(2)[0]).to(u.cm)
-    return wavelength[1] - wavelength[0]
+    return abs(wavelength[1] - wavelength[0])
 
 
 def fit_quantities(fit_data: np.ndarray, units: list,

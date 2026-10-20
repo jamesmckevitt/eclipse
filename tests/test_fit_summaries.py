@@ -263,6 +263,22 @@ def test_spectral_pixel_width_is_read_from_the_cube():
     assert spectral_pixel_width(_line_cube()).to_value(u.AA) == pytest.approx(0.0169)
 
 
+def test_a_decreasing_wavelength_axis_gives_the_same_intensities():
+    """The pixel width is above zero, so the intensities are too."""
+    increasing = _line_cube()
+    wcs = increasing.wcs.deepcopy()
+    wcs.wcs.cdelt[0] = -wcs.wcs.cdelt[0]
+    decreasing = NDCube(increasing.data[..., ::-1], wcs=wcs, unit=increasing.unit)
+    assert spectral_pixel_width(decreasing).to_value(u.AA) == pytest.approx(0.0169)
+    intensities = []
+    for cube in (increasing, decreasing):
+        data, units = fit_cube_gauss(cube, n_jobs=1)
+        quantities = fit_quantities(data, units, spectral_pixel_width(cube), REST0)
+        intensities.append(quantities["components"]["195.1190 Angstrom"]["intensity"])
+    assert np.all(intensities[1] > 0)
+    assert intensities[1].value == pytest.approx(intensities[0].value, rel=1e-6)
+
+
 # --- the Monte Carlo keeps them ----------------------------------------------
 
 def _intensity_cube(n_slit=3, n_scan=2, n_wave=16, peak=2.0e4):
