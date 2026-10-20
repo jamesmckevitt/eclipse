@@ -40,6 +40,7 @@ MARK_LIKE = re.compile(rf" {{0,3}}<!--\s*(?:(?:{'|'.join(INSTRUMENTS)})\s+settin
 FENCE = re.compile(r" {0,3}(```|~~~)")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
+NUMBER_E = rf"{NUMBER}(?:e[-+]?\d+)?"
 
 # Words of the `unit` metadata, and the units they stand for.
 UNIT_WORDS = {
@@ -363,7 +364,7 @@ def updated_page(text):
 
 
 # Items a hand-written Default cell gives, in order: numbers and words.
-ITEM = re.compile(rf"(?<![\w.]){NUMBER}(?:e[-+]?\d+)?(?!\w|\.\d)"
+ITEM = re.compile(rf"(?<![\w.])(?P<number>{NUMBER_E})(?!\w|\.\d)"
                   r"|\b(?:none|true|false|packaged tables?)\b|`[^`]*`")
 
 
@@ -400,7 +401,7 @@ def _cell_items(cell):
     for match in ITEM.finditer(cell):
         text = match.group(0)
         item = "packaged table" if text.startswith("packaged") else text
-        if text[0] in "+-0123456789":
+        if match.group("number"):
             item = float(text)
         items.append((item, match.start(), match.end()))
     return items

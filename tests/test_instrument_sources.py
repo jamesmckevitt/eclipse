@@ -141,14 +141,14 @@ CHANGES = {
     "tilt measured": ("detector.slit_image_tilt",
                       lambda v: MEASURED_SLIT_IMAGE_TILT if not any(v) else (0.0, 0.0)),
     "blur across the slit": ("telescope.psf_across_slit",
-                             lambda v: 0.3 * u.arcsec if v is None else 2 * v),
+                             lambda v: 0.3 * u.arcsec if v is None else v + 0.3 * u.arcsec),
     "columns doubled": ("detector.n_columns", lambda v: 2 * v),
     "imperfect transfer": ("detector.cte_serial", lambda v: v * 0.99999),
     "band moved": ("detector.lit_band", lambda v: (v[0] + 1 * u.AA, v[1])),
     "no slit width": ("simulation.slit_width", lambda v: None),
     "no fiducials": ("telescope.fiducial_centres", lambda v: []),
     "jitter given": ("telescope.pointing_jitter",
-                     lambda v: 0.3 * u.arcsec if v is None else None),
+                     lambda v: 0.3 * u.arcsec if v is None else v + 0.3 * u.arcsec),
     # A single zero is a value, not none.
     "no jitter": ("telescope.pointing_jitter", lambda v: 0.0 * u.arcsec if v is None else None),
 }
@@ -226,7 +226,7 @@ def test_a_mark_applies_to_its_table_only():
         "| `detector.max_dn` | outside a marked table | kept |\n")
 
 
-NUM = r"[-+]?\d+(?:\.\d+)?(?:e\d+)?"
+NUM = tool.NUMBER_E
 
 
 def _read(instrument, first_cell, pattern):
@@ -248,12 +248,17 @@ def test_psf_row_matches_the_fields_of_view():
     telescope = Telescope_EUVST()
     plate_scale = Detector_SWC.plate_scale_angle.to_value(u.arcsec / u.pix)
     step = Detector_SWC.wvl_res.to_value(u.mAA / u.pix)
-    fields = sorted(Telescope_EUVST.FIELDS_OF_VIEW.items(), key=lambda item: -item[1][0].value)
     edit = f"Edit the SWC psf_params row of {tool.PAGE_NAME} or Telescope_EUVST.FIELDS_OF_VIEW"
+    assert telescope.field_of_view == f"{side:g}x{other:g}", (
+        f"{edit}: the default field is {telescope.field_of_view}.")
+    # The default field first, then the others from largest to smallest.
+    others = sorted((name for name in Telescope_EUVST.FIELDS_OF_VIEW
+                     if name != telescope.field_of_view),
+                    key=lambda name: -float(name.split("x")[0]))
+    fields = [(name, Telescope_EUVST.FIELDS_OF_VIEW[name])
+              for name in [telescope.field_of_view] + others]
     assert len(fields) == 3, (f"{edit}, and the pattern in this test: the code has "
                               f"{len(fields)} fields of view.")
-    assert telescope.field_of_view == f"{side:g}x{other:g}" == fields[0][0], (
-        f"{edit}: the default field is {telescope.field_of_view}.")
     for (name, widths), arcsec in zip(fields, (along, small, smaller)):
         assert round(arcsec / plate_scale, 2) == widths[0].value, (
             f"{edit}: field {name} is {widths[0].value} pixels along the slit, "
@@ -326,8 +331,9 @@ def test_dark_current_law_rows_match_the_code(instrument, cls):
     factor, activation, held, below = _read(
         instrument, "Dark current against temperature, set in the code",
         r"the 293 K value times NUM T\^3 exp\(-NUM/T\), held at its NUM K value below NUM K")
-    assert below == held, (f"Edit the {instrument} dark current row of {tool.PAGE_NAME}: the "
-                           f"law is held below the temperature it is held at.")
+    assert below == held, (f"Edit the {instrument} dark current row of {tool.PAGE_NAME}: give "
+                           f"the same temperature twice, as the dark current is held at its "
+                           f"value there for all lower temperatures.")
     rate = cls.dark_current_293k
     for kelvin in (290.0, 250.0, below, below - 20):
         used = max(kelvin, held)
