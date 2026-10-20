@@ -1,4 +1,5 @@
 """The package's former name, euvst_response, still imports, with a warning."""
+import os
 import pickle
 import subprocess
 import sys
@@ -11,8 +12,12 @@ MESSAGE = "euvst_response package is now called eclipse"
 
 
 def _run(code):
+    """Run `code` in a new interpreter that imports the package under test."""
+    source = str(Path(eclipse.config.__file__).resolve().parents[1])
+    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
     return subprocess.run([sys.executable, "-W", "always::FutureWarning", "-c", code],
-                          capture_output=True, text=True, check=True)
+                          capture_output=True, text=True, check=True,
+                          env={**os.environ, "PYTHONPATH": path})
 
 
 def test_the_old_name_warns_gives_the_new_modules_and_loads_old_pickles():

@@ -77,6 +77,7 @@ Repository = "https://github.com/jamesmckevitt/eclipse"
 Documentation = "https://solarc-eclipse.readthedocs.io"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["eclipse*", "euvst_response"]
 
 [tool.setuptools.dynamic]
@@ -84,3 +85,6 @@ version = {attr = "eclipse.__version__"}
 
 [tool.setuptools.package-data]
 eclipse = ["data/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

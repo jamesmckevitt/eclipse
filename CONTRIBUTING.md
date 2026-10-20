@@ -26,7 +26,7 @@ Whatever the size of the bump, if output changes for identical input, say so pro
 
 ### Making a release
 
-1. Bump `__version__` in `eclipse/__init__.py`. `pyproject.toml` reads it with `version = {attr = "eclipse.__version__"}`, so that is the only place the version is written. `master` takes pull requests only, so this goes through one like anything else.
+1. Bump `__version__` in `src/eclipse/__init__.py`. `pyproject.toml` reads it with `version = {attr = "eclipse.__version__"}`, so that is the only place the version is written. `master` takes pull requests only, so this goes through one like anything else.
 2. Tag `vX.Y.Z` on the merged bump, and push the tag.
 3. `gh release create vX.Y.Z` with notes covering what merged, leading with any change to numerical output.
 

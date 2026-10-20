@@ -13,7 +13,7 @@ long_description = (this_directory / "README.md").read_text()
 # Get version from __init__.py
 def get_version():
     """Extract version from __init__.py file."""
-    init_file = this_directory / "eclipse" / "__init__.py"
+    init_file = this_directory / "src" / "eclipse" / "__init__.py"
     content = init_file.read_text()
     match = re.search(r'^__version__ = [\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     if match:
@@ -29,7 +29,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/jamesmckevitt/eclipse",
-    packages=find_packages(),
+    package_dir={"": "src"},
+    packages=find_packages("src"),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",

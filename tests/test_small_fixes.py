@@ -114,6 +114,21 @@ def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path):
     assert utils.get_git_commit_id() == "unknown (not installed from a git checkout of ECLIPSE)"
 
 
+def test_the_git_commit_of_a_checkout_with_the_package_in_src(monkeypatch, tmp_path):
+    checkout = tmp_path / "eclipse"
+    package = checkout / "src" / "eclipse"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    for command in (["init", "-q"], ["add", "."],
+                    ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "t"]):
+        subprocess.run(["git", "-C", str(checkout), *command], check=True)
+    head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    import importlib.resources
+    monkeypatch.setattr(importlib.resources, "files", lambda name: package)
+    assert utils.get_git_commit_id() == head
+
+
 def _atmosphere(tmp_path, name="box.h5", **overrides):
     shape = (2, 3, 4)
     fields = dict(temperature=np.full(shape, 1e6) * u.K,

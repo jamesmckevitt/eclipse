@@ -554,14 +554,14 @@ def get_git_commit_id() -> str:
     """
     Get the last git commit ID from the package's git repository.
 
-    Only a git checkout of ECLIPSE, with the package at its top level, has
-    one. An environment inside another repository, such as a project's
+    Only a git checkout of ECLIPSE, with the package in its `src` folder,
+    has one. An environment inside another repository, such as a project's
     .venv, is not part of it, and that repository's commit says nothing
     about ECLIPSE.
     """
     try:
         from importlib.resources import files
-        pkg_path = Path(str(files("eclipse"))).parent
+        pkg_path = Path(str(files("eclipse"))).parent.parent
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,
