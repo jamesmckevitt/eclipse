@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
+from .config import Detector_SWC, _RenamedSetting
 from .deprecated import get_dem_data_from_results  # noqa: F401  (deprecated)
 from .results_file import load_results
 from .utils import has_wrong_velocity_sign
@@ -362,8 +363,14 @@ def _same_parameter(name: str, asked, stored) -> bool:
     of a different kind raises ValueError rather than matching (5 m would
     otherwise match 5 s), as does a quantity with a unit for a setting run
     as a plain number. A number with no unit is compared with the stored
-    value in SI.
+    value in SI. A list, tuple or array matches a stored list or tuple item
+    by item, so a list from YAML matches a tuple the run stored.
     """
+    if isinstance(stored, (list, tuple)):
+        if isinstance(asked, np.ndarray) and asked.ndim > 0:
+            asked = list(asked)
+        return (isinstance(asked, (list, tuple)) and len(asked) == len(stored)
+                and all(_same_parameter(name, one, other) for one, other in zip(asked, stored)))
     numbers = (int, float, np.integer, np.floating)
     if isinstance(asked, u.Quantity) and isinstance(stored, (bool, np.bool_)):
         raise ValueError(f"{name} is a switch, true or false; {asked} is not.")
@@ -426,7 +433,13 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "enough parameters to select a unique one."
         )
 
-    query = dict(kwargs)
+    query = {}
+    for key, value in kwargs.items():
+        section, _, name = key.rpartition(".")
+        if section == "detector" and name in Detector_SWC._OLD_NAMES:
+            _RenamedSetting(name, Detector_SWC._OLD_NAMES[name]).warn("detector.")
+            key = f"detector.{Detector_SWC._OLD_NAMES[name]}"
+        query[key] = value
 
     matches = [combo_results for combo_results in all_combinations.values()
                if all(key in combo_results["parameters"]

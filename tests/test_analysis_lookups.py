@@ -105,3 +105,22 @@ def test_the_deprecated_functions_warn_at_the_line_that_calls_them():
             call()
         assert len(caught) == 1
         assert (caught[0].filename, caught[0].lineno) == (__file__, line)
+
+
+def test_a_list_matches_the_tuple_a_run_stored():
+    results = _results([(0.0, 0.0), (0.991, 0.605)], "detector.slit_image_tilt")
+    found = get_results_for_combination(results, **{"detector.slit_image_tilt": [0.991, 0.605]})
+    assert found["index"] == 1
+    results = _results([(170 * u.AA, 212.3 * u.AA), (171 * u.AA, 211 * u.AA)], "detector.lit_band")
+    for asked in ([17.1 * u.nm, 211 * u.AA], [171, 211] * u.AA):
+        assert get_results_for_combination(results, **{"detector.lit_band": asked})["index"] == 1
+    with pytest.raises(ValueError, match="No combination matches"):
+        get_results_for_combination(results, **{"detector.lit_band": [171 * u.AA]})
+
+
+def test_the_old_name_of_the_dark_current_finds_its_combination():
+    rate = u.electron / (u.pix * u.s)
+    results = _results([100 * rate, 200 * rate], "detector.dark_current_293k")
+    with pytest.warns(FutureWarning, match="detector._dark_current_293k is renamed") as seen:
+        found = get_results_for_combination(results, **{"detector._dark_current_293k": 200 * rate})
+    assert found["index"] == 1 and seen[0].filename == __file__
