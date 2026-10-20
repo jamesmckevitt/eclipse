@@ -1,13 +1,13 @@
 """
 Deprecated functions, which warn when called and will be removed in a future release.
 
-They are kept so existing scripts still run, under their old names too.
-`docs/older-versions.md` lists the deprecated features, such as results
-pickles and the synthesis's dynamic mode.
+Each can still be imported from where it was before, such as
+`euvst_response.frame.apply_spectral_psf`, so existing scripts still run.
 """
 
 from __future__ import annotations
 
+import sys
 import warnings
 from pathlib import Path
 from typing import Any, Dict
@@ -21,9 +21,18 @@ from .radiometric import spectral_line_spread, spectral_psf_fwhm, spectral_psf_r
 from .utils import _fwhm_to_sigma
 
 
-def _warn(name: str) -> None:
-    warnings.warn(f"{name} is deprecated and will be removed in a future release.",
-                  FutureWarning, stacklevel=3)
+def _warn(name: str, reason: str) -> None:
+    """Warn that `name` is deprecated, attributed to the first caller outside ECLIPSE."""
+    frame, level = sys._getframe(1), 2
+    package = __name__.split(".")[0] + "."
+    while frame is not None and frame.f_globals.get("__name__", "").startswith(package):
+        frame, level = frame.f_back, level + 1
+    warnings.warn(f"{name} is deprecated and will be removed in a future release: {reason}",
+                  FutureWarning, stacklevel=level)
+
+
+_PSF_FILES = ("ECLIPSE does not use it. scipy.signal.convolve2d and scipy.ndimage.zoom "
+              "do the same.")
 
 
 def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
@@ -49,22 +58,21 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     :func:`~euvst_response.radiometric.spectral_psf_reach` rows past each
     end (:func:`~euvst_response.frame.photons_from_lines` and
     :func:`~euvst_response.frame.photons_from_spectrum` take one), and pass
-    the same margin here. The result is then the chip's own
-    rows. The kernel is normalised, so flux that stays within the rows is
-    conserved.
+    the same margin here. The result is then the chip's own rows. The
+    kernel is normalised, so flux that stays within the rows is conserved.
 
-    Deprecated: blurring the rows after the light is on them moves a line
-    narrower than a row toward the middle of its row, by up to a few km/s.
+    Deprecated since 0.12.0: blurring the rows after the light is on them
+    moves a line narrower than a row toward the middle of its row, by up to
+    a few km/s.
     Give `spectral_psf` and `det` to
     :func:`~euvst_response.frame.photons_from_lines` or
     :func:`~euvst_response.frame.photons_from_spectrum` instead, which blur
     the light as it is laid onto the rows.
     """
-    warnings.warn(
-        "apply_spectral_psf is deprecated and will be removed in a future release: blurring "
-        "the rows once the light is on them moves a line narrower than a row toward the "
-        "middle of its row. Give spectral_psf and det to photons_from_lines or "
-        "photons_from_spectrum instead.", FutureWarning, stacklevel=2)
+    _warn("apply_spectral_psf",
+          "blurring the rows once the light is on them moves a line narrower than a row "
+          "toward the middle of its row. Give spectral_psf and det to photons_from_lines or "
+          "photons_from_spectrum instead.")
     margin = int(margin)
     if spectral_psf == "quadrature":
         sigma = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
@@ -96,9 +104,10 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
 
 def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Deprecated: no version of ECLIPSE wrote the DEM into the results.
+    DEM data held in the results, which no version of ECLIPSE has written there.
 
-    The DEM and emission measure are in the synthesis file. Read them with
+    Deprecated since 0.12.0. The DEM and emission measure are in the
+    synthesis file. Read them with
     `read_synthesis_products(path, keys=["dem_map", "em_tv"])`.
 
     Parameters
@@ -106,16 +115,20 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     results : dict
         Results from `load_instrument_response_results`.
 
+    Returns
+    -------
+    dict
+        `results["dem_data"]`.
+
     Raises
     ------
     KeyError
         If the results hold no DEM; results from `eclipse` never do.
     """
-    warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
-                  "release: no released version wrote DEM data into the results. The DEM is "
-                  "in the synthesis file; read it with "
-                  "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
-                  FutureWarning, stacklevel=2)
+    _warn("get_dem_data_from_results",
+          "no released version wrote DEM data into the results. The DEM is in the synthesis "
+          "file; read it with "
+          "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).")
     if "dem_data" not in results:
         raise KeyError(
             "DEM data is not in the results, as no released version wrote it there. It is "
@@ -128,20 +141,20 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_psf_ascii(fname: Path, skip: int) -> np.ndarray:
     """Load PSF data from ASCII file."""
-    _warn("_load_psf_ascii")
+    _warn("_load_psf_ascii", _PSF_FILES)
     return np.loadtxt(fname, skiprows=skip, encoding="utf-16 LE")
 
 
 def _resample_psf(psf: np.ndarray, res_in: u.Quantity, res_out: u.Quantity) -> np.ndarray:
     """Resample PSF to different pixel scale."""
-    _warn("_resample_psf")
+    _warn("_resample_psf", _PSF_FILES)
     factor = (res_in / res_out).decompose().value
     return zoom(psf, factor, order=1)
 
 
 def _combine_psfs(psf_focus: np.ndarray, psf_mesh: np.ndarray, crop: float = 0.99, size: int | None = None) -> np.ndarray:
     """Convolve the focus and mesh PSFs and crop to an energy fraction or size."""
-    _warn("_combine_psfs")
+    _warn("_combine_psfs", _PSF_FILES)
     psf = convolve2d(psf_focus, psf_mesh, mode="same")
     if size is not None:
         if size % 2 == 0:

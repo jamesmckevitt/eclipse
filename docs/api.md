@@ -186,6 +186,8 @@ A frame of both SW CCDs at one slit position, with every line in the band and th
 
 ## Deprecated
 
-These still work, with a warning, and will be removed in a future release.
+These warn when called and will be removed in a future release. Each can still be imported from where it was before.
 
-::: euvst_response.deprecated
+::: euvst_response.frame.apply_spectral_psf
+
+::: euvst_response.get_dem_data_from_results

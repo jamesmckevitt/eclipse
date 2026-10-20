@@ -27,7 +27,9 @@ from .radiometric import (
     photons_per_energy,
     slit_image_width,
     spectral_blur_fwhm,
+    spectral_line_spread,  # noqa: F401
     spectral_psf_fwhm,
+    spectral_psf_reach,  # noqa: F401
 )
 from .deprecated import apply_spectral_psf  # noqa: F401  (deprecated)
 from .readout import FocalPlane_SWC, expose, expose_serial_overscan
@@ -221,14 +223,14 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         Ignored otherwise.
     lit_only : bool
         Zero the rows the baffle keeps dark. They still pass charge, so the
-        smear model needs them present but empty. The baffle comes after the
-        grating, so to blur the rows with :func:`apply_spectral_psf`, leave
-        this off and empty the dark rows afterwards.
+        smear model needs them present but empty. Only for the deprecated
+        :func:`apply_spectral_psf`, leave this off, blur, and empty the dark
+        rows afterwards.
     margin : int
-        Rows to add past each end of the CCD for :func:`apply_spectral_psf`,
-        which blurs light from just off the chip onto its edge rows. Needs
-        `lit_only=False`. Not needed with `spectral_psf`, which blurs the
-        light of a line off the chip onto the edge rows as it is laid.
+        Rows to add past each end of the CCD, only for the deprecated
+        :func:`apply_spectral_psf`. Needs `lit_only=False`. Not needed with
+        `spectral_psf`, which blurs the light of a line off the chip onto
+        the edge rows as it is laid.
     det : Detector_SWC, optional
         Detector, for the spectral response in rows. Needed with
         `spectral_psf`.
