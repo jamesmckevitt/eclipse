@@ -104,9 +104,9 @@ def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypat
 
 
 def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path):
-    """An environment inside some other repository is not a checkout of ECLIPSE."""
+    """A copy of ECLIPSE inside some other repository is not a checkout of ECLIPSE."""
     project = tmp_path / "project"
-    package = project / ".venv" / "lib" / "site-packages" / "eclipse"
+    package = project / "libraries" / "eclipse" / "src" / "eclipse"
     package.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(project)], check=True)
     import importlib.resources
