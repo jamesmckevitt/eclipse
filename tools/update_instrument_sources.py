@@ -4,7 +4,8 @@ Write the defaults and sources in docs/instrument-sources.md from the code.
 Each table of settings follows a comment line naming its instrument, such as
 `<!-- SWC settings: ... -->`. A row whose first cell names settings, such as
 `detector.pix_size`, gets the settings' defaults, in the `unit` of their field
-metadata, and their `source`. Other rows are left as they are.
+metadata, and their `source`. Other rows are left as they are. Run it from the
+repository root: `python tools/update_instrument_sources.py`.
 """
 
 import dataclasses
@@ -17,9 +18,9 @@ import astropy.units as u
 import numpy as np
 
 from euvst_response import resolution_budget
-from euvst_response.config import (MEASURED_SLIT_IMAGE_TILT, TILT_REFERENCE_ANGLE,
-                                   AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST, _material_value)
+from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,
+                                   TILT_REFERENCE_ANGLE, AluminiumFilter, Detector_EIS,
+                                   Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
 
@@ -200,16 +201,18 @@ def _default(cls, f):
     """Default of field `f` of `cls`, or its material's where the default is None."""
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
-    if f.default is None and hasattr(cls, "material"):
-        return _material_value(cls, f.name)
-    return f.default
+    material = DETECTOR_MATERIALS.get(getattr(cls, "material", None), {})
+    return material.get(f.name) if f.default is None else f.default
 
 
 def _constants():
     """Values from the code that the wording quotes besides the settings."""
     column = resolution_budget._column(Telescope_EUVST.resolution_budget)
+    if column is None:
+        raise ValueError("The pointing jitter wording quotes the default resolution budget, "
+                         "which is none.")
     budget = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][column]
-    return {"budget_jitter": Number(budget), "material": Detector_SWC.material,
+    return {"budget_jitter": Number(budget),
             "tilt": Value("MEASURED_SLIT_IMAGE_TILT", MEASURED_SLIT_IMAGE_TILT),
             "tilt_angle": Value("TILT_REFERENCE_ANGLE", TILT_REFERENCE_ANGLE, "arcsec")}
 
@@ -246,12 +249,12 @@ def cells(instrument, keys):
     ------
     ValueError
         If the instrument is unknown, a key is not one of its settings with a
-        source, the settings' sources differ, or the wording leaves out a
-        setting.
+        source, the settings' sources differ, or the row's wording leaves
+        out one of its settings or names a setting not in the row.
     """
     if instrument not in INSTRUMENTS:
         raise ValueError(f"Unknown instrument {instrument!r}; use {', '.join(INSTRUMENTS)}.")
-    values, sources, hidden = {}, set(), []
+    values, sources, hidden, material = {}, set(), [], None
     for key in keys:
         section, _, name = key.partition(".")
         cls = INSTRUMENTS[instrument].get(section)
@@ -262,6 +265,7 @@ def cells(instrument, keys):
         default = _default(cls, f)
         values[name] = Value(key, default, f.metadata.get("unit", ""))
         sources.add(f.metadata["source"])
+        material = getattr(cls, "material", material)
         if default is not None and not hasattr(default, "is_file"):
             hidden.append(name)
     if len(sources) > 1:
@@ -276,20 +280,33 @@ def cells(instrument, keys):
         missing = [name for name in hidden if name not in used and "all" not in used]
         if missing:
             raise ValueError(f"The wording for {keys[0]} leaves out {', '.join(missing)}.")
-        unknown = used - set(values) - set(_constants()) - {"all"}
+        names = {**_constants(), "material": material, "all": _plain(list(values.values()))}
+        unknown = used - set(values) - {name for name in names if names[name] is not None}
         if unknown:
             raise ValueError(f"The wording for {keys[0]} names {', '.join(sorted(unknown))}, "
                              f"which are not in its row.")
-        default = wording.format(all=_plain(list(values.values())), **values, **_constants())
+        default = wording.format(**{**names, **values})
     row = (default, sources.pop())
     if any("|" in cell for cell in row):
         raise ValueError(f"A '|' in the row for {', '.join(keys)} would split its table cell.")
     return row
 
 
-def updated_page(text):
-    """Page `text` with the Default and Source cells of each setting's row rewritten."""
-    lines = text.split("\n")
+def setting_rows(lines):
+    """
+    Rows of the page's lines that name settings.
+
+    Yields
+    ------
+    index : int
+        Line of the row.
+    instrument : str
+        Instrument of its table.
+    cells : list of str
+        Its cells.
+    keys : list of str
+        Settings its first cell names.
+    """
     instrument, in_table = None, False
     for index, line in enumerate(lines):
         line = line.rstrip()
@@ -301,12 +318,31 @@ def updated_page(text):
                 instrument, in_table = None, False
         elif instrument:
             in_table = True
-            row = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            row = [cell.strip() for cell in line.strip("|").split("|")]
             keys = SETTING.findall(row[0])
             if keys:
-                if len(row) != 3:
-                    raise ValueError(f"Row for {row[0]} has {len(row)} cells, not 3.")
-                lines[index] = "| " + " | ".join([row[0], *cells(instrument, keys)]) + " |"
+                yield index, instrument, row, keys
+
+
+def updated_page(text, every_wording=True):
+    """
+    Page `text` with the Default and Source cells of each setting's row rewritten.
+
+    With `every_wording`, wording for a row the page does not have, such as
+    one whose settings were reordered, is refused.
+    """
+    lines = text.split("\n")
+    used = {instrument: set() for instrument in WORDING}
+    for index, instrument, row, keys in setting_rows(lines):
+        if len(row) != 3:
+            raise ValueError(f"Row for {row[0]} has {len(row)} cells, not 3.")
+        lines[index] = "| " + " | ".join([row[0], *cells(instrument, keys)]) + " |"
+        used[instrument].add(keys[0])
+    unused = [f"{instrument} {key}" for instrument, wording in WORDING.items()
+              for key in wording if key not in used[instrument]]
+    if every_wording and unused:
+        raise ValueError(f"No row starts with the setting of the wording for "
+                         f"{', '.join(unused)}.")
     return "\n".join(lines)
 
 

@@ -52,15 +52,11 @@ def test_page_is_up_to_date():
 
 
 def test_page_has_a_row_for_every_setting_with_a_source():
-    shown, instrument = set(), None
-    for line in tool.PAGE.read_text().split("\n"):
-        mark = tool.TABLE_MARK.match(line)
-        if mark:
-            instrument = mark.group(1)
-        elif line.startswith("|") and instrument:
-            for key in tool.SETTING.findall(line.split("|")[1]):
-                section, _, name = key.partition(".")
-                shown.add((tool.INSTRUMENTS[instrument][section], name))
+    shown = set()
+    for _, instrument, _, keys in tool.setting_rows(tool.PAGE.read_text().split("\n")):
+        for key in keys:
+            section, _, name = key.partition(".")
+            shown.add((tool.INSTRUMENTS[instrument][section], name))
     for cls in INSTRUMENT_CLASSES + (Simulation,):
         missing = {name for name in _sourced(cls) if (cls, name) not in shown}
         assert not missing, f"{cls.__name__} settings missing from the page: {missing}"
@@ -72,7 +68,7 @@ def test_hand_written_rows_are_kept():
             "| `detector.max_dn` | 1 DN | old |\n"
             "| Something set in the code | 0.5 | Not recorded |\n\n"
             "| `detector.max_dn` | outside a marked table | kept |\n")
-    lines = tool.updated_page(page).split("\n")
+    lines = tool.updated_page(page, every_wording=False).split("\n")
     assert lines[4] == ("| `detector.max_dn` | 65535 DN | SOLC-EUVST-MSSL-RP-0012 v2.0, "
                         "Table 5-5: a 16-bit converter |")
     assert lines[5] == "| Something set in the code | 0.5 | Not recorded |"
@@ -171,20 +167,12 @@ def test_wording_matches_the_code():
         Simulation(slit_width=0.3 * u.arcsec)
 
 
-def test_every_wording_is_used():
-    """Wording is found by the first setting of its row, so a reordered row would lose it."""
-    first = {}
-    instrument = None
-    for line in tool.PAGE.read_text().split("\n"):
-        mark = tool.TABLE_MARK.match(line)
-        if mark:
-            instrument = mark.group(1)
-        elif line.startswith("|") and instrument:
-            keys = tool.SETTING.findall(line.split("|")[1])
-            if keys:
-                first.setdefault(instrument, set()).add(keys[0])
-    for instrument, wording in tool.WORDING.items():
-        assert set(wording) <= first[instrument]
+def test_wording_must_match_a_row():
+    """Wording is found by the first setting of its row, so a reordered row is refused."""
+    page = tool.PAGE.read_text().replace("`detector.pix_size`, `detector.n_rows`",
+                                         "`detector.n_rows`, `detector.pix_size`")
+    with pytest.raises(ValueError, match="SWC detector.pix_size"):
+        tool.updated_page(page)
 
 
 def test_wording_names_only_its_row(monkeypatch):
