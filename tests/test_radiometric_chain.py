@@ -469,11 +469,10 @@ def test_dark_electrons_without_noise_is_a_writable_mean():
     assert np.all(dark == 4.5)
 
 
-
 @pytest.mark.parametrize("inverse_transform", [False, True])
 def test_dark_electrons_refuses_a_mean_that_does_not_fit_the_pixels(inverse_transform):
     with pytest.raises(ValueError, match="does not broadcast"):
-        _dark_electrons(np.ones(3), (2, 3 + 1), inverse_transform=inverse_transform)
+        _dark_electrons(np.ones(3), (2, 4), inverse_transform=inverse_transform)
     with pytest.raises(ValueError, match="does not broadcast"):
         _dark_electrons(np.ones((3, 1)), (1, 4), inverse_transform=inverse_transform)
 
@@ -509,7 +508,6 @@ def test_detected_photons_without_noise_match_the_photons_times_the_qe():
     detected = _detected_photons(photons, det, noise=False)
     assert detected.dtype == np.float64
     np.testing.assert_array_equal(detected, (photons * det.qe_euv).astype(float))
-    detected += 1.0
 
 
 def test_detected_photons_with_noise_drop_fractions_of_a_photon():
@@ -529,9 +527,18 @@ def test_read_noise_has_the_detector_rms():
                                         rel=0.01)
 
 
-def test_dn_are_given_in_the_unit_of_the_digitiser_maximum():
+def test_dn_are_whole_dn_per_pixel_whatever_the_unit_of_the_maximum():
     det = Detector_SWC(max_dn=65.535 * u.DN / u.mpix)
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
-    # 50000 DN per pixel is 50 DN per milli-pixel, the unit of max_dn.
-    dn = _digitise(np.array([50000 * gain]), det)
-    assert (dn[0] * det.max_dn.unit).to_value(u.DN / u.pixel) == pytest.approx(50000.0)
+    # The maximum is 65535 DN per pixel, so 50400.4 DN rounds and 70000 clips.
+    dn = _digitise(np.array([50400.4, 70000.0]) * gain, det)
+    np.testing.assert_allclose(dn, [50400.0, 65535.0], rtol=1e-12)
+
+
+def test_dark_electrons_per_row_draw_as_over_every_pixel():
+    mean = np.array([[1.0], [50.0], [400.0]])
+    np.random.seed(5)
+    per_row = _dark_electrons(mean, (3, 7))
+    np.random.seed(5)
+    every_pixel = np.random.poisson(np.broadcast_to(mean, (3, 7)))
+    np.testing.assert_array_equal(per_row, every_pixel)

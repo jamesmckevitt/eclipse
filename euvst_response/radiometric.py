@@ -260,7 +260,7 @@ def _detected_photons(photons: np.ndarray, det, *, noise: bool = True,
     inverse-transform sampling, for common random numbers.
     """
     if not noise:
-        return (np.asarray(photons) * det.qe_euv).astype(float)
+        return (np.asarray(photons) * det.qe_euv).astype(float, copy=False)
     trials = np.asarray(photons).astype(np.int64)
     if inverse_transform:
         detected = _binomial_inverse_transform(trials, det.qe_euv)
@@ -281,14 +281,12 @@ def _dark_electrons(mean, shape: tuple, *, noise: bool = True,
     ValueError for a `mean` that does not broadcast to `shape`.
     """
     try:
-        broadcast = np.broadcast_shapes(np.shape(mean), shape) == tuple(shape)
+        full = np.broadcast_to(np.asarray(mean, dtype=float), shape)
     except ValueError:
-        broadcast = False
-    if not broadcast:
         raise ValueError(f"The dark mean, shaped {np.shape(mean)}, does not broadcast to "
-                         f"the pixels, shaped {tuple(shape)}.")
+                         f"the pixels, shaped {tuple(shape)}.") from None
     if not noise:
-        return np.array(np.broadcast_to(np.asarray(mean, dtype=float), shape))
+        return np.array(full)
     if inverse_transform:
         return _poisson_inverse_transform(mean, size=shape)
     return np.random.poisson(mean, size=shape)
@@ -301,17 +299,16 @@ def _read_noise(shape: tuple, det) -> np.ndarray:
 
 def _digitise(electrons: np.ndarray, det, *, rounded: bool = True) -> np.ndarray:
     """
-    DN in each pixel, in the unit of `det.max_dn`.
+    DN per pixel in each pixel.
 
     The electrons are divided by the gain, rounded to the nearest DN and
     clipped at `det.max_dn`. With `rounded` False they are not rounded, as
     for the mean DN.
     """
     dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
-    dn = dn * (u.DN / u.pixel).to(det.max_dn.unit)
     if rounded:
         dn = np.round(dn)
-    return np.minimum(dn, det.max_dn.value)
+    return np.minimum(dn, det.max_dn.to_value(u.DN / u.pixel))
 
 
 def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
@@ -977,12 +974,12 @@ def to_dn(electrons: NDCube, det) -> NDCube:
     Returns
     -------
     NDCube
-        DN in each pixel.
+        DN in each pixel, in DN per pixel.
     """
     return NDCube(
         data=_digitise(electrons.unit.to(u.electron / u.pixel) * electrons.data, det),
         wcs=electrons.wcs.deepcopy(),
-        unit=det.max_dn.unit,
+        unit=u.DN / u.pixel,
         meta=electrons.meta,
     )
 
