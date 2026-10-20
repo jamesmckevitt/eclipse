@@ -1,5 +1,9 @@
 # Contributing
 
+## Instrument settings
+
+Each instrument setting in `euvst_response/config.py` gives the source of its default in its field metadata, as `source`, with the `unit` to show a quantity in. A new setting needs both, and a row in the tables of `docs/instrument-sources.md`. After adding a setting, or changing a default or source, run `python tools/update_instrument_sources.py` from the repository root to rewrite the defaults and sources on that page. The tests fail until the page agrees with the code.
+
 ## Releases
 
 ### Release when

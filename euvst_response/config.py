@@ -620,18 +620,15 @@ def _fractions(values: list, name: str) -> list:
     return out
 
 
-# Each instrument setting gives where its default comes from in its field's
-# metadata, from which docs/instrument-sources.md is built: "source", and
-# optionally the "unit" to show the default in, a "note" to follow it, text
-# "shown" in its place, and "range" for a pair shown as "a to b". These
-# sources are shared by several settings.
+# Each instrument setting gives where its default comes from, as "source" in
+# its field's metadata, and the "unit" to show a quantity in.
+# tools/update_instrument_sources.py writes them to docs/instrument-sources.md.
+# These sources are shared by several settings.
 _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "
                             "1500 Angstrom aluminium foil")
 _HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
 _SENSITIVITY_BUDGET = "RSC-2022035A, Sensitivity Budget (13 Dec 2024)"
 _SLIT_REQUIREMENTS = "TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170"
-_EUVST_PSF = ("0.423 arcsec along the slit for the default 280 x 280 arcsec field (0.195 and "
-              "0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit")
 _SW_CCD_SPEC = "SOLC-EUVST-MSSL-SP-0001 v1.4"
 _SW_QE_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of "
                  "0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71")
@@ -690,9 +687,7 @@ class AluminiumFilter:
                                         metadata={"source": _HENKE, "unit": "Angstrom"})
     visible_decade_thickness: u.Quantity = field(
         default=170.0 * u.angstrom, kw_only=True,
-        metadata={"source": _NOT_RECORDED, "unit": "Angstrom",
-                  "note": ": visible light falls by a factor 10 per this thickness of "
-                          "aluminium, times the mesh"})
+        metadata={"source": _NOT_RECORDED, "unit": "Angstrom"})
 
     def __post_init__(self):
         _check_settings(self, "filter", positive=("table_thickness", "visible_decade_thickness"),
@@ -920,51 +915,45 @@ class Detector_SWC:
         metadata={"source": "SOLC-EUVST-MSSL-RS-0002 v2.0", "unit": "ns"})
     serial_prescan: int = field(
         default=50, kw_only=True,
-        metadata={"source": _SCAN_SOURCE, "note": "; each settable from 0 to 200"})
+        metadata={"source": _SCAN_SOURCE})
     serial_overscan: int = field(
         default=20, kw_only=True,
-        metadata={"source": _SCAN_SOURCE, "note": "; each settable from 0 to 200"})
+        metadata={"source": _SCAN_SOURCE})
     parallel_overscan_rows: int = field(default=20, kw_only=True,
                                         metadata={"source": _NOT_RECORDED})
     cte_parallel: float = field(default=1.0, kw_only=True,
-                                metadata={"source": _CTE_SOURCE, "note": ", a perfect transfer"})
+                                metadata={"source": _CTE_SOURCE})
     cte_serial: float = field(default=1.0, kw_only=True,
-                              metadata={"source": _CTE_SOURCE, "note": ", a perfect transfer"})
+                              metadata={"source": _CTE_SOURCE})
     # Properties of the material, None for those in DETECTOR_MATERIALS.
     fano_factor: float | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED, "note": ", for silicon"})
+        metadata={"source": _NOT_RECORDED})
     pair_energy_300k: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED, "unit": "eV", "note": ", for silicon"})
+        metadata={"source": _NOT_RECORDED, "unit": "eV"})
     pair_energy_slope: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED, "unit": "eV per K", "note": ", for silicon"})
+        metadata={"source": _NOT_RECORDED, "unit": "eV per K"})
     # The SW focal plane, which euvst_response.readout models.
     dispersion: tuple = field(
         default=DISPERSION_COEFFICIENTS, kw_only=True,
         metadata={"source": "Fitted to RSC-2022021C: the detector edges, the focal plane "
-                            "centre, the chief ray and the ray-traced line positions",
-                  "shown": "quadratic in position along the dispersion"})
+                            "centre, the chief ray and the ray-traced line positions"})
     wavelength_offset: u.Quantity = field(
         default=0.0 * u.Angstrom, kw_only=True,
-        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, page 45", "unit": "Angstrom",
-                  "note": "; the alignment of the camera to the beam is known to +/-0.79 "
-                          "Angstrom"})
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, page 45", "unit": "Angstrom"})
     lit_band: tuple = field(
         default=(170.0 * u.Angstrom, 212.3 * u.Angstrom), kw_only=True,
         metadata={"source": "The required range, RSC-2022021C REQ-103 and "
                             "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the "
                             "baffle's edges, so where the band stops to within a row or two is "
-                            "a modelling choice", "unit": "Angstrom", "range": True})
+                            "a modelling choice", "unit": "Angstrom"})
     slit_image_tilt: tuple = field(
         default=(0.0, 0.0), kw_only=True,
         metadata={"source": "No document gives it. Measured from the ray-traced spots in the SW "
                             "footprint figure of RSC-2022021C, where a row is about a quarter "
-                            "of a pixel of the figure",
-                  "unit": "rows",
-                  "note": "; measured as a drift along the dispersion of 0.991 f + 0.605 f^2 "
-                          "rows, where f is the angle along the slit over 140 arcsec"})
+                            "of a pixel of the figure"})
 
     def __post_init__(self):
         _check_detector(self)
@@ -1181,7 +1170,7 @@ class Telescope_EUVST:
     # [spatial_fwhm, spectral_fwhm] in pixels, or None to take them from
     # field_of_view (FIELDS_OF_VIEW).
     psf_params: list | None = field(default=None,
-                                    metadata={"source": "RSC-2022021C", "shown": _EUVST_PSF})
+                                    metadata={"source": "RSC-2022021C"})
     # Slit width the spectral FWHM in psf_params is for. RSC-2022021C quotes
     # the spectral resolution for the 0.2 arcsec slit as the optics FWHM after
     # the slit (0.352 arcsec at 212.3 A) added in quadrature to the slit width
@@ -1189,8 +1178,7 @@ class Telescope_EUVST:
     # derived from it; see radiometric.spectral_psf_fwhm.
     psf_slit_width: u.Quantity = field(
         default=0.2 * u.arcsec,
-        metadata={"source": "RSC-2022021C, Appendix A.2", "unit": "arcsec",
-                  "note": ", the slit the spectral PSF above is given for"})
+        metadata={"source": "RSC-2022021C, Appendix A.2", "unit": "arcsec"})
     # Telescope optics' blur across the slit: the FWHM of their image at the
     # slit, which sets how much light from beside the slit falls into it. None
     # leaves it out; the resolution budget's blur before the slit still
@@ -1199,18 +1187,15 @@ class Telescope_EUVST:
     # spectrograph after the slit.
     psf_across_slit: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED,
-                  "note": ": across the slit only the budget terms below"})
+        metadata={"source": _NOT_RECORDED})
     field_of_view: str | None = field(default=None, kw_only=True,
-                                      metadata={"source": "RSC-2022021C", "shown": _EUVST_PSF})
+                                      metadata={"source": "RSC-2022021C"})
     resolution_budget: str = field(
         default="current_estimate", kw_only=True,
         metadata={"source": "RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1"})
     pointing_jitter: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20",
-                  "note": ": the budget's 0.110 arcsec, or no jitter with "
-                          "`resolution_budget: none`"})
+        metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20"})
     # The slits are 4.07 mm long, 300 arcsec at the slit's 13.57 um per arcsec,
     # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
     # narrow slits and 21.8 um (1.6 arcsec) in the widest, centred -340 um
@@ -1225,8 +1210,7 @@ class Telescope_EUVST:
     fiducial_lengths: list = field(
         default_factory=lambda: [0.8 * u.arcsec, 0.8 * u.arcsec, 0.8 * u.arcsec, 1.6 * u.arcsec],
         kw_only=True,
-        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec",
-                  "note": ", from the narrowest slit to the widest"})
+        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat',
@@ -1441,7 +1425,7 @@ class Telescope_EIS:
     psf_type: str = "gaussian"
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel],  # [spatial_fwhm, spectral_fwhm] in pixels
                              metadata={"source": "Ugarte-Urra (2016), EIS Software Note 2",
-                                       "unit": "pixels", "note": " FWHM"})
+                                       "unit": "pixels"})
     # The EIS PSF is not tied to a slit width, so its spectral FWHM is the
     # same for every slit. Setting this gives the slit psf_params was measured
     # with, and the spectral PSF then follows the slit as for SWC.
@@ -1603,8 +1587,7 @@ class Simulation:
     n_iter: int = 10
     slit_width: u.Quantity = field(
         default=0.2 * u.arcsec,
-        metadata={"source": "RSC-2022021C", "unit": "arcsec",
-                  "note": "; the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide"})
+        metadata={"source": "RSC-2022021C", "unit": "arcsec"})
     ncpu: int = -1
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before SWC's filter; at EIS's CCD

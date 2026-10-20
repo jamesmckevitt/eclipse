@@ -1,4 +1,4 @@
-"""Every instrument setting has a source, and docs/instrument-sources.md shows them all."""
+"""Every instrument setting has a source, and docs/instrument-sources.md shows the code's."""
 import dataclasses
 import importlib.util
 from pathlib import Path
@@ -10,12 +10,11 @@ from euvst_response.config import (AluminiumFilter, Detector_EIS, Detector_SWC, 
                                    Telescope_EIS, Telescope_EUVST)
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = ROOT / "docs" / "instrument-sources.md"
 
-_spec = importlib.util.spec_from_file_location("instrument_sources",
-                                               ROOT / "hooks" / "instrument_sources.py")
-hook = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(hook)
+_spec = importlib.util.spec_from_file_location(
+    "update_instrument_sources", ROOT / "tools" / "update_instrument_sources.py")
+tool = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(tool)
 
 INSTRUMENT_CLASSES = (AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS)
 
@@ -44,78 +43,128 @@ def test_every_instrument_setting_has_a_source(cls):
             assert isinstance(f.metadata["source"], str) and f.metadata["source"]
 
 
-def test_page_shows_every_setting_with_a_source():
-    """Each setting with a source has a row for its instrument, and no placeholder is left."""
-    markdown = PAGE.read_text()
-    shown = set()
-    for instrument, keys in hook.PLACEHOLDER.findall(markdown):
-        for key in keys.split(","):
-            section, _, name = key.strip().partition(".")
-            shown.add((hook.INSTRUMENTS[instrument][section], name))
+def test_page_is_up_to_date():
+    page = tool.PAGE.read_text()
+    assert tool.updated_page(page) == page, (
+        "docs/instrument-sources.md differs from the defaults and sources in the code; run "
+        "python tools/update_instrument_sources.py")
+
+
+def test_page_has_a_row_for_every_setting_with_a_source():
+    shown, instrument = set(), None
+    for line in tool.PAGE.read_text().split("\n"):
+        mark = tool.TABLE_MARK.match(line)
+        if mark:
+            instrument = mark.group(1)
+        elif line.startswith("|") and instrument:
+            for key in tool.SETTING.findall(line.split("|")[1]):
+                section, _, name = key.partition(".")
+                shown.add((tool.INSTRUMENTS[instrument][section], name))
     for cls in INSTRUMENT_CLASSES + (Simulation,):
         missing = {name for name in _sourced(cls) if (cls, name) not in shown}
-        assert not missing, f"{cls.__name__} settings missing from {PAGE.name}: {missing}"
-
-    rendered = hook.render(markdown)
-    assert "<!-- setting" not in rendered
-    for cls, name in shown:
-        section = next(s for table in hook.INSTRUMENTS.values()
-                       for s, c in table.items() if c is cls)
-        assert f"`{section}.{name}`" in rendered
+        assert not missing, f"{cls.__name__} settings missing from the page: {missing}"
 
 
-@pytest.mark.parametrize("instrument, keys, row", [
+def test_hand_written_rows_are_kept():
+    page = ("<!-- SWC settings: written by the script -->\n\n"
+            "| Setting | Default | Source |\n| --- | --- | --- |\n"
+            "| `detector.max_dn` | 1 DN | old |\n"
+            "| Something set in the code | 0.5 | Not recorded |\n\n"
+            "| `detector.max_dn` | outside a marked table | kept |\n")
+    lines = tool.updated_page(page).split("\n")
+    assert lines[4] == ("| `detector.max_dn` | 65535 DN | SOLC-EUVST-MSSL-RP-0012 v2.0, "
+                        "Table 5-5: a 16-bit converter |")
+    assert lines[5] == "| Something set in the code | 0.5 | Not recorded |"
+    assert lines[7] == "| `detector.max_dn` | outside a marked table | kept |"
+
+
+@pytest.mark.parametrize("instrument, keys, default", [
     ("SWC", ["detector.pix_size", "detector.n_rows", "detector.n_columns"],
-     "13.5 micron, 2048 and 2048"),
+     "13.5 micron, 2048 by 2048"),
     ("SWC", ["detector.wvl_res"], "16.9 mA per pixel"),
     ("SWC", ["detector.ccd_temperature"], "-60 Celsius"),
     ("SWC", ["detector.read_noise_rms"], "10 electrons"),
     ("SWC", ["detector.dark_current_293k"], "20000 electrons per pixel per second"),
     ("SWC", ["filter.al_thickness", "filter.oxide_thickness", "filter.c_thickness"],
      "1485, 95 and 0 Angstrom"),
-    ("SWC", ["detector.serial_prescan", "detector.serial_overscan"],
-     "50 and 20; each settable from 0 to 200"),
-    ("SWC", ["detector.cte_parallel", "detector.cte_serial"], "1, a perfect transfer"),
-    ("SWC", ["detector.pair_energy_300k", "detector.pair_energy_slope"],
-     "3.71 eV and -0.0006 eV per K, for silicon"),
-    ("SWC", ["detector.shutter"], "true"),
+    ("SWC", ["telescope.fiducial_centres", "telescope.fiducial_lengths"],
+     "-25 and +70 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit"),
     ("SWC", ["detector.lit_band"], "170 to 212.3 Angstrom"),
-    ("SWC", ["detector.slit_image_tilt"], "0 and 0 rows; measured as a drift along the dispersion"
-     " of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec"),
-    ("EIS", ["telescope.psf_params"], "3 and 3 pixels FWHM"),
-    ("EIS", ["telescope.calibration"], "`ground`"),
+    ("SWC", ["detector.slit_image_tilt"], "none; measured as a drift along the dispersion of "
+     "0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec"),
+    ("SWC", ["telescope.pointing_jitter"], "none: the budget's 0.110 arcsec, or no jitter with "
+     "`resolution_budget: none`"),
+    ("EIS", ["telescope.psf_params"], "3 pixels FWHM"),
+    ("EIS", ["detector.wvl_res", "detector.plate_scale_angle"],
+     "22.3 mA per pixel, 1 arcsec per pixel"),
 ])
-def test_defaults_in_their_display_units(instrument, keys, row):
-    """Stored units are converted for the page, e.g. pix_size from cm per pixel to micron."""
-    assert hook.setting_row(instrument, keys).split(" | ")[1] == row
+def test_defaults_in_their_display_units(instrument, keys, default):
+    """Stored units are converted for the page, e.g. `pix_size` from cm per pixel to micron."""
+    assert tool.cells(instrument, keys)[0] == default
 
 
-def test_row_refuses_unknown_settings_and_mixed_sources():
+def test_numbers_have_no_exponent():
+    assert format(tool.Number(1e6)) == "1000000"
+    assert format(tool.Number(2e-7)) == "0.0000002"
+    assert format(tool.Number((13.5 * u.um).cgs.to_value(u.um))) == "13.5"
+
+
+def test_refuses_bad_settings_units_and_rows(monkeypatch):
     with pytest.raises(ValueError, match="not an EIS setting"):
-        hook.setting_row("EIS", ["detector.shutter"])
+        tool.cells("EIS", ["detector.shutter"])
+    with pytest.raises(ValueError, match="not an EIS setting"):
+        tool.cells("EIS", ["simulation.slit_width"])
     with pytest.raises(ValueError, match="different sources"):
-        hook.setting_row("SWC", ["detector.qe_euv", "detector.max_dn"])
+        tool.cells("SWC", ["detector.qe_euv", "detector.max_dn"])
     with pytest.raises(ValueError, match="Unknown instrument"):
-        hook.setting_row("SW", ["detector.qe_euv"])
-    with pytest.raises(ValueError, match="do not know"):
-        hook._unit("arcseconds")
-    with pytest.raises(ValueError, match="plain count"):
-        hook._unit("DN per rows")
-
-
-def test_row_escapes_pipes(monkeypatch):
-    """A `|` outside code would otherwise start a new table column."""
+        tool.cells("SW", ["detector.qe_euv"])
+    with pytest.raises(ValueError, match="does not know"):
+        tool.Value("x", 1 * u.arcsec, "arcseconds")
+    with pytest.raises(ValueError, match="x is a quantity"):
+        tool.Value("x", 1 * u.arcsec)
+    with pytest.raises(ValueError, match="x is a plain number"):
+        tool.Value("x", 0.5, "arcsec")
+    with pytest.raises(ValueError, match="needs two values"):
+        format(tool.Value("x", (1.0, 2.0, 3.0)), "range")
+    with pytest.raises(ValueError, match="leaves out pix_size"):
+        monkeypatch.setitem(tool.WORDING["SWC"], "detector.pix_size", "{n_rows} by {n_columns}")
+        tool.cells("SWC", ["detector.pix_size", "detector.n_rows", "detector.n_columns"])
     f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "max_dn")
-    monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2, `a|b`"})
-    assert hook.setting_row("SWC", ["detector.max_dn"]).endswith("| Table 6-1 \\| 6-2, `a|b` |")
-    assert hook._escape_pipes("a ` b | c") == "a ` b \\| c"
-    assert hook._escape_pipes("``a|b`` and ` | c") == "``a|b`` and ` \\| c"
+    monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2"})
+    with pytest.raises(ValueError, match="split its table cell"):
+        tool.cells("SWC", ["detector.max_dn"])
 
 
-def test_range_needs_two_values(monkeypatch):
-    f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "lit_band")
-    monkeypatch.setattr(f, "default", (170.0 * u.AA, 190.0 * u.AA, 212.3 * u.AA))
-    with pytest.raises(ValueError, match="range"):
-        hook.setting_row("SWC", ["detector.lit_band"])
-    monkeypatch.setattr(f, "default", [170.0, 212.3] * u.AA)
-    assert "170 to 212.3 Angstrom" in hook.setting_row("SWC", ["detector.lit_band"])
+def test_euvst_psf_design_values_match_the_code():
+    """The design FWHMs, in pixels rounded to 0.01 as the code holds them."""
+    fields = Telescope_EUVST.FIELDS_OF_VIEW
+    plate_scale = Detector_SWC.plate_scale_angle.to_value(u.arcsec / u.pix)
+    spectral_step = Detector_SWC.wvl_res.to_value(u.mAA / u.pix)
+    for field, arcsec in (("280x280", 0.423), ("100x100", 0.195), ("70x70", 0.161)):
+        assert round(arcsec / plate_scale, 2) == fields[field][0].to_value(u.pix)
+    for field in fields:
+        assert round(43.00 / spectral_step, 2) == fields[field][1].to_value(u.pix)
+    assert "0.423" in tool.EUVST_PSF and "0.195 and 0.161" in tool.EUVST_PSF
+    assert "43.00 mA" in tool.EUVST_PSF
+
+
+def test_wording_matches_the_code():
+    """Facts the page's wording states, beyond the values it takes from the code."""
+    # "each settable from 0 to 200"
+    for name in ("serial_prescan", "serial_overscan"):
+        Detector_SWC(**{name: 0})
+        Detector_SWC(**{name: 200})
+        for bad in (-1, 201):
+            with pytest.raises(ValueError):
+                Detector_SWC(**{name: bad})
+    # "a perfect transfer", one value for both
+    assert Detector_SWC.cte_parallel == Detector_SWC.cte_serial == 1
+    # "0.8 arcsec, 1.6 arcsec for the widest slit", two fiducials
+    telescope = Telescope_EUVST()
+    assert len(telescope.fiducial_centres) == 2
+    assert len(set(telescope.fiducial_lengths[:3])) == 1 and len(telescope.fiducial_lengths) == 4
+    # "the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide"
+    for width in (0.2, 0.4, 0.8, 1.6):
+        Simulation(slit_width=width * u.arcsec)
+    with pytest.raises(ValueError):
+        Simulation(slit_width=0.3 * u.arcsec)
