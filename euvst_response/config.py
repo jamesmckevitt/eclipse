@@ -622,8 +622,9 @@ def _fractions(values: list, name: str) -> list:
 
 # Each instrument setting gives where its default comes from in its field's
 # metadata, from which docs/instrument-sources.md is built: "source", and
-# optionally the "unit" to show the default in, a "note" to follow it, and
-# text "shown" in its place. These sources are shared by several settings.
+# optionally the "unit" to show the default in, a "note" to follow it, text
+# "shown" in its place, and "range" for a pair shown as "a to b". These
+# sources are shared by several settings.
 _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "
                             "1500 Angstrom aluminium foil")
 _HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
@@ -955,7 +956,7 @@ class Detector_SWC:
         metadata={"source": "The required range, RSC-2022021C REQ-103 and "
                             "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the "
                             "baffle's edges, so where the band stops to within a row or two is "
-                            "a modelling choice", "unit": "Angstrom"})
+                            "a modelling choice", "unit": "Angstrom", "range": True})
     slit_image_tilt: tuple = field(
         default=(0.0, 0.0), kw_only=True,
         metadata={"source": "No document gives it. Measured from the ray-traced spots in the SW "
@@ -1198,7 +1199,8 @@ class Telescope_EUVST:
     # spectrograph after the slit.
     psf_across_slit: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED, "note": ": across the slit only the budget terms below"})
+        metadata={"source": _NOT_RECORDED,
+                  "note": ": across the slit only the budget terms below"})
     field_of_view: str | None = field(default=None, kw_only=True,
                                       metadata={"source": "RSC-2022021C", "shown": _EUVST_PSF})
     resolution_budget: str = field(

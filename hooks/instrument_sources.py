@@ -39,6 +39,9 @@ _UNIT_WORDS = {
 
 def _unit(label):
     """Unit for a label such as "electrons per pixel per second", or None for a plain number."""
+    unknown = [word for word in label.split(" per ") if word not in _UNIT_WORDS]
+    if unknown:
+        raise ValueError(f"Unit {label!r} has words the docs do not know: {unknown}.")
     words = [_UNIT_WORDS[word] for word in label.split(" per ")]
     if words[0] is None:
         return None
@@ -50,7 +53,7 @@ def _unit(label):
 
 def _number(value):
     """Number as it reads in the docs: 13.5, 2048, -0.0006."""
-    return f"{value:.6g}"
+    return f"{value:.12g}"
 
 
 def _default(cls, f):
@@ -107,8 +110,8 @@ def default_value(cls, f):
                 converted.append((v * u.pix).to_value(unit))
         values = converted
     numbers = [_number(v) for v in values]
-    if len(set(numbers)) == 1:
-        numbers = numbers[:1]
+    if meta.get("range") and len(numbers) == 2:
+        return f"{numbers[0]} to {numbers[1]}", label
     return _join(numbers), label
 
 
@@ -131,9 +134,11 @@ def setting_row(instrument, keys):
     Raises
     ------
     ValueError
-        If a key is not a setting of the instrument with a source, or the
-        settings' sources differ.
+        If the instrument is unknown, a key is not one of its settings with a
+        source, or the settings' sources differ.
     """
+    if instrument not in INSTRUMENTS:
+        raise ValueError(f"Unknown instrument {instrument!r}; use {', '.join(INSTRUMENTS)}.")
     found = []
     for key in keys:
         section, _, name = key.partition(".")
@@ -152,7 +157,7 @@ def setting_row(instrument, keys):
     if shared_note:
         notes = [""] * len(notes)
     units = {unit for _, unit in values}
-    if len(set(values)) == 1:
+    if len(set(zip(values, notes))) == 1:
         # The same default for each, such as 1 for both transfer efficiencies.
         value, unit = values[0]
         default = f"{value} {unit}".strip() + notes[0]
@@ -163,7 +168,8 @@ def setting_row(instrument, keys):
         default = _join([f"{value} {unit}".strip() + note
                          for (value, unit), note in zip(values, notes)])
     settings = ", ".join(f"`{key}`" for key in keys)
-    return f"| {settings} | {default}{shared_note} | {sources.pop()} |"
+    cells = [settings, default + shared_note, sources.pop()]
+    return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
 
 
 def render(markdown):
