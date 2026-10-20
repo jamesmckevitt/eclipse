@@ -583,7 +583,7 @@ def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monke
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     np.random.seed(8)
     # Some 800 photons at the peak, for velocities within a few km/s.
-    # Uniform mode stacks the iterations along the slit, so it takes one row.
+    # Uniform mode fits only the first row along the slit, so give it one row.
     cube = _intensity_cube(n_slit=1 if uniform_mode else 3, peak=1e13)
     _, dn_stats, _, photon_stats = monte_carlo(cube, 40 * u.s, det, tel, sim, n_iter=2,
                                                uniform_mode=uniform_mode)

@@ -344,18 +344,26 @@ def test_a_missing_pixel_may_carry_any_uncertainty():
     prof[30] = np.nan
     uncertainty = np.ones(N_WAVE)
     uncertainty[30] = -100.0
-    _, _, failed = fit_cube_gauss(_cube([prof]), n_jobs=1, return_failed=True,
-                                  uncertainty=uncertainty[None, None])
+    data, _, failed = fit_cube_gauss(_cube([prof]), n_jobs=1, return_failed=True,
+                                     uncertainty=uncertainty[None, None])
     assert not failed.any()
+    assert _velocity(data[0, 0]) == pytest.approx(20, abs=1e-2)
     with pytest.raises(ValueError, match="above zero"):
         fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
                        uncertainty=uncertainty[None, None])
 
 
 def test_an_uncertainty_that_is_nan_everywhere_is_refused():
-    with pytest.raises(ValueError, match="nothing to fit"):
+    with pytest.raises(ValueError, match="NaN or infinite everywhere"):
         fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
                        uncertainty=np.full((1, 1, N_WAVE), np.nan))
+
+
+def test_values_that_are_all_nan_fail_in_a_weighted_fit_as_in_an_unweighted_one():
+    rows = np.full((1, N_WAVE), np.nan)
+    for weighting in ({}, {"uncertainty": np.ones((1, 1, N_WAVE))}):
+        _, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, return_failed=True, **weighting)
+        assert failed.all()
 
 
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
@@ -364,10 +372,10 @@ def test_a_centre_in_end_pixels_left_out_for_their_uncertainty_fails(backend):
     wave = _wave()
     prof = _line(wave, True)
     uncertainty = np.ones((1, 1, N_WAVE))
-    # The line is near pixel 22; leave out everything from pixel 15 on.
+    # The line is near pixel 19; leave out everything from pixel 15 on, so the
+    # fit finds the centre from the line's short-wavelength side alone.
     uncertainty[0, 0, 15:] = np.nan
     data, _, failed = fit_cube_gauss(_cube([prof]), n_jobs=1, fit_config=_config(True, backend),
                                      return_failed=True, uncertainty=uncertainty)
-    assert data[0, 0, 1] > wave[14] + 0.5 * STEP or failed[0, 0]
-    if data[0, 0, 1] > wave[14] + 0.5 * STEP:
-        assert failed[0, 0]
+    assert data[0, 0, 1] > wave[14] + 0.5 * STEP
+    assert failed[0, 0]
