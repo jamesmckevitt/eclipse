@@ -1,14 +1,8 @@
 """
-Write the sources in docs/instrument-sources.md, and simple defaults, from the code.
+Write the sources and plain defaults in docs/instrument-sources.md from the code.
 
-The tables this script writes follow a comment line naming their instrument,
-`<!-- SWC settings: ... -->` or `<!-- EIS settings: ... -->`, and a blank
-line. In those tables, a row whose first cell names settings in backticks
-gets their `source` from the field metadata in `euvst_response.config`. Its
-Default cell is written too when the row names one setting and the cell holds
-only a value, such as `65535 DN`. Other Default cells are worded by hand, and
-`hand_written_problems` lists those that no longer show the code's defaults.
-Run it as `python tools/update_instrument_sources.py`.
+CONTRIBUTING.md describes the page's tables and which cells this script
+writes. Run it as `python tools/update_instrument_sources.py`.
 """
 
 import dataclasses
@@ -39,6 +33,8 @@ INSTRUMENTS = {
 }
 
 TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
+# A comment starting with an instrument's name, which must be a table mark.
+MARK_LIKE = re.compile(rf"<!--\s*(?:{'|'.join(INSTRUMENTS)})\b")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
 
@@ -49,14 +45,18 @@ UNIT_WORDS = {
     "mm": u.mm, "nm": u.nm, "ns": u.ns, "pixel": u.pix, "pixels": u.pix, "second": u.s,
     "us": u.us,
 }
+_WORD = "|".join(sorted(map(re.escape, UNIT_WORDS), key=len, reverse=True))
+# Text between two numbers of one list, such as " and " or " micron, ".
+LIST_JOIN = re.compile(rf"(?: (?:{_WORD})(?: per (?:{_WORD}))*)?(?:, | and | by | to )")
+# A Default cell holding only a value: numbers and a unit, or one word.
+PLAIN = re.compile(rf"{NUMBER}(?:(?:, | and ){NUMBER})*(?: (?:{_WORD})(?: per (?:{_WORD}))*)?"
+                   r"|none|true|false|packaged table|`[^`|]*`")
 
-# Hand-written Default cells that do not show the setting's value, and why.
-# tests/test_instrument_sources.py checks what they show instead.
-NOT_SHOWN = {
-    ("SWC", "telescope.psf_params"): "None, for the design values of field_of_view",
-    ("SWC", "telescope.field_of_view"): "None, for 280x280; the cell gives the design values",
-    ("SWC", "detector.dispersion"): "coefficients, shown as the polynomial's degree",
-}
+# Settings whose hand-written Default cell gives something other than the
+# default: the design values that the default None stands for, and the
+# dispersion polynomial's degree. tests/test_instrument_sources.py checks them.
+NOT_SHOWN = {("SWC", "telescope.psf_params"), ("SWC", "telescope.field_of_view"),
+             ("SWC", "detector.dispersion")}
 
 
 def _number(value):
@@ -105,7 +105,7 @@ def display_numbers(name, value, label):
     if quantity and not label:
         raise ValueError(f"{name} is a quantity, so needs a `unit` in its field metadata.")
     if not quantity:
-        if label:
+        if label and values:
             raise ValueError(f"{name} is a plain number, so takes no `unit` in its field "
                              f"metadata.")
         return [float(v) for v in values]
@@ -136,24 +136,13 @@ def _words(value):
 
 
 def plain_default(name, value, label):
-    """Default as a Default cell holding only a value: "13.5 micron", "true"."""
+    """Default as a plain Default cell shows it: "13.5 micron", "true"."""
     numbers = display_numbers(name, value, label)
-    if numbers is None:
-        return _words(value)
+    if numbers is None or not numbers:
+        return _words(None if numbers == [] else value)
     texts = [_number(n) for n in numbers]
     text = texts[0] if len(texts) == 1 else ", ".join(texts[:-1]) + " and " + texts[-1]
     return f"{text} {label}" if label else text
-
-
-def _is_plain(cell, value, label):
-    """Whether a Default cell holds only a value of the kind of `value`."""
-    if not cell:
-        return True
-    if display_numbers("", value, label) is None:
-        return cell in ("none", "true", "false", "packaged table") or bool(
-            re.fullmatch(r"`[^`]*`", cell))
-    unit = " " + re.escape(label) if label else ""
-    return bool(re.fullmatch(rf"{NUMBER}(?:(?:, | and ){NUMBER})*{unit}", cell))
 
 
 def setting(instrument, key):
@@ -179,7 +168,7 @@ def setting(instrument, key):
     section, _, name = key.partition(".")
     cls = INSTRUMENTS[instrument].get(section)
     fields = {f.name: f for f in dataclasses.fields(cls)} if cls else {}
-    if name not in fields or "source" not in fields[name].metadata:
+    if name not in fields or not fields[name].metadata.get("source"):
         raise ValueError(f"{key}, in an {instrument} table of {PAGE_NAME}, is not an "
                          f"{instrument} setting with a source in its field metadata.")
     f = fields[name]
@@ -193,9 +182,40 @@ def setting(instrument, key):
     return f, default
 
 
+def _split_row(line):
+    """Cells of a table row, split at pipes that are not escaped or in code."""
+    cells, cell, index, code = [], "", 0, None
+    text = line.strip()
+    text = text[1:] if text.startswith("|") else text
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            cell += text[index:index + 2]
+            index += 2
+            continue
+        if char == "`":
+            run = len(re.match(r"`+", text[index:]).group(0))
+            code = None if code == run else (run if code is None else code)
+            cell += "`" * run
+            index += run
+            continue
+        if char == "|" and code is None:
+            cells.append(cell.strip())
+            cell = ""
+        else:
+            cell += char
+        index += 1
+    if cell.strip():
+        cells.append(cell.strip())
+    return cells
+
+
 def table_rows(lines):
     """
-    Rows of the tables that follow a table mark.
+    Body rows of the tables that follow a table mark.
+
+    A mark applies to the table after it and the blank line below it, and
+    stops at the end of that table.
 
     Yields
     ------
@@ -211,21 +231,23 @@ def table_rows(lines):
     ValueError
         If a mark is malformed or is not followed by a blank line and a table.
     """
-    instrument, pending, row = None, None, None
+    instrument, pending, row, fence = None, None, None, False
     for index, line in enumerate(lines):
         line = line.rstrip()
-        if line.startswith("<!--") and "settings" in line:
+        if line.startswith("```"):
+            fence = not fence
+        if fence or line.startswith("```"):
+            instrument, row = None, None
+            continue
+        if MARK_LIKE.match(line):
             mark = TABLE_MARK.fullmatch(line)
             if not mark:
                 raise ValueError(f"Line {index + 1} of {PAGE_NAME} looks like a table mark "
                                  f"but is not one: {line!r}.")
-            if pending or row is not None:
-                raise ValueError(f"The table mark on line {index + 1} of {PAGE_NAME} must "
-                                 f"follow a blank line and be followed by one.")
-            pending, instrument = mark.group(1), None
             if index + 1 >= len(lines) or lines[index + 1].strip():
                 raise ValueError(f"The table mark on line {index + 1} of {PAGE_NAME} must be "
                                  f"followed by a blank line and its table.")
+            pending, instrument, row = mark.group(1), None, None
         elif line.startswith("|"):
             if row is None:
                 instrument, pending, row = pending, None, 0
@@ -233,9 +255,9 @@ def table_rows(lines):
                 row += 1
             # The first two lines of a table are its header and separator.
             if instrument and row >= 2:
-                yield index, instrument, [cell.strip() for cell in line.strip("|").split("|")]
+                yield index, instrument, _split_row(line)
         elif line or row is not None:
-            if pending and line:
+            if pending:
                 raise ValueError(f"The table mark before line {index + 1} of {PAGE_NAME} "
                                  f"must be followed by a blank line and its table.")
             instrument, row = None, None
@@ -244,15 +266,15 @@ def table_rows(lines):
 
 
 def _setting_rows(text):
-    """Rows naming settings: line, instrument, cells and keys."""
-    lines = text.split("\n")
-    for index, instrument, cells in table_rows(lines):
-        keys = SETTING.findall(cells[0])
+    """Rows naming settings: line, instrument, cells and settings."""
+    for index, instrument, cells in table_rows(text.split("\n")):
+        keys = SETTING.findall(cells[0]) if cells else []
         if keys:
             if len(cells) != 3:
                 raise ValueError(f"The row for {cells[0]} in {PAGE_NAME} has {len(cells)} "
                                  f"cells, not 3.")
-            yield index, instrument, cells, keys
+            found = [(key, *setting(instrument, key)) for key in keys]
+            yield index, instrument, cells, found
 
 
 def _check_cell(text, key):
@@ -264,7 +286,7 @@ def _check_cell(text, key):
 
 def updated_page(text):
     """
-    Page `text` with the sources, and the Default cells holding only a value, rewritten.
+    Page with its sources and plain Default cells rewritten from the code.
 
     Raises
     ------
@@ -273,8 +295,8 @@ def updated_page(text):
         a row.
     """
     lines = text.split("\n")
-    for index, instrument, cells, keys in list(_setting_rows(text)):
-        found = [(key, *setting(instrument, key)) for key in keys]
+    for index, _, cells, found in list(_setting_rows(text)):
+        keys = [key for key, _, _ in found]
         sources = {f.metadata["source"] for _, f, _ in found}
         if len(sources) > 1:
             raise ValueError(f"{', '.join(keys)} have different sources, so need a row each "
@@ -282,45 +304,70 @@ def updated_page(text):
         source = sources.pop()
         _check_cell(source, keys[0])
         default = cells[1]
-        if len(keys) == 1:
+        if len(found) == 1 and (not default or PLAIN.fullmatch(default)):
             key, f, value = found[0]
-            label = f.metadata.get("unit", "")
-            if _is_plain(default, value, label):
-                default = plain_default(key, value, label)
-                _check_cell(default, key)
+            default = plain_default(key, value, f.metadata.get("unit", ""))
+            _check_cell(default, key)
         lines[index] = f"| {cells[0]} | {default} | {source} |"
     return "\n".join(lines)
 
 
-def _shows(cell, numbers, words, label):
-    """Whether a hand-written Default cell shows a default's numbers or words, and unit."""
-    if numbers is None:
-        return words in cell
-    if words == "none" and not any(numbers) and "none" in cell:
-        return True
-    shown = [float(token) for token in re.findall(NUMBER, cell)]
-    return (all(any(math.isclose(n, s, rel_tol=1e-9, abs_tol=1e-12) for s in shown)
-                for n in numbers)
-            and (not label or label in cell))
+def _collapse(numbers):
+    """Numbers with each run of equal ones kept once."""
+    out = []
+    for number in numbers:
+        if not out or not math.isclose(out[-1], number, rel_tol=1e-9, abs_tol=1e-12):
+            out.append(number)
+    return out
+
+
+def _shows(cell, found):
+    """
+    Whether a hand-written Default cell shows the defaults of its settings.
+
+    A cell starting with "none" shows defaults that are None or zero.
+    Otherwise the cell starts with the defaults' numbers, in order, and does
+    not list more after them. A run of equal numbers in one setting may be
+    given once, as may one number shared by every setting of the row. The
+    cell must also give their units and words.
+    """
+    numbers, labels, words = [], set(), []
+    for key, f, value in found:
+        label = f.metadata.get("unit", "")
+        shown = display_numbers(key, value, label)
+        if shown is None:
+            words.append(_words(value))
+        else:
+            numbers += _collapse(shown)
+            labels.add(label)
+    if cell.startswith("none"):
+        return all(w == "none" for w in words) and not any(numbers)
+    wanted = _collapse(numbers) if len(_collapse(numbers)) == 1 else numbers
+    tokens = list(re.finditer(NUMBER, cell))
+    if len(tokens) < len(wanted) or not all(
+            math.isclose(float(t.group(0)), n, rel_tol=1e-9, abs_tol=1e-12)
+            for t, n in zip(tokens, wanted)):
+        return False
+    if wanted and len(tokens) > len(wanted):
+        between = cell[tokens[len(wanted) - 1].end():tokens[len(wanted)].start()]
+        if LIST_JOIN.fullmatch(between):
+            return False
+    return (all(label in cell for label in labels if label)
+            and all(word in cell for word in words if word != "none"))
 
 
 def hand_written_problems(text):
-    """Settings whose hand-written Default cell does not show the code's default."""
+    """Messages for the hand-written Default cells that do not show the code's defaults."""
     problems = []
-    for _, instrument, cells, keys in _setting_rows(text):
-        for key in keys:
-            f, value = setting(instrument, key)
-            label = f.metadata.get("unit", "")
-            if (instrument, key) in NOT_SHOWN:
-                continue
-            if len(keys) == 1 and _is_plain(cells[1], value, label):
-                continue
-            numbers = display_numbers(key, value, label)
-            words = "none" if numbers is not None and not any(numbers) else _words(value)
-            if not _shows(cells[1], numbers, words, label):
-                problems.append(f"Edit the Default cell of the {instrument} row for {cells[0]} "
-                                f"in {PAGE_NAME} by hand: it should show {key} as "
-                                f"{plain_default(key, value, label)}.")
+    for _, instrument, cells, found in _setting_rows(text):
+        found = [item for item in found if (instrument, item[0]) not in NOT_SHOWN]
+        if not found or (len(found) == 1 and PLAIN.fullmatch(cells[1])):
+            continue
+        if not _shows(cells[1], found):
+            defaults = "; ".join(plain_default(key, value, f.metadata.get("unit", ""))
+                                 for key, f, value in found)
+            problems.append(f"Edit the Default cell of the {instrument} row for {cells[0]} in "
+                            f"{PAGE_NAME} by hand: it should show {defaults}.")
     return problems
 
 

@@ -72,7 +72,9 @@ def test_page_has_a_row_for_every_setting_with_a_source():
     for _, instrument, cells in tool.table_rows(_page().split("\n")):
         for key in tool.SETTING.findall(cells[0]):
             section, _, name = key.partition(".")
-            shown.add((tool.INSTRUMENTS[instrument][section], name))
+            cls = tool.INSTRUMENTS[instrument].get(section)
+            assert cls, f"{key} is not an {instrument} setting; move its row in {tool.PAGE_NAME}."
+            shown.add((cls, name))
     for cls in WITHOUT_SOURCE:
         missing = sorted(name for name in _sourced(cls) if (cls, name) not in shown)
         assert not missing, (f"Add a row for {cls.__name__}.{', '.join(missing)} to a table of "
@@ -122,13 +124,26 @@ def test_writes_sources_and_plain_defaults_only():
     assert any("detector.gain_e_per_dn" in p for p in tool.hand_written_problems(SYNTHETIC))
 
 
-def test_hand_written_defaults_are_checked(monkeypatch):
+@pytest.mark.parametrize("key, value", [
+    ("detector.serial_prescan", 51),
+    # Numbers that the cell gives for another setting or in its wording.
+    ("detector.serial_prescan", 20),
+    ("detector.serial_overscan", 200),
+    ("detector.qe_vis", 0.76),
+    ("detector.slit_image_tilt", (0.991, 0.605)),
+    ("telescope.psf_across_slit", 0.3 * u.arcsec),
+    ("detector.n_columns", 4096),
+    ("detector.cte_serial", 0.99999),
+    ("detector.lit_band", (171.0 * u.AA, 212.3 * u.AA)),
+])
+def test_hand_written_defaults_are_checked(monkeypatch, key, value):
     """A changed default fails the check until its hand-written cell is edited."""
-    page = _page()
-    f, _ = tool.setting("SWC", "detector.serial_prescan")
-    monkeypatch.setattr(f, "default", 51)
-    problems = tool.hand_written_problems(page)
-    assert len(problems) == 1 and "detector.serial_prescan as 51" in problems[0]
+    f, _ = tool.setting("SWC", key)
+    monkeypatch.setattr(f, "default", value)
+    if isinstance(value, u.Quantity) and value.unit == u.arcsec:
+        monkeypatch.setattr(f, "metadata", {**f.metadata, "unit": "arcsec"})
+    problems = tool.hand_written_problems(_page())
+    assert len(problems) == 1 and f"`{key}`" in problems[0]
 
 
 @pytest.mark.parametrize("value, label, text", [
@@ -167,6 +182,10 @@ def test_refuses_bad_units_marks_and_cells(monkeypatch):
         monkeypatch.setattr(f, "metadata", {**f.metadata, "source": bad})
         with pytest.raises(ValueError, match="detector.max_dn"):
             tool.updated_page(SYNTHETIC)
+
+
+def test_rows_split_at_pipes_outside_code():
+    assert tool._split_row(r"| `a|b` | c \| d | ``x`|`` |") == ["`a|b`", r"c \| d", "``x`|``"]
 
 
 def test_a_mark_applies_to_its_table_only():
