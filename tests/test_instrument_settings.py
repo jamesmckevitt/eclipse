@@ -340,6 +340,25 @@ def test_a_run_records_the_old_dark_current_key_as_the_config_gives_it(tmp_path,
             "dark_current_293k": ["1 electron / (pix s)", "2 electron / (pix s)"]}})
 
 
+def test_a_sweep_of_the_visible_decade_thickness_lays_the_scene_once(tmp_path, monkeypatch,
+                                                                     capsys):
+    """It changes only the visible light, which the Monte Carlo adds, not the EUV cube."""
+    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+
+    edges = np.arange(3) * 0.1 * u.Mm
+    wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=195.119 * u.AA)
+    write_synthesis(Synthesis(lines={"Fe12_195.1190": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    payload = _run(tmp_path, monkeypatch, {
+        "instrument": "SWC", "n_iter": 1, "synthesis_file": str(tmp_path / "file.h5"),
+        "simulation": {"noise": False, "vis_sl": "1e12 photon / (s cm2)"},
+        "filter": {"visible_decade_thickness": ["170 angstrom", "160 angstrom"]}})
+    assert capsys.readouterr().out.count("Laying the scene onto the detector") == 1
+    assert len(payload["results"]["all_combinations"]) == 2
+
+
 def test_an_eis_run_refuses_the_pinhole_wavelength(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Pinhole effects are not supported for EIS"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "instrument": "EIS", "simulation": {

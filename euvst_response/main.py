@@ -1363,10 +1363,13 @@ def main() -> None:
         cube_obs = cube_reb
         if not uniform_intensity_mode:
             # The observed cube includes the telescope's throughput as well as
-            # its PSF, so every telescope and filter setting is in the key.
-            telescope_key = _params_to_key({
-                **_extract_config_params(TEL, "telescope"),
-                **(_extract_config_params(filter_obj, "filter") if filter_obj is not None else {})})
+            # its PSF, so every telescope and filter setting is in the key,
+            # except the one for visible light, which the Monte Carlo adds.
+            filter_params = (_extract_config_params(filter_obj, "filter")
+                             if filter_obj is not None else {})
+            filter_params.pop("filter.visible_decade_thickness", None)
+            telescope_key = _params_to_key({**_extract_config_params(TEL, "telescope"),
+                                            **filter_params})
             # With the pinholes on, it also includes the light they let past
             # the filter.
             pinholes = _pinholes_on(SIM)
