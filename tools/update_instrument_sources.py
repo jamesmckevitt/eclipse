@@ -33,8 +33,9 @@ INSTRUMENTS = {
 }
 
 TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
-# A comment that names settings like a table mark, and so must be one.
-MARK_LIKE = re.compile(r"<!--\s*\w+\s+settings\s*:", re.IGNORECASE)
+# A comment that starts like a table mark, and so must be one: a name in
+# capitals and "settings", or any word, "settings" and a colon.
+MARK_LIKE = re.compile(r"<!--\s*(?:[A-Z]+\s+settings\b|\w+\s+settings\s*:)")
 FENCE = re.compile(r" {0,3}(```|~~~)")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
@@ -49,8 +50,8 @@ UNIT_WORDS = {
 _WORD = "|".join(sorted(map(re.escape, UNIT_WORDS), key=len, reverse=True))
 # Text between two numbers of one list, such as " and " or " micron, ".
 LIST_JOIN = re.compile(rf"(?: (?:{_WORD})(?: per (?:{_WORD}))*)?(?:, | and | by | to )")
-# A Default cell holding only a value: numbers with a unit, "none", "true",
-# "false", "packaged table" or a backticked word.
+# A Default cell holding only a value: numbers, with or without a unit,
+# "none", "true", "false", "packaged table" or a backticked word.
 PLAIN = re.compile(rf"{NUMBER}(?:(?:, | and ){NUMBER})*(?: (?:{_WORD})(?: per (?:{_WORD}))*)?"
                    r"|none|true|false|packaged table|`[^`|]*`")
 
@@ -141,7 +142,8 @@ def _words(value):
 def plain_default(name, value, label):
     """Default written as a plain Default cell: "13.5 micron", "true"."""
     numbers = display_numbers(name, value, label)
-    if not numbers:
+    if not numbers or (len(numbers) > 1 and not any(numbers)):
+        # A list of zeros, such as no slit image tilt, reads as none.
         return _words(value if numbers is None else None)
     texts = [_number(n) for n in numbers]
     text = texts[0] if len(texts) == 1 else ", ".join(texts[:-1]) + " and " + texts[-1]
@@ -282,9 +284,22 @@ def table_rows(lines):
 
 
 def _setting_rows(text):
-    """Rows naming settings: line, instrument, cells and settings."""
+    """
+    Rows naming settings: line, instrument, cells and settings.
+
+    Raises
+    ------
+    ValueError
+        If a row does not have three cells, or a setting has two rows.
+    """
+    seen = set()
     for index, instrument, cells in table_rows(text.split("\n")):
         keys = SETTING.findall(cells[0]) if cells else []
+        for key in keys:
+            if (instrument, key) in seen:
+                raise ValueError(f"{key} is named twice in the {instrument} tables of "
+                                 f"{PAGE_NAME}; keep one row for it.")
+            seen.add((instrument, key))
         if keys:
             if len(cells) != 3:
                 raise ValueError(f"The row for {cells[0]} in {PAGE_NAME} has {len(cells)} "
@@ -301,15 +316,14 @@ def _check_cell(text, key):
 
 
 def _written_by_script(instrument, cell, found):
-    """Whether the script writes this Default cell: one setting, and only a value."""
+    """
+    Whether the script writes this Default cell.
+
+    It does for a row naming one setting, not in `NOT_SHOWN`, whose cell is
+    empty or holds only a value.
+    """
     if len(found) != 1 or (instrument, found[0][0]) in NOT_SHOWN:
         return False
-    key, f, value = found[0]
-    if cell == "none":
-        # A list of zeros may be written as none by hand.
-        numbers = display_numbers(key, value, f.metadata.get("unit", ""))
-        if numbers and len(numbers) > 1 and not any(numbers):
-            return False
     return not cell or bool(PLAIN.fullmatch(cell))
 
 
@@ -400,6 +414,10 @@ def hand_written_problems(text):
     problems = []
     for _, instrument, cells, found in _setting_rows(text):
         if _written_by_script(instrument, cells[1], found):
+            continue
+        if not cells[1]:
+            problems.append(f"Write the Default cell of the {instrument} row for {cells[0]} in "
+                            f"{PAGE_NAME} by hand.")
             continue
         found = [item for item in found if (instrument, item[0]) not in NOT_SHOWN]
         if found and not _shows(cells[1], found):

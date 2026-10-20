@@ -68,12 +68,9 @@ def test_every_instrument_setting_has_a_source(cls):
 
 
 def test_page_has_a_row_for_every_setting_with_a_source():
-    shown, seen = set(), set()
+    shown = set()
     for _, instrument, cells in tool.table_rows(_page().split("\n")):
         for key in tool.SETTING.findall(cells[0]):
-            assert (instrument, key) not in seen, (
-                f"{key} has two rows in the {instrument} tables of {tool.PAGE_NAME}; keep one.")
-            seen.add((instrument, key))
             section, _, name = key.partition(".")
             cls = tool.INSTRUMENTS[instrument].get(section)
             assert cls, f"{key} is not an {instrument} setting; move its row in {tool.PAGE_NAME}."
@@ -181,7 +178,8 @@ def test_refuses_bad_units_marks_and_cells(monkeypatch):
         tool.setting("EIS", "simulation.slit_width")
     with pytest.raises(ValueError, match="Unknown instrument"):
         tool.setting("SW", "detector.qe_euv")
-    for page in (SYNTHETIC.replace("SWC settings: written", "SWC settings : written -- >"),
+    for page in (SYNTHETIC.replace("SWC settings: written", "SWC settings written"),
+                 SYNTHETIC.replace("SWC settings: written", "swc settings: written -- >"),
                  SYNTHETIC.replace("<!-- SWC settings", "<!-- SW settings"),
                  SYNTHETIC.replace("Text.\n\n", "Text.\n"),
                  SYNTHETIC.replace("script -->\n\n", "script -->\n\n```\ncode\n```\n\n"),
@@ -284,9 +282,20 @@ def test_aperture_share_row_matches_the_code():
         f"Edit the aperture share row of {tool.PAGE_NAME} to Telescope_EUVST.collecting_area.")
 
 
-def test_script_leaves_hand_written_none_and_design_values():
-    tilt, _ = tool.setting("SWC", "detector.slit_image_tilt")
-    assert not tool._written_by_script("SWC", "none", [("detector.slit_image_tilt", tilt,
-                                                        (0.0, 0.0))])
-    dispersion, value = tool.setting("SWC", "detector.dispersion")
-    assert not tool._written_by_script("SWC", "", [("detector.dispersion", dispersion, value)])
+def test_script_keeps_hand_written_cells_and_refuses_repeats():
+    page = SYNTHETIC.replace(
+        "| Something set in the code",
+        "| `detector.slit_image_tilt` | none | old |\n"
+        "| `detector.dispersion` | quadratic | old |\n"
+        "| `detector.ccd_gap` |  | old |\n"
+        "| Something set in the code")
+    lines = tool.updated_page(page).split("\n")
+    assert lines[8].startswith("| `detector.slit_image_tilt` | none | ")
+    assert lines[9].startswith("| `detector.dispersion` | quadratic | ")
+    assert not lines[10].startswith("| `detector.ccd_gap` |  |")
+    assert not [p for p in tool.hand_written_problems(page) if "slit_image_tilt" in p
+                or "dispersion" in p]
+    empty = page.replace("| `detector.dispersion` | quadratic |", "| `detector.dispersion` |  |")
+    assert any("Write the Default cell" in p for p in tool.hand_written_problems(empty))
+    with pytest.raises(ValueError, match="named twice"):
+        tool.updated_page(page.replace("`detector.ccd_gap`", "`detector.dispersion`"))
