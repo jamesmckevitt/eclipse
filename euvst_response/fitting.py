@@ -283,7 +283,8 @@ def _tie_root(fit_config: FitConfig, key: str, index: int) -> int:
     return index
 
 
-# Fraction of the primary's amplitude that every other component starts at.
+# Fraction of the background-subtracted peak: the starting amplitude of
+# components with a tied centre, and the lowest start of the others.
 _GUESS_FRACTION = 0.15
 
 
