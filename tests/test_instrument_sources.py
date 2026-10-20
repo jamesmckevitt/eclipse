@@ -46,6 +46,7 @@ def test_every_instrument_setting_has_a_source(cls):
 
 def test_page_is_up_to_date():
     page = tool.PAGE.read_text()
+    assert tool.unused_wording(page) == []
     assert tool.updated_page(page) == page, (
         "docs/instrument-sources.md differs from the defaults and sources in the code; run "
         "python tools/update_instrument_sources.py")
@@ -62,8 +63,7 @@ def test_page_has_a_row_for_every_setting_with_a_source():
         assert not missing, f"{cls.__name__} settings missing from the page: {missing}"
 
 
-def test_hand_written_rows_are_kept(monkeypatch):
-    monkeypatch.setattr(tool, "WORDING", {"SWC": {}, "EIS": {}})
+def test_hand_written_rows_are_kept():
     page = ("<!-- SWC settings: written by the script -->\n\n"
             "| Setting | Default | Source |\n| --- | --- | --- |\n"
             "| `detector.max_dn` | 1 DN | old |\n"
@@ -174,8 +174,8 @@ def test_every_wording_has_a_row():
     reordered = page.replace("`detector.pix_size`, `detector.n_rows`",
                              "`detector.n_rows`, `detector.pix_size`")
     assert tool.updated_page(reordered) == reordered
-    with pytest.raises(ValueError, match="SWC detector.lit_band"):
-        tool.updated_page(page.replace("`detector.lit_band`", "`detector.ccd_gap`"))
+    assert tool.unused_wording(page.replace("`detector.lit_band`", "`detector.ccd_gap`")) == [
+        "SWC detector.lit_band"]
 
 
 def test_wording_names_only_its_row(monkeypatch):

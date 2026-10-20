@@ -17,13 +17,15 @@ from pathlib import Path
 import astropy.units as u
 import numpy as np
 
-# This checkout's package, not one installed elsewhere.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if __name__ == "__main__":
+    # This checkout's package, not one installed elsewhere.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from euvst_response import resolution_budget  # noqa: E402
 from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,  # noqa: E402
                                    TILT_REFERENCE_ANGLE, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST)
+                                   Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST,
+                                   _material_value)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
 
@@ -204,11 +206,9 @@ def _default(cls, f):
     """Default of field `f` of `cls`, or its material's where the default is None."""
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
-    if f.default is None and hasattr(cls, "material"):
-        if cls.material not in DETECTOR_MATERIALS:
-            raise ValueError(f"{cls.__name__}.material {cls.material!r} is not in "
-                             f"DETECTOR_MATERIALS.")
-        return DETECTOR_MATERIALS[cls.material].get(f.name)
+    properties = {name for material in DETECTOR_MATERIALS.values() for name in material}
+    if f.default is None and f.name in properties:
+        return _material_value(cls, f.name)
     return f.default
 
 
@@ -274,6 +274,8 @@ def cells(instrument, keys):
         fields = {f.name: f for f in dataclasses.fields(cls)} if cls else {}
         if name not in fields or "source" not in fields[name].metadata:
             raise ValueError(f"{key} is not an {instrument} setting with a source.")
+        if name in values:
+            raise ValueError(f"The row for {', '.join(keys)} names {name} twice.")
         f = fields[name]
         default = _default(cls, f)
         values[name] = Value(key, default, f.metadata.get("unit", ""))
@@ -354,12 +356,8 @@ def updated_page(text):
     Raises
     ------
     ValueError
-        If a row cannot be written, or no row names the setting of some
-        wording.
+        If a row cannot be written.
     """
-    unused = unused_wording(text)
-    if unused:
-        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     lines = text.split("\n")
     for index, instrument, row, keys in list(setting_rows(lines)):
         if len(row) != 3:
@@ -378,6 +376,9 @@ def unused_wording(text):
 
 def main():
     text = PAGE.read_text()
+    unused = unused_wording(text)
+    if unused:
+        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     updated = updated_page(text)
     if updated == text:
         print(f"{PAGE.name} is up to date.")
