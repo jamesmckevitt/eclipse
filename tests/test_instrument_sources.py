@@ -251,14 +251,14 @@ def test_psf_row_matches_the_fields_of_view():
     edit = f"Edit the SWC psf_params row of {tool.PAGE_NAME} or Telescope_EUVST.FIELDS_OF_VIEW"
     assert telescope.field_of_view == f"{side:g}x{other:g}", (
         f"{edit}: the default field is {telescope.field_of_view}.")
-    # The default field first, then the others from largest to smallest.
-    others = sorted((name for name in Telescope_EUVST.FIELDS_OF_VIEW
-                     if name != telescope.field_of_view),
-                    key=lambda name: -float(name.split("x")[0]))
-    fields = [(name, Telescope_EUVST.FIELDS_OF_VIEW[name])
-              for name in [telescope.field_of_view] + others]
+    # The default field first, then the others from widest PSF to narrowest.
+    fields = sorted(Telescope_EUVST.FIELDS_OF_VIEW.items(),
+                    key=lambda item: (item[0] != telescope.field_of_view, -item[1][0].value))
     assert len(fields) == 3, (f"{edit}, and the pattern in this test: the code has "
                               f"{len(fields)} fields of view.")
+    assert all(fields[0][1][0] >= widths[0] for _, widths in fields), (
+        f"{edit}: the page calls the other fields smaller, so their PSF should be no wider "
+        f"than the default field's.")
     for (name, widths), arcsec in zip(fields, (along, small, smaller)):
         assert round(arcsec / plate_scale, 2) == widths[0].value, (
             f"{edit}: field {name} is {widths[0].value} pixels along the slit, "
