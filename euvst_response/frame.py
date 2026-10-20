@@ -111,9 +111,8 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     slit's image it is convolved with, both in Angstrom. With `spectral_psf`
     `"quadrature"` the slit is included in the Gaussian and the width is 0.
 
-    The response is set in rows, as
-    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` sets it for
-    a synthesis, and converted at the width of the row each wavelength falls
+    The response is set in rows, as :func:`~euvst_response.radiometric._spectral_response`
+    gives it, and converted at the width of the row each wavelength falls
     in. The row width changes by less than a part in 1e4 across the
     response.
     """

@@ -20,7 +20,7 @@ from euvst_response.config import (Detector_EIS, Detector_SWC, Simulation,
                                    Telescope_EIS, Telescope_EUVST)
 from euvst_response.data_processing import (_spectra_on_the_detector,
                                             create_uniform_intensity_cube, pad_spectral_axis)
-from euvst_response.frame import _response
+from euvst_response.frame import _response, _row_bounds
 from euvst_response.main import _validate_config_keys
 from euvst_response.radiometric import (_spectral_kernel, _spectral_response,
                                         apply_focusing_optics_psf, slit_image_width,
@@ -431,13 +431,16 @@ def test_a_cube_on_the_pixels_is_blurred_with_the_shared_kernel(spectral_psf, co
 
 @pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
 def test_a_frame_takes_the_shared_response_in_its_rows(spectral_psf):
-    """The frame's response is the shared one, in rows of about 16.9 mA."""
+    """The frame's response is the shared one, converted at the width of each wavelength's row."""
+    focal_plane = FocalPlane_SWC()
     wavelength = np.array([175.0, 195.119])
-    sigma, box = _response(FocalPlane_SWC(), "left", None, TEL, DET, 0.4 * u.arcsec,
+    sigma, box = _response(focal_plane, "left", None, TEL, DET, 0.4 * u.arcsec,
                            spectral_psf, wavelength)
     sigma_rows, box_rows = _spectral_response(TEL, DET, 0.4 * u.arcsec, spectral_psf)
-    row = DET.wvl_res.to_value(u.Angstrom / u.pix)
-    np.testing.assert_allclose(sigma / sigma_rows, row, rtol=0.02)
+    bounds = _row_bounds(focal_plane, "left")
+    row = [np.diff(bounds[(bounds[:, 0] <= w) & (w < bounds[:, 1])][0])[0] for w in wavelength]
+    # The row width changes by less than a part in 1e4 within a row.
+    np.testing.assert_allclose(sigma / sigma_rows, row, rtol=1e-4)
     if spectral_psf == "convolution":
         np.testing.assert_allclose(box / box_rows, sigma / sigma_rows, rtol=1e-12)
     else:

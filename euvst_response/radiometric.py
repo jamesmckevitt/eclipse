@@ -573,9 +573,9 @@ def _spectral_response(tel, det, slit_width: u.Quantity, spectral_psf: str) -> t
     of FWHM :func:`spectral_blur_fwhm`, and the rectangle is the slit's
     image.
 
-    Raises ValueError for any other `spectral_psf`, for `"convolution"` with
-    a telescope whose PSF is not split into the optics and the slit (no
-    `psf_slit_width`), and for a spectral PSF narrower than its own slit.
+    Raises ValueError for any other `spectral_psf`, and wherever
+    :func:`spectral_psf_fwhm` or :func:`spectral_blur_fwhm` does, such as
+    for `"convolution"` with a telescope that has no `psf_slit_width`.
     """
     if spectral_psf == "quadrature":
         return _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width)), 0.0
