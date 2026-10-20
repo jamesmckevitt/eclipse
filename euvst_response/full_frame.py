@@ -494,15 +494,17 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
 _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 
 # `Simulation` fields a frame does not use, as they do not change it. `expos`
-# is replaced by the `exposure` argument.
-_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
+# is replaced by the `exposure` argument, and the pinhole lists are checked
+# through `enable_pinholes`.
+_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu", "pinhole_sizes", "pinhole_positions",
+                              "pinhole_positions_spectral")
 
 
 def _same(a, b) -> bool:
     """Whether `a` and `b` are equal, False if they cannot be compared."""
     try:
         return bool(np.all(a == b))
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -521,15 +523,17 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
 
     if not isinstance(sim, Simulation):
         raise TypeError(f"sim must be a Simulation, got {type(sim).__name__}.")
-    defaults = inspect.signature(full_ccd_frame).parameters
+    arguments = inspect.signature(full_ccd_frame).parameters
     problems = [f"{name} is {value!r} here and {getattr(sim, name)!r} in sim"
                 for name, value in given.items()
-                if not _same(value, defaults[name].default)
+                if not _same(value, arguments[name].default)
                 and not _same(value, getattr(sim, name))]
-    pinhole_fields = ("enable_pinholes", "pinhole_sizes", "pinhole_positions",
-                      "pinhole_positions_spectral")
-    for f in dataclasses.fields(Simulation):
-        name, value = f.name, getattr(sim, f.name)
+    defaults = {f.name: (f.default if f.default is not dataclasses.MISSING
+                         else f.default_factory() if f.default_factory is not dataclasses.MISSING
+                         else dataclasses.MISSING)
+                for f in dataclasses.fields(sim)}
+    for name, default in defaults.items():
+        value = getattr(sim, name)
         if name in _FROM_SIMULATION or name in _IGNORED_SIMULATION_FIELDS:
             continue
         if name == "instrument":
@@ -539,21 +543,16 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
             if sim.psf and value != "zero":
                 problems.append(f"psf_boundary {value!r}: the frame takes the Sun beyond the "
                                 f"synthesis's edges as dark, psf_boundary 'zero'")
-        elif name in pinhole_fields:
-            if name == "enable_pinholes" and _pinholes_on(sim):
+        elif name == "enable_pinholes":
+            if _pinholes_on(sim):
                 problems.append("enable_pinholes: the frame does not model pinholes in the "
                                 "filter")
-        else:
-            default = (f.default_factory() if f.default is dataclasses.MISSING
-                       else f.default)
-            if not _same(value, default):
-                problems.append(f"{name} {value!r}: the frame does not model it")
+        elif not _same(value, default):
+            problems.append(f"{name} {value!r}: the frame does not model it")
     if problems:
         raise ValueError("full_ccd_frame cannot take these settings: " + "; ".join(problems)
                          + ".")
-    default_expos = next(f.default for f in dataclasses.fields(Simulation)
-                         if f.name == "expos")
-    if not _same(sim.expos, default_expos) and not _same(sim.expos, u.Quantity(exposure)):
+    if not _same(sim.expos, defaults["expos"]) and not _same(sim.expos, exposure):
         warnings.warn(f"The frame's exposure is {exposure}, from exposure; sim.expos, "
                       f"{sim.expos}, is not used.", UserWarning, stacklevel=3)
     return {name: getattr(sim, name) for name in _FROM_SIMULATION}
@@ -610,11 +609,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         on Windows, one process is used.
     sim : Simulation, optional
         Settings to take `slit_width`, `psf`, `spectral_psf` and `noise`
-        from. One of these arguments left at its default takes the
-        `Simulation`'s value; one set to another value must agree with it. A
-        `Simulation` has the PSF off unless `psf=True` is given. Its `expos`,
-        `n_iter` and `ncpu` are not used, nor `psf_boundary` with the PSF off,
-        nor the pinhole lists with pinholes off. Default None.
+        from. Where one of these arguments equals its default, given or not,
+        the `Simulation`'s value is used; any other value must agree with
+        it. A `Simulation` has the PSF off unless made with `psf=True`. Its
+        `expos`, `n_iter` and `ncpu` are not used, nor `psf_boundary` with
+        the PSF off, nor the pinhole lists with pinholes off. Default None.
 
     Returns
     -------

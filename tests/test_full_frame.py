@@ -444,7 +444,7 @@ def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
 
 
 def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame):
-    """`psf=None` is taken as false, as before `sim` was added, and recorded as given."""
+    """`psf=None` is taken as false and recorded as given."""
     products = read_synthesis_products(uniform_synthesis)
     frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), psf=None,
@@ -490,17 +490,14 @@ def test_one_error_lists_every_unsupported_setting_and_conflict():
         assert name in str(error.value)
 
 
-def test_a_simulation_field_the_frame_does_not_know_is_refused(monkeypatch):
-    """A field added to `Simulation` is refused once set, until the frame handles it."""
+def test_a_simulation_field_the_frame_does_not_know_is_refused():
+    """A field the frame does not handle is refused once it differs from its default."""
     import dataclasses
-
-    from euvst_response import full_frame
 
     @dataclasses.dataclass
     class Extended(Simulation):
         new_effect: bool = dataclasses.field(default=False, kw_only=True)
 
-    monkeypatch.setattr(full_frame, "Simulation", Extended)
     given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
              "noise": True}
     _settings_from_simulation(Extended(), given, 1 * u.s)
