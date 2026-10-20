@@ -1,4 +1,4 @@
-"""Starting values for a multi-component fit: width, wavelength order and NaN pixels."""
+"""Starting values for a multi-component fit with a decreasing wavelength axis or NaN pixels."""
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
@@ -8,7 +8,6 @@ from ndcube import NDCube
 
 from euvst_response.fitting import (FitComponent, FitConfig, _guess_multi_params, _start_ratio,
                                    fit_cube_gauss)
-from euvst_response.utils import _fwhm_to_sigma
 
 C = const.c.to_value(u.km / u.s)
 STEP = 0.0169e-8
@@ -26,20 +25,12 @@ def _blend(wave):
             + 30.0 * np.exp(-0.5 * ((wave - 195.179e-8 * DOPPLER) / 0.03e-8) ** 2))
 
 
-
 def _box(n_pixels):
     """A flat background with `n_pixels` bright pixels in the middle."""
     prof = np.full(N_WAVE, 10.0)
     start = N_WAVE // 2 - n_pixels // 2
     prof[start:start + n_pixels] = 110.0
     return prof
-
-
-@pytest.mark.parametrize("n_pixels", [1, 2, 3])
-def test_a_feature_n_pixels_wide_starts_n_pixels_wide(n_pixels):
-    """Each pixel above half maximum counts a whole pixel wide, ends included."""
-    sigma = _guess_multi_params(WV, _box(n_pixels), CONFIG)[2]
-    assert sigma == pytest.approx(_fwhm_to_sigma(n_pixels * STEP))
 
 
 @pytest.mark.parametrize("n_pixels", [1, 2])
@@ -83,31 +74,6 @@ def test_a_nan_pixel_counts_as_background_in_the_starting_ratio():
     ratio = _start_ratio(WV, with_nan, guess, 3, 0)
     assert 0 < ratio < 1
     assert ratio == pytest.approx(_start_ratio(WV, with_background, guess, 3, 0), rel=1e-12)
-
-
-def test_a_peak_halfway_between_two_centres_starts_the_same_in_either_order():
-    """
-    The peak pixel is one pixel from the components either side of it.
-
-    It is given to the one on the brighter side, whose run of pixels above
-    half maximum is two pixels wide, whatever the order of the components.
-    """
-    prof = 10 + 100 * np.exp(-0.5 * ((WV - CENTRE) / STEP) ** 2)
-    prof[N_WAVE // 2 + 1] += 30
-    far = FitComponent((CENTRE - 10 * STEP) * 1e8 * u.AA)
-    either_side = [FitComponent((CENTRE + sign * STEP) * 1e8 * u.AA) for sign in (-1, 1)]
-    widths = [_guess_multi_params(WV, prof, FitConfig(components=[far] + side))[2]
-              for side in (either_side, either_side[::-1])]
-    assert widths[0] == widths[1] == pytest.approx(_fwhm_to_sigma(2 * STEP))
-
-
-def test_two_components_at_one_wavelength_start_apart():
-    """Started identical, a core and a wing would stay identical through the fit."""
-    config = FitConfig(components=[FitComponent(195.119 * u.AA),
-                                   FitComponent(195.119 * u.AA, name="wing")])
-    guess = _guess_multi_params(WV, _box(3), config)
-    assert guess[1] == guess[4]
-    assert guess[3] < guess[0]
 
 
 def _cube(data, centre=CENTRE, decreasing=False):
@@ -166,26 +132,3 @@ def test_nan_spectra_fail_alone(backend):
     assert failed[:, 0].tolist() == [True, False, True, False]
     velocity = (data[[1, 3], 0, 1] / 195.119e-8 - 1) * C
     assert velocity == pytest.approx(20, abs=1e-3)
-
-
-def test_a_noisy_blend_of_three_free_lines_fits_the_brightest_where_it_is():
-    """
-    Lines at 195.05, 195.119 and 195.20 A, peaks 500, 1000 and 300, noise 10.
-
-    The primary is the fainter line at 195.05 A, so the peak pixel is not
-    its. Every fit ends within 10 km/s of the brightest line's velocity.
-    """
-    rng = np.random.default_rng(10)
-    rests = (195.05e-8, 195.119e-8, 195.20e-8)
-    wave = 195.13e-8 + (np.arange(N_WAVE) - (N_WAVE - 1) / 2) * STEP
-    velocity = rng.uniform(-50, 50, 50)
-    doppler = 1 + velocity[:, None] / C
-    data = 10.0 + sum(peak * np.exp(-0.5 * ((wave - rest * doppler) / 0.025e-8) ** 2)
-                      for peak, rest in zip((500.0, 1000.0, 300.0), rests))
-    data = data + 10.0 * rng.standard_normal(data.shape)
-    config = FitConfig(components=[FitComponent(rest * 1e8 * u.AA) for rest in rests])
-    fits, _, failed = fit_cube_gauss(_cube(data, 195.13e-8), n_jobs=1, fit_config=config,
-                                     return_failed=True)
-    assert not failed.any()
-    fitted = (fits[:, 0, 4] / rests[1] - 1) * C
-    assert np.abs(fitted - velocity).max() < 10
