@@ -4,8 +4,8 @@ Write the defaults and sources in docs/instrument-sources.md from the code.
 Each table of settings follows a comment line naming its instrument, such as
 `<!-- SWC settings: ... -->`. A row whose first cell names settings, such as
 `detector.pix_size`, gets the settings' defaults, in the `unit` of their field
-metadata, and their `source`. Other rows are left as they are. Run it with
-ECLIPSE installed from this checkout: `python tools/update_instrument_sources.py`.
+metadata, and their `source`. Other rows are left as they are. Run it as
+`python tools/update_instrument_sources.py`; it reads this checkout's code.
 """
 
 import dataclasses
@@ -17,8 +17,11 @@ from pathlib import Path
 import astropy.units as u
 import numpy as np
 
-from euvst_response import resolution_budget
-from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,
+# This checkout's package, not one installed elsewhere.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from euvst_response import resolution_budget  # noqa: E402
+from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,  # noqa: E402
                                    TILT_REFERENCE_ANGLE, AluminiumFilter, Detector_EIS,
                                    Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST)
 
@@ -50,7 +53,7 @@ EUVST_PSF = ("0.423 arcsec along the slit for the default 280 x 280 arcsec field
 # Wording of rows whose default needs more than the values, keyed by one
 # setting of the row. `{name}` is a setting of the row, `{all}` all of them as a
 # row without wording shows them, and the other names are those of
-# `_constants`. The format specs are those of `Value`.
+# `CONSTANTS` and `material`, the row's detector material. The format specs are those of `Value`.
 WORDING = {
     "SWC": {
         "telescope.psf_params": EUVST_PSF,
@@ -202,6 +205,9 @@ def _default(cls, f):
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
     if f.default is None and hasattr(cls, "material"):
+        if cls.material not in DETECTOR_MATERIALS:
+            raise ValueError(f"{cls.__name__}.material {cls.material!r} is not in "
+                             f"DETECTOR_MATERIALS.")
         return DETECTOR_MATERIALS[cls.material].get(f.name)
     return f.default
 
@@ -255,8 +261,9 @@ def cells(instrument, keys):
     ------
     ValueError
         If the instrument is unknown, a key is not one of its settings with a
-        source, the settings' sources differ, or the row's wording leaves
-        out one of its settings or names a setting not in the row.
+        source, the settings' sources differ, the row has wording under
+        more than one setting, or its wording leaves out one of its settings,
+        names a setting not in the row, or shares a name with a setting.
     """
     if instrument not in INSTRUMENTS:
         raise ValueError(f"Unknown instrument {instrument!r}; use {', '.join(INSTRUMENTS)}.")
@@ -293,9 +300,10 @@ def cells(instrument, keys):
         if material is not None:
             names["material"] = material
         names.update({name: CONSTANTS[name]() for name in used if name in CONSTANTS})
-        if set(names) & set(values):
-            raise ValueError(f"The row for {', '.join(keys)} has a setting named as one of "
-                             f"{', '.join(names)}.")
+        clash = set(names) & set(values)
+        if clash:
+            raise ValueError(f"The row for {', '.join(keys)} has settings named as its "
+                             f"wording's other names: {', '.join(sorted(clash))}.")
         unknown = used - set(values) - set(names)
         if unknown:
             raise ValueError(f"The wording for {worded[0]} names "
@@ -340,7 +348,18 @@ def setting_rows(lines):
 
 
 def updated_page(text):
-    """Page `text` with the Default and Source cells of each setting's row rewritten."""
+    """
+    Page `text` with the Default and Source cells of each setting's row rewritten.
+
+    Raises
+    ------
+    ValueError
+        If a row cannot be written, or no row names the setting of some
+        wording.
+    """
+    unused = unused_wording(text)
+    if unused:
+        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     lines = text.split("\n")
     for index, instrument, row, keys in list(setting_rows(lines)):
         if len(row) != 3:
@@ -359,9 +378,6 @@ def unused_wording(text):
 
 def main():
     text = PAGE.read_text()
-    unused = unused_wording(text)
-    if unused:
-        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     updated = updated_page(text)
     if updated == text:
         print(f"{PAGE.name} is up to date.")
