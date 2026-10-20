@@ -384,10 +384,14 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     cruder guesses, at a peak of two or three times the noise per pixel, the
     fits ending hundreds of km/s away and the scatter of the fitted
     velocities were both twice those from a good start.
+
+    NaN pixels count as background. A spectrum with no finite pixel starts
+    at zero peak and background.
     """
     prof = np.asarray(prof, dtype=float)
-    back = float(np.median(prof))
-    height = prof - back
+    finite = np.isfinite(prof)
+    back = float(np.median(prof[finite])) if finite.any() else 0.0
+    height = np.where(finite, prof - back, 0.0)
     smooth = np.convolve(height, np.ones(3) / 3, mode="same") if prof.size >= 3 else height
     peak_idx = int(np.nanargmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
