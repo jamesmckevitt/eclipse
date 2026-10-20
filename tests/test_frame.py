@@ -28,6 +28,7 @@ from euvst_response.frame import (
 )
 from euvst_response.radiometric import (
     apply_focusing_optics_psf,
+    photons_per_energy,
     spectral_psf_fwhm,
     spectral_psf_reach,
     to_electrons,
@@ -728,10 +729,15 @@ def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
 
 @pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
 def test_a_lines_rows_are_never_below_zero(spectral_psf):
-    """The line correction rounds a few far-wing rows just below zero; a Poisson draw needs none."""
-    rows = photons_from_lines(FocalPlane_SWC(), "right", Telescope_EUVST(), SLIT_WIDTH * u.arcsec,
-                              [211.317] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
+    """No row is below zero, and the rows still hold the line's photons."""
+    focal_plane, telescope = FocalPlane_SWC(), Telescope_EUVST()
+    intensity = 1.0 * u.erg / (u.s * u.cm**2 * u.sr)
+    rows = photons_from_lines(focal_plane, "right", telescope, SLIT_WIDTH * u.arcsec,
+                              [211.317] * u.Angstrom, [intensity.value] * intensity.unit,
                               [0.03] * u.Angstrom, det=Detector_SWC(),
                               spectral_psf=spectral_psf).value
-    assert (rows >= 0).all() and rows.max() > 0
+    assert (rows >= 0).all()
+    expected = (intensity * pixel_solid_angle(focal_plane, SLIT_WIDTH * u.arcsec)
+                * photons_per_energy(telescope, 211.317 * u.Angstrom)[0]).to_value(u.s**-1)
+    assert rows.sum() == pytest.approx(expected, rel=1e-3)
     np.random.default_rng(0).poisson(rows)
