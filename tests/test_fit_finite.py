@@ -1,4 +1,4 @@
-"""Fits of spectra with NaN or infinite pixels, which use only the finite pixels."""
+"""Fits that leave out pixels whose value or uncertainty is NaN or infinite."""
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
@@ -315,7 +315,7 @@ def test_a_pixel_with_a_nan_uncertainty_is_left_out_of_a_weighted_fit(backend):
 @pytest.mark.parametrize("mode", ["unweighted", "uncertainty", "poisson"])
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 def test_too_few_kept_pixels_fail_in_every_mode(backend, mode):
-    """Three kept pixels are too few for the blend's 5 parameters; NaN ends move no centre."""
+    """Three kept pixels are too few for the blend's 5 parameters, so that spectrum fails alone."""
     clean = np.rint(_line(_wave(), False))
     few = np.full(N_WAVE, np.nan)
     few[17:20] = clean[17:20]
@@ -323,3 +323,51 @@ def test_too_few_kept_pixels_fail_in_every_mode(backend, mode):
     _, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, fit_config=_config(False, backend),
                                   return_failed=True, **_weighting(mode, rows))
     assert failed[:, 0].tolist() == [False, True]
+
+
+@pytest.mark.parametrize("backend", ["scipy", "mpfit"])
+def test_a_nan_value_with_a_finite_uncertainty_is_left_out(backend):
+    """The value decides too: a NaN value with an uncertainty of 1 is left out."""
+    prof = _line(_wave(), False)
+    with_nan = prof.copy()
+    with_nan[[4, 25]] = np.nan
+    data, _, failed = fit_cube_gauss(_cube([prof, with_nan]), n_jobs=1,
+                                     fit_config=_config(False, backend), return_failed=True,
+                                     uncertainty=np.ones((2, 1, N_WAVE)))
+    assert not failed.any()
+    assert _velocity(data[:, 0]) == pytest.approx(20, abs=1e-2)
+
+
+def test_a_missing_pixel_may_carry_any_uncertainty():
+    """Data marked missing with NaN and an uncertainty of -100 is fitted on the other pixels."""
+    prof = _line(_wave(), True)
+    prof[30] = np.nan
+    uncertainty = np.ones(N_WAVE)
+    uncertainty[30] = -100.0
+    _, _, failed = fit_cube_gauss(_cube([prof]), n_jobs=1, return_failed=True,
+                                  uncertainty=uncertainty[None, None])
+    assert not failed.any()
+    with pytest.raises(ValueError, match="above zero"):
+        fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
+                       uncertainty=uncertainty[None, None])
+
+
+def test_an_uncertainty_that_is_nan_everywhere_is_refused():
+    with pytest.raises(ValueError, match="nothing to fit"):
+        fit_cube_gauss(_cube([_line(_wave(), True)]), n_jobs=1,
+                       uncertainty=np.full((1, 1, N_WAVE), np.nan))
+
+
+@pytest.mark.parametrize("backend", ["scipy", "mpfit"])
+def test_a_centre_in_end_pixels_left_out_for_their_uncertainty_fails(backend):
+    """The end rule holds for pixels left out for a NaN uncertainty, as for a NaN value."""
+    wave = _wave()
+    prof = _line(wave, True)
+    uncertainty = np.ones((1, 1, N_WAVE))
+    # The line is near pixel 22; leave out everything from pixel 15 on.
+    uncertainty[0, 0, 15:] = np.nan
+    data, _, failed = fit_cube_gauss(_cube([prof]), n_jobs=1, fit_config=_config(True, backend),
+                                     return_failed=True, uncertainty=uncertainty)
+    assert data[0, 0, 1] > wave[14] + 0.5 * STEP or failed[0, 0]
+    if data[0, 0, 1] > wave[14] + 0.5 * STEP:
+        assert failed[0, 0]

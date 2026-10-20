@@ -558,7 +558,9 @@ def test_every_velocity_and_width_map_holds_its_own_quantity():
         assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name
 
 
-def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monkeypatch):
+@pytest.mark.parametrize("uniform_mode", [False, True], ids=["per-iteration", "uniform"])
+def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monkeypatch,
+                                                                           uniform_mode):
     """
     A NaN DN and photon count in one pixel: the DN's uncertainty is NaN too.
 
@@ -581,10 +583,12 @@ def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monke
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     np.random.seed(8)
     # Some 800 photons at the peak, for velocities within a few km/s.
-    _, dn_stats, _, photon_stats = monte_carlo(_intensity_cube(peak=1e13), 40 * u.s, det, tel,
-                                               sim, n_iter=2)
+    # Uniform mode stacks the iterations along the slit, so it takes one row.
+    cube = _intensity_cube(n_slit=1 if uniform_mode else 3, peak=1e13)
+    _, dn_stats, _, photon_stats = monte_carlo(cube, 40 * u.s, det, tel, sim, n_iter=2,
+                                               uniform_mode=uniform_mode)
     name = "195.1190 Angstrom"
     for stats in (dn_stats, photon_stats):
         assert not stats["failed_fits"].any()
         velocity = stats["components"][name]["velocity"]["mean"].value
-        assert abs(velocity[0, 0] - np.mean(velocity[1:])) < 10
+        assert abs(velocity[0, 0] - np.mean(velocity.ravel()[1:])) < 10

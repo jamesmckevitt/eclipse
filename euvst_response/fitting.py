@@ -338,8 +338,8 @@ def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
     whether it succeeded. `sigma` is None, or one uncertainty per pixel,
     kept or left out with its pixel. A spectrum with every pixel kept is
     fitted as it is. With fewer than `min_pixels` kept, the fit is not
-    tried, and `start(wv, prof)` of the kept pixels is returned as a failed
-    fit.
+    tried, and `start` of the whole window, with the pixels left out set to
+    NaN, is returned as a failed fit.
     """
     if kept.all():
         return fit(wv, prof, sigma)
@@ -1231,13 +1231,15 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     failed : np.ndarray of bool
         True where the fit failed, shaped (along the slit, slit positions).
         This includes where the optimiser used up `max_iter`, and spectra
-        with NaN or infinite pixels as given in the Notes. Only with
+        with pixels left out, as given in the Notes. Only with
         `return_failed`.
 
     Notes
     -----
-    A pixel whose value, or with `uncertainty` whose uncertainty, is NaN or
-    infinite is left out, and each spectrum is fitted to the pixels kept.
+    A pixel whose value is NaN or infinite is left out, and each spectrum is
+    fitted to the pixels kept. With `uncertainty`, so is a pixel whose
+    uncertainty is NaN or infinite, and an uncertainty at or below zero is
+    refused only where the value is kept.
     Such a spectrum is a failed fit if fewer pixels are kept than free
     parameters, or if the pixels at an end of the window were left out and
     a fitted centre lies more than half a pixel beyond the outermost kept
@@ -1279,9 +1281,12 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
                 f"spectra, shaped {signal_cube.data.shape}.") from None
         finite_uncertainty = np.isfinite(uncertainty)
-        if np.any(finite_uncertainty & (uncertainty <= 0)):
+        if np.any(kept & finite_uncertainty & (uncertainty <= 0)):
             raise ValueError("Every uncertainty must be above zero, as each pixel is "
                              "weighted by one over its square.")
+        if not np.any(kept & finite_uncertainty):
+            raise ValueError("No pixel has both a finite value and a finite uncertainty, "
+                             "so there is nothing to fit.")
         kept &= finite_uncertainty
 
     min_pixels = _n_free_params(fit_config)
