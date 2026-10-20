@@ -7,14 +7,23 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from euvst_response.fitting import FitComponent, FitConfig, _guess_multi_params, fit_cube_gauss
+from euvst_response.utils import _fwhm_to_sigma
 
+C = const.c.to_value(u.km / u.s)
 STEP = 0.0169e-8
 N_WAVE = 41
 CENTRE = 195.15e-8
 WV = CENTRE + (np.arange(N_WAVE) - (N_WAVE - 1) / 2) * STEP
-FWHM_TO_SIGMA = 1 / (2 * np.sqrt(2 * np.log(2)))
 CONFIG = FitConfig(components=[FitComponent(195.119 * u.AA),
                                FitComponent(195.179 * u.AA, tie_center=0, tie_width=0)])
+DOPPLER = 1 + 20 / C
+
+
+def _blend(wave):
+    """Fe XII 195.119 and 195.179 at 20 km/s, 3:1, on a background of 10."""
+    return (10.0 + 100.0 * np.exp(-0.5 * ((wave - 195.119e-8 * DOPPLER) / 0.03e-8) ** 2)
+            + 30.0 * np.exp(-0.5 * ((wave - 195.179e-8 * DOPPLER) / 0.03e-8) ** 2))
+
 
 
 def _box(n_pixels):
@@ -29,7 +38,7 @@ def _box(n_pixels):
 def test_a_feature_n_pixels_wide_starts_n_pixels_wide(n_pixels):
     """Each pixel above half maximum counts a whole pixel wide, ends included."""
     sigma = _guess_multi_params(WV, _box(n_pixels), CONFIG)[2]
-    assert sigma == pytest.approx(n_pixels * STEP * FWHM_TO_SIGMA)
+    assert sigma == pytest.approx(_fwhm_to_sigma(n_pixels * STEP))
 
 
 @pytest.mark.parametrize("n_pixels", [1, 2])
@@ -48,6 +57,14 @@ def test_one_nan_pixel_leaves_the_start_finite():
     assert guess == pytest.approx(_guess_multi_params(WV, _box(3), CONFIG), rel=1e-12)
 
 
+def test_a_nan_pixel_on_the_line_leaves_the_start_finite_and_near_the_line():
+    prof = _blend(WV)
+    prof[np.argmax(prof)] = np.nan
+    guess = _guess_multi_params(WV, prof, CONFIG)
+    assert np.all(np.isfinite(guess))
+    assert abs(guess[1] - 195.119e-8 * DOPPLER) < 2 * STEP
+
+
 def test_an_all_nan_spectrum_starts_at_zero():
     guess = _guess_multi_params(WV, np.full(N_WAVE, np.nan), CONFIG)
     assert guess[0] == 0 and guess[-1] == 0
@@ -63,26 +80,31 @@ def test_two_components_at_one_wavelength_start_apart():
     assert guess[3] < guess[0]
 
 
-def _blend_cube(decreasing, rows=None):
-    """Fe XII 195.119 and 195.179 at 20 km/s, 3:1, in a (len, 1, N_WAVE) cube."""
+def _cube(data, centre=CENTRE, decreasing=False):
+    """Spectra shaped (rows, N_WAVE) as a (rows, 1, N_WAVE) cube, wavelength step `STEP`."""
     sign = -1 if decreasing else 1
-    wave = CENTRE + sign * (np.arange(N_WAVE) - (N_WAVE - 1) / 2) * STEP
-    doppler = 1 + 20 / const.c.to_value(u.km / u.s)
-    prof = (10.0 + 100.0 * np.exp(-0.5 * ((wave - 195.119e-8 * doppler) / 0.03e-8) ** 2)
-            + 30.0 * np.exp(-0.5 * ((wave - 195.179e-8 * doppler) / 0.03e-8) ** 2))
-    data = np.tile(prof, (3, 1, 1)) if rows is None else rows(prof)
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
     wcs.wcs.cdelt = [sign * STEP, 0.4, 0.16]
     wcs.wcs.crpix = [(N_WAVE + 1) / 2, 1.0, 1.0]
-    wcs.wcs.crval = [CENTRE, 0.0, 0.0]
-    return NDCube(data, wcs=wcs, unit=u.DN / u.pix)
+    wcs.wcs.crval = [centre, 0.0, 0.0]
+    return NDCube(np.asarray(data)[:, None, :], wcs=wcs, unit=u.DN / u.pix)
+
+
+def _blend_cube(decreasing=False):
+    wave = WV[::-1] if decreasing else WV
+    return _cube(np.tile(_blend(wave), (3, 1)), decreasing=decreasing)
 
 
 @pytest.mark.parametrize("settings", [{"backend": "mpfit"}, {}], ids=["mpfit", "scipy"])
 def test_a_blend_on_a_decreasing_wavelength_axis_fits_as_on_an_increasing_one(settings):
-    """Both backends fit it to the same values, at the velocity it was made with."""
+    """
+    Both backends fit it to the same values, at the velocity it was made with.
+
+    Centres are compared as velocities, as a relative tolerance on a centre
+    near 195 A would allow 0.3 km/s per 1e-6.
+    """
     config = FitConfig(components=CONFIG.components, **settings)
     fits = []
     for decreasing in (False, True):
@@ -90,19 +112,30 @@ def test_a_blend_on_a_decreasing_wavelength_axis_fits_as_on_an_increasing_one(se
                                          return_failed=True)
         assert not failed.any()
         fits.append(data[:, 0])
-    assert fits[1] == pytest.approx(fits[0], rel=1e-6)
-    velocity = (fits[1][:, 1] / 195.119e-8 - 1) * const.c.to_value(u.km / u.s)
-    assert velocity == pytest.approx(20, abs=1e-3)
+    velocity = [(fit[:, [1, 4]] / [195.119e-8, 195.179e-8] - 1) * C for fit in fits]
+    assert velocity[1] == pytest.approx(velocity[0], abs=1e-3)
+    assert velocity[1] == pytest.approx(20, abs=1e-3)
+    others = [0, 2, 3, 5, 6]
+    assert fits[1][:, others] == pytest.approx(fits[0][:, others], rel=1e-6)
 
 
-def test_an_all_nan_spectrum_fails_alone():
-    """The spectra either side are still fitted."""
-    def rows(prof):
-        return np.stack([prof, np.full(N_WAVE, np.nan), prof])[:, None, :]
+@pytest.mark.parametrize("backend", ["mpfit", "scipy"])
+def test_nan_spectra_fail_alone(backend):
+    """
+    An all-NaN first spectrum and one with a NaN on the line fail, and the rest are fitted.
 
-    data, _, failed = fit_cube_gauss(_blend_cube(False, rows), n_jobs=1, fit_config=CONFIG,
+    mpfit builds its parameter template from the first spectrum, so an
+    all-NaN first spectrum must not stop the others.
+    """
+    on_line = _blend(WV)
+    on_line[np.argmax(on_line)] = np.nan
+    rows = [np.full(N_WAVE, np.nan), _blend(WV), on_line, _blend(WV)]
+    config = FitConfig(components=CONFIG.components, backend=backend)
+    data, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, fit_config=config,
                                      return_failed=True)
-    assert failed[:, 0].tolist() == [False, True, False]
+    assert failed[:, 0].tolist() == [True, False, True, False]
+    velocity = (data[[1, 3], 0, 1] / 195.119e-8 - 1) * C
+    assert velocity == pytest.approx(20, abs=1e-3)
 
 
 def test_a_noisy_blend_of_three_free_lines_fits_the_brightest_where_it_is():
@@ -116,19 +149,13 @@ def test_a_noisy_blend_of_three_free_lines_fits_the_brightest_where_it_is():
     rests = (195.05e-8, 195.119e-8, 195.20e-8)
     wave = 195.13e-8 + (np.arange(N_WAVE) - (N_WAVE - 1) / 2) * STEP
     velocity = rng.uniform(-50, 50, 50)
-    doppler = 1 + velocity[:, None] / const.c.to_value(u.km / u.s)
+    doppler = 1 + velocity[:, None] / C
     data = 10.0 + sum(peak * np.exp(-0.5 * ((wave - rest * doppler) / 0.025e-8) ** 2)
                       for peak, rest in zip((500.0, 1000.0, 300.0), rests))
     data = data + 10.0 * rng.standard_normal(data.shape)
-    wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
-    wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]
-    wcs.wcs.cdelt = [STEP, 0.4, 0.16]
-    wcs.wcs.crpix = [(N_WAVE + 1) / 2, 1.0, 1.0]
-    wcs.wcs.crval = [195.13e-8, 0.0, 0.0]
     config = FitConfig(components=[FitComponent(rest * 1e8 * u.AA) for rest in rests])
-    fits, _, failed = fit_cube_gauss(NDCube(data[:, None, :], wcs=wcs, unit=u.DN / u.pix),
-                                     n_jobs=1, fit_config=config, return_failed=True)
+    fits, _, failed = fit_cube_gauss(_cube(data, 195.13e-8), n_jobs=1, fit_config=config,
+                                     return_failed=True)
     assert not failed.any()
-    fitted = (fits[:, 0, 4] / rests[1] - 1) * const.c.to_value(u.km / u.s)
+    fitted = (fits[:, 0, 4] / rests[1] - 1) * C
     assert np.abs(fitted - velocity).max() < 10
