@@ -293,13 +293,13 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     Starting amplitude ratio of a component held fainter than its parent.
 
     The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres, with NaN pixels counted as background. The guess
-    itself starts every component but the primary at the same fraction of
-    the primary, so two components held one below the other would start
-    equal, at the bound, and a primary held below another would start above
-    it. If the spectrum makes the child the brighter, `_GUESS_FRACTION` is
-    used, strictly inside the bounds. `child` and `parent` index the
-    amplitudes in the full `guess`.
+    two guessed centres, with NaN and infinite pixels counted as background.
+    The guess itself starts every component but the primary at the same
+    fraction of the primary, so two components held one below the other
+    would start equal, at the bound, and a primary held below another would
+    start above it. If the spectrum makes the child the brighter,
+    `_GUESS_FRACTION` is used, strictly inside the bounds. `child` and
+    `parent` index the amplitudes in the full `guess`.
     """
     wv, prof = np.asarray(wv), np.asarray(prof)
     if len(wv) > 1 and wv[0] > wv[-1]:
@@ -352,8 +352,8 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     fits ending hundreds of km/s away and the scatter of the fitted
     velocities were both twice those from a good start.
 
-    NaN pixels count as background. A spectrum with no finite pixel starts
-    at zero peak and background.
+    NaN and infinite pixels count as background. A spectrum with no finite
+    pixel starts at zero peak and background.
     """
     prof = np.asarray(prof, dtype=float)
     finite = np.isfinite(prof)
@@ -861,8 +861,8 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     """
     Initial guess for the full parameter vector.
 
-    NaN pixels count as background. A spectrum with no finite pixel starts
-    at zero peak and background.
+    NaN and infinite pixels count as background. A spectrum with no finite
+    pixel starts at zero peak and background.
     """
     wv, prof = np.asarray(wv), np.asarray(prof)
     if len(wv) > 1 and wv[0] > wv[-1]:
@@ -1076,12 +1076,14 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     sign flipped, which also flips the sign of the intensity computed from
     it. A flat spectrum, such as one with no photons, holds no line to fit,
     and a component wider than the whole window is background, not a line.
+    A spectrum with a NaN or infinite pixel is not fitted as given.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
     flat = np.all(spectra == spectra[..., :1], axis=-1)
     too_wide = np.any(widths > np.ptp(wavelength), axis=-1)
-    return flat | too_wide
+    not_finite = ~np.all(np.isfinite(spectra), axis=-1)
+    return flat | too_wide | not_finite
 
 
 @overload
@@ -1151,8 +1153,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Unit of each parameter.
     failed : np.ndarray of bool
         True where the fit failed, including where the optimiser used up
-        `max_iter`, shaped (along the slit, slit positions). Only with
-        `return_failed`.
+        `max_iter` or the spectrum has a NaN or infinite pixel, shaped
+        (along the slit, slit positions). Only with `return_failed`.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords_values(2)[0].cgs  # wavelength axis

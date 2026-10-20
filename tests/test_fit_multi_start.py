@@ -132,3 +132,18 @@ def test_nan_spectra_fail_alone(backend):
     assert failed[:, 0].tolist() == [True, False, True, False]
     velocity = (data[[1, 3], 0, 1] / 195.119e-8 - 1) * C
     assert velocity == pytest.approx(20, abs=1e-3)
+
+
+@pytest.mark.parametrize("backend", ["mpfit", "scipy"])
+@pytest.mark.parametrize("single", [True, False], ids=["single", "blend"])
+def test_a_spectrum_with_an_infinite_pixel_fails(backend, single):
+    """An infinite pixel far from the lines marks only its own spectrum failed."""
+    with_inf = _blend(WV)
+    with_inf[0] = np.inf
+    if single:
+        config = FitConfig(backend=backend)
+    else:
+        config = FitConfig(components=CONFIG.components, backend=backend)
+    _, _, failed = fit_cube_gauss(_cube([_blend(WV), with_inf]), n_jobs=1, fit_config=config,
+                                  return_failed=True)
+    assert failed[:, 0].tolist() == [False, True]
