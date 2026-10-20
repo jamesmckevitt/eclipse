@@ -505,9 +505,9 @@ _UNCHECKED_FIELDS = frozenset(_FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS
 
 
 def _same(a, b) -> bool:
-    """Whether `a` and `b` are equal, False if they cannot be compared."""
+    """Whether `a` and `b` are equal and of one shape, False if they cannot be compared."""
     try:
-        return bool(np.all(a == b))
+        return np.shape(a) == np.shape(b) and bool(np.all(a == b))
     except (TypeError, ValueError):
         return False
 
