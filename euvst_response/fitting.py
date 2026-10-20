@@ -1076,7 +1076,7 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     sign flipped, which also flips the sign of the intensity computed from
     it. A flat spectrum, such as one with no photons, holds no line to fit,
     and a component wider than the whole window is background, not a line.
-    A spectrum with a NaN or infinite pixel is not fitted as given.
+    A spectrum with a NaN or infinite pixel counts as failed.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
