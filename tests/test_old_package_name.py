@@ -141,3 +141,42 @@ def test_a_table_of_ones_own_in_a_folder_named_as_the_old_package_is_kept(tmp_pa
     own.write_bytes((results_file._package_root() / TABLE).read_bytes())
     assert results_file._jsonable(own) == {results_file.TAG: "path", "value": str(own)}
     assert _tables_read_back(tmp_path, own) == (own, own)
+
+
+class _NamesAnOldModule:
+    """Unpickles as a number, through a function of `euvst_response.utils`."""
+
+    def __reduce__(self):
+        return eclipse.utils._fwhm_to_sigma, (2.0,)
+
+
+def _old_pickle(path, payload):
+    """Write `payload` as a pickle naming the modules of `euvst_response`."""
+    import dill
+
+    text = dill.dumps({**payload, "old": _NamesAnOldModule()}, protocol=2)
+    path.write_bytes(text.replace(b"eclipse.utils\n", b"euvst_response.utils\n"))
+    assert b"euvst_response.utils" in path.read_bytes()
+    return path
+
+
+@pytest.mark.parametrize("read", [
+    "from eclipse.analysis import load_instrument_response_results as read\n"
+    "read(results)\n",
+    "from eclipse.synthesis_file import convert_synthesis_pickle\n"
+    "convert_synthesis_pickle(synthesis, synthesis.with_suffix('.h5'))\n",
+    "from eclipse.data_processing import load_atmosphere\n"
+    "load_atmosphere(synthesis)\n",
+])
+def test_an_old_pickle_is_read_without_the_warning_to_change_an_import(tmp_path, read):
+    from test_synthesis_file import _line_cubes
+
+    results = _old_pickle(tmp_path / "results.pkl",
+                          {"results": {"all_combinations": {}, "fit_weighted": True}})
+    synthesis = _old_pickle(tmp_path / "synthesis.pkl", {"line_cubes": _line_cubes()})
+    result = _run("import sys\n"
+                  "from pathlib import Path\n"
+                  f"results, synthesis = Path({str(results)!r}), Path({str(synthesis)!r})\n"
+                  + read +
+                  "assert 'euvst_response.utils' in sys.modules\n")
+    assert MESSAGE not in result.stderr
