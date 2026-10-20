@@ -620,8 +620,8 @@ def _fractions(values: list, name: str) -> list:
     return out
 
 
-# Each instrument setting gives where its default comes from, as "source" in
-# its field's metadata, and the "unit" to show a quantity in.
+# Each instrument setting gives where its default comes from, as `source` in
+# its field's metadata, and a quantity also the `unit` to show it in.
 # tools/update_instrument_sources.py writes them to docs/instrument-sources.md.
 # These sources are shared by several settings.
 _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "

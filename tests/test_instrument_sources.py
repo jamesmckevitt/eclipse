@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import astropy.units as u
+import numpy as np
 import pytest
 
 from euvst_response.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
@@ -168,3 +169,45 @@ def test_wording_matches_the_code():
         Simulation(slit_width=width * u.arcsec)
     with pytest.raises(ValueError):
         Simulation(slit_width=0.3 * u.arcsec)
+
+
+def test_every_wording_is_used():
+    """Wording is found by the first setting of its row, so a reordered row would lose it."""
+    first = {}
+    instrument = None
+    for line in tool.PAGE.read_text().split("\n"):
+        mark = tool.TABLE_MARK.match(line)
+        if mark:
+            instrument = mark.group(1)
+        elif line.startswith("|") and instrument:
+            keys = tool.SETTING.findall(line.split("|")[1])
+            if keys:
+                first.setdefault(instrument, set()).add(keys[0])
+    for instrument, wording in tool.WORDING.items():
+        assert set(wording) <= first[instrument]
+
+
+def test_wording_names_only_its_row(monkeypatch):
+    monkeypatch.setitem(tool.WORDING["SWC"], "detector.pix_size",
+                        "{pix_size}, {n_rows} by {n_columns}")
+    with pytest.raises(ValueError, match="n_columns, n_rows, which are not in its row"):
+        tool.cells("SWC", ["detector.pix_size"])
+
+
+def test_hand_written_rows_match_the_code():
+    """The dark current laws and the aperture share, written by hand on the page."""
+    page = tool.PAGE.read_text()
+    assert ("the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value below "
+            "198 K") in page
+    assert ("the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K value below "
+            "198 K") in page
+    for cls, law in ((Detector_SWC, lambda t: 122 * t**3 * np.exp(-6400 / t)),
+                     (Detector_EIS, lambda t: 1.14e6 * t**3 * np.exp(-9080 / t))):
+        rate = cls.dark_current_293k
+        for kelvin, used in ((250.0, 250.0), (198.0, 198.0), (180.0, 198.0)):
+            got = cls.calculate_dark_current(kelvin * u.K, rate)
+            assert got.value == pytest.approx(rate.value * law(used), rel=1e-12)
+    assert "| Half the aperture feeding the SW channel, set in the code | 0.5 |" in page
+    telescope = Telescope_EUVST()
+    assert telescope.collecting_area.to_value(u.m**2) == pytest.approx(
+        0.5 * np.pi * (telescope.D_ap.to_value(u.m) / 2) ** 2)

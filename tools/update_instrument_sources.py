@@ -1,16 +1,10 @@
 """
 Write the defaults and sources in docs/instrument-sources.md from the code.
 
-Each table of settings on the page follows a comment line naming its
-instrument, `<!-- SWC settings: ... -->` or `<!-- EIS settings: ... -->`. In
-those tables, a row whose first cell names settings in backticks, such as
-`detector.pix_size`, gets its Default and Source cells from the settings'
-fields in `euvst_response.config`: the default, shown in the field's "unit"
-metadata, and the field's "source". Other rows are left as they are.
-
-Run it from the repository root after changing a setting's default or source::
-
-    python tools/update_instrument_sources.py
+Each table of settings follows a comment line naming its instrument, such as
+`<!-- SWC settings: ... -->`. A row whose first cell names settings, such as
+`detector.pix_size`, gets the settings' defaults, in the `unit` of their field
+metadata, and their `source`. Other rows are left as they are.
 """
 
 import dataclasses
@@ -23,9 +17,9 @@ import astropy.units as u
 import numpy as np
 
 from euvst_response import resolution_budget
-from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,
-                                   TILT_REFERENCE_ANGLE, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST)
+from euvst_response.config import (MEASURED_SLIT_IMAGE_TILT, TILT_REFERENCE_ANGLE,
+                                   AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
+                                   Telescope_EIS, Telescope_EUVST, _material_value)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
 
@@ -53,8 +47,9 @@ EUVST_PSF = ("0.423 arcsec along the slit for the default 280 x 280 arcsec field
              "0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit")
 
 # Wording of rows whose default needs more than the values, keyed by the row's
-# first setting. `{name}` is a setting of the row, and `{all}` all of them as
-# a row without wording shows them. The format specs are those of `Value`.
+# first setting. `{name}` is a setting of the row, `{all}` all of them as a
+# row without wording shows them, and the other names are those of
+# `_constants`. The format specs are those of `Value`.
 WORDING = {
     "SWC": {
         "telescope.psf_params": EUVST_PSF,
@@ -79,8 +74,9 @@ WORDING = {
         "detector.slit_image_tilt": "{slit_image_tilt:none}; measured as a drift along the "
                                     "dispersion of {tilt[0]} f + {tilt[1]} f^2 rows, where f "
                                     "is the angle along the slit over {tilt_angle}",
-        "detector.fano_factor": "{fano_factor}, for silicon",
-        "detector.pair_energy_300k": "{pair_energy_300k} and {pair_energy_slope}, for silicon",
+        "detector.fano_factor": "{fano_factor}, for {material}",
+        "detector.pair_energy_300k": "{pair_energy_300k} and {pair_energy_slope}, for "
+                                     "{material}",
         "filter.visible_decade_thickness": "{visible_decade_thickness}: visible light falls by a "
                                            "factor 10 per {visible_decade_thickness} of "
                                            "aluminium, times the mesh",
@@ -131,10 +127,10 @@ class Value:
     """
     Default of one setting, formatted for the page.
 
-    Format specs: none for the default with its unit, "n" without its unit,
-    "each" for a list shown once when its values are equal, "range" for a
-    pair as "a to b", "none" for "none" when every value is zero, and
-    "degree" for the degree of a polynomial's coefficients. Indexing gives
+    Format specs: none for the default with its unit, `n` without its unit,
+    `each` for a list shown once when its values are equal, `range` for a
+    pair as "a to b", `none` for "none" when every value is zero, and
+    `degree` for the degree of a polynomial's coefficients. Indexing gives
     one value of a list as a `Number`.
     """
 
@@ -146,9 +142,9 @@ class Value:
         values = list(value) if isinstance(value, (list, tuple)) or np.ndim(value) else [value]
         quantity = any(isinstance(v, u.Quantity) for v in values)
         if quantity and not label:
-            raise ValueError(f"{name} is a quantity, so needs a \"unit\" in its metadata.")
+            raise ValueError(f"{name} is a quantity, so needs a `unit` in its metadata.")
         if not quantity and label:
-            raise ValueError(f"{name} is a plain number, so takes no \"unit\" in its metadata.")
+            raise ValueError(f"{name} is a plain number, so takes no `unit` in its metadata.")
         if quantity:
             unit = _unit(label, name)
             converted = []
@@ -157,7 +153,11 @@ class Value:
                     converted.append(v.to_value(unit, equivalencies=u.temperature()))
                 except u.UnitConversionError:
                     # A value per pixel shown without "per pixel", such as 10 electrons.
-                    converted.append((v * u.pix).to_value(unit))
+                    try:
+                        converted.append((v * u.pix).to_value(unit))
+                    except u.UnitConversionError:
+                        raise ValueError(f"{name} is in {v.unit}, which cannot be shown in "
+                                         f"{label!r}.") from None
             values = converted
         self.numbers = [Number(v) for v in values]
 
@@ -200,14 +200,16 @@ def _default(cls, f):
     """Default of field `f` of `cls`, or its material's where the default is None."""
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
-    material = DETECTOR_MATERIALS.get(getattr(cls, "material", None), {})
-    return material.get(f.name, f.default) if f.default is None else f.default
+    if f.default is None and hasattr(cls, "material"):
+        return _material_value(cls, f.name)
+    return f.default
 
 
 def _constants():
     """Values from the code that the wording quotes besides the settings."""
-    budget = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][0]
-    return {"budget_jitter": Number(budget),
+    column = resolution_budget._column(Telescope_EUVST.resolution_budget)
+    budget = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][column]
+    return {"budget_jitter": Number(budget), "material": Detector_SWC.material,
             "tilt": Value("MEASURED_SLIT_IMAGE_TILT", MEASURED_SLIT_IMAGE_TILT),
             "tilt_angle": Value("TILT_REFERENCE_ANGLE", TILT_REFERENCE_ANGLE, "arcsec")}
 
@@ -274,6 +276,10 @@ def cells(instrument, keys):
         missing = [name for name in hidden if name not in used and "all" not in used]
         if missing:
             raise ValueError(f"The wording for {keys[0]} leaves out {', '.join(missing)}.")
+        unknown = used - set(values) - set(_constants()) - {"all"}
+        if unknown:
+            raise ValueError(f"The wording for {keys[0]} names {', '.join(sorted(unknown))}, "
+                             f"which are not in its row.")
         default = wording.format(all=_plain(list(values.values())), **values, **_constants())
     row = (default, sources.pop())
     if any("|" in cell for cell in row):
@@ -286,6 +292,7 @@ def updated_page(text):
     lines = text.split("\n")
     instrument, in_table = None, False
     for index, line in enumerate(lines):
+        line = line.rstrip()
         mark = TABLE_MARK.match(line)
         if mark:
             instrument, in_table = mark.group(1), False
