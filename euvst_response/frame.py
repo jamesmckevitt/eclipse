@@ -23,6 +23,10 @@ import astropy.units as u
 import numpy as np
 
 from .radiometric import (
+    _dark_electrons,
+    _detected_photons,
+    _digitise,
+    _read_noise,
     _spectral_response,
     _vectorized_fano_noise,
     photons_per_energy,
@@ -565,25 +569,18 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         raise ValueError(f"A frame has two axes, rows and columns, not {photons.ndim}.")
     wavelength = _per_pixel(wavelength, photons.shape)
     rms = wavelength if rms_wavelength is None else _per_pixel(rms_wavelength, photons.shape)
-    if noise:
-        if not np.all(np.mod(photons, 1) == 0):
-            raise ValueError("With noise on the photons must be whole numbers, as from a Poisson draw.")
-        detected = np.random.binomial(photons.astype(np.int64), det.qe_euv).astype(float)
-    else:
-        detected = photons * det.qe_euv
+    if noise and not np.all(np.mod(photons, 1) == 0):
+        raise ValueError("With noise on the photons must be whole numbers, as from a Poisson draw.")
+    detected = _detected_photons(photons, det, noise=noise)
     electrons = _vectorized_fano_noise(detected, wavelength * u.Angstrom, det, noise=noise,
                                        rms_wavelength=rms * u.Angstrom)
 
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
     if np.ndim(dark) == 1:
         dark = np.reshape(dark, (-1, 1))
-    dark = np.broadcast_to(dark, photons.shape)
+    electrons = electrons + _dark_electrons(dark, photons.shape, noise=noise)
     if noise:
-        electrons = (electrons + np.random.poisson(dark)
-                     + np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel),
-                                        photons.shape))
-    else:
-        electrons = electrons + dark
+        electrons = electrons + _read_noise(photons.shape, det)
     # Not clipped at zero, as a CCD reads out above a bias level; see
     # radiometric.to_electrons.
     return electrons
@@ -594,5 +591,4 @@ def digitise(electrons: np.ndarray, det) -> np.ndarray:
     DN per pixel: electrons divided by the gain, rounded and clipped at the
     detector's maximum, as in :func:`euvst_response.radiometric.to_dn`.
     """
-    dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
-    return np.minimum(np.round(dn), det.max_dn.to_value(u.DN / u.pixel))
+    return _digitise(electrons, det)
