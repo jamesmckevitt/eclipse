@@ -248,13 +248,23 @@ def test_the_old_dark_current_key_is_accepted_but_not_advertised():
 def test_a_run_records_the_settings_it_is_given(tmp_path, monkeypatch):
     payload = _run(tmp_path, monkeypatch, {**UNIFORM,
         "simulation": {"expos": "1 s", "noise": False},
-        "detector": {"fano_factor": [0.115, 0.2], "wavelength_offset": "0.1 Angstrom",
-                     "lit_band": ["171 AA", "211 AA"], "slit_image_tilt": [0.991, 0.605]}})
+        "detector": {"fano_factor": [0.115, 0.2], "wavelength_offset": "0 Angstrom",
+                     "lit_band": ["17 nm", "212.3 AA"]}})
     combos = list(payload["results"]["all_combinations"].values())
     assert sorted(c["parameters"]["detector.fano_factor"] for c in combos) == [0.115, 0.2]
     det = combos[0]["config_objects"]["detector"]
-    assert det.slit_image_tilt == (0.991, 0.605) and det.lit_band == (171 * u.AA, 211 * u.AA)
-    assert det.wavelength_offset == 0.1 * u.AA
+    assert det.lit_band == (17 * u.nm, 212.3 * u.AA)
+
+
+@pytest.mark.parametrize("detector", [
+    {"wavelength_offset": "0.1 Angstrom"}, {"wavelength_offset": ["0 AA", "0.1 AA"]},
+    {"lit_band": ["171 AA", "211 AA"]}, {"slit_image_tilt": [0.991, 0.605]},
+    {"dispersion": [199.0, 1.25]}])
+def test_a_run_refuses_focal_plane_settings_it_does_not_use(tmp_path, monkeypatch, detector):
+    name = next(iter(detector))
+    with pytest.raises(ValueError, match=f"detector.{name} must be left at its default for an "
+                                         f"instrument run, which does not use the SW focal"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": detector})
 
 
 def test_a_run_records_the_old_dark_current_key_as_the_config_gives_it(tmp_path, monkeypatch):
@@ -277,12 +287,6 @@ def test_a_run_records_the_old_dark_current_key_as_the_config_gives_it(tmp_path,
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {
             "_dark_current_293k": "1 electron / (pix s)",
             "dark_current_293k": ["1 electron / (pix s)", "2 electron / (pix s)"]}})
-
-
-def test_a_run_refuses_a_sweep_of_the_wavelength_offset(tmp_path, monkeypatch):
-    with pytest.raises(ValueError, match="detector.wavelength_offset takes one value"):
-        _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {
-            "wavelength_offset": ["0 Angstrom", "0.1 Angstrom"]}})
 
 
 def test_an_eis_run_refuses_the_pinhole_wavelength(tmp_path, monkeypatch):

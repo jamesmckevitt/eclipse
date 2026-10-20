@@ -15,7 +15,7 @@ import gzip
 import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
-from .config import _old_names_used
+from .config import _FOCAL_PLANE_SETTINGS, _old_names_used, _same_setting
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
@@ -761,12 +761,18 @@ def main() -> None:
                 f"detector.{name} must be 1 for an instrument run, which does not model the "
                 f"read-out. Charge left behind as a frame is read is modelled by "
                 f"euvst_response.readout, which takes the detector's settings.")
-    # Nor does it use the SW focal plane, so a sweep over it would repeat one run.
-    if "wavelength_offset" in det_sweep:
-        raise ValueError(
-            "detector.wavelength_offset takes one value: an instrument run does not use the "
-            "focal plane, and only records it. It is modelled by euvst_response.readout and "
-            "euvst_response.full_frame.")
+    # Nor does it use the SW focal plane, so other values would be ignored.
+    if instrument == "SWC":
+        focal_plane = {name: det_fixed[name] for name in _FOCAL_PLANE_SETTINGS
+                       if name in det_fixed}
+        default, given = Detector_SWC(), Detector_SWC(**focal_plane)
+        for name in _FOCAL_PLANE_SETTINGS:
+            if name in det_sweep or not _same_setting(getattr(given, name),
+                                                      getattr(default, name)):
+                raise ValueError(
+                    f"detector.{name} must be left at its default for an instrument run, "
+                    f"which does not use the SW focal plane yet. Full-CCD frames, made by "
+                    f"euvst_response.full_frame, do.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
     # sized for the slit's spectral PSF, which also depends on the slit

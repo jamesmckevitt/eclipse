@@ -186,6 +186,18 @@ def _numbers(value, count, section: str, name: str, example: str) -> tuple:
     return numbers
 
 
+# The SW focal plane settings, which a detector and a focal plane both hold.
+_FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
+
+
+def _same_setting(first, second) -> bool:
+    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
+    first, second = u.Quantity(first), u.Quantity(second)
+    if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
+        return False
+    return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
+
+
 def _check_focal_plane(det, section: str = "detector") -> None:
     """Check the SW focal plane settings of a detector or focal plane; store the lists as tuples."""
     offset = det.wavelength_offset
@@ -758,7 +770,8 @@ class Detector_SWC:
 
     The last four describe the SW focal plane, which
     :class:`euvst_response.readout.FocalPlane_SWC` models. An instrument run
-    does not use them, and only checks and records them.
+    does not use the focal plane yet, and refuses values other than the
+    defaults.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 

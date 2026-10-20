@@ -56,7 +56,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST-SW focal plane
 
-These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run records them but does not use them, and the frame does not yet take the slit image tilt.
+These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run does not use them yet, and the frame does not yet take the slit image tilt.
 
 | Setting | Default | Source |
 | --- | --- | --- |

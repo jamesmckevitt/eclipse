@@ -26,6 +26,7 @@ from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _so
                     detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
+from .config import _FOCAL_PLANE_SETTINGS, _same_setting
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
 from .utils import _fwhm_to_sigma, distance_to_angle
@@ -485,18 +486,6 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
         pieces[1], pieces[2] = overscan_dn[:, :overscan], overscan_dn[:, overscan:]
     return np.concatenate([pieces[0], image_dn[:, :half], pieces[1], pieces[2],
                            image_dn[:, half:], pieces[3]], axis=1)
-
-
-# Settings that both the detector and the focal plane hold.
-_FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
-
-
-def _same_setting(first, second) -> bool:
-    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
-    first, second = u.Quantity(first), u.Quantity(second)
-    if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
-        return False
-    return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
 
 
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
