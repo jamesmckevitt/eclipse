@@ -954,6 +954,12 @@ def main() -> None:
                 sim_sweep["enable_pinholes"] = [False]
             else:
                 sim_fixed["enable_pinholes"] = False
+    # The wavelength sets only the light through the pinholes.
+    if "pinhole_visible_wavelength" in sim_sweep and not (pinhole_sizes and any(enable_ph_vals)):
+        raise ValueError(
+            "simulation.pinhole_visible_wavelength sets the light through the pinholes, which "
+            "are off, so a sweep of it would repeat one run. Give it one value, or turn the "
+            "pinholes on with enable_pinholes and pinhole_sizes.")
 
     # Build sweep dimensions: every list-valued entry in a section becomes a named sweep dimension.
     # Keys use "section.attribute" notation.

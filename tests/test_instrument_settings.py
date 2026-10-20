@@ -359,6 +359,15 @@ def test_a_sweep_of_the_visible_decade_thickness_lays_the_scene_once(tmp_path, m
     assert len(payload["results"]["all_combinations"]) == 2
 
 
+def test_a_run_refuses_a_sweep_of_the_pinhole_wavelength_with_the_pinholes_off(tmp_path,
+                                                                                monkeypatch):
+    sweep = {"pinhole_visible_wavelength": ["500 nm", "600 nm"]}
+    with pytest.raises(ValueError, match="pinhole_visible_wavelength sets the light through"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": sweep})
+    with pytest.raises(ValueError, match="pinhole_visible_wavelength sets the light through"):
+        _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {**sweep, "enable_pinholes": True}})
+
+
 def test_an_eis_run_refuses_the_pinhole_wavelength(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Pinhole effects are not supported for EIS"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "instrument": "EIS", "simulation": {
