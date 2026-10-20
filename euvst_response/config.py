@@ -211,11 +211,11 @@ def _one_length(value, zero: bool = False):
     """
     if isinstance(value, str) and not value.strip():
         return None
-    items = ([] if isinstance(value, (str, u.Quantity))
-             else np.ravel(np.asarray(value, dtype=object)))
-    if any(isinstance(item, (bool, np.bool_)) for item in items):
-        return None
     try:
+        items = ([] if isinstance(value, (str, u.Quantity))
+                 else np.ravel(np.asarray(value, dtype=object)))
+        if any(isinstance(item, (bool, np.bool_)) for item in items):
+            return None
         value = u.Quantity(value)
     except (TypeError, ValueError):
         return None
