@@ -491,7 +491,8 @@ def test_one_error_lists_every_unsupported_setting_and_conflict():
 
 
 def test_a_simulation_field_the_frame_does_not_know_is_refused():
-    """A field the frame does not handle is refused once it differs from its default."""
+    """A field a subclass adds is refused whatever its value, as the frame cannot tell
+    whether it changes the frame."""
     import dataclasses
 
     @dataclasses.dataclass
@@ -500,9 +501,9 @@ def test_a_simulation_field_the_frame_does_not_know_is_refused():
 
     given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
              "noise": True}
-    _settings_from_simulation(Extended(), given, 1 * u.s)
-    with pytest.raises(ValueError, match="new_effect"):
-        _settings_from_simulation(Extended(new_effect=True), given, 1 * u.s)
+    for sim in (Extended(), Extended(new_effect=True)):
+        with pytest.raises(ValueError, match="new_effect"):
+            _settings_from_simulation(sim, given, 1 * u.s)
 
 
 def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
@@ -519,6 +520,9 @@ def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
         _settings_from_simulation(Masked(), given, 1 * u.s)
     with pytest.warns(UserWarning, match="sim.expos"):
         _settings_from_simulation(Masked(slit_mask=False), given, 1 * u.s)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _settings_from_simulation(Masked(slit_mask=False), given, 5 * u.s)
 
 
 def test_settings_a_frame_does_not_use_are_accepted():

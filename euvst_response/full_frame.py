@@ -497,8 +497,11 @@ _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 # is replaced by the `exposure` argument.
 _IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
 
-# Pinhole lists, checked through `enable_pinholes`.
-_PINHOLE_LISTS = ("pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral")
+# Fields not checked one by one. The pinhole lists are checked through
+# `enable_pinholes`.
+_UNCHECKED_FIELDS = frozenset(_FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS
+                              + ("pinhole_sizes", "pinhole_positions",
+                                 "pinhole_positions_spectral"))
 
 
 def _same(a, b) -> bool:
@@ -526,8 +529,9 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     An argument in `given` equal to its default takes the value in `sim`.
     Raises TypeError if `sim` is not a `Simulation`. Raises one ValueError
     listing every argument that differs from both its default and `sim`, and
-    every setting in `sim` the frame does not model. Warns if `sim.expos` is
-    set and differs from `exposure`.
+    every setting in `sim` the frame does not model, including any field a
+    subclass adds. Warns if `sim.expos` differs from both 1 s, its default,
+    and `exposure`.
     """
     from .pinhole_diffraction import _pinholes_on
 
@@ -543,9 +547,11 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     base = {f.name: f for f in dataclasses.fields(Simulation)}
     for f in dataclasses.fields(sim):
         name, value = f.name, getattr(sim, f.name)
-        if name in _FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS + _PINHOLE_LISTS:
+        if name in _UNCHECKED_FIELDS:
             continue
-        if name == "instrument":
+        if name not in base:
+            problems.append(f"{name}: the frame does not know this setting")
+        elif name == "instrument":
             if str(value).upper() != "SWC":
                 problems.append(f"instrument {value!r}: a frame is of SWC")
         elif name == "psf_boundary":
@@ -556,7 +562,7 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
             if _pinholes_on(sim):
                 problems.append("enable_pinholes: the frame does not model pinholes in the "
                                 "filter")
-        elif not _same(value, _field_default(base.get(name, f))):
+        elif not _same(value, _field_default(base[name])):
             problems.append(f"{name} {value!r}: the frame does not model it")
     if problems:
         raise ValueError("full_ccd_frame cannot take these settings: " + "; ".join(problems)
@@ -639,13 +645,14 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         `sim`, if an argument differs from both its default and the
         `Simulation`, or the `Simulation` asks for something the frame does
         not model: an instrument other than SWC, `psf_boundary` `"replicate"`
-        with the PSF on, `slit_mask`, pinholes or visible stray light. One
-        error lists every such setting.
+        with the PSF on, `slit_mask`, pinholes, visible stray light, or a
+        field a subclass adds. One error lists every such setting.
 
     Warns
     -----
     UserWarning
-        If `sim.expos` is set and differs from `exposure`, which is used.
+        If `sim.expos` differs from both 1 s, its default, and `exposure`,
+        which is used.
     """
     from . import frame as frame_module
     from .config import Detector_SWC, Telescope_EUVST
