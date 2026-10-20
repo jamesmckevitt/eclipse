@@ -98,8 +98,6 @@ These are the steps `simulate_once` takes, in order.
 
 ::: euvst_response.create_sunpy_maps_from_combo
 
-::: euvst_response.get_dem_data_from_results
-
 ## Atmosphere files
 
 ::: euvst_response.Atmosphere
@@ -185,3 +183,11 @@ A frame of both SW CCDs at one slit position, with every line in the band and th
 ::: euvst_response.angle_to_distance
 
 ::: euvst_response.distance_to_angle
+
+## Deprecated
+
+These warn when called and will be removed in a future release. Each can still be imported from where it was before.
+
+::: euvst_response.frame.apply_spectral_psf
+
+::: euvst_response.get_dem_data_from_results

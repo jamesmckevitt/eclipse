@@ -13,7 +13,7 @@ from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
+from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
 
 
@@ -365,7 +365,7 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
         # Every pixel of the run is a pixel wide, ends included, so add one step.
         step = abs(float(np.median(np.diff(wv)))) if len(wv) > 1 else 0.0
         fwhm = abs(float(wv[hi] - wv[lo])) + step
-        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+        sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
                  else (wv.max() - wv.min()) / 10)
     return [peak, centre, sigma, back]
 
@@ -877,7 +877,7 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         while hi < len(above) - 1 and above[hi + 1]:
             hi += 1
         if hi > lo:
-            sigma = (wv[hi] - wv[lo]) / (2 * np.sqrt(2 * np.log(2)))
+            sigma = _fwhm_to_sigma(wv[hi] - wv[lo])
         else:
             # Unresolved: the feature is one pixel wide, so take that as an
             # upper bound on the width rather than a tenth of the window.
