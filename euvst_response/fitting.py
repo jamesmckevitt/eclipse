@@ -13,7 +13,7 @@ from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
+from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
 
 
@@ -293,15 +293,21 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     Starting amplitude ratio of a component held fainter than its parent.
 
     The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres. The guess itself starts every component but the
-    primary at the same fraction of the primary, so two components held one
-    below the other would start equal, at the bound, and a primary held
-    below another would start above it. If the spectrum makes the child the
-    brighter, `_GUESS_FRACTION` is used, strictly inside the bounds. `child`
-    and `parent` index the amplitudes in the full `guess`.
+    two guessed centres, with NaN and infinite pixels counted as background.
+    The guess itself starts every component but the primary at the same
+    fraction of the primary, so two components held one below the other
+    would start equal, at the bound, and a primary held below another would
+    start above it. If the spectrum makes the child the brighter,
+    `_GUESS_FRACTION` is used, strictly inside the bounds. `child` and
+    `parent` index the amplitudes in the full `guess`.
     """
+    wv, prof = np.asarray(wv), np.asarray(prof)
+    if len(wv) > 1 and wv[0] > wv[-1]:
+        wv, prof = wv[::-1], prof[::-1]
+    height = np.where(np.isfinite(prof), prof - guess[-1], 0.0)
+
     def level(index):
-        return float(np.interp(guess[index + 1], wv, prof - guess[-1]))
+        return float(np.interp(guess[index + 1], wv, height))
 
     child_level, parent_level = level(child), level(parent)
     if parent_level > 0 and 0 < child_level / parent_level < 1:
@@ -345,10 +351,14 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     cruder guesses, at a peak of two or three times the noise per pixel, the
     fits ending hundreds of km/s away and the scatter of the fitted
     velocities were both twice those from a good start.
+
+    NaN and infinite pixels count as background. A spectrum with no finite
+    pixel starts at zero peak and background.
     """
     prof = np.asarray(prof, dtype=float)
-    back = float(np.median(prof))
-    height = prof - back
+    finite = np.isfinite(prof)
+    back = float(np.median(prof[finite])) if finite.any() else 0.0
+    height = np.where(finite, prof - back, 0.0)
     smooth = np.convolve(height, np.ones(3) / 3, mode="same") if prof.size >= 3 else height
     peak_idx = int(np.nanargmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
@@ -365,7 +375,7 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
         # Every pixel of the run is a pixel wide, ends included, so add one step.
         step = abs(float(np.median(np.diff(wv)))) if len(wv) > 1 else 0.0
         fwhm = abs(float(wv[hi] - wv[lo])) + step
-        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+        sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
                  else (wv.max() - wv.min()) / 10)
     return [peak, centre, sigma, back]
 
@@ -848,9 +858,19 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
 
 def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
                         fit_config: FitConfig) -> np.ndarray:
-    """Initial guess for the full parameter vector."""
-    back = float(prof.min())
-    prof_c = prof - back
+    """
+    Initial guess for the full parameter vector.
+
+    NaN and infinite pixels count as background. A spectrum with no finite
+    pixel starts at zero peak and background.
+    """
+    wv, prof = np.asarray(wv), np.asarray(prof)
+    if len(wv) > 1 and wv[0] > wv[-1]:
+        # The width and comb search below need increasing wavelengths.
+        wv, prof = wv[::-1], prof[::-1]
+    finite = np.isfinite(prof)
+    back = float(prof[finite].min()) if finite.any() else 0.0
+    prof_c = np.where(finite, prof - back, 0.0)
     prof_c[prof_c < 0] = 0
 
     peak = float(prof_c.max())
@@ -877,7 +897,7 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         while hi < len(above) - 1 and above[hi + 1]:
             hi += 1
         if hi > lo:
-            sigma = (wv[hi] - wv[lo]) / (2 * np.sqrt(2 * np.log(2)))
+            sigma = _fwhm_to_sigma(wv[hi] - wv[lo])
         else:
             # Unresolved: the feature is one pixel wide, so take that as an
             # upper bound on the width rather than a tenth of the window.
@@ -1056,12 +1076,14 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     sign flipped, which also flips the sign of the intensity computed from
     it. A flat spectrum, such as one with no photons, holds no line to fit,
     and a component wider than the whole window is background, not a line.
+    A spectrum with a NaN or infinite pixel counts as failed.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
     flat = np.all(spectra == spectra[..., :1], axis=-1)
     too_wide = np.any(widths > np.ptp(wavelength), axis=-1)
-    return flat | too_wide
+    not_finite = ~np.all(np.isfinite(spectra), axis=-1)
+    return flat | too_wide | not_finite
 
 
 @overload
@@ -1131,8 +1153,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Unit of each parameter.
     failed : np.ndarray of bool
         True where the fit failed, including where the optimiser used up
-        `max_iter`, shaped (along the slit, slit positions). Only with
-        `return_failed`.
+        `max_iter` or the spectrum has a NaN or infinite pixel, shaped
+        (along the slit, slit positions). Only with `return_failed`.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords_values(2)[0].cgs  # wavelength axis
@@ -1296,9 +1318,9 @@ def component_names(fit_config: FitConfig | None,
 
 
 def spectral_pixel_width(cube: NDCube) -> u.Quantity:
-    """Width of one spectral pixel of a cube with wavelength on its last axis."""
+    """Width of one spectral pixel, above zero, of a cube with wavelength on its last axis."""
     wavelength = u.Quantity(cube.axis_world_coords_values(2)[0]).to(u.cm)
-    return wavelength[1] - wavelength[0]
+    return abs(wavelength[1] - wavelength[0])
 
 
 def fit_quantities(fit_data: np.ndarray, units: list,
@@ -1315,7 +1337,7 @@ def fit_quantities(fit_data: np.ndarray, units: list,
     units : list of Unit
         One unit per parameter, as from :func:`fit_cube_gauss`.
     wavelength_step : u.Quantity
-        Width of one spectral pixel.
+        Width of one spectral pixel; its sign is ignored.
     rest_wavelength : u.Quantity
         Rest wavelength of a single-Gaussian fit. With components, each uses
         its own.
@@ -1343,7 +1365,7 @@ def fit_quantities(fit_data: np.ndarray, units: list,
         peak = fit_data[..., 3 * i] * units[3 * i]
         centre = fit_data[..., 3 * i + 1] * units[3 * i + 1]
         sigma = fit_data[..., 3 * i + 2] * units[3 * i + 2]
-        pixels = (sigma / wavelength_step).to(u.dimensionless_unscaled)
+        pixels = (sigma / abs(wavelength_step)).to(u.dimensionless_unscaled)
         components[name] = {
             "intensity": np.sqrt(2 * np.pi) * peak * pixels * u.pix,
             "velocity": ((centre - lam0) / lam0 * const.c).to(u.km / u.s),
