@@ -307,6 +307,9 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         sigma, cell_box = _response(focal_plane, ccd, column, telescope, det, slit_width,
                                     spectral_psf, middle)
     sorted_rows += light_onto_pixels(low, high, edges, sigma, cell_box) @ change
+    # Far from a line, the exact part and the correction nearly cancel and
+    # can leave a row slightly below zero, which no light can be.
+    np.maximum(sorted_rows, 0.0, out=sorted_rows)
     rows = np.zeros(edges.size - 1)
     rows[order] = sorted_rows
 
