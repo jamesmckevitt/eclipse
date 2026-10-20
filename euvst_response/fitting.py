@@ -1212,9 +1212,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Uncertainty of every value in the cube, same shape as its data or
         broadcastable to it. A pixel whose uncertainty is NaN or positive
         infinity is left out. Where the value is finite, an uncertainty at or
-        below zero, negative infinity included, is refused, and so are
-        uncertainties that leave out every finite value. Keyword only.
-        Default None, for an unweighted fit.
+        below zero, negative infinity included, is refused. If there are
+        finite values but none has a finite uncertainty, the uncertainty is
+        refused. Keyword only. Default None, for an unweighted fit.
     poisson : bool, optional
         Fit the spectra as counts by their Poisson likelihood, with every
         amplitude and the background held at zero or above. Each finite
@@ -1240,7 +1240,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     -----
     A pixel whose value is NaN or infinite is left out, and each spectrum is
     fitted to the pixels kept. With `uncertainty`, so is a pixel whose
-    uncertainty is NaN or infinite.
+    uncertainty is NaN or positive infinity.
     Such a spectrum is a failed fit if fewer pixels are kept than free
     parameters, or if the pixels at an end of the window were left out and
     a fitted centre lies more than half a pixel beyond the outermost kept
@@ -1282,8 +1282,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
                 f"spectra, shaped {signal_cube.data.shape}.") from None
         if np.any(kept & (uncertainty <= 0)):
-            raise ValueError("Every uncertainty of a finite value must be above zero, as "
-                             "each pixel is weighted by one over its square.")
+            raise ValueError("The uncertainty of a finite value must be above zero, or NaN "
+                             "to leave that pixel out, as each pixel is weighted by one over "
+                             "its square.")
         finite_uncertainty = np.isfinite(uncertainty)
         if kept.any() and not np.any(kept & finite_uncertainty):
             raise ValueError("No finite value has a finite uncertainty, so there is nothing "

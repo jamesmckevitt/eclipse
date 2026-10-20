@@ -360,7 +360,7 @@ def test_an_uncertainty_that_leaves_out_every_value_is_refused(bad):
                        uncertainty=np.full((1, 1, N_WAVE), bad))
 
 
-def test_a_negative_infinite_uncertainty_is_refused_and_a_positive_one_left_out():
+def test_a_negative_infinite_uncertainty_is_refused_and_a_positive_one_is_not():
     uncertainty = np.ones((1, 1, N_WAVE))
     uncertainty[0, 0, 30] = -np.inf
     with pytest.raises(ValueError, match="above zero"):
