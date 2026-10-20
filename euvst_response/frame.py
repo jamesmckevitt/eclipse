@@ -27,19 +27,20 @@ from .radiometric import (
     _detected_photons,
     _digitise,
     _read_noise,
+    _spectral_response,
     _vectorized_fano_noise,
     photons_per_energy,
-    slit_image_width,
-    spectral_blur_fwhm,
+    slit_image_width,  # noqa: F401
+    spectral_blur_fwhm,  # noqa: F401
     spectral_line_spread,  # noqa: F401
-    spectral_psf_fwhm,
+    spectral_psf_fwhm,  # noqa: F401
     spectral_psf_reach,  # noqa: F401
 )
 from .deprecated import apply_spectral_psf  # noqa: F401  (deprecated)
 from .readout import FocalPlane_SWC, expose, expose_serial_overscan
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
-from .utils import angle_to_distance, _fwhm_to_sigma
+from .utils import angle_to_distance
 
 
 def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.Quantity:
@@ -114,22 +115,12 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     slit's image it is convolved with, both in Angstrom. With `spectral_psf`
     `"quadrature"` the slit is included in the Gaussian and the width is 0.
 
-    The response is set in rows, as
-    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` sets it for
-    a synthesis, and converted at the width of the row each wavelength falls
+    The response is set in rows, as :func:`~euvst_response.radiometric._spectral_response`
+    gives it, and converted at the width of the row each wavelength falls
     in. The row width changes by less than a part in 1e4 across the
     response.
     """
-    if spectral_psf == "quadrature":
-        sigma_rows = _fwhm_to_sigma(spectral_psf_fwhm(telescope, det, slit_width))
-        box_rows = 0.0
-    elif spectral_psf == "convolution":
-        sigma_rows = _fwhm_to_sigma(spectral_blur_fwhm(telescope, det))
-        box_rows = slit_image_width(slit_width, det)
-    else:
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
-        )
+    sigma_rows, box_rows = _spectral_response(telescope, det, slit_width, spectral_psf)
     bounds = _row_bounds(focal_plane, ccd, column)
     centres = bounds.mean(axis=1)
     order = np.argsort(centres)
