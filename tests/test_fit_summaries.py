@@ -556,3 +556,39 @@ def test_every_velocity_and_width_map_holds_its_own_quantity():
     assert len({tuple(np.ravel(analysis[key].value)) for key, _ in pairs}) == len(pairs)
     for key, name in pairs:
         assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name
+
+
+@pytest.mark.parametrize("uniform_mode", [False, True], ids=["per-iteration", "uniform"])
+def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monkeypatch,
+                                                                           uniform_mode):
+    """
+    A NaN DN and photon count in one pixel: the DN's uncertainty is NaN too.
+
+    The run goes on, and that spectrum is fitted on its other pixels.
+    """
+    mc = sys.modules["euvst_response.monte_carlo"]
+    simulate = mc.simulate_once
+
+    def with_a_nan_pixel(*args, **kwargs):
+        signals = list(simulate(*args, **kwargs))
+        for index in (5, 9):  # photon arrivals and DN
+            cube = signals[index]
+            data = np.array(cube.data, dtype=float)
+            data[0, 0, 5] = np.nan
+            signals[index] = NDCube(data, wcs=cube.wcs, unit=cube.unit, meta=cube.meta)
+        return tuple(signals)
+
+    monkeypatch.setattr(mc, "simulate_once", with_a_nan_pixel)
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
+    np.random.seed(8)
+    # Some 800 photons at the peak, for velocities within a few km/s.
+    # Uniform mode fits only the first row along the slit, so give it one row.
+    cube = _intensity_cube(n_slit=1 if uniform_mode else 3, peak=1e13)
+    _, dn_stats, _, photon_stats = monte_carlo(cube, 40 * u.s, det, tel, sim, n_iter=2,
+                                               uniform_mode=uniform_mode)
+    name = "195.1190 Angstrom"
+    for stats in (dn_stats, photon_stats):
+        assert not stats["failed_fits"].any()
+        velocity = stats["components"][name]["velocity"]["mean"].value
+        assert abs(velocity[0, 0] - np.mean(velocity.ravel()[1:])) < 10

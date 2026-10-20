@@ -14,9 +14,9 @@ from scipy.sparse import csr_matrix
 from scipy.special import erf
 from tqdm import tqdm
 from .pinhole_diffraction import _filter_transmission, _pinholes_on
-from .radiometric import (_carry_photon_meta, across_slit_fwhm, photons_per_energy,
-                          slit_image_width, spatial_psf_fwhm, spectral_blur_fwhm,
-                          spectral_psf_fwhm, spectral_psf_margin)
+from .radiometric import (_carry_photon_meta, _spectral_response, across_slit_fwhm,
+                          photons_per_energy, spatial_psf_fwhm, spectral_psf_margin)
+from .radiometric import slit_image_width, spectral_blur_fwhm, spectral_psf_fwhm  # noqa: F401
 from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
                        pixel_weights_through)
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
@@ -473,11 +473,9 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     centres = spectral_world.to_value(u.cm)
     grid = _spectral_grid(centres, step, spectral_psf_margin(tel, det, sim.slit_width))
     sigma = width = 0.0
-    if sim.psf and sim.spectral_psf == "quadrature":
-        sigma = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * step
-    elif sim.psf:
-        sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det)) * step
-        width = slit_image_width(sim.slit_width, det) * step
+    if sim.psf:
+        sigma, width = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+        sigma, width = sigma * step, width * step
     pixel_edges = np.concatenate([grid - step / 2, [grid[-1] + step / 2]])
     cells = _bin_edges(centres)
     share = light_onto_pixels(cells[:-1], cells[1:], pixel_edges, sigma, width)
@@ -769,7 +767,7 @@ def create_uniform_intensity_cube(
     # spectral_psf.
     sigma_total = sigma_lam
     if tel is not None:
-        sigma_psf = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width)) * dlam
+        sigma_psf = _spectral_response(tel, det, sim.slit_width, "quadrature")[0] * dlam
         sigma_total = np.sqrt(sigma_lam**2 + sigma_psf**2)
 
     half_range = n_sigma_extent * sigma_total
