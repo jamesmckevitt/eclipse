@@ -87,10 +87,12 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     np.ndarray
         Electrons per photon, same shape as `rest_wavelength`.
     """
-    if not hasattr(det, "pair_energy") and not hasattr(det, "ccd_temperature"):
-        raise ValueError("The detector has no ccd_temperature, which sets the energy to free an "
-                         "electron-hole pair.")
-    pair_energy = det.pair_energy if hasattr(det, "pair_energy") else _pair_energy(det)
+    pair_energy = getattr(det, "pair_energy", None)
+    if pair_energy is None:
+        if not hasattr(det, "ccd_temperature"):
+            raise ValueError("The detector has no ccd_temperature, which sets the energy to "
+                             "free an electron-hole pair.")
+        pair_energy = _pair_energy(det)
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
     return np.asarray(photon_energy_ev / pair_energy.to_value(u.eV), dtype=float)
 

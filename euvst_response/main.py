@@ -767,8 +767,8 @@ def main() -> None:
                        if name in det_fixed}
         default, given = Detector_SWC(), Detector_SWC(**focal_plane)
         for name in _FOCAL_PLANE_SETTINGS:
-            if name in det_sweep or not _same_setting(getattr(given, name),
-                                                      getattr(default, name)):
+            same = _same_setting(name, getattr(given, name), getattr(default, name))
+            if name in det_sweep or not same:
                 raise ValueError(
                     f"detector.{name} must be left at its default for an instrument run, "
                     f"which does not use the SW focal plane yet. Full-CCD frames, made by "

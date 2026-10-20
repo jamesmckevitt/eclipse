@@ -195,17 +195,23 @@ def _numbers(value, count, section: str, name: str, example: str) -> tuple:
 _FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
 
 
-def _same_setting(first, second) -> bool:
-    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
+def _same_setting(name: str, first, second) -> bool:
+    """Whether two values of focal plane setting `name` are the same, to a part in 1e12."""
     first, second = u.Quantity(first), u.Quantity(second)
+    if name == "lit_band":
+        first, second = np.sort(first), np.sort(second)
     if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
         return False
     return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
 
 
-def _one_length(value):
-    """`value` as one length, read with `u.Quantity`, or None if it is not one."""
-    if isinstance(value, str) and not value.strip():
+def _one_length(value, zero: bool = False):
+    """
+    `value` as one length, read with `u.Quantity`, or None if it is not one.
+
+    With `zero`, a plain zero is taken as 0 Angstrom, as it adds to a wavelength.
+    """
+    if isinstance(value, (bool, np.bool_)) or (isinstance(value, str) and not value.strip()):
         return None
     try:
         value = u.Quantity(value)
@@ -214,8 +220,7 @@ def _one_length(value):
     if value.size != 1:
         return None
     value = value.reshape(())
-    # A plain zero adds to a wavelength.
-    if value.unit == u.dimensionless_unscaled and value.value == 0:
+    if zero and value.unit == u.dimensionless_unscaled and value.value == 0:
         value = value.value * u.Angstrom
     if not (value.unit.is_equivalent(u.AA) and np.isfinite(value.value)):
         return None
@@ -224,7 +229,7 @@ def _one_length(value):
 
 def _check_focal_plane(det, section: str = "detector") -> None:
     """Check the SW focal plane settings of a detector or focal plane; store the lists as tuples."""
-    offset = _one_length(det.wavelength_offset)
+    offset = _one_length(det.wavelength_offset, zero=True)
     if offset is None:
         raise ValueError(f"{section}.wavelength_offset must be one wavelength, such as "
                          f"0.1 Angstrom; got {det.wavelength_offset!r}.")

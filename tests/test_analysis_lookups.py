@@ -124,3 +124,6 @@ def test_the_old_name_of_the_dark_current_finds_its_combination():
     with pytest.warns(FutureWarning, match="detector._dark_current_293k is renamed") as seen:
         found = get_results_for_combination(results, **{"detector._dark_current_293k": 200 * rate})
     assert found["index"] == 1 and seen[0].filename == __file__
+    with pytest.raises(ValueError, match="Give detector.dark_current_293k only"):
+        get_results_for_combination(results, **{"detector._dark_current_293k": 200 * rate,
+                                                "detector.dark_current_293k": 100 * rate})

@@ -17,7 +17,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
-from .config import Detector_SWC, _RenamedSetting
+from .config import Detector_SWC, _old_names_used
 from .deprecated import get_dem_data_from_results  # noqa: F401  (deprecated)
 from .results_file import load_results
 from .utils import has_wrong_velocity_sign
@@ -433,12 +433,14 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "enough parameters to select a unique one."
         )
 
+    renamed = _old_names_used(Detector_SWC, {key[len("detector."):] for key in kwargs
+                                             if key.startswith("detector.")},
+                              "detector.", error=ValueError)
     query = {}
     for key, value in kwargs.items():
-        section, _, name = key.rpartition(".")
-        if section == "detector" and name in Detector_SWC._OLD_NAMES:
-            _RenamedSetting(name, Detector_SWC._OLD_NAMES[name]).warn("detector.")
-            key = f"detector.{Detector_SWC._OLD_NAMES[name]}"
+        name = key[len("detector."):]
+        if key.startswith("detector.") and name in renamed:
+            key = f"detector.{renamed[name]}"
         query[key] = value
 
     matches = [combo_results for combo_results in all_combinations.values()

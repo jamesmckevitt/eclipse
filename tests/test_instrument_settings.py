@@ -17,7 +17,7 @@ import yaml
 from euvst_response import results_file
 from euvst_response.config import (DETECTOR_MATERIALS, DISPERSION_COEFFICIENTS,
                                    MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation)
+                                   Detector_SWC, Simulation, _same_setting)
 from euvst_response.main import _validate_config_keys, main
 from euvst_response.radiometric import electrons_per_photon
 from euvst_response.readout import FocalPlane_SWC
@@ -136,6 +136,13 @@ def test_the_focal_plane_takes_any_wavelength_offset_that_adds_to_a_wavelength(o
     assert moved.to_value(u.AA) == pytest.approx(shift, abs=1e-12)
 
 
+def test_a_lit_band_matches_its_reverse_but_a_dispersion_does_not():
+    band = Detector_SWC().lit_band
+    assert _same_setting("lit_band", band[::-1], band)
+    assert not _same_setting("lit_band", (171 * u.AA, 212.3 * u.AA), band)
+    assert not _same_setting("dispersion", (1.0, 2.0), (2.0, 1.0))
+
+
 def test_a_scalar_dispersion_is_refused_with_a_message():
     with pytest.raises(ValueError, match="focal_plane.dispersion must be two or more"):
         FocalPlane_SWC(dispersion=199.0)
@@ -153,6 +160,8 @@ def test_a_scalar_dispersion_is_refused_with_a_message():
     (lambda: Detector_SWC(lit_band=(170.0, 212.3)), "detector.lit_band must be two wavelengths"),
     (lambda: Detector_SWC(wavelength_offset=0.1), "detector.wavelength_offset needs a unit"),
     (lambda: Detector_SWC(wavelength_offset=[0, 0.1] * u.AA), "must be one wavelength"),
+    (lambda: FocalPlane_SWC(wavelength_offset=False), "focal_plane.wavelength_offset must be one"),
+    (lambda: Detector_SWC(lit_band=(0, 212.3 * u.AA)), "detector.lit_band must be two"),
     (lambda: FocalPlane_SWC(lit_band=(170.0, 212.3)), "focal_plane.lit_band must be two"),
     (lambda: FocalPlane_SWC.from_detector(Detector_SWC(), slit_image_tilt=(1, 2, 3)),
      "focal_plane.slit_image_tilt must be two"),

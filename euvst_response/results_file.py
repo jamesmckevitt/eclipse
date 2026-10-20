@@ -347,7 +347,9 @@ _EARLIER_VALUES = {
 
 def _is_default(cls, name: str, value) -> bool:
     """Whether `value` is the default of `cls`'s setting `name`."""
-    field = next(field for field in dataclasses.fields(cls) if field.name == name)
+    field = next((field for field in dataclasses.fields(cls) if field.name == name), None)
+    if field is None:
+        return False
     if field.default is not dataclasses.MISSING:
         default = field.default
     elif field.default_factory is not dataclasses.MISSING:

@@ -562,7 +562,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
     differ = [name for name in _FOCAL_PLANE_SETTINGS
-              if not _same_setting(getattr(det, name), getattr(focal_plane, name))]
+              if not _same_setting(name, getattr(det, name), getattr(focal_plane, name))]
     if differ:
         raise ValueError(
             f"The detector and the focal plane give different {', '.join(differ)}. Set them on "
