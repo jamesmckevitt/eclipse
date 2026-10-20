@@ -106,18 +106,23 @@ def _package_root() -> Path:
     return Path(os.fspath(files("eclipse")))
 
 
-def _former_package_path(path):
+def _moved_package_file(path):
     """
-    Path of a package file relative to the package, for a file of the package's former name.
+    This installation's copy of a packaged table named under the package's former name.
 
-    Older versions were installed as `euvst_response`, so their results name
-    the packaged tables inside it, a folder an upgrade removes. None for any
-    other path.
+    Older versions were installed as `euvst_response`, so their results can
+    name the packaged tables inside it, a folder an upgrade removes. None if
+    `path` exists, is not such a table, or the table is not in this installation.
     """
-    parts = Path(os.fspath(path)).parts
-    for i in range(len(parts) - 1, -1, -1):
-        if parts[i] == "euvst_response" and i + 1 < len(parts) and parts[i + 1] == "data":
-            return Path(*parts[i + 1:]).as_posix()
+    path = Path(os.fspath(path))
+    parts = path.parts
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] == "euvst_response" and parts[i + 1] == "data":
+            relative = _package_parts(Path(*parts[i + 1:]).as_posix())
+            if relative is None or path.exists():
+                return None
+            moved = _package_root().joinpath(*relative)
+            return moved if moved.is_file() else None
     return None
 
 
@@ -326,7 +331,7 @@ def _jsonable(value):
         try:
             relative = Path(os.fspath(value)).relative_to(_package_root()).as_posix()
         except ValueError:
-            relative = _former_package_path(value)
+            relative = None
         if relative is not None and _package_parts(relative):
             return {TAG: "resource", "value": relative}
         return {TAG: "path", "value": os.fspath(value)}
@@ -479,7 +484,7 @@ def _unjson(value, reading: _Reading):
     if tag == "date":
         return datetime.date.fromisoformat(value["value"])
     if tag == "path":
-        return Path(value["value"])
+        return _moved_package_file(value["value"]) or Path(value["value"])
     if tag == "resource":
         # Check the path as written, before touching the filesystem, so a
         # file cannot make the reader look outside the package at all.
@@ -1082,7 +1087,8 @@ def _give_earlier_values(value, seen=None) -> None:
     An object pickled before a setting existed would otherwise read the
     class default, such as a telescope's `resolution_budget`, which runs
     then did not have. Packaged tables named under the package's former
-    name, `euvst_response`, are read from this installation's copy.
+    name, `euvst_response`, that no longer exist are read from this
+    installation's copy.
     """
     seen = set() if seen is None else seen
     if id(value) in seen:
@@ -1101,12 +1107,10 @@ def _give_earlier_values(value, seen=None) -> None:
                 if name not in own:
                     object.__setattr__(value, name, item)
             for name, item in list(own.items()):
-                # A packaged table named under the package's former name is
-                # read from this installation's copy.
                 if isinstance(item, Path) or hasattr(item, "__fspath__"):
-                    relative = _former_package_path(item)
-                    if relative is not None and _package_parts(relative):
-                        object.__setattr__(value, name, _package_root() / relative)
+                    moved = _moved_package_file(item)
+                    if moved is not None:
+                        object.__setattr__(value, name, moved)
                 else:
                     _give_earlier_values(item, seen)
 

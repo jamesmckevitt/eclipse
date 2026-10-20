@@ -110,13 +110,34 @@ def test_the_package_data_are_found_under_the_old_name(tmp_path):
          cwd=tmp_path)
 
 
-def test_a_packaged_table_named_under_the_old_name_is_read_from_this_installation():
-    old = (Path("/somewhere/site-packages/euvst_response/data/throughput")
-           / "grating_reflection_efficiency.dat")
-    assert results_file._jsonable(old) == {
-        results_file.TAG: "resource", "value": "data/throughput/grating_reflection_efficiency.dat"}
+TABLE = Path("data/throughput/grating_reflection_efficiency.dat")
+
+
+def _tables_read_back(tmp_path, recorded):
+    """`grating_table` read back from a results pickle naming `recorded`, and from its conversion."""
+    import dill
+
     telescope = eclipse.config.Telescope_EUVST()
-    object.__setattr__(telescope, "grating_table", old)
-    results_file._give_earlier_values({"telescope": telescope})
-    assert telescope.grating_table.is_file()
-    assert results_file._jsonable(Path("/elsewhere/data/table.dat"))[results_file.TAG] == "path"
+    object.__setattr__(telescope, "grating_table", recorded)
+    pickled = tmp_path / "old.pkl"
+    with open(pickled, "wb") as handle:
+        dill.dump({"results": {"all_combinations": {}, "fit_weighted": True},
+                   "telescope": telescope}, handle)
+    with pytest.warns(FutureWarning, match="results pickle"):
+        from_pickle = results_file.load_results(pickled)["telescope"].grating_table
+    converted = results_file.convert_results_pickle(pickled, tmp_path / "new.h5")
+    return from_pickle, results_file.load_results(converted)["telescope"].grating_table
+
+
+def test_a_packaged_table_named_under_the_old_name_is_read_from_this_installation(tmp_path):
+    old = Path("/somewhere/site-packages/euvst_response") / TABLE
+    installed = results_file._package_root() / TABLE
+    assert _tables_read_back(tmp_path, old) == (installed, installed)
+
+
+def test_a_table_of_ones_own_in_a_folder_named_as_the_old_package_is_kept(tmp_path):
+    own = tmp_path / "euvst_response" / TABLE
+    own.parent.mkdir(parents=True)
+    own.write_bytes((results_file._package_root() / TABLE).read_bytes())
+    assert results_file._jsonable(own) == {results_file.TAG: "path", "value": str(own)}
+    assert _tables_read_back(tmp_path, own) == (own, own)
