@@ -9,8 +9,7 @@ A frame is made from a synthesis file from ECLIPSE's [synthesis of an MHD simula
 `band_contribution_functions` works out the contribution function of every CHIANTI line in the band, on the synthesis's grids and with its abundances, and `write_band_lines` keeps them in a file:
 
 ```python
-from euvst_response import read_synthesis_products
-from euvst_response.band import band_contribution_functions, write_band_lines
+from euvst_response import band_contribution_functions, read_synthesis_products, write_band_lines
 
 if __name__ == "__main__":
     products = read_synthesis_products("synthesis.h5", keys=["logT_grid", "logN_grid", "config"])
@@ -42,8 +41,7 @@ This takes about 6 minutes on 16 cores.
 ## 3. The frame
 
 ```python
-from euvst_response.band import read_band_lines
-from euvst_response.full_frame import full_ccd_frame, write_full_frame
+from euvst_response import full_ccd_frame, read_band_lines, write_full_frame
 
 lines = read_band_lines("band_lines.h5")
 frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
@@ -53,6 +51,18 @@ write_full_frame(frame, "frame.h5")
 ```
 
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit.
+
+The slit width, PSF and noise can instead be taken from a `Simulation`, as in an instrument-response run:
+
+```python
+from euvst_response import Simulation
+
+sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=True)
+frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
+                       exposure=10 * u.s, sim=sim, continuum=(wavelength, free, two_photon))
+```
+
+The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf` and `noise`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these four arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame takes the Sun beyond the edges of the synthesis as dark. With the PSF on, `psf_boundary` must therefore be `"zero"`. A frame does not model the slit's fiducials, pinholes or visible stray light. `slit_mask` and `vis_sl` must be left off, and no pinholes enabled. `instrument` must be `"SWC"`.
 
 For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about 20 minutes and 55 GB of memory on 16 cores. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
