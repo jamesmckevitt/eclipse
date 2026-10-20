@@ -293,26 +293,59 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     Starting amplitude ratio of a component held fainter than its parent.
 
     The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres, with NaN and infinite pixels counted as background.
-    The guess itself starts every component but the primary at the same
-    fraction of the primary, so two components held one below the other
-    would start equal, at the bound, and a primary held below another would
-    start above it. If the spectrum makes the child the brighter,
-    `_GUESS_FRACTION` is used, strictly inside the bounds. `child` and
-    `parent` index the amplitudes in the full `guess`.
+    two guessed centres, interpolated between the finite pixels. The guess
+    itself starts every component but the primary at the same fraction of
+    the primary, so two components held one below the other would start
+    equal, at the bound, and a primary held below another would start above
+    it. If the spectrum makes the child the brighter, `_GUESS_FRACTION` is
+    used, strictly inside the bounds. `child` and `parent` index the
+    amplitudes in the full `guess`. A centre in NaN or infinite pixels at an
+    end of the window has zero height, as background.
     """
     wv, prof = np.asarray(wv), np.asarray(prof)
+    finite = np.isfinite(prof)
+    if not finite.any():
+        return _GUESS_FRACTION
     if len(wv) > 1 and wv[0] > wv[-1]:
-        wv, prof = wv[::-1], prof[::-1]
-    height = np.where(np.isfinite(prof), prof - guess[-1], 0.0)
+        wv, prof, finite = wv[::-1], prof[::-1], finite[::-1]
+    left = None if finite[0] else 0.0
+    right = None if finite[-1] else 0.0
+    wv, prof = _finite_pixels(wv, prof, finite)
+    height = prof - guess[-1]
 
     def level(index):
-        return float(np.interp(guess[index + 1], wv, height))
+        return float(np.interp(guess[index + 1], wv, height, left=left, right=right))
 
     child_level, parent_level = level(child), level(parent)
     if parent_level > 0 and 0 < child_level / parent_level < 1:
         return child_level / parent_level
     return _GUESS_FRACTION
+
+
+def _finite_pixels(wv: np.ndarray, prof: np.ndarray, finite: np.ndarray) -> tuple:
+    """Wavelengths and values where `finite` is True, the arrays themselves if it is everywhere."""
+    if finite.all():
+        return wv, prof
+    return wv[finite], prof[finite]
+
+
+def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
+                drop: bool, min_pixels: int, start) -> tuple[np.ndarray, bool]:
+    """
+    Fit a spectrum, leaving out its NaN and infinite pixels.
+
+    `fit(wv, prof, sigma)` fits a spectrum and returns the parameters and
+    whether it succeeded. A spectrum with every pixel finite is fitted as it
+    is. Otherwise, with `drop`, only its finite pixels are fitted, unweighted.
+    Without `drop`, or with fewer than `min_pixels` finite pixels, the fit is
+    not tried, and `start(wv, prof)` is returned as a failed fit.
+    """
+    finite = np.isfinite(prof)
+    if finite.all():
+        return fit(wv, prof, sigma)
+    if not drop or np.count_nonzero(finite) < min_pixels:
+        return np.asarray(start(wv, prof), dtype=float), False
+    return fit(*_finite_pixels(wv, prof, finite), None)
 
 
 def _in_dependency_order(fainter_than: dict) -> list:
@@ -352,13 +385,17 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     fits ending hundreds of km/s away and the scatter of the fitted
     velocities were both twice those from a good start.
 
-    NaN and infinite pixels count as background. A spectrum with no finite
-    pixel starts at zero peak and background.
+    Only the finite pixels are used. A spectrum with no finite pixel starts
+    at zero peak and background, at the first wavelength.
     """
+    wv = np.asarray(wv)
     prof = np.asarray(prof, dtype=float)
     finite = np.isfinite(prof)
-    back = float(np.median(prof[finite])) if finite.any() else 0.0
-    height = np.where(finite, prof - back, 0.0)
+    if not finite.any():
+        return [0.0, wv[0], (wv.max() - wv.min()) / 10, 0.0]
+    wv, prof = _finite_pixels(wv, prof, finite)
+    back = float(np.median(prof))
+    height = prof - back
     smooth = np.convolve(height, np.ones(3) / 3, mode="same") if prof.size >= 3 else height
     peak_idx = int(np.nanargmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
@@ -669,6 +706,13 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
     return model_func, free_to_full_A, n_free, free_indices, ratio_spec, bounds, has_bounds
 
 
+def _n_free_params(fit_config: FitConfig | None) -> int:
+    """Number of parameters a fit adjusts: those not tied to another, and the background."""
+    if fit_config is None or fit_config.is_single:
+        return 4
+    return _build_scipy_multi(fit_config)[2]
+
+
 def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
                          fit_config: FitConfig,
                          model_func, free_to_full_A,
@@ -861,16 +905,21 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     """
     Initial guess for the full parameter vector.
 
-    NaN and infinite pixels count as background. A spectrum with no finite
-    pixel starts at zero peak and background.
+    Only the finite pixels are used. A spectrum with no finite pixel starts
+    at zero peak and background.
     """
     wv, prof = np.asarray(wv), np.asarray(prof)
     if len(wv) > 1 and wv[0] > wv[-1]:
         # The width and comb search below need increasing wavelengths.
         wv, prof = wv[::-1], prof[::-1]
     finite = np.isfinite(prof)
-    back = float(prof[finite].min()) if finite.any() else 0.0
-    prof_c = np.where(finite, prof - back, 0.0)
+    if finite.any():
+        wv, prof = _finite_pixels(wv, prof, finite)
+        back = float(prof.min())
+        prof_c = prof - back
+    else:
+        back = 0.0
+        prof_c = np.zeros(len(wv))
     prof_c[prof_c < 0] = 0
 
     peak = float(prof_c.max())
@@ -1074,16 +1123,41 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     Also makes the widths positive in place. A Gaussian does not depend on
     the sign of its width, so a fit with a negative width is kept with the
     sign flipped, which also flips the sign of the intensity computed from
-    it. A flat spectrum, such as one with no photons, holds no line to fit,
-    and a component wider than the whole window is background, not a line.
-    A spectrum with a NaN or infinite pixel counts as failed.
+    it. Only the finite pixels of each spectrum are considered. A flat
+    spectrum, such as one with no photons, holds no line to fit, and a
+    component wider than the window of finite pixels is background, not a
+    line. A spectrum with no finite pixel counts as flat. Where the pixels
+    at an end of the window are NaN or infinite, a centre, tied or not,
+    beyond the edge of the last finite pixel on that side was fitted with no
+    data there.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
-    flat = np.all(spectra == spectra[..., :1], axis=-1)
-    too_wide = np.any(widths > np.ptp(wavelength), axis=-1)
-    not_finite = ~np.all(np.isfinite(spectra), axis=-1)
-    return flat | too_wide | not_finite
+    spectra = np.asarray(spectra)
+    if not np.issubdtype(spectra.dtype, np.floating):
+        # Whole numbers are all finite.
+        return (np.all(spectra == spectra[..., :1], axis=-1)
+                | np.any(widths > np.ptp(wavelength), axis=-1))
+    finite = np.isfinite(spectra)
+    wavelength = np.asarray(wavelength)
+    first, last = np.min(wavelength), np.max(wavelength)
+    half_pixel = 0.5 * np.median(np.abs(np.diff(wavelength))) if wavelength.size > 1 else 0.0
+    wavelength = np.broadcast_to(wavelength, spectra.shape)
+
+    def extent(values):
+        return (np.max(values, axis=-1, where=finite, initial=-np.inf),
+                np.min(values, axis=-1, where=finite, initial=np.inf))
+
+    highest, lowest = extent(spectra)
+    flat = highest <= lowest
+    longest, shortest = extent(wavelength)
+    too_wide = np.any(widths > (longest - shortest)[..., np.newaxis], axis=-1)
+    centres = params[..., 1:3 * n_components:3]
+    below = ((shortest > first)[..., np.newaxis]
+             & (centres < (shortest - half_pixel)[..., np.newaxis]))
+    above = ((longest < last)[..., np.newaxis]
+             & (centres > (longest + half_pixel)[..., np.newaxis]))
+    return flat | too_wide | np.any(below | above, axis=-1)
 
 
 @overload
@@ -1152,9 +1226,22 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     units_list : list of Unit
         Unit of each parameter.
     failed : np.ndarray of bool
-        True where the fit failed, including where the optimiser used up
-        `max_iter` or the spectrum has a NaN or infinite pixel, shaped
-        (along the slit, slit positions). Only with `return_failed`.
+        True where the fit failed, shaped (along the slit, slit positions).
+        This includes where the optimiser used up `max_iter`, and spectra
+        with NaN or infinite pixels as given in the Notes. Only with
+        `return_failed`.
+
+    Notes
+    -----
+    In an unweighted fit, NaN and infinite pixels are left out, and each
+    spectrum is fitted to its finite pixels alone. Such a spectrum is a
+    failed fit if fewer finite pixels remain than free parameters, or if the
+    pixels at an end of the window are NaN or infinite and a fitted centre
+    lies more than half a pixel beyond the outermost finite pixel on that
+    side. As for every spectrum, it is also a failed fit if its finite
+    pixels are flat or a fitted width is more than their span. With
+    `uncertainty`, a spectrum with any NaN or infinite pixel is a failed
+    fit. With `poisson`, such a pixel raises a ValueError.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords_values(2)[0].cgs  # wavelength axis
@@ -1192,6 +1279,10 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             raise ValueError("Every uncertainty must be finite and above zero, as each "
                              "pixel is weighted by one over its square.")
 
+    # Weighted fits need every pixel. Poisson counts were checked above to be finite.
+    drop = uncertainty is None
+    min_pixels = _n_free_params(fit_config)
+
     def _rows():
         """Each row along the slit, with its uncertainties."""
         for i in range(n_slit):
@@ -1202,13 +1293,17 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         use_mpfit = fit_config is not None and fit_config.backend == "mpfit"
         fit_one = _fit_one_mpfit if use_mpfit else _fit_one
 
+        def _fit(wave, prof, sigma):
+            return fit_one(wave, prof, max_iter, pixel, sigma, poisson)
+
         def _fit_block(spec_block, unc_block):
             results = np.empty((spec_block.shape[0], 4))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = fit_one(
-                    wv.value, spec_block[i], max_iter, pixel,
-                    None if unc_block is None else unc_block[i], poisson)
+                results[i], succeeded[i] = _fit_finite(
+                    _fit, wv.value, spec_block[i],
+                    None if unc_block is None else unc_block[i], drop, min_pixels,
+                    _guess_params)
             return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
@@ -1237,16 +1332,10 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
          free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
             fit_config, None if pixel is None else pixel * 1e8)
 
-        def _fit_block_multi(spec_block, unc_block):
-            results = np.empty((spec_block.shape[0], n_params))
-            succeeded = np.empty(spec_block.shape[0], dtype=bool)
-            for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = _fit_one_scipy_multi(
-                    wv.value, spec_block[i], fit_config,
-                    model_func, free_to_full, free_indices,
-                    ratio_spec, bounds, has_bounds,
-                    None if unc_block is None else unc_block[i], poisson)
-            return results, succeeded
+        def _fit(wave, prof, sigma):
+            return _fit_one_scipy_multi(wave, prof, fit_config, model_func, free_to_full,
+                                        free_indices, ratio_spec, bounds, has_bounds,
+                                        sigma, poisson)
 
     else:
         # mpfit with full parinfo (slower, supports hard bounds)
@@ -1261,15 +1350,21 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         p0_template = _guess_multi_params(wv.value, signal_cube.data[0, 0], fit_config)
         parinfo_template = _build_parinfo(fit_config, p0_template, ratio_params)
 
-        def _fit_block_multi(spec_block, unc_block):
-            results = np.empty((spec_block.shape[0], n_params))
-            succeeded = np.empty(spec_block.shape[0], dtype=bool)
-            for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = _fit_one_multi(
-                    wv.value, spec_block[i], fit_config,
-                    parinfo_template, ratio_params, pixel,
-                    None if unc_block is None else unc_block[i], poisson)
-            return results, succeeded
+        def _fit(wave, prof, sigma):
+            return _fit_one_multi(wave, prof, fit_config, parinfo_template, ratio_params,
+                                  pixel, sigma, poisson)
+
+    def _start(wave, prof):
+        return _guess_multi_params(wave, prof, fit_config)
+
+    def _fit_block_multi(spec_block, unc_block):
+        results = np.empty((spec_block.shape[0], n_params))
+        succeeded = np.empty(spec_block.shape[0], dtype=bool)
+        for i in range(spec_block.shape[0]):
+            results[i], succeeded[i] = _fit_finite(
+                _fit, wv.value, spec_block[i],
+                None if unc_block is None else unc_block[i], drop, min_pixels, _start)
+        return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
