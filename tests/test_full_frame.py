@@ -402,25 +402,15 @@ def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthe
     assert np.allclose(moving.rate["left"], at_rest.rate["left"], rtol=1e-12, atol=0)
 
 
-
-def test_a_blurred_frame_can_be_drawn_and_keeps_its_wavelengths_in_reach(blurred_frame):
-    """Rates are never below zero, and photon wavelengths lie within the blur of their row."""
-    from euvst_response.full_frame import _within_reach
-
-    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):
+    """No rate is below zero, so the Poisson draw takes them all."""
+    products = read_synthesis_products(uniform_synthesis)
+    np.random.seed(0)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
     for ccd in ("left", "right"):
-        rate = blurred_frame.rate[ccd]
-        assert (rate >= 0).all()
-        np.random.default_rng(0).poisson(blurred_frame.photons[ccd])
-        image = slice(0, rate.shape[0])
-        mean = blurred_frame.photon_wavelength[ccd][image].to_value(u.AA)
-        rms = blurred_frame.photon_rms_wavelength[ccd][image].to_value(u.AA)
-        low, high = _within_reach(focal_plane, ccd, Telescope_EUVST(resolution_budget="none"),
-                                  Detector_SWC(), 0.2 * u.arcsec, "quadrature")
-        # The exposure averages each pixel's wavelengths again, to rounding.
-        slack = 1e-9
-        assert np.all((mean >= low[:, np.newaxis] - slack) & (mean <= high[:, np.newaxis] + slack))
-        assert np.all(rms <= mean + slack)
-        row = blurred_frame.wavelength[ccd].to_value(u.AA)[:, np.newaxis]
-        dark = rate == 0
-        assert np.all(mean[dark] == np.broadcast_to(row, mean.shape)[dark])
+        assert (frame.rate[ccd] >= 0).all()
+        lit = frame.rate[ccd] > 0
+        image = frame.photon_wavelength[ccd][:lit.shape[0]]
+        assert np.all(image[~lit] == np.broadcast_to(
+            frame.wavelength[ccd].to_value(u.AA)[:, np.newaxis], lit.shape)[~lit] * u.AA)

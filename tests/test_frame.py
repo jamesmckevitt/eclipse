@@ -733,7 +733,7 @@ def test_a_lines_rows_are_never_below_zero(spectral_psf):
     focal_plane, telescope = FocalPlane_SWC(), Telescope_EUVST()
     intensity = 1.0 * u.erg / (u.s * u.cm**2 * u.sr)
     rows = photons_from_lines(focal_plane, "right", telescope, SLIT_WIDTH * u.arcsec,
-                              [211.317] * u.Angstrom, [intensity.value] * intensity.unit,
+                              [211.317] * u.Angstrom, u.Quantity([intensity]),
                               [0.03] * u.Angstrom, det=Detector_SWC(),
                               spectral_psf=spectral_psf).value
     assert (rows >= 0).all()

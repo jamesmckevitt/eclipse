@@ -22,8 +22,8 @@ import astropy.constants as const
 import astropy.units as u
 
 from .band import BandLines
-from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _row_bounds,
-                    _sorted_rows, detect, digitise, expose_serial_overscan_with_wavelengths,
+from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
+                    detect, digitise, expose_serial_overscan_with_wavelengths,
                     expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
@@ -487,23 +487,6 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
                            image_dn[:, half:], pieces[3]], axis=1)
 
 
-def _within_reach(focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
-                  slit_width: u.Quantity, blur: Optional[str]) -> tuple:
-    """
-    Shortest and longest wavelength, in Angstrom, of light that can reach
-    each row: the row's own wavelengths, widened by the spectral blur and by
-    one row.
-    """
-    bounds = _row_bounds(focal_plane, ccd)
-    width = bounds[:, 1] - bounds[:, 0]
-    reach = width.copy()
-    if blur is not None:
-        sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
-                               bounds.mean(axis=1))
-        reach += _REACH_IN_SIGMA * sigma + box
-    return bounds[:, 0] - reach, bounds[:, 1] + reach
-
-
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
                    exposure: u.Quantity, *, slit_width: u.Quantity = 0.2 * u.arcsec,
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
@@ -669,8 +652,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}}
     for ccd in CCDS:
-        # Far from a line, its light is a sum of terms that nearly cancel and
-        # can come out slightly below zero. Clip at zero, as a run does
+        # Far from a line, the exact part and the correction nearly cancel and
+        # can leave a rate slightly below zero. Clip at zero, as a run does
         # before its Poisson draw.
         image_rate = np.maximum(rate[ccd], 0.0, out=rate[ccd]).T          # (rows, columns)
         wavelength = focal_plane.wavelength(rows, ccd)
@@ -679,20 +662,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         # row's wavelength.
         own = np.broadcast_to(wavelength.to_value(u.Angstrom)[:, np.newaxis], image_rate.shape)
         lit = image_rate > 0
-        mean = np.divide(image_rate, per_wavelength[ccd].T, out=np.array(own, dtype=float),
-                         where=lit & (per_wavelength[ccd].T > 0))
-        rms = np.sqrt(np.divide(image_rate, per_square[ccd].T, out=np.array(own, dtype=float) ** 2,
-                                where=lit & (per_square[ccd].T > 0)))
-        # Photons reach a row only from wavelengths within the spectral blur
-        # of it, so keep the wavelengths there, with a row to spare for the
-        # cells the light is laid in. This changes only pixels whose light
-        # is the near-cancelling remainder of a far line.
-        low, high = _within_reach(focal_plane, ccd, telescope, det, u.Quantity(slit_width), blur)
-        mean = np.clip(mean, low[:, np.newaxis], high[:, np.newaxis])
-        # The RMS energy is at least the mean energy, so its wavelength is at
-        # most the mean's.
-        rms = np.clip(rms, low[:, np.newaxis], mean)
-        reaching, reaching_rms = mean * u.Angstrom, rms * u.Angstrom
+        reaching = np.divide(image_rate, per_wavelength[ccd].T, out=np.array(own, dtype=float),
+                             where=lit & (per_wavelength[ccd].T > 0)) * u.Angstrom
+        reaching_rms = np.sqrt(np.divide(image_rate, per_square[ccd].T,
+                                         out=np.array(own, dtype=float) ** 2,
+                                         where=lit & (per_square[ccd].T > 0))) * u.Angstrom
         photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
             image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons
