@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
+from .deprecated import get_dem_data_from_results  # noqa: F401  (deprecated)
 from .results_file import load_results
 from .utils import has_wrong_velocity_sign
 
@@ -445,38 +446,6 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "Add more parameters to narrow the selection. "
             "Use summary_table(results) to see all available combinations."
         )
-
-
-def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deprecated: no version of ECLIPSE wrote the DEM into the results.
-
-    The DEM and emission measure are in the synthesis file. Read them with
-    `read_synthesis_products(path, keys=["dem_map", "em_tv"])`.
-
-    Parameters
-    ----------
-    results : dict
-        Results from `load_instrument_response_results`.
-
-    Raises
-    ------
-    KeyError
-        If the results hold no DEM; results from `eclipse` never do.
-    """
-    warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
-                  "release: no released version wrote DEM data into the results. The DEM is "
-                  "in the synthesis file; read it with "
-                  "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
-                  FutureWarning, stacklevel=2)
-    if "dem_data" not in results:
-        raise KeyError(
-            "DEM data is not in the results, as no released version wrote it there. It is "
-            "in the synthesis file: read it with "
-            "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
-        )
-    
-    return results["dem_data"]
 
 
 def summary_table(results: Dict[str, Any]) -> None:

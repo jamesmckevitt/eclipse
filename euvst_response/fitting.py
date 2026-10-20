@@ -13,7 +13,7 @@ from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from .utils import gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
+from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
 
 
@@ -393,7 +393,7 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
     centre = wv[peak_idx]
     fwhm = _half_max_fwhm(wv, smooth, peak_idx)
-    sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+    sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
              else (wv.max() - wv.min()) / 10)
     return [peak, centre, sigma, back]
 
@@ -987,7 +987,7 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             inside &= wv <= 0.5 * (own + upper.min())
         inside[peak_idx] = True
         fwhm = _half_max_fwhm(wv, np.where(inside, prof_c, 0.0), peak_idx)
-        sigma = (fwhm / (2 * np.sqrt(2 * np.log(2))) if fwhm > 0
+        sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
                  else (wv.max() - wv.min()) / 10)
 
     # The primary, and every component whose centre is free, starts at the

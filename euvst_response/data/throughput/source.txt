@@ -1,3 +1,6 @@
+primary_mirror_coating_reflectance.dat and grating_reflection_efficiency.dat
+are from RSC-2022035A, EUVST Sensitivity Budget (13 Dec 2024).
+
 Aluminium, aluminium oxide, and carbon throughputs retrieved from:
 https://henke.lbl.gov/optical_constants/filter2.html
 11/08/2025

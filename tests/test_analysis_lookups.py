@@ -79,3 +79,29 @@ def test_the_dem_helper_says_it_is_deprecated_and_where_the_dem_is():
     with pytest.warns(FutureWarning, match="get_dem_data_from_results is deprecated"):
         with pytest.raises(KeyError, match="read_synthesis_products"):
             get_dem_data_from_results({})
+
+
+def test_the_deprecated_functions_warn_at_the_line_that_calls_them():
+    import importlib
+    import inspect
+    import sys
+    import warnings
+
+    import astropy.units as u
+    import numpy as np
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sys.modules.pop("euvst_response.psf", None)
+        psf = importlib.import_module("euvst_response.psf")
+    from euvst_response import get_dem_data_from_results
+
+    calls = [lambda: psf._resample_psf(np.ones((4, 4)), 1 * u.arcsec, 2 * u.arcsec),
+             lambda: psf._combine_psfs(np.ones((3, 3)), np.ones((3, 3)), size=3),
+             lambda: get_dem_data_from_results({"dem_data": {}})]
+    for call in calls:
+        line = inspect.getsourcelines(call)[1]
+        with pytest.warns(FutureWarning, match="is deprecated") as caught:
+            call()
+        assert len(caught) == 1
+        assert (caught[0].filename, caught[0].lineno) == (__file__, line)
