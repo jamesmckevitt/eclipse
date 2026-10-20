@@ -9,7 +9,7 @@ The EUVST long wavelength channel (LW) is coming soon, and will complete EUVST.
 
 ## EUVST-SW
 
-ECLIPSE's default settings describe EUVST-SW. The [configuration reference](configuration.md) lists them, and [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000) describes the instrument model. It will be updated as EUVST is built, tested and commissioned.
+ECLIPSE's default settings describe EUVST-SW. The [configuration reference](configuration.md) lists them, [Where the settings come from](instrument-sources.md) gives their sources, and [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000) describes the instrument model. It will be updated as EUVST is built, tested and commissioned.
 
 Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide. Its PSF is modelled, from simulations and some measurements of the mirror's roughness, and will be measured before launch; ECLIPSE prints a warning saying so whenever `psf: True` is set.
 
