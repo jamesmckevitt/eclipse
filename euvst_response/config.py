@@ -59,9 +59,10 @@ TILT_REFERENCE_ANGLE = 140.0 * u.arcsec
 
 
 def _material_value(det, name: str):
-    """Detector setting `name`, or its material's when the setting is None."""
-    value = getattr(det, name)
-    return DETECTOR_MATERIALS[det.material][name] if value is None else value
+    """Detector setting `name`, or its material's when the setting is None or missing."""
+    value = getattr(det, name, None)
+    material = getattr(det, "material", "silicon")
+    return DETECTOR_MATERIALS[material][name] if value is None else value
 
 
 def _pair_energy(det) -> u.Quantity:

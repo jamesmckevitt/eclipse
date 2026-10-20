@@ -12,6 +12,7 @@ from scipy.signal import convolve2d
 from scipy.special import erf
 from scipy.stats import binom, poisson
 from . import resolution_budget
+from .config import _pair_energy
 from .sampling import _carry_photon_wavelengths
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
@@ -77,17 +78,21 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     rest_wavelength : u.Quantity
         Photon wavelength, one value or an array.
     det : Detector_SWC or Detector_EIS
-        Detector.
+        Detector. Another object needs a `ccd_temperature`, and is taken as
+        silicon unless it gives a `material` or `pair_energy_300k` and
+        `pair_energy_slope`.
 
     Returns
     -------
     np.ndarray
         Electrons per photon, same shape as `rest_wavelength`.
     """
-    if not hasattr(det, 'ccd_temperature'):
-        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
+    if not hasattr(det, "pair_energy") and not hasattr(det, "ccd_temperature"):
+        raise ValueError("The detector has no ccd_temperature, which sets the energy to free an "
+                         "electron-hole pair.")
+    pair_energy = det.pair_energy if hasattr(det, "pair_energy") else _pair_energy(det)
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
-    return np.asarray(photon_energy_ev / det.pair_energy.to_value(u.eV), dtype=float)
+    return np.asarray(photon_energy_ev / pair_energy.to_value(u.eV), dtype=float)
 
 
 def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,

@@ -62,6 +62,17 @@ def test_the_default_pair_energy_is_the_silicon_law(det):
     assert det.fano_factor == 0.115 and det.pair_energy_300k == 3.71 * u.eV
 
 
+def test_electrons_per_photon_takes_any_object_with_a_ccd_temperature():
+    from types import SimpleNamespace
+
+    temperature = -60 * u.deg_C
+    np.testing.assert_array_equal(
+        electrons_per_photon(195 * u.AA, SimpleNamespace(ccd_temperature=temperature)),
+        electrons_per_photon(195 * u.AA, Detector_SWC(ccd_temperature=temperature)))
+    with pytest.raises(ValueError, match="no ccd_temperature"):
+        electrons_per_photon(195 * u.AA, SimpleNamespace())
+
+
 def test_the_default_filter_and_pinhole_light_are_unchanged():
     assert AluminiumFilter().visible_light_throughput() == 10.0 ** (-1485 / 170.0) * 0.8
     assert Simulation().pinhole_visible_wavelength == 600 * u.nm
