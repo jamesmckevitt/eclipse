@@ -254,13 +254,13 @@ def _detected_photons(photons: np.ndarray, det, *, noise: bool = True,
     """
     Photons detected in each pixel, given the quantum efficiency `det.qe_euv`.
 
-    With `noise` on, a binomial draw over the whole photons in each pixel
-    (fractions are dropped); with it off, its mean, `qe_euv` times the
-    photons. `inverse_transform` draws by inverse-transform sampling, for
-    common random numbers.
+    With `noise` on, each pixel is a binomial draw over its whole photons,
+    and fractions of a photon are dropped. With `noise` off, it is the mean,
+    `qe_euv` times the photons. `inverse_transform` draws by
+    inverse-transform sampling, for common random numbers.
     """
     if not noise:
-        return np.asarray(photons, dtype=float) * det.qe_euv
+        return (np.asarray(photons) * det.qe_euv).astype(float)
     trials = np.asarray(photons).astype(np.int64)
     if inverse_transform:
         detected = _binomial_inverse_transform(trials, det.qe_euv)
@@ -275,13 +275,18 @@ def _dark_electrons(mean, shape: tuple, *, noise: bool = True,
     Dark current electrons in each pixel.
 
     `mean` is in electrons per pixel, one value for all pixels or an array
-    of `shape`. With `noise` on, a Poisson draw; with it off, the mean.
-    `inverse_transform` draws by inverse-transform sampling, for common
-    random numbers.
+    that broadcasts to `shape`. With `noise` on, each pixel is a Poisson
+    draw. With `noise` off, it is the mean. `inverse_transform` draws by
+    inverse-transform sampling, for common random numbers. Raises
+    ValueError for a `mean` that does not broadcast to `shape`.
     """
-    if np.ndim(mean) not in (0, len(shape)):
-        raise ValueError(f"The dark mean must be one value or have {len(shape)} axes, "
-                         f"not {np.ndim(mean)}.")
+    try:
+        broadcast = np.broadcast_shapes(np.shape(mean), shape) == tuple(shape)
+    except ValueError:
+        broadcast = False
+    if not broadcast:
+        raise ValueError(f"The dark mean, shaped {np.shape(mean)}, does not broadcast to "
+                         f"the pixels, shaped {tuple(shape)}.")
     if not noise:
         return np.array(np.broadcast_to(np.asarray(mean, dtype=float), shape))
     if inverse_transform:
@@ -296,15 +301,17 @@ def _read_noise(shape: tuple, det) -> np.ndarray:
 
 def _digitise(electrons: np.ndarray, det, *, rounded: bool = True) -> np.ndarray:
     """
-    DN in each pixel: electrons divided by the gain, rounded to the nearest
-    DN and clipped at `det.max_dn`.
+    DN in each pixel, in the unit of `det.max_dn`.
 
-    With `rounded` False the DN are not rounded, as for the mean DN.
+    The electrons are divided by the gain, rounded to the nearest DN and
+    clipped at `det.max_dn`. With `rounded` False they are not rounded, as
+    for the mean DN.
     """
     dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
+    dn = dn * (u.DN / u.pixel).to(det.max_dn.unit)
     if rounded:
         dn = np.round(dn)
-    return np.minimum(dn, det.max_dn.to_value(u.DN / u.pixel))
+    return np.minimum(dn, det.max_dn.value)
 
 
 def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
@@ -915,8 +922,6 @@ def to_electrons(
     else:
         rest_wavelength = rms_wavelength = meta["rest_wav"]
 
-    # Apply quantum efficiency: a binomial draw over whole photons, or without
-    # noise its expectation qe * N, with no cast to integers.
     incident = photon_counts.to(u.photon / u.pix).data
     photons_detected = _detected_photons(incident, det, noise=noise,
                                          inverse_transform=photon_shot_inverse_transform)

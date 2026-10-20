@@ -587,8 +587,7 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
     if np.ndim(dark) == 1:
         dark = np.reshape(dark, (-1, 1))
-    electrons = electrons + _dark_electrons(np.broadcast_to(dark, photons.shape),
-                                            photons.shape, noise=noise)
+    electrons = electrons + _dark_electrons(dark, photons.shape, noise=noise)
     if noise:
         electrons = electrons + _read_noise(photons.shape, det)
     # Not clipped at zero, as a CCD reads out above a bias level; see

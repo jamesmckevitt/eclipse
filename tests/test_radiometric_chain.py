@@ -21,6 +21,10 @@ from ndcube import NDCube
 
 from euvst_response.config import Detector_EIS, Detector_SWC, Simulation
 from euvst_response.radiometric import (
+    _dark_electrons,
+    _detected_photons,
+    _digitise,
+    _read_noise,
     add_telescope_throughput,
     apply_exposure,
     intensity_to_photons,
@@ -459,21 +463,29 @@ def test_an_iteration_raises_no_warnings_about_the_cube_having_no_observer():
 
 
 def test_dark_electrons_without_noise_is_a_writable_mean():
-    from euvst_response.radiometric import _dark_electrons
     dark = _dark_electrons(3.5, (2, 3), noise=False)
     assert dark.shape == (2, 3) and np.all(dark == 3.5)
     dark += 1.0
     assert np.all(dark == 4.5)
 
 
-def test_dark_electrons_refuses_a_mean_with_the_wrong_axes():
-    from euvst_response.radiometric import _dark_electrons
-    with pytest.raises(ValueError, match="axes"):
-        _dark_electrons(np.ones(3), (2, 3))
+
+@pytest.mark.parametrize("inverse_transform", [False, True])
+def test_dark_electrons_refuses_a_mean_that_does_not_fit_the_pixels(inverse_transform):
+    with pytest.raises(ValueError, match="does not broadcast"):
+        _dark_electrons(np.ones(3), (2, 3 + 1), inverse_transform=inverse_transform)
+    with pytest.raises(ValueError, match="does not broadcast"):
+        _dark_electrons(np.ones((3, 1)), (1, 4), inverse_transform=inverse_transform)
+
+
+def test_dark_electrons_takes_a_mean_per_row():
+    np.random.seed(0)
+    dark = _dark_electrons(np.array([[0.0], [1e6]]), (2, 3))
+    assert dark.shape == (2, 3)
+    assert np.all(dark[0] == 0) and np.all(dark[1] > 9e5)
 
 
 def test_dark_electrons_by_inverse_transform_takes_a_mean_per_pixel():
-    from euvst_response.radiometric import _dark_electrons
     mean = np.array([[0.0, 5.0], [50.0, 500.0]])
     np.random.seed(0)
     draws = np.array([_dark_electrons(mean, mean.shape, inverse_transform=True)
@@ -483,10 +495,43 @@ def test_dark_electrons_by_inverse_transform_takes_a_mean_per_pixel():
 
 
 def test_digitise_without_rounding_keeps_fractional_dn():
-    from euvst_response.radiometric import _digitise
     det = Detector_SWC()
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
     max_dn = det.max_dn.to_value(u.DN / u.pixel)
     electrons = np.array([0.3 * gain, 10.6 * gain, 10 * max_dn * gain])
     np.testing.assert_allclose(_digitise(electrons, det, rounded=False), [0.3, 10.6, max_dn])
     np.testing.assert_array_equal(_digitise(electrons, det), [0.0, 11.0, max_dn])
+
+
+def test_detected_photons_without_noise_match_the_photons_times_the_qe():
+    det = Detector_SWC()
+    photons = np.array([[10.0, 20.5]], dtype=np.float32)
+    detected = _detected_photons(photons, det, noise=False)
+    assert detected.dtype == np.float64
+    np.testing.assert_array_equal(detected, (photons * det.qe_euv).astype(float))
+    detected += 1.0
+
+
+def test_detected_photons_with_noise_drop_fractions_of_a_photon():
+    det = Detector_SWC()
+    np.random.seed(0)
+    detected = _detected_photons(np.full(20000, 3.9), det)
+    # A binomial draw over 3 photons, not 3.9: a mean of 3 qe.
+    assert detected.mean() == pytest.approx(3 * det.qe_euv, rel=0.02)
+
+
+def test_read_noise_has_the_detector_rms():
+    det = Detector_SWC()
+    np.random.seed(0)
+    noise = _read_noise((400, 400), det)
+    assert noise.mean() == pytest.approx(0.0, abs=0.1)
+    assert noise.std() == pytest.approx(det.read_noise_rms.to_value(u.electron / u.pixel),
+                                        rel=0.01)
+
+
+def test_dn_are_given_in_the_unit_of_the_digitiser_maximum():
+    det = Detector_SWC(max_dn=65.535 * u.DN / u.mpix)
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    # 50000 DN per pixel is 50 DN per milli-pixel, the unit of max_dn.
+    dn = _digitise(np.array([50000 * gain]), det)
+    assert (dn[0] * det.max_dn.unit).to_value(u.DN / u.pixel) == pytest.approx(50000.0)
