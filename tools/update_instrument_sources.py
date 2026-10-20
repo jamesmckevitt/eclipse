@@ -94,6 +94,9 @@ WORDING = {
 
 DEGREES = {1: "linear", 2: "quadratic", 3: "cubic"}
 
+# Detector settings that default to their material's value.
+MATERIAL_PROPERTIES = {name for material in DETECTOR_MATERIALS.values() for name in material}
+
 
 def _number(value):
     """Number as the page shows it, without exponents: 13.5, 2048, -0.0006."""
@@ -206,8 +209,7 @@ def _default(cls, f):
     """Default of field `f` of `cls`, or its material's where the default is None."""
     if f.default_factory is not dataclasses.MISSING:
         return f.default_factory()
-    properties = {name for material in DETECTOR_MATERIALS.values() for name in material}
-    if f.default is None and f.name in properties:
+    if f.default is None and hasattr(cls, "material") and f.name in MATERIAL_PROPERTIES:
         return _material_value(cls, f.name)
     return f.default
 
@@ -261,9 +263,10 @@ def cells(instrument, keys):
     ------
     ValueError
         If the instrument is unknown, a key is not one of its settings with a
-        source, the settings' sources differ, the row has wording under
-        more than one setting, or its wording leaves out one of its settings,
-        names a setting not in the row, or shares a name with a setting.
+        source, the row names one field twice, the settings' sources differ,
+        the row has wording under more than one setting, or its wording
+        leaves out one of its settings, names a setting not in the row, or
+        shares a name with a setting.
     """
     if instrument not in INSTRUMENTS:
         raise ValueError(f"Unknown instrument {instrument!r}; use {', '.join(INSTRUMENTS)}.")
@@ -275,7 +278,7 @@ def cells(instrument, keys):
         if name not in fields or "source" not in fields[name].metadata:
             raise ValueError(f"{key} is not an {instrument} setting with a source.")
         if name in values:
-            raise ValueError(f"The row for {', '.join(keys)} names {name} twice.")
+            raise ValueError(f"The row for {', '.join(keys)} names the field {name} twice.")
         f = fields[name]
         default = _default(cls, f)
         values[name] = Value(key, default, f.metadata.get("unit", ""))
