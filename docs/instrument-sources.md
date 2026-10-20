@@ -9,7 +9,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | Setting | Default | Source |
 | --- | --- | --- |
 | `telescope.D_ap` | 0.28 m | RSC-2022021C, Optical Design Summary: entrance pupil 280 mm |
-| Half the aperture feeding the SW channel | 0.5 | Not recorded |
+| Half the aperture feeding the SW channel, set in the code | 0.5 | Not recorded |
 | `telescope.microroughness_sigma` | 0.3 nm | Not recorded |
 | `telescope.pm_table` | packaged table | RSC-2022035A, Sensitivity Budget (13 Dec 2024) |
 | `telescope.grating_table` | packaged table | RSC-2022035A, Sensitivity Budget (13 Dec 2024) |
@@ -43,7 +43,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `detector.read_noise_rms` | 10 electrons | Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.1 requires 6 electrons rms; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, predicts 11.0 electrons at most |
 | `detector.gain_e_per_dn` | 2.78 electrons per DN | MSSL engineering model test results; SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5, gives the same design value |
 | `detector.dark_current_293k` | 20000 electrons per pixel per second | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement) |
-| Dark current against temperature | the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value below 198 K | Not recorded for the law; MSSL test results for holding it below 198 K |
+| Dark current against temperature, set in the code | the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value below 198 K | Not recorded for the law; MSSL test results for holding it below 198 K |
 | `detector.full_well` | 150000 electrons | Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1 (January 2024); SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.6.1 requires more than 100000, typically 150000. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, gives 75000 typical for the image area |
 | `detector.max_dn` | 65535 DN | SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5: a 16-bit converter |
 | `detector.shutter` | true | SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a mechanical shutter |
@@ -83,7 +83,7 @@ These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) us
 | `telescope.psf_params` | 3 pixels FWHM | Ugarte-Urra (2016), EIS Software Note 2 |
 | `detector.qe_euv` | 0.64 | EIS Software Note 2 |
 | `detector.qe_vis` | 0.65 | MSSL engineering test report |
-| Dark current against temperature | the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K value below 198 K | MSSL test results |
+| Dark current against temperature, set in the code | the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K value below 198 K | MSSL test results |
 | `detector.read_noise_rms`, `detector.gain_e_per_dn`, `detector.dark_current_293k` | 5 electrons, 6.3 electrons per DN, 250 electrons per pixel per second | Not recorded |
 | `detector.wvl_res`, `detector.plate_scale_angle` | 22.3 mA per pixel, 1 arcsec per pixel | Not recorded |
 | `detector.ccd_temperature`, `detector.pix_size`, `detector.max_dn` | -60 Celsius, 13.5 micron, 65535 DN | Not recorded |
