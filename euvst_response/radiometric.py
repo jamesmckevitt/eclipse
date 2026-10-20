@@ -280,8 +280,9 @@ def _dark_electrons(mean, shape: tuple, *, noise: bool = True,
     inverse-transform sampling, for common random numbers. Raises
     ValueError for a `mean` that does not broadcast to `shape`.
     """
+    mean = np.asarray(mean, dtype=float)
     try:
-        full = np.broadcast_to(np.asarray(mean, dtype=float), shape)
+        full = np.broadcast_to(mean, shape)
     except ValueError:
         raise ValueError(f"The dark mean, shaped {np.shape(mean)}, does not broadcast to "
                          f"the pixels, shaped {tuple(shape)}.") from None

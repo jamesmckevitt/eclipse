@@ -532,7 +532,7 @@ def test_dn_are_whole_dn_per_pixel_whatever_the_unit_of_the_maximum():
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
     # The maximum is 65535 DN per pixel, so 50400.4 DN rounds and 70000 clips.
     dn = _digitise(np.array([50400.4, 70000.0]) * gain, det)
-    np.testing.assert_allclose(dn, [50400.0, 65535.0], rtol=1e-12)
+    np.testing.assert_array_equal(dn, [50400.0, 65535.0])
 
 
 def test_dark_electrons_per_row_draw_as_over_every_pixel():
