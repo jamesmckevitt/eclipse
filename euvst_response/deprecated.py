@@ -31,8 +31,6 @@ def _warn(name: str, reason: str) -> None:
                   FutureWarning, stacklevel=level)
 
 
-_PSF_FILES = ("ECLIPSE does not use it. scipy.signal.convolve2d and scipy.ndimage.zoom "
-              "do the same.")
 
 
 def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
@@ -141,20 +139,22 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_psf_ascii(fname: Path, skip: int) -> np.ndarray:
     """Load PSF data from ASCII file."""
-    _warn("_load_psf_ascii", _PSF_FILES)
+    _warn("_load_psf_ascii", "ECLIPSE does not use it. "
+          "numpy.loadtxt(fname, skiprows=skip, encoding='utf-16 LE') does the same.")
     return np.loadtxt(fname, skiprows=skip, encoding="utf-16 LE")
 
 
 def _resample_psf(psf: np.ndarray, res_in: u.Quantity, res_out: u.Quantity) -> np.ndarray:
     """Resample PSF to different pixel scale."""
-    _warn("_resample_psf", _PSF_FILES)
+    _warn("_resample_psf", "ECLIPSE does not use it. scipy.ndimage.zoom does the same.")
     factor = (res_in / res_out).decompose().value
     return zoom(psf, factor, order=1)
 
 
 def _combine_psfs(psf_focus: np.ndarray, psf_mesh: np.ndarray, crop: float = 0.99, size: int | None = None) -> np.ndarray:
     """Convolve the focus and mesh PSFs and crop to an energy fraction or size."""
-    _warn("_combine_psfs", _PSF_FILES)
+    _warn("_combine_psfs", "ECLIPSE does not use it. scipy.signal.convolve2d does the "
+          "convolution.")
     psf = convolve2d(psf_focus, psf_mesh, mode="same")
     if size is not None:
         if size % 2 == 0:
