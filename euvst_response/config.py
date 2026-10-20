@@ -169,7 +169,11 @@ def _check_detector_material(det, section: str) -> None:
 
 
 def _numbers(value, count, section: str, name: str, example: str) -> tuple:
-    """`value` as a tuple of floats, refused unless it holds `count` finite numbers."""
+    """
+    `value` as a tuple of finite floats.
+
+    Refused unless `count`, a test of how many there are, is true of them.
+    """
     def number(item):
         if isinstance(item, u.Quantity) and item.unit == u.dimensionless_unscaled:
             item = item.value
@@ -198,25 +202,46 @@ def _same_setting(first, second) -> bool:
     return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
 
 
+def _one_length(value):
+    """`value` as one length, read with `u.Quantity`, or None if it is not one."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        value = u.Quantity(value)
+    except (TypeError, ValueError):
+        return None
+    if value.size != 1:
+        return None
+    value = value.reshape(())
+    # A plain zero adds to a wavelength.
+    if value.unit == u.dimensionless_unscaled and value.value == 0:
+        value = value.value * u.Angstrom
+    if not (value.unit.is_equivalent(u.AA) and np.isfinite(value.value)):
+        return None
+    return value
+
+
 def _check_focal_plane(det, section: str = "detector") -> None:
     """Check the SW focal plane settings of a detector or focal plane; store the lists as tuples."""
-    offset = det.wavelength_offset
-    if not (isinstance(offset, u.Quantity) and offset.isscalar and offset.unit.is_equivalent(u.AA)
-            and np.isfinite(offset.value)):
+    offset = _one_length(det.wavelength_offset)
+    if offset is None:
         raise ValueError(f"{section}.wavelength_offset must be one wavelength, such as "
-                         f"0.1 Angstrom; got {offset!r}.")
+                         f"0.1 Angstrom; got {det.wavelength_offset!r}.")
+    det.wavelength_offset = offset
     det.dispersion = _numbers(det.dispersion, lambda n: n >= 2, section, "dispersion",
                               "two or more coefficients, lowest order first, such as "
                               "[198.9, 1.25]")
     det.slit_image_tilt = _numbers(det.slit_image_tilt, lambda n: n == 2, section,
                                    "slit_image_tilt", "two numbers of rows, such as [0.991, 0.605]")
     band = det.lit_band
-    if not (isinstance(band, (list, tuple)) and len(band) == 2
-            and all(isinstance(q, u.Quantity) and q.isscalar and q.unit.is_equivalent(u.AA)
-                    and np.isfinite(q.value) for q in band)):
+    try:
+        limits = None if isinstance(band, str) else tuple(_one_length(item) for item in band)
+    except TypeError:
+        limits = None
+    if limits is None or len(limits) != 2 or any(limit is None for limit in limits):
         raise ValueError(f"{section}.lit_band must be two wavelengths, such as [170.0 Angstrom, "
                          f"212.3 Angstrom]; got {band!r}.")
-    det.lit_band = tuple(band)
+    det.lit_band = limits
 
 
 def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple = (),

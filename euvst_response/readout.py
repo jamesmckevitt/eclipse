@@ -124,11 +124,6 @@ class FocalPlane_SWC:
                 f"A CCD needs at least one row and one column, got "
                 f"{self.n_rows} x {self.n_columns}."
             )
-        if len(self.dispersion) < 2:
-            raise ValueError(
-                "dispersion needs at least a constant and a linear coefficient, "
-                f"got {len(self.dispersion)} coefficient(s)."
-            )
         _check_focal_plane(self, "focal_plane")
 
     @property

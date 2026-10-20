@@ -105,6 +105,31 @@ def test_the_focal_plane_settings_reach_the_focal_plane():
     assert FocalPlane_SWC.from_detector(det, slit_image_tilt=(0.0, 0.0)).slit_image_tilt == (0, 0)
 
 
+@pytest.mark.parametrize("lit_band", [[170.0, 212.3] * u.AA, ("170 Angstrom", "212.3 Angstrom"),
+                                      [17 * u.nm, 212.3 * u.AA], (212.3 * u.AA, 170 * u.AA),
+                                      np.array([170.0, 212.3]) * u.AA])
+def test_the_focal_plane_takes_any_lit_band_that_quantity_reads(lit_band):
+    fp = FocalPlane_SWC(lit_band=lit_band)
+    assert all(isinstance(limit, u.Quantity) and limit.isscalar for limit in fp.lit_band)
+    for ccd in ("left", "right"):
+        assert fp.lit_rows(ccd) == FocalPlane_SWC().lit_rows(ccd)
+
+
+@pytest.mark.parametrize("offset, shift", [(0, 0.0), (np.float64(0.0), 0.0),
+                                           ([0.1] * u.AA, 0.1), (0.01 * u.nm, 0.1),
+                                           ("0.1 Angstrom", 0.1)])
+def test_the_focal_plane_takes_any_wavelength_offset_that_adds_to_a_wavelength(offset, shift):
+    fp = FocalPlane_SWC(wavelength_offset=offset)
+    assert fp.wavelength_offset.isscalar
+    moved = fp.wavelength(100, "left") - FocalPlane_SWC().wavelength(100, "left")
+    assert moved.to_value(u.AA) == pytest.approx(shift, abs=1e-12)
+
+
+def test_a_scalar_dispersion_is_refused_with_a_message():
+    with pytest.raises(ValueError, match="focal_plane.dispersion must be two or more"):
+        FocalPlane_SWC(dispersion=199.0)
+
+
 @pytest.mark.parametrize("build, message", [
     (lambda: Detector_SWC(fano_factor=-0.1), "detector.fano_factor must be a number, zero or more"),
     (lambda: Detector_EIS(fano_factor="0.1"), "detector.fano_factor must be a number"),
