@@ -63,7 +63,7 @@ These describe the focal plane in `FocalPlane_SWC`, which the [full-CCD frame](f
 | Wavelength of each row | quadratic in position along the dispersion | Fitted to RSC-2022021C: the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
 | Band reaching the detectors | 170.0 to 212.3 Angstrom | The required range, RSC-2022021C REQ-103 and SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the baffle's edges, so where the band stops to within a row or two is a modelling choice |
 | Alignment of the camera to the beam | +/-0.79 Angstrom; no offset by default | SOLC-EUVST-MSSL-RP-0007 v1.2, page 45 |
-| Slit image tilt, when asked for | a drift along the dispersion of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec | RSC-2022021C, SW footprint figure |
+| Slit image tilt, off unless asked for | a drift along the dispersion of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec | No document gives it. Measured from the ray-traced spots in the SW footprint figure of RSC-2022021C, where a row is about a quarter of a pixel of the figure |
 | Clear and read-out sequence | dump, exposure, row-by-row read with windows | SOLC-EUVST-MSSL-SP-0001 v1.4, SOLC-EUVST-MSSL-RS-0002 v2.0, SOLC-EUVST-MSSL-ICD-0003 v3.1 |
 
 ## Constants and assumptions in the code
