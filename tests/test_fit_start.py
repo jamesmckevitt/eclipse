@@ -54,13 +54,15 @@ def test_at_a_peak_of_three_times_the_noise_no_fit_ends_far_away():
     assert velocity.std() < 25
 
 
-def test_a_nan_pixel_on_the_line_counts_as_background():
+def test_a_nan_pixel_on_the_line_is_left_out():
+    """The line is still found, within a pixel, and its width and background are kept."""
     spectrum = gaussian(WV, 100.0, REST, SIGMA, BACK)
     spectrum[16] = np.nan
     peak, centre, sigma, back = _guess_params(WV, spectrum)
-    assert np.all(np.isfinite([peak, centre, sigma, back]))
     assert centre == pytest.approx(REST, abs=STEP)
     assert back == pytest.approx(BACK, abs=1.0)
+    assert sigma == pytest.approx(SIGMA, rel=0.25)
+    assert peak == pytest.approx(100.0, rel=0.2)
 
 
 def test_an_all_nan_spectrum_starts_at_zero():
@@ -71,7 +73,7 @@ def test_an_all_nan_spectrum_starts_at_zero():
 
 @pytest.mark.parametrize("backend", [None, "mpfit"], ids=["scipy", "mpfit"])
 def test_nan_spectra_fail_alone(backend):
-    """An all-NaN first spectrum and a NaN on the line fail; the clean spectrum is fitted."""
+    """An all-NaN first spectrum fails; one with a NaN on the line is fitted without it."""
     line = gaussian(WV, 100.0, REST, SIGMA, BACK)
     on_line = line.copy()
     on_line[15] = np.nan
@@ -85,5 +87,5 @@ def test_nan_spectra_fail_alone(backend):
     config = None if backend is None else FitConfig(backend=backend)
     fits, _, failed = fit_cube_gauss(NDCube(data, wcs=wcs, unit=u.DN / u.pix), n_jobs=1,
                                      fit_config=config, return_failed=True)
-    assert failed[:, 0].tolist() == [True, True, False]
-    assert (fits[2, 0, 1] * 1e8 / REST - 1) * C == pytest.approx(0, abs=1e-3)
+    assert failed[:, 0].tolist() == [True, False, False]
+    assert (fits[1:, 0, 1] * 1e8 / REST - 1) * C == pytest.approx(0, abs=1e-3)
