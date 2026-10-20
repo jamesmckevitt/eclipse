@@ -1,6 +1,7 @@
 """Every instrument setting has a source, and docs/instrument-sources.md shows the code's."""
 import dataclasses
 import importlib.util
+import re
 from pathlib import Path
 
 import astropy.units as u
@@ -30,7 +31,8 @@ WITHOUT_SOURCE = {
     Detector_EIS: {"material", "fano_factor", "pair_energy_300k", "pair_energy_slope"},
     # The PSF shape is a modelling choice, and the filter is a section of its own.
     Telescope_EUVST: {"psf_type", "filter"},
-    # Modelling choices left off by default, and the date of an observation.
+    # The PSF shape is a modelling choice, the slit width the PSF is for and the
+    # blur across the slit are off by default, and the date is an observation's.
     Telescope_EIS: {"psf_type", "psf_slit_width", "psf_across_slit", "date"},
     # Choices of a run, not facts about the instrument.
     Simulation: {"expos", "n_iter", "ncpu", "instrument", "vis_sl", "psf", "psf_boundary",
@@ -124,31 +126,50 @@ def test_writes_sources_and_plain_defaults_only():
     assert any("detector.gain_e_per_dn" in p for p in tool.hand_written_problems(SYNTHETIC))
 
 
-@pytest.mark.parametrize("key, value", [
-    ("detector.serial_prescan", 51),
+def _default(key):
+    return tool.setting("SWC", key)[1]
+
+
+def _not_none(value, unit):
+    """A nonzero value in `unit` for a default that is None."""
+    return 0.3 * unit if value is None else None
+
+
+# Each changes a default to a value derived from the current one, so the
+# hand-written cell no longer shows it.
+CHANGES = {
+    "prescan up by one": ("detector.serial_prescan", lambda v: v + 1),
     # The new value appears elsewhere in the cell, for another setting or in a note.
-    ("detector.serial_prescan", 20),
-    ("detector.serial_overscan", 200),
-    ("detector.qe_vis", 0.76),
-    ("detector.slit_image_tilt", (0.991, 0.605)),
-    ("telescope.psf_across_slit", 0.3 * u.arcsec),
-    ("detector.n_columns", 4096),
-    ("detector.cte_serial", 0.99999),
-    ("detector.lit_band", (171.0 * u.AA, 212.3 * u.AA)),
-    ("simulation.slit_width", None),
-    ("telescope.fiducial_centres", []),
-    ("telescope.fiducial_lengths", []),
-    ("telescope.pointing_jitter", 0.0 * u.arcsec),
-])
-def test_hand_written_defaults_are_checked(monkeypatch, key, value):
+    "prescan to the overscan": ("detector.serial_prescan",
+                                lambda v: _default("detector.serial_overscan")),
+    "qe_vis to qe_euv": ("detector.qe_vis", lambda v: _default("detector.qe_euv")),
+    "tilt measured": ("detector.slit_image_tilt",
+                      lambda v: MEASURED_SLIT_IMAGE_TILT if not any(v) else (0.0, 0.0)),
+    "blur across the slit": ("telescope.psf_across_slit",
+                             lambda v: _not_none(v, u.arcsec) if v is None else 2 * v),
+    "columns doubled": ("detector.n_columns", lambda v: 2 * v),
+    "imperfect transfer": ("detector.cte_serial", lambda v: v * 0.99999),
+    "band moved": ("detector.lit_band", lambda v: (v[0] + 1 * u.AA, v[1])),
+    "no slit width": ("simulation.slit_width", lambda v: None),
+    "no fiducials": ("telescope.fiducial_centres", lambda v: []),
+    "jitter given": ("telescope.pointing_jitter",
+                     lambda v: _not_none(v, u.arcsec) if v is None else None),
+}
+
+
+@pytest.mark.parametrize("key, change", CHANGES.values(), ids=CHANGES)
+def test_hand_written_defaults_are_checked(monkeypatch, key, change):
     """A changed default fails the check until its hand-written cell is edited."""
-    f, _ = tool.setting("SWC", key)
+    f, current = tool.setting("SWC", key)
+    value = change(current)
+    assert repr(value) != repr(current), f"Make the change for {key} differ from its default."
     if f.default_factory is dataclasses.MISSING:
         monkeypatch.setattr(f, "default", value)
     else:
         monkeypatch.setattr(f, "default_factory", lambda: value)
     problems = tool.hand_written_problems(_page())
-    assert len(problems) == 1 and f"`{key}`" in problems[0]
+    assert len(problems) == 1 and f"`{key}`" in problems[0], (
+        f"Changing {key} to {value!r} should give one problem naming it, got {problems}.")
 
 
 @pytest.mark.parametrize("value, label, text", [
@@ -208,66 +229,104 @@ def test_a_mark_applies_to_its_table_only():
         "| `detector.max_dn` | outside a marked table | kept |\n")
 
 
-def test_hand_written_facts_match_the_code():
-    """Hand-written values that are not settings match the code."""
-    psf = _cell("SWC", "`telescope.psf_params`, through `telescope.field_of_view`")
-    fields = Telescope_EUVST.FIELDS_OF_VIEW
+NUM = r"[-+]?\d+(?:\.\d+)?(?:e\d+)?"
+
+
+def _read(instrument, first_cell, pattern):
+    """Numbers of a hand-written cell read in a fixed form."""
+    cell = _cell(instrument, first_cell)
+    match = re.fullmatch(pattern.replace("NUM", f"({NUM})"), cell)
+    assert match, (f"The {instrument} row {first_cell} of {tool.PAGE_NAME} is no longer in the "
+                   f"form tests/test_instrument_sources.py reads; update the pattern there.")
+    return [float(group) for group in match.groups()]
+
+
+def test_psf_row_matches_the_fields_of_view():
+    """The design FWHMs, in pixels rounded to 0.01 as `FIELDS_OF_VIEW` holds them."""
+    first = "`telescope.psf_params`, through `telescope.field_of_view`"
+    along, side, _, small, smaller, spectral, slit = _read(
+        "SWC", first, r"NUM arcsec along the slit for the default NUM x NUM arcsec field "
+                      r"\(NUM and NUM for the smaller fields\); NUM mA in wavelength with the "
+                      r"NUM arcsec slit")
+    telescope = Telescope_EUVST()
     plate_scale = Detector_SWC.plate_scale_angle.to_value(u.arcsec / u.pix)
-    spectral_step = Detector_SWC.wvl_res.to_value(u.mAA / u.pix)
-    # The design FWHMs, in pixels rounded to 0.01 as the code holds them.
-    for field, arcsec in (("280x280", 0.423), ("100x100", 0.195), ("70x70", 0.161)):
-        pixels = round(arcsec / plate_scale, 2)
-        assert f"{arcsec:.3f}" in psf and pixels == fields[field][0].value, (
-            f"Edit the SWC psf_params row of {tool.PAGE_NAME} to the design FWHM of {field}.")
-    assert "43.00 mA" in psf and all(round(43.00 / spectral_step, 2) == f[1].value
-                                     for f in fields.values()), (
-        f"Edit the spectral FWHM in the SWC psf_params row of {tool.PAGE_NAME}.")
-    assert Telescope_EUVST().field_of_view == "280x280", (
-        f"Edit the default field in the SWC psf_params row of {tool.PAGE_NAME}.")
+    step = Detector_SWC.wvl_res.to_value(u.mAA / u.pix)
+    fields = sorted(Telescope_EUVST.FIELDS_OF_VIEW.items(), key=lambda item: -item[1][0].value)
+    edit = f"Edit the SWC psf_params row of {tool.PAGE_NAME} or Telescope_EUVST.FIELDS_OF_VIEW"
+    assert telescope.field_of_view == f"{side:g}x{side:g}" == fields[0][0], (
+        f"{edit}: the default field is {telescope.field_of_view}.")
+    for (name, widths), arcsec in zip(fields, (along, small, smaller)):
+        assert round(arcsec / plate_scale, 2) == widths[0].value, (
+            f"{edit}: field {name} is {widths[0].value} pixels along the slit, "
+            f"{widths[0].value * plate_scale:.3f} arcsec.")
+        assert round(spectral / step, 2) == widths[1].value, (
+            f"{edit}: field {name} is {widths[1].value} pixels in wavelength, "
+            f"{widths[1].value * step:.2f} mA.")
+    assert slit == telescope.psf_slit_width.to_value(u.arcsec), (
+        f"{edit}: the spectral FWHM is for the {telescope.psf_slit_width} slit.")
 
-    assert len(Detector_SWC().dispersion) == 3 and _cell("SWC", "`detector.dispersion`") == (
-        "quadratic in position along the dispersion"), (
-        f"Edit the dispersion row of {tool.PAGE_NAME} to the polynomial's degree.")
 
-    tilt = _cell("SWC", "`detector.slit_image_tilt`")
-    assert (f"{MEASURED_SLIT_IMAGE_TILT[0]} f + {MEASURED_SLIT_IMAGE_TILT[1]} f^2" in tilt
-            and f"over {TILT_REFERENCE_ANGLE.to_value(u.arcsec):g} arcsec" in tilt), (
-        f"Edit the slit_image_tilt row of {tool.PAGE_NAME} to MEASURED_SLIT_IMAGE_TILT.")
+def test_fiducial_lengths_row_matches_the_code():
+    narrow, widest = _read("SWC", "`telescope.fiducial_centres`, `telescope.fiducial_lengths`",
+                           r"[^;]*; NUM arcsec, NUM arcsec for the widest slit")
+    lengths = [length.to_value(u.arcsec) for length in Telescope_EUVST().fiducial_lengths]
+    assert lengths == [narrow] * (len(lengths) - 1) + [widest], (
+        f"Edit the fiducial row of {tool.PAGE_NAME}: the lengths for the slits from narrowest "
+        f"to widest are {lengths} arcsec.")
 
-    # Column 0 of the budget's rows is the current best estimate, the default budget.
-    jitter = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][0]
-    assert (Telescope_EUVST().resolution_budget == "current_estimate"
-            and f"the budget's {jitter:.3f} arcsec" in _cell("SWC", "`telescope.pointing_jitter`")
-            ), f"Edit the pointing_jitter row of {tool.PAGE_NAME} to the budget's jitter."
 
+def test_dispersion_and_tilt_rows_match_the_code():
+    degree = {2: "linear", 3: "quadratic", 4: "cubic"}[len(Detector_SWC().dispersion)]
+    assert _cell("SWC", "`detector.dispersion`").startswith(degree), (
+        f"Edit the dispersion row of {tool.PAGE_NAME}: the polynomial is {degree}.")
+    linear, quadratic, angle = _read(
+        "SWC", "`detector.slit_image_tilt`",
+        r"[^;]*; measured as a drift along the dispersion of NUM f \+ NUM f\^2 rows, where f "
+        r"is the angle along the slit over NUM arcsec")
+    assert ((linear, quadratic) == tuple(MEASURED_SLIT_IMAGE_TILT)
+            and angle == TILT_REFERENCE_ANGLE.to_value(u.arcsec)), (
+        f"Edit the slit_image_tilt row of {tool.PAGE_NAME} to MEASURED_SLIT_IMAGE_TILT "
+        f"{MEASURED_SLIT_IMAGE_TILT} and TILT_REFERENCE_ANGLE {TILT_REFERENCE_ANGLE}.")
+
+
+def test_jitter_scan_and_slit_rows_match_the_code():
+    budget = Telescope_EUVST().resolution_budget
+    jitter = _read("SWC", "`telescope.pointing_jitter`",
+                   r"none: the budget's NUM arcsec, or no jitter with `resolution_budget: none`")
+    assert budget in resolution_budget.BUDGETS[:2], (
+        f"Edit the pointing_jitter row of {tool.PAGE_NAME}: the default budget is {budget}.")
+    row = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW]
+    expected = row[resolution_budget.BUDGETS.index(budget)]
+    assert jitter == [expected], (
+        f"Edit the pointing_jitter row of {tool.PAGE_NAME}: the {budget} budget's jitter is "
+        f"{expected:.3f} arcsec.")
+
+    least, most = _read("SWC", "`detector.serial_prescan`, `detector.serial_overscan`",
+                        r"[^;]*; each settable from NUM to NUM")
     for name in ("serial_prescan", "serial_overscan"):
-        Detector_SWC(**{name: 0})
-        Detector_SWC(**{name: 200})
-        for bad in (-1, 201):
+        for good, bad in ((least, least - 1), (most, most + 1)):
+            Detector_SWC(**{name: int(good)})
             with pytest.raises(ValueError):
-                Detector_SWC(**{name: bad})
-    assert "each settable from 0 to 200" in _cell(
-        "SWC", "`detector.serial_prescan`, `detector.serial_overscan`")
+                Detector_SWC(**{name: int(bad)})
 
-    for width in (0.2, 0.4, 0.8, 1.6):
+    cell = _cell("SWC", "`simulation.slit_width`")
+    widths = [float(w) for w in re.findall(NUM, cell.split("the slits are", 1)[-1])]
+    for width in widths:
         Simulation(slit_width=width * u.arcsec)
-    with pytest.raises(ValueError):
-        Simulation(slit_width=0.3 * u.arcsec)
-    assert "the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide" in _cell(
-        "SWC", "`simulation.slit_width`")
+    for width in np.arange(0.1, 2.0, 0.1):
+        if not np.isclose(widths, width).any():
+            with pytest.raises(ValueError, match="slit_width"):
+                Simulation(slit_width=round(width, 1) * u.arcsec)
 
 
-@pytest.mark.parametrize("instrument, cls, law", [
-    ("SWC", Detector_SWC, "the 293 K value times 122 T^3 exp(-6400/T), held at its 198 K value "
-                          "below 198 K"),
-    ("EIS", Detector_EIS, "the 293 K value times 1.14e6 T^3 exp(-9080/T), held at its 198 K "
-                          "value below 198 K"),
-])
-def test_dark_current_law_rows_match_the_code(instrument, cls, law):
-    assert _cell(instrument, "Dark current against temperature, set in the code") == law
-    factor, activation = (122, 6400) if cls is Detector_SWC else (1.14e6, 9080)
+@pytest.mark.parametrize("instrument, cls", [("SWC", Detector_SWC), ("EIS", Detector_EIS)])
+def test_dark_current_law_rows_match_the_code(instrument, cls):
+    factor, activation, held, below = _read(
+        instrument, "Dark current against temperature, set in the code",
+        r"the 293 K value times NUM T\^3 exp\(-NUM/T\), held at its NUM K value below NUM K")
     rate = cls.dark_current_293k
-    for kelvin, used in ((250.0, 250.0), (198.0, 198.0), (180.0, 198.0)):
+    for kelvin in (290.0, 250.0, below, below - 20):
+        used = max(kelvin, held)
         got = cls.calculate_dark_current(kelvin * u.K, rate).value
         assert got == pytest.approx(rate.value * factor * used**3 * np.exp(-activation / used),
                                     rel=1e-12), (
@@ -276,14 +335,32 @@ def test_dark_current_law_rows_match_the_code(instrument, cls, law):
 
 
 def test_aperture_share_row_matches_the_code():
-    assert _cell("SWC", "Half the aperture feeding the SW channel, set in the code") == "0.5"
+    share, = _read("SWC", "Half the aperture feeding the SW channel, set in the code", "NUM")
     telescope = Telescope_EUVST()
-    assert telescope.collecting_area.to_value(u.m**2) == pytest.approx(
-        0.5 * np.pi * (telescope.D_ap.to_value(u.m) / 2) ** 2), (
-        f"Edit the aperture share row of {tool.PAGE_NAME} to Telescope_EUVST.collecting_area.")
+    full = np.pi * (telescope.D_ap.to_value(u.m) / 2) ** 2
+    assert telescope.collecting_area.to_value(u.m**2) == pytest.approx(share * full), (
+        f"Edit the aperture share row of {tool.PAGE_NAME} to Telescope_EUVST.collecting_area "
+        f"over the aperture's area.")
 
 
-def test_script_keeps_hand_written_cells_and_refuses_repeats():
+def test_check_reads_items_in_order():
+    """Words, numbers and "none" must start the cell in the order of the settings."""
+    def found(instrument, key, value):
+        return (key, tool.setting(instrument, key)[0], value)
+
+    ground = [found("EIS", "telescope.calibration", "ground")]
+    assert tool._shows("`ground`, as calibrated before launch", ground)
+    assert not tool._shows("before launch; not `ground`", ground)
+    slit = [found("SWC", "telescope.fiducial_centres", []),
+            found("SWC", "telescope.slit_length", 300.0 * u.arcsec)]
+    assert tool._shows("none; 300 arcsec", slit)
+    assert not tool._shows("300 arcsec; none", slit)
+    assert not tool._shows("300 arcsec", slit)
+
+
+def test_script_keeps_hand_written_cells_and_refuses_repeats(monkeypatch):
+    tilt, _ = tool.setting("SWC", "detector.slit_image_tilt")
+    monkeypatch.setattr(tilt, "default", (0.0, 0.0))
     page = SYNTHETIC.replace(
         "| Something set in the code",
         "| `detector.slit_image_tilt` | none | old |\n"
