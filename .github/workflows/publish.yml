@@ -54,7 +54,7 @@ jobs:
               )
           PY
 
-      - name: Check the package data is in the wheel
+      - name: Check the package files are in the wheel
         run: |
           python - <<'PY'
           import glob
@@ -62,16 +62,17 @@ jobs:
           import zipfile
 
           # Compare against the source tree rather than a hardcoded list, so
-          # this keeps working when data files are added, and so partial
+          # this keeps working when files are added, and so partial
           # inclusion fails rather than passing on the strength of one file.
-          source = pathlib.Path("src/eclipse/data")
-          expected = {
-              path.relative_to("src").as_posix()
-              for path in source.rglob("*")
-              if path.is_file()
-          }
-          if not expected:
+          source = pathlib.Path("src")
+          data = {path for path in (source / "eclipse/data").rglob("*") if path.is_file()}
+          if not data:
               raise SystemExit("no src/eclipse/data files in the checkout")
+          modules = set((source / "eclipse").rglob("*.py")) - data
+          expected = {
+              path.relative_to(source).as_posix()
+              for path in data | modules | {source / "euvst_response/__init__.py"}
+          }
 
           wheel = glob.glob("dist/*.whl")[0]
           packaged = set(zipfile.ZipFile(wheel).namelist())
@@ -79,11 +80,11 @@ jobs:
           missing = sorted(expected - packaged)
           if missing:
               raise SystemExit(
-                  f"::error::{len(missing)} of {len(expected)} data files are "
+                  f"::error::{len(missing)} of {len(expected)} package files are "
                   f"absent from {wheel}, so the package would install but fail "
                   f"at runtime: {', '.join(missing)}"
               )
-          print(f"all {len(expected)} data files are in the wheel")
+          print(f"all {len(expected)} package files are in the wheel")
           PY
 
       - name: Check the metadata renders
