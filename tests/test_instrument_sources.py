@@ -126,7 +126,7 @@ def test_writes_sources_and_plain_defaults_only():
 
 @pytest.mark.parametrize("key, value", [
     ("detector.serial_prescan", 51),
-    # Numbers that the cell gives for another setting or in its wording.
+    # The new value appears elsewhere in the cell, for another setting or in a note.
     ("detector.serial_prescan", 20),
     ("detector.serial_overscan", 200),
     ("detector.qe_vis", 0.76),
@@ -135,11 +135,16 @@ def test_writes_sources_and_plain_defaults_only():
     ("detector.n_columns", 4096),
     ("detector.cte_serial", 0.99999),
     ("detector.lit_band", (171.0 * u.AA, 212.3 * u.AA)),
+    ("simulation.slit_width", None),
+    ("telescope.fiducial_centres", []),
 ])
 def test_hand_written_defaults_are_checked(monkeypatch, key, value):
     """A changed default fails the check until its hand-written cell is edited."""
     f, _ = tool.setting("SWC", key)
-    monkeypatch.setattr(f, "default", value)
+    if f.default_factory is dataclasses.MISSING:
+        monkeypatch.setattr(f, "default", value)
+    else:
+        monkeypatch.setattr(f, "default_factory", lambda: value)
     if isinstance(value, u.Quantity) and value.unit == u.arcsec:
         monkeypatch.setattr(f, "metadata", {**f.metadata, "unit": "arcsec"})
     problems = tool.hand_written_problems(_page())
@@ -174,6 +179,9 @@ def test_refuses_bad_units_marks_and_cells(monkeypatch):
     with pytest.raises(ValueError, match="Unknown instrument"):
         tool.setting("SW", "detector.qe_euv")
     for page in (SYNTHETIC.replace("SWC settings: written", "SWC settings written"),
+                 SYNTHETIC.replace("<!-- SWC settings", "<!-- SW settings"),
+                 SYNTHETIC.replace("Text.\n\n", "Text.\n"),
+                 SYNTHETIC.replace("script -->\n\n", "script -->\n\n```\ncode\n```\n\n"),
                  SYNTHETIC.replace("script -->\n\n", "script -->\n")):
         with pytest.raises(ValueError, match="table mark"):
             list(tool.table_rows(page.split("\n")))
@@ -186,6 +194,7 @@ def test_refuses_bad_units_marks_and_cells(monkeypatch):
 
 def test_rows_split_at_pipes_outside_code():
     assert tool._split_row(r"| `a|b` | c \| d | ``x`|`` |") == ["`a|b`", r"c \| d", "``x`|``"]
+    assert tool._split_row("| `a | b |") == ["`a", "b"]
 
 
 def test_a_mark_applies_to_its_table_only():
