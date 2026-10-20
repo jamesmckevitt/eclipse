@@ -8,7 +8,7 @@ Each instrument setting in `euvst_response/config.py` gives the source of its de
 
 `python tools/update_instrument_sources.py` writes the Source cell of every setting's row. It also writes the Default cell of a row that names one setting and holds only a value, such as `65535 DN`. Other Default cells are worded by hand. The script lists any of them that no longer show the code's default, and you edit those yourself.
 
-To add a setting, give its field a `source`, and a `unit` if it is a quantity. Then add a row for it to a table of its instrument, with its key in backticks in the first cell, and run the script. A setting that is not a fact about the instrument, such as a choice of a run, goes in `WITHOUT_SOURCE` in `tests/test_instrument_sources.py`, with the reason.
+To add a setting, give its field a `source`, and a `unit` if it is a quantity. Then add a row for it to a table of its instrument, with its key in backticks in the first cell, and run the script. For a row with one setting, leave the Default cell empty and the script fills it. For a row with several settings, or a default that needs words, write the Default cell by hand, starting with the defaults in the order of the settings. A setting that is not a fact about the instrument, such as a choice of a run, goes in `WITHOUT_SOURCE` in `tests/test_instrument_sources.py`, with the reason.
 
 After changing a default or a source, run the script, and edit any Default cell it lists. The tests fail until the page agrees with the code.
 

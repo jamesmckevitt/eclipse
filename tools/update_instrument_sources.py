@@ -34,8 +34,7 @@ INSTRUMENTS = {
 
 TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
 # A comment that names settings like a table mark, and so must be one.
-MARK_LIKE = re.compile(rf"<!--\s*(?:\w+\s+settings\s*:|(?:{'|'.join(INSTRUMENTS)})\b)",
-                       re.IGNORECASE)
+MARK_LIKE = re.compile(r"<!--\s*\w+\s+settings\s*:", re.IGNORECASE)
 FENCE = re.compile(r" {0,3}(```|~~~)")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
@@ -50,7 +49,8 @@ UNIT_WORDS = {
 _WORD = "|".join(sorted(map(re.escape, UNIT_WORDS), key=len, reverse=True))
 # Text between two numbers of one list, such as " and " or " micron, ".
 LIST_JOIN = re.compile(rf"(?: (?:{_WORD})(?: per (?:{_WORD}))*)?(?:, | and | by | to )")
-# A Default cell holding only a value: numbers and a unit, or one word.
+# A Default cell holding only a value: numbers with a unit, "none", "true",
+# "false", "packaged table" or a backticked word.
 PLAIN = re.compile(rf"{NUMBER}(?:(?:, | and ){NUMBER})*(?: (?:{_WORD})(?: per (?:{_WORD}))*)?"
                    r"|none|true|false|packaged table|`[^`|]*`")
 
@@ -300,6 +300,19 @@ def _check_cell(text, key):
                          f"which would break its row in {PAGE_NAME}: {text!r}.")
 
 
+def _written_by_script(instrument, cell, found):
+    """Whether the script writes this Default cell: one setting, and only a value."""
+    if len(found) != 1 or (instrument, found[0][0]) in NOT_SHOWN:
+        return False
+    key, f, value = found[0]
+    if cell == "none":
+        # A list of zeros may be written as none by hand.
+        numbers = display_numbers(key, value, f.metadata.get("unit", ""))
+        if numbers and len(numbers) > 1 and not any(numbers):
+            return False
+    return not cell or bool(PLAIN.fullmatch(cell))
+
+
 def updated_page(text):
     """
     Page with its sources and plain Default cells rewritten from the code.
@@ -311,7 +324,7 @@ def updated_page(text):
         a row.
     """
     lines = text.split("\n")
-    for index, _, cells, found in list(_setting_rows(text)):
+    for index, instrument, cells, found in list(_setting_rows(text)):
         keys = [key for key, _, _ in found]
         sources = {f.metadata["source"] for _, f, _ in found}
         if len(sources) > 1:
@@ -320,7 +333,7 @@ def updated_page(text):
         source = sources.pop()
         _check_cell(source, keys[0])
         default = cells[1]
-        if len(found) == 1 and (not default or PLAIN.fullmatch(default)):
+        if _written_by_script(instrument, default, found):
             key, f, value = found[0]
             default = plain_default(key, value, f.metadata.get("unit", ""))
             _check_cell(default, key)
@@ -377,7 +390,8 @@ def _shows(cell, found):
     merged = _collapse(raw)
     candidates = [raw, collapsed] + ([merged] if len(merged) == 1 else [])
     return (any(_starts_with(cell, wanted) for wanted in candidates)
-            and all(label in cell for label in labels if label)
+            and all(re.search(rf"(?<!\w){re.escape(label)}(?!\w)", cell)
+                    for label in labels if label)
             and all(word in cell for word in words))
 
 
@@ -385,7 +399,7 @@ def hand_written_problems(text):
     """Messages for the hand-written Default cells that do not show the code's defaults."""
     problems = []
     for _, instrument, cells, found in _setting_rows(text):
-        if len(found) == 1 and (not cells[1] or PLAIN.fullmatch(cells[1])):
+        if _written_by_script(instrument, cells[1], found):
             continue
         found = [item for item in found if (instrument, item[0]) not in NOT_SHOWN]
         if found and not _shows(cells[1], found):

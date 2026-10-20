@@ -1187,7 +1187,7 @@ class Telescope_EUVST:
     # spectrograph after the slit.
     psf_across_slit: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": _NOT_RECORDED})
+        metadata={"source": _NOT_RECORDED, "unit": "arcsec"})
     field_of_view: str | None = field(default=None, kw_only=True,
                                       metadata={"source": "RSC-2022021C"})
     resolution_budget: str = field(
@@ -1195,7 +1195,7 @@ class Telescope_EUVST:
         metadata={"source": "RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1"})
     pointing_jitter: u.Quantity | None = field(
         default=None, kw_only=True,
-        metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20"})
+        metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20", "unit": "arcsec"})
     # The slits are 4.07 mm long, 300 arcsec at the slit's 13.57 um per arcsec,
     # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
     # narrow slits and 21.8 um (1.6 arcsec) in the widest, centred -340 um
