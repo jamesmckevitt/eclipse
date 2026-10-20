@@ -330,9 +330,9 @@ def _finite_pixels(wv: np.ndarray, prof: np.ndarray, finite: np.ndarray) -> tupl
 
 
 def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
-                min_pixels: int, start) -> tuple[np.ndarray, bool]:
+                kept: np.ndarray, min_pixels: int, start) -> tuple[np.ndarray, bool]:
     """
-    Fit a spectrum, leaving out pixels whose value or uncertainty is NaN or infinite.
+    Fit only the pixels of a spectrum marked in `kept`.
 
     `fit(wv, prof, sigma)` fits a spectrum and returns the parameters and
     whether it succeeded. `sigma` is None, or one uncertainty per pixel,
@@ -341,9 +341,6 @@ def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
     tried, and `start(wv, prof)` of the kept pixels is returned as a failed
     fit.
     """
-    kept = np.isfinite(prof)
-    if sigma is not None:
-        kept &= np.isfinite(sigma)
     if kept.all():
         return fit(wv, prof, sigma)
     if np.count_nonzero(kept) < min_pixels:
@@ -1137,13 +1134,11 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
     spectra = np.asarray(spectra)
-    floating = np.issubdtype(spectra.dtype, np.floating)
-    if kept is None and not floating:
-        # Whole numbers are all finite.
-        return (np.all(spectra == spectra[..., :1], axis=-1)
-                | np.any(widths > np.ptp(wavelength), axis=-1))
     finite = np.isfinite(spectra) if kept is None else kept
-    if not floating:
+    if not np.issubdtype(spectra.dtype, np.floating):
+        if finite.all():
+            return (np.all(spectra == spectra[..., :1], axis=-1)
+                    | np.any(widths > np.ptp(wavelength), axis=-1))
         spectra = spectra.astype(float)
     wavelength = np.asarray(wavelength)
     first, last = np.min(wavelength), np.max(wavelength)
@@ -1271,7 +1266,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     if poisson and uncertainty is not None:
         raise ValueError("A Poisson fit needs no uncertainty: give poisson or uncertainty, "
                          "not both.")
-    if poisson and np.any(np.isfinite(signal_cube.data) & (signal_cube.data < 0)):
+    # Pixels the fits keep: those with a finite value and, if given, a finite uncertainty.
+    kept = np.isfinite(signal_cube.data)
+    if poisson and np.any(kept & (signal_cube.data < 0)):
         raise ValueError("A Poisson fit is of counts, which are zero or more.")
     if uncertainty is not None:
         try:
@@ -1281,19 +1278,19 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             raise ValueError(
                 f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
                 f"spectra, shaped {signal_cube.data.shape}.") from None
-        if np.any(np.isfinite(uncertainty) & (uncertainty <= 0)):
+        finite_uncertainty = np.isfinite(uncertainty)
+        if np.any(finite_uncertainty & (uncertainty <= 0)):
             raise ValueError("Every uncertainty must be above zero, as each pixel is "
                              "weighted by one over its square.")
+        kept &= finite_uncertainty
 
     min_pixels = _n_free_params(fit_config)
-    # Pixels the fits keep, for the checks after them.
-    kept = (None if uncertainty is None
-            else np.isfinite(signal_cube.data) & np.isfinite(uncertainty))
 
     def _rows():
-        """Each row along the slit, with its uncertainties."""
+        """Each row along the slit, with its uncertainties and the pixels kept."""
         for i in range(n_slit):
-            yield signal_cube.data[i], None if uncertainty is None else uncertainty[i]
+            yield (signal_cube.data[i], None if uncertainty is None else uncertainty[i],
+                   kept[i])
 
     # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
@@ -1303,18 +1300,19 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         def _fit(wave, prof, sigma):
             return fit_one(wave, prof, max_iter, pixel, sigma, poisson)
 
-        def _fit_block(spec_block, unc_block):
+        def _fit_block(spec_block, unc_block, kept_block):
             results = np.empty((spec_block.shape[0], 4))
             succeeded = np.empty(spec_block.shape[0], dtype=bool)
             for i in range(spec_block.shape[0]):
                 results[i], succeeded[i] = _fit_finite(
                     _fit, wv.value, spec_block[i],
-                    None if unc_block is None else unc_block[i], min_pixels, _guess_params)
+                    None if unc_block is None else unc_block[i], kept_block[i], min_pixels,
+                    _guess_params)
             return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
             results = Parallel(n_jobs=n_jobs)(
-                delayed(_fit_block)(spectra, unc) for spectra, unc in _rows()
+                delayed(_fit_block)(*row) for row in _rows()
             )
 
         data_array = np.stack([r[0] for r in results], axis=0)
@@ -1363,18 +1361,19 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     def _start(wave, prof):
         return _guess_multi_params(wave, prof, fit_config)
 
-    def _fit_block_multi(spec_block, unc_block):
+    def _fit_block_multi(spec_block, unc_block, kept_block):
         results = np.empty((spec_block.shape[0], n_params))
         succeeded = np.empty(spec_block.shape[0], dtype=bool)
         for i in range(spec_block.shape[0]):
             results[i], succeeded[i] = _fit_finite(
                 _fit, wv.value, spec_block[i],
-                None if unc_block is None else unc_block[i], min_pixels, _start)
+                None if unc_block is None else unc_block[i], kept_block[i], min_pixels,
+                _start)
         return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block_multi)(spectra, unc) for spectra, unc in _rows()
+            delayed(_fit_block_multi)(*row) for row in _rows()
         )
 
     data_array = np.stack([r[0] for r in results], axis=0)

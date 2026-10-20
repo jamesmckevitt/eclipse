@@ -161,14 +161,14 @@ def test_the_fit_is_tried_from_as_many_finite_pixels_as_free_parameters():
     wave = _wave()
     prof = np.full(N_WAVE, np.nan)
     prof[:4] = 1.0
-    assert _fit_finite(fit, wave, prof, None, 4, start)[1]
+    assert _fit_finite(fit, wave, prof, None, np.isfinite(prof), 4, start)[1]
     prof[0] = np.nan
-    assert not _fit_finite(fit, wave, prof, None, 4, start)[1]
-    assert _fit_finite(fit, wave[:3], np.ones(3), None, 4, start)[1]
+    assert not _fit_finite(fit, wave, prof, None, np.isfinite(prof), 4, start)[1]
+    assert _fit_finite(fit, wave[:3], np.ones(3), None, np.ones(3, bool), 4, start)[1]
     assert tried == [4, 3]
 
 
-def test_a_pixel_with_a_nan_uncertainty_is_left_out_with_its_uncertainty():
+def test_the_kept_pixels_go_to_the_fit_with_their_uncertainties():
     seen = []
 
     def fit(wave, prof, sigma):
@@ -178,7 +178,7 @@ def test_a_pixel_with_a_nan_uncertainty_is_left_out_with_its_uncertainty():
     wave = _wave(5)
     sigma = np.array([1.0, np.inf, 3.0, 4.0, 5.0])
     prof = np.array([10.0, 20.0, np.nan, 40.0, 50.0])
-    _fit_finite(fit, wave, prof, sigma, 1, None)
+    _fit_finite(fit, wave, prof, sigma, np.isfinite(prof) & np.isfinite(sigma), 1, None)
     kept_wave, kept_prof, kept_sigma = seen[0]
     assert kept_wave.tolist() == wave[[0, 3, 4]].tolist()
     assert kept_prof.tolist() == [10.0, 40.0, 50.0]
