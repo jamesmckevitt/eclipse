@@ -989,7 +989,13 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         # two close lines can hold the spectrum between them above half
         # maximum.
         peak_idx = int(np.argmax(prof_c))
-        own = centres[np.argmin(np.abs(centres - wv[peak_idx]))]
+        # The peak belongs to the nearest centre. Of centres equally near, to
+        # within rounding, it takes the one where the spectrum is higher, then
+        # the shortest wavelength, so the choice does not depend on the order
+        # of the components.
+        distance = np.abs(centres - wv[peak_idx])
+        near = np.flatnonzero(distance <= distance.min() + 1e-6 * np.ptp(wv))
+        own = centres[near[np.lexsort((centres[near], -levels[near]))[0]]]
         lower, upper = centres[centres < own], centres[centres > own]
         inside = np.ones(wv.size, dtype=bool)
         if lower.size:

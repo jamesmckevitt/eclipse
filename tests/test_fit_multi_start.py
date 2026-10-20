@@ -85,6 +85,22 @@ def test_a_nan_pixel_counts_as_background_in_the_starting_ratio():
     assert ratio == pytest.approx(_start_ratio(WV, with_background, guess, 3, 0), rel=1e-12)
 
 
+def test_a_peak_halfway_between_two_centres_starts_the_same_in_either_order():
+    """
+    The peak pixel is one pixel from the components either side of it.
+
+    It is given to the one on the brighter side, whose run of pixels above
+    half maximum is two pixels wide, whatever the order of the components.
+    """
+    prof = 10 + 100 * np.exp(-0.5 * ((WV - CENTRE) / STEP) ** 2)
+    prof[N_WAVE // 2 + 1] += 30
+    far = FitComponent((CENTRE - 10 * STEP) * 1e8 * u.AA)
+    either_side = [FitComponent((CENTRE + sign * STEP) * 1e8 * u.AA) for sign in (-1, 1)]
+    widths = [_guess_multi_params(WV, prof, FitConfig(components=[far] + side))[2]
+              for side in (either_side, either_side[::-1])]
+    assert widths[0] == widths[1] == pytest.approx(_fwhm_to_sigma(2 * STEP))
+
+
 def test_two_components_at_one_wavelength_start_apart():
     """Started identical, a core and a wing would stay identical through the fit."""
     config = FitConfig(components=[FitComponent(195.119 * u.AA),
