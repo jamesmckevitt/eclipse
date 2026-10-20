@@ -130,11 +130,6 @@ def _default(key):
     return tool.setting("SWC", key)[1]
 
 
-def _not_none(value, unit):
-    """A nonzero value in `unit` for a default that is None."""
-    return 0.3 * unit if value is None else None
-
-
 # Each changes a default to a value derived from the current one, so the
 # hand-written cell no longer shows it.
 CHANGES = {
@@ -146,14 +141,16 @@ CHANGES = {
     "tilt measured": ("detector.slit_image_tilt",
                       lambda v: MEASURED_SLIT_IMAGE_TILT if not any(v) else (0.0, 0.0)),
     "blur across the slit": ("telescope.psf_across_slit",
-                             lambda v: _not_none(v, u.arcsec) if v is None else 2 * v),
+                             lambda v: 0.3 * u.arcsec if v is None else 2 * v),
     "columns doubled": ("detector.n_columns", lambda v: 2 * v),
     "imperfect transfer": ("detector.cte_serial", lambda v: v * 0.99999),
     "band moved": ("detector.lit_band", lambda v: (v[0] + 1 * u.AA, v[1])),
     "no slit width": ("simulation.slit_width", lambda v: None),
     "no fiducials": ("telescope.fiducial_centres", lambda v: []),
     "jitter given": ("telescope.pointing_jitter",
-                     lambda v: _not_none(v, u.arcsec) if v is None else None),
+                     lambda v: 0.3 * u.arcsec if v is None else None),
+    # A single zero is a value, not none.
+    "no jitter": ("telescope.pointing_jitter", lambda v: 0.0 * u.arcsec if v is None else None),
 }
 
 
@@ -244,7 +241,7 @@ def _read(instrument, first_cell, pattern):
 def test_psf_row_matches_the_fields_of_view():
     """The design FWHMs, in pixels rounded to 0.01 as `FIELDS_OF_VIEW` holds them."""
     first = "`telescope.psf_params`, through `telescope.field_of_view`"
-    along, side, _, small, smaller, spectral, slit = _read(
+    along, side, other, small, smaller, spectral, slit = _read(
         "SWC", first, r"NUM arcsec along the slit for the default NUM x NUM arcsec field "
                       r"\(NUM and NUM for the smaller fields\); NUM mA in wavelength with the "
                       r"NUM arcsec slit")
@@ -253,7 +250,9 @@ def test_psf_row_matches_the_fields_of_view():
     step = Detector_SWC.wvl_res.to_value(u.mAA / u.pix)
     fields = sorted(Telescope_EUVST.FIELDS_OF_VIEW.items(), key=lambda item: -item[1][0].value)
     edit = f"Edit the SWC psf_params row of {tool.PAGE_NAME} or Telescope_EUVST.FIELDS_OF_VIEW"
-    assert telescope.field_of_view == f"{side:g}x{side:g}" == fields[0][0], (
+    assert len(fields) == 3, (f"{edit}, and the pattern in this test: the code has "
+                              f"{len(fields)} fields of view.")
+    assert telescope.field_of_view == f"{side:g}x{other:g}" == fields[0][0], (
         f"{edit}: the default field is {telescope.field_of_view}.")
     for (name, widths), arcsec in zip(fields, (along, small, smaller)):
         assert round(arcsec / plate_scale, 2) == widths[0].value, (
@@ -309,14 +308,17 @@ def test_jitter_scan_and_slit_rows_match_the_code():
             with pytest.raises(ValueError):
                 Detector_SWC(**{name: int(bad)})
 
-    cell = _cell("SWC", "`simulation.slit_width`")
-    widths = [float(w) for w in re.findall(NUM, cell.split("the slits are", 1)[-1])]
+    match = re.fullmatch(r"[^;]*; the slits are (.*) arcsec wide",
+                         _cell("SWC", "`simulation.slit_width`"))
+    assert match, (f"The SWC slit_width row of {tool.PAGE_NAME} is no longer in the form this "
+                   f"test reads; update the pattern here.")
+    widths = [float(w) for w in re.findall(NUM, match.group(1))]
     for width in widths:
         Simulation(slit_width=width * u.arcsec)
-    for width in np.arange(0.1, 2.0, 0.1):
+    for width in np.round(np.arange(0.05, 3.25, 0.05), 2):
         if not np.isclose(widths, width).any():
             with pytest.raises(ValueError, match="slit_width"):
-                Simulation(slit_width=round(width, 1) * u.arcsec)
+                Simulation(slit_width=width * u.arcsec)
 
 
 @pytest.mark.parametrize("instrument, cls", [("SWC", Detector_SWC), ("EIS", Detector_EIS)])
@@ -324,6 +326,8 @@ def test_dark_current_law_rows_match_the_code(instrument, cls):
     factor, activation, held, below = _read(
         instrument, "Dark current against temperature, set in the code",
         r"the 293 K value times NUM T\^3 exp\(-NUM/T\), held at its NUM K value below NUM K")
+    assert below == held, (f"Edit the {instrument} dark current row of {tool.PAGE_NAME}: the "
+                           f"law is held below the temperature it is held at.")
     rate = cls.dark_current_293k
     for kelvin in (290.0, 250.0, below, below - 20):
         used = max(kelvin, held)
@@ -356,6 +360,8 @@ def test_check_reads_items_in_order():
     assert tool._shows("none; 300 arcsec", slit)
     assert not tool._shows("300 arcsec; none", slit)
     assert not tool._shows("300 arcsec", slit)
+    length = [found("SWC", "telescope.slit_length", 300.0 * u.arcsec)]
+    assert tool._shows("3e2 arcsec", length) and tool._shows("300. In arcsec", length)
 
 
 def test_script_keeps_hand_written_cells_and_refuses_repeats(monkeypatch):

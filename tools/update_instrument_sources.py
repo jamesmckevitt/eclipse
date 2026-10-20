@@ -363,8 +363,8 @@ def updated_page(text):
 
 
 # Items a hand-written Default cell gives, in order: numbers and words.
-ITEM = re.compile(rf"(?<![\w.]){NUMBER}(?![\w.])|\b(?:none|true|false|packaged tables?)\b"
-                  r"|`[^`]*`")
+ITEM = re.compile(rf"(?<![\w.]){NUMBER}(?:e[-+]?\d+)?(?!\w|\.\d)"
+                  r"|\b(?:none|true|false|packaged tables?)\b|`[^`]*`")
 
 
 def _same(a, b):
@@ -381,8 +381,8 @@ def _expected(key, f, value):
     Returns
     -------
     list of list
-        The default's items in full, and, for a list of equal numbers, the
-        number once.
+        Default's items in full, and the number once for a list of equal
+        numbers.
     """
     shown = display_numbers(key, value, f.metadata.get("unit", ""))
     if shown is None:
@@ -395,12 +395,12 @@ def _expected(key, f, value):
 
 
 def _cell_items(cell):
-    """Numbers and words of a cell, with where each ends and the next starts."""
+    """Numbers and words of a cell, each with its start and end."""
     items = []
     for match in ITEM.finditer(cell):
         text = match.group(0)
         item = "packaged table" if text.startswith("packaged") else text
-        if re.fullmatch(NUMBER, text):
+        if text[0] in "+-0123456789":
             item = float(text)
         items.append((item, match.start(), match.end()))
     return items
@@ -418,18 +418,20 @@ def _shows(cell, found):
     by neighbouring settings that are not numbers. The cell must also give
     the units.
     """
+    expected = [_expected(key, f, value) for key, f, value in found]
     options = [[]]
-    for key, f, value in found:
-        options = [done + more for done in options for more in _expected(key, f, value)]
+    for alternatives in expected:
+        options = [done + more for done in options for more in alternatives]
     for wanted in list(options):
         merged = [item for index, item in enumerate(wanted)
                   if index == 0 or isinstance(item, float) or not _same(item, wanted[index - 1])]
         options.append(merged)
         if all(_same(item, wanted[0]) for item in wanted):
             options.append(wanted[:1])
+    options = [list(option) for option in dict.fromkeys(map(tuple, options))]
     items = _cell_items(cell)
-    labels = {f.metadata.get("unit", "") for key, f, value in found
-              if isinstance(_expected(key, f, value)[0][0], float)} - {""}
+    labels = {f.metadata.get("unit", "") for (_, f, _), alternatives in zip(found, expected)
+              if isinstance(alternatives[0][0], float)} - {""}
     if not all(re.search(rf"(?<!\w){re.escape(label)}(?!\w)", cell) for label in labels):
         return False
     for wanted in options:
