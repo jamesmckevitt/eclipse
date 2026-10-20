@@ -1121,10 +1121,10 @@ def _give_earlier_values(payload) -> None:
 
 def _move_old_tables(payload) -> None:
     """
-    Read the missing packaged tables an unpickled payload names under the former name.
+    Point missing packaged tables named under the former name at this installation's copies.
 
-    Each is read from this installation's copy instead (see
-    :func:`_moved_package_file`).
+    Changes the configuration objects of an unpickled payload in place; see
+    :func:`_moved_package_file`.
     """
     for value in _configuration_objects(payload):
         for name, item in list(value.__dict__.items()):
@@ -1155,10 +1155,10 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     check. A setting that did not exist when the pickle was made gets
     today's default, with a warning, unless runs then had another value:
     their fits were unweighted, so the file records `fit_weighted` False,
-    and `weighted` False for a FitConfig in it. A packaged table the pickle
-    names in the package's former folder, `euvst_response/data`, is recorded
-    as this installation's copy if the old one is gone. A pickle holding no
-    results, such as a synthesis pickle, is refused. Reading a pickle runs
+    and `weighted` False for a FitConfig in it. Missing packaged tables
+    named in the former folder `euvst_response/data` are recorded as this
+    installation's copies. A pickle holding no results, such as a synthesis
+    pickle, is refused. Reading a pickle runs
     whatever code it holds, so only convert files you trust.
 
     Parameters
