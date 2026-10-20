@@ -571,7 +571,11 @@ def _spectral_response(tel, det, slit_width: u.Quantity, spectral_psf: str) -> t
     :func:`spectral_psf_fwhm`, and the width is 0. With
     `spectral_psf="convolution"` the Gaussian is the blur without the slit,
     of FWHM :func:`spectral_blur_fwhm`, and the rectangle is the slit's
-    image. Raises ValueError for any other `spectral_psf`.
+    image.
+
+    Raises ValueError for any other `spectral_psf`, for `"convolution"` with
+    a telescope whose PSF is not split into the optics and the slit (no
+    `psf_slit_width`), and for a spectral PSF narrower than its own slit.
     """
     if spectral_psf == "quadrature":
         return _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width)), 0.0
@@ -586,9 +590,9 @@ def _spectral_kernel(tel, det, slit_width: u.Quantity, spectral_psf: str) -> np.
     """
     Spectral response at whole pixels out to :func:`spectral_psf_reach`.
 
-    For `"quadrature"` a Gaussian, not normalised; for `"convolution"`
-    :func:`spectral_line_spread`, which sums to one. Raises ValueError for
-    any other `spectral_psf`.
+    With `spectral_psf="quadrature"` a Gaussian, not normalised. With
+    `spectral_psf="convolution"` :func:`spectral_line_spread`, which sums to
+    one. Raises ValueError as :func:`_spectral_response` does.
     """
     if spectral_psf == "convolution":
         return spectral_line_spread(tel, det, slit_width)
