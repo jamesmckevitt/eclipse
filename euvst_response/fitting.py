@@ -330,22 +330,25 @@ def _finite_pixels(wv: np.ndarray, prof: np.ndarray, finite: np.ndarray) -> tupl
 
 
 def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
-                drop: bool, min_pixels: int, start) -> tuple[np.ndarray, bool]:
+                min_pixels: int, start) -> tuple[np.ndarray, bool]:
     """
-    Fit a spectrum, leaving out its NaN and infinite pixels.
+    Fit a spectrum, leaving out pixels whose value or uncertainty is NaN or infinite.
 
     `fit(wv, prof, sigma)` fits a spectrum and returns the parameters and
-    whether it succeeded. A spectrum with every pixel finite is fitted as it
-    is. Otherwise, with `drop`, only its finite pixels are fitted, unweighted.
-    Without `drop`, or with fewer than `min_pixels` finite pixels, the fit is
-    not tried, and `start(wv, prof)` is returned as a failed fit.
+    whether it succeeded. `sigma` is None, or one uncertainty per pixel,
+    kept or left out with its pixel. A spectrum with every pixel kept is
+    fitted as it is. With fewer than `min_pixels` kept, the fit is not
+    tried, and `start(wv, prof)` of the kept pixels is returned as a failed
+    fit.
     """
-    finite = np.isfinite(prof)
-    if finite.all():
+    kept = np.isfinite(prof)
+    if sigma is not None:
+        kept &= np.isfinite(sigma)
+    if kept.all():
         return fit(wv, prof, sigma)
-    if not drop or np.count_nonzero(finite) < min_pixels:
-        return np.asarray(start(wv, prof), dtype=float), False
-    return fit(*_finite_pixels(wv, prof, finite), None)
+    if np.count_nonzero(kept) < min_pixels:
+        return np.asarray(start(wv, np.where(kept, prof, np.nan)), dtype=float), False
+    return fit(wv[kept], prof[kept], None if sigma is None else sigma[kept])
 
 
 def _in_dependency_order(fainter_than: dict) -> list:
@@ -1116,29 +1119,32 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
 #  Public fitting entry point
 # ---------------------------------------------------------------------------
 def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarray,
-                  n_components: int) -> np.ndarray:
+                  n_components: int, kept: np.ndarray | None = None) -> np.ndarray:
     """
     Fits that cannot have measured a line, to be counted as failed.
 
     Also makes the widths positive in place. A Gaussian does not depend on
     the sign of its width, so a fit with a negative width is kept with the
     sign flipped, which also flips the sign of the intensity computed from
-    it. Only the finite pixels of each spectrum are considered. A flat
-    spectrum, such as one with no photons, holds no line to fit, and a
-    component wider than the window of finite pixels is background, not a
-    line. A spectrum with no finite pixel counts as flat. Where the pixels
-    at an end of the window are NaN or infinite, a centre, tied or not,
-    beyond the edge of the last finite pixel on that side was fitted with no
-    data there.
+    it. Only the pixels each fit kept are considered: those marked in
+    `kept`, by default the finite ones. A flat spectrum, such as one with no
+    photons, holds no line to fit, and a component wider than the window of
+    kept pixels is background, not a line. A spectrum with no kept pixel
+    counts as flat. Where the pixels at an end of the window were left out,
+    a centre, tied or not, beyond the edge of the last kept pixel on that
+    side was fitted with no data there.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
     spectra = np.asarray(spectra)
-    if not np.issubdtype(spectra.dtype, np.floating):
+    floating = np.issubdtype(spectra.dtype, np.floating)
+    if kept is None and not floating:
         # Whole numbers are all finite.
         return (np.all(spectra == spectra[..., :1], axis=-1)
                 | np.any(widths > np.ptp(wavelength), axis=-1))
-    finite = np.isfinite(spectra)
+    finite = np.isfinite(spectra) if kept is None else kept
+    if not floating:
+        spectra = spectra.astype(float)
     wavelength = np.asarray(wavelength)
     first, last = np.min(wavelength), np.max(wavelength)
     half_pixel = 0.5 * np.median(np.abs(np.diff(wavelength))) if wavelength.size > 1 else 0.0
@@ -1209,12 +1215,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         Fit the Gaussians' mean over each pixel. Keyword only. Default False.
     uncertainty : np.ndarray, optional
         Uncertainty of every value in the cube, same shape as its data or
-        broadcastable to it, and above zero everywhere. Keyword only.
+        broadcastable to it. Each finite uncertainty must be above zero; a
+        pixel whose uncertainty is NaN or infinite is left out. Keyword only.
         Default None, for an unweighted fit.
     poisson : bool, optional
-        Fit the spectra as counts, zero or more, by their Poisson likelihood,
-        with every amplitude and the background held at zero or above. Not
-        with `uncertainty`. Keyword only. Default False.
+        Fit the spectra as counts by their Poisson likelihood, with every
+        amplitude and the background held at zero or above. Each finite
+        count must be zero or more. Not with `uncertainty`. Keyword only.
+        Default False.
 
     Returns
     -------
@@ -1233,15 +1241,13 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     Notes
     -----
-    In an unweighted fit, NaN and infinite pixels are left out, and each
-    spectrum is fitted to its finite pixels alone. Such a spectrum is a
-    failed fit if fewer finite pixels remain than free parameters, or if the
-    pixels at an end of the window are NaN or infinite and a fitted centre
-    lies more than half a pixel beyond the outermost finite pixel on that
-    side. As for every spectrum, it is also a failed fit if its finite
-    pixels are flat or a fitted width is more than their span. With
-    `uncertainty`, a spectrum with any NaN or infinite pixel is a failed
-    fit. With `poisson`, such a pixel raises a ValueError.
+    A pixel whose value, or with `uncertainty` whose uncertainty, is NaN or
+    infinite is left out, and each spectrum is fitted to the pixels kept.
+    Such a spectrum is a failed fit if fewer pixels are kept than free
+    parameters, or if the pixels at an end of the window were left out and
+    a fitted centre lies more than half a pixel beyond the outermost kept
+    pixel on that side. As for every spectrum, it is also a failed fit if
+    its kept pixels are flat or a fitted width is more than their span.
     """
     n_slit, n_scan, _ = signal_cube.shape
     wv = signal_cube.axis_world_coords_values(2)[0].cgs  # wavelength axis
@@ -1265,7 +1271,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     if poisson and uncertainty is not None:
         raise ValueError("A Poisson fit needs no uncertainty: give poisson or uncertainty, "
                          "not both.")
-    if poisson and not np.all(np.isfinite(signal_cube.data) & (signal_cube.data >= 0)):
+    if poisson and np.any(np.isfinite(signal_cube.data) & (signal_cube.data < 0)):
         raise ValueError("A Poisson fit is of counts, which are zero or more.")
     if uncertainty is not None:
         try:
@@ -1275,13 +1281,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             raise ValueError(
                 f"The uncertainty, shaped {np.shape(uncertainty)}, does not match the "
                 f"spectra, shaped {signal_cube.data.shape}.") from None
-        if not np.all(np.isfinite(uncertainty) & (uncertainty > 0)):
-            raise ValueError("Every uncertainty must be finite and above zero, as each "
-                             "pixel is weighted by one over its square.")
+        if np.any(np.isfinite(uncertainty) & (uncertainty <= 0)):
+            raise ValueError("Every uncertainty must be above zero, as each pixel is "
+                             "weighted by one over its square.")
 
-    # Weighted fits need every pixel. Poisson counts were checked above to be finite.
-    drop = uncertainty is None
     min_pixels = _n_free_params(fit_config)
+    # Pixels the fits keep, for the checks after them.
+    kept = (None if uncertainty is None
+            else np.isfinite(signal_cube.data) & np.isfinite(uncertainty))
 
     def _rows():
         """Each row along the slit, with its uncertainties."""
@@ -1302,8 +1309,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             for i in range(spec_block.shape[0]):
                 results[i], succeeded[i] = _fit_finite(
                     _fit, wv.value, spec_block[i],
-                    None if unc_block is None else unc_block[i], drop, min_pixels,
-                    _guess_params)
+                    None if unc_block is None else unc_block[i], min_pixels, _guess_params)
             return results, succeeded
 
         with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
@@ -1313,7 +1319,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
         data_array = np.stack([r[0] for r in results], axis=0)
         failed = ~np.stack([r[1] for r in results], axis=0)
-        failed |= _unmeasurable(data_array, signal_cube.data, wv.value, 1)
+        failed |= _unmeasurable(data_array, signal_cube.data, wv.value, 1, kept)
         units_list = [signal_cube.unit, wv.unit, wv.unit, signal_cube.unit]
         if return_failed:
             return data_array, units_list, failed
@@ -1363,7 +1369,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         for i in range(spec_block.shape[0]):
             results[i], succeeded[i] = _fit_finite(
                 _fit, wv.value, spec_block[i],
-                None if unc_block is None else unc_block[i], drop, min_pixels, _start)
+                None if unc_block is None else unc_block[i], min_pixels, _start)
         return results, succeeded
 
     with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
@@ -1373,7 +1379,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     data_array = np.stack([r[0] for r in results], axis=0)
     failed = ~np.stack([r[1] for r in results], axis=0)
-    failed |= _unmeasurable(data_array, signal_cube.data, wv.value, fit_config.n_components)
+    failed |= _unmeasurable(data_array, signal_cube.data, wv.value, fit_config.n_components,
+                            kept)
 
     # Build units list: [signal, wl, wl, signal, wl, wl, ..., signal]
     units_list = []

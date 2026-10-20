@@ -161,11 +161,28 @@ def test_the_fit_is_tried_from_as_many_finite_pixels_as_free_parameters():
     wave = _wave()
     prof = np.full(N_WAVE, np.nan)
     prof[:4] = 1.0
-    assert _fit_finite(fit, wave, prof, None, True, 4, start)[1]
+    assert _fit_finite(fit, wave, prof, None, 4, start)[1]
     prof[0] = np.nan
-    assert not _fit_finite(fit, wave, prof, None, True, 4, start)[1]
-    assert _fit_finite(fit, wave[:3], np.ones(3), None, True, 4, start)[1]
+    assert not _fit_finite(fit, wave, prof, None, 4, start)[1]
+    assert _fit_finite(fit, wave[:3], np.ones(3), None, 4, start)[1]
     assert tried == [4, 3]
+
+
+def test_a_pixel_with_a_nan_uncertainty_is_left_out_with_its_uncertainty():
+    seen = []
+
+    def fit(wave, prof, sigma):
+        seen.append((wave, prof, sigma))
+        return np.zeros(1), True
+
+    wave = _wave(5)
+    sigma = np.array([1.0, np.inf, 3.0, 4.0, 5.0])
+    prof = np.array([10.0, 20.0, np.nan, 40.0, 50.0])
+    _fit_finite(fit, wave, prof, sigma, 1, None)
+    kept_wave, kept_prof, kept_sigma = seen[0]
+    assert kept_wave.tolist() == wave[[0, 3, 4]].tolist()
+    assert kept_prof.tolist() == [10.0, 40.0, 50.0]
+    assert kept_sigma.tolist() == [1.0, 4.0, 5.0]
 
 
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
@@ -251,11 +268,58 @@ def test_a_partly_tied_blend_with_nan_pixels(backend):
     assert _velocity(data[1, 0]) == pytest.approx(20, abs=1e-2)
 
 
+def _weighting(mode, rows):
+    """Keywords for an unweighted, weighted or Poisson fit of `rows`, shaped (rows, n)."""
+    if mode == "poisson":
+        return {"poisson": True}
+    if mode == "uncertainty":
+        return {"uncertainty": np.sqrt(np.abs(rows) + 1.0)[:, None, :]}
+    return {}
+
+
+@pytest.mark.parametrize("mode", ["uncertainty", "poisson"])
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
-def test_a_weighted_fit_of_a_spectrum_with_a_nan_pixel_fails(backend):
-    """With `uncertainty`, every pixel is needed, so a NaN pixel fails its spectrum alone."""
-    rows = np.tile(_line(_wave(), False), (2, 1))
-    rows[1, 5] = np.nan
+@pytest.mark.parametrize("single", [True, False], ids=["single", "blend"])
+def test_weighted_and_poisson_fits_leave_out_nan_pixels_at_the_ends(single, backend, mode):
+    """As for an unweighted fit, the fit is that of the window without them."""
+    counts = np.random.default_rng(4).poisson(_line(_wave(), single)).astype(float)
+    with_nan = counts.copy()
+    with_nan[:3] = np.nan
+    with_nan[-2:] = np.inf
+    config = _config(single, backend)
+    data, _, failed = fit_cube_gauss(_cube([with_nan]), n_jobs=1, fit_config=config,
+                                     return_failed=True, **_weighting(mode, with_nan[None]))
+    short, _, short_failed = fit_cube_gauss(_cube([counts[3:-2]], first=3), n_jobs=1,
+                                            fit_config=config, return_failed=True,
+                                            **_weighting(mode, counts[None, 3:-2]))
+    assert not failed.any() and not short_failed.any()
+    assert data == pytest.approx(short, rel=1e-6)
+    assert _velocity(data[0, 0]) == pytest.approx(_velocity(short[0, 0]), abs=1e-3)
+
+
+@pytest.mark.parametrize("backend", ["scipy", "mpfit"])
+def test_a_pixel_with_a_nan_uncertainty_is_left_out_of_a_weighted_fit(backend):
+    """The data of that pixel, though finite, is not used: a spike there does not move the fit."""
+    clean = _line(_wave(), False)
+    spiked = clean.copy()
+    spiked[25] += 500.0
+    uncertainty = np.ones((2, 1, N_WAVE))
+    uncertainty[1, 0, 25] = np.nan
+    data, _, failed = fit_cube_gauss(_cube([clean, spiked]), n_jobs=1,
+                                     fit_config=_config(False, backend), return_failed=True,
+                                     uncertainty=uncertainty)
+    assert not failed.any()
+    assert _velocity(data[:, 0]) == pytest.approx(20, abs=1e-2)
+
+
+@pytest.mark.parametrize("mode", ["unweighted", "uncertainty", "poisson"])
+@pytest.mark.parametrize("backend", ["scipy", "mpfit"])
+def test_too_few_kept_pixels_fail_in_every_mode(backend, mode):
+    """Three kept pixels are too few for the blend's 5 parameters; NaN ends move no centre."""
+    clean = np.rint(_line(_wave(), False))
+    few = np.full(N_WAVE, np.nan)
+    few[17:20] = clean[17:20]
+    rows = np.stack([clean, few])
     _, _, failed = fit_cube_gauss(_cube(rows), n_jobs=1, fit_config=_config(False, backend),
-                                  return_failed=True, uncertainty=np.ones(rows.shape)[:, None])
+                                  return_failed=True, **_weighting(mode, rows))
     assert failed[:, 0].tolist() == [False, True]
