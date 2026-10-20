@@ -17,6 +17,8 @@ from typing import Dict, List, Tuple, Any
 from ndcube import NDCube
 from tqdm import tqdm
 
+from .config import Detector_SWC, _old_names_used
+from .deprecated import get_dem_data_from_results  # noqa: F401  (deprecated)
 from .results_file import load_results
 from .utils import has_wrong_velocity_sign
 
@@ -361,8 +363,14 @@ def _same_parameter(name: str, asked, stored) -> bool:
     of a different kind raises ValueError rather than matching (5 m would
     otherwise match 5 s), as does a quantity with a unit for a setting run
     as a plain number. A number with no unit is compared with the stored
-    value in SI.
+    value in SI. A list, tuple or array matches a stored list or tuple item
+    by item, so a list from YAML matches a tuple the run stored.
     """
+    if isinstance(stored, (list, tuple)):
+        if isinstance(asked, np.ndarray) and asked.ndim > 0:
+            asked = list(asked)
+        return (isinstance(asked, (list, tuple)) and len(asked) == len(stored)
+                and all(_same_parameter(name, one, other) for one, other in zip(asked, stored)))
     numbers = (int, float, np.integer, np.floating)
     if isinstance(asked, u.Quantity) and isinstance(stored, (bool, np.bool_)):
         raise ValueError(f"{name} is a switch, true or false; {asked} is not.")
@@ -425,7 +433,14 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "enough parameters to select a unique one."
         )
 
-    query = dict(kwargs)
+    detector = {key.partition(".")[2] for key in kwargs if key.startswith("detector.")}
+    renamed = _old_names_used(Detector_SWC, detector, "detector.", error=ValueError)
+    query = {}
+    for key, value in kwargs.items():
+        section, _, name = key.partition(".")
+        if section == "detector" and name in renamed:
+            key = f"detector.{renamed[name]}"
+        query[key] = value
 
     matches = [combo_results for combo_results in all_combinations.values()
                if all(key in combo_results["parameters"]
@@ -445,38 +460,6 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "Add more parameters to narrow the selection. "
             "Use summary_table(results) to see all available combinations."
         )
-
-
-def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deprecated: no version of ECLIPSE wrote the DEM into the results.
-
-    The DEM and emission measure are in the synthesis file. Read them with
-    `read_synthesis_products(path, keys=["dem_map", "em_tv"])`.
-
-    Parameters
-    ----------
-    results : dict
-        Results from `load_instrument_response_results`.
-
-    Raises
-    ------
-    KeyError
-        If the results hold no DEM; results from `eclipse` never do.
-    """
-    warnings.warn("get_dem_data_from_results is deprecated and will be removed in a future "
-                  "release: no released version wrote DEM data into the results. The DEM is "
-                  "in the synthesis file; read it with "
-                  "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv']).",
-                  FutureWarning, stacklevel=2)
-    if "dem_data" not in results:
-        raise KeyError(
-            "DEM data is not in the results, as no released version wrote it there. It is "
-            "in the synthesis file: read it with "
-            "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
-        )
-    
-    return results["dem_data"]
 
 
 def summary_table(results: Dict[str, Any]) -> None:

@@ -180,7 +180,7 @@ def test_the_message_lists_what_is_valid():
 
 
 def test_private_fields_are_accepted_but_not_advertised():
-    """_dark_current_293k is a real constructor argument, but not a user setting."""
+    """_dark_current_293k, the old name of dark_current_293k, still works but is not listed."""
     _validate_config_keys(
         dict(MINIMAL, detector={"_dark_current_293k": 1.0}), "SWC")
     with pytest.raises(ValueError) as excinfo:

@@ -8,6 +8,7 @@ import functools
 import difflib
 import dataclasses
 import subprocess
+import sys
 from pathlib import Path
 import warnings
 import numpy as np
@@ -33,6 +34,23 @@ VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
 # increasing coordinate, -1 on the other. The observer is above the box (+z)
 # for the top view, and at +x and -y for the two side views.
 OBSERVER_SIDE = {"x": +1, "y": -1, "z": +1}
+
+
+def _warn_outside(message: str, category=FutureWarning) -> None:
+    """
+    Warn, attributed to the first caller outside ECLIPSE.
+
+    Frames in `dataclasses` and `copy` are skipped too, so a warning raised
+    while `dataclasses.replace` makes an object names the line that called it.
+    """
+    frame, level = sys._getframe(1), 2
+    package = __name__.split(".")[0] + "."
+    while frame is not None:
+        module = frame.f_globals.get("__name__", "")
+        if not (module.startswith(package) or module in ("dataclasses", "copy")):
+            break
+        frame, level = frame.f_back, level + 1
+    warnings.warn(message, category, stacklevel=level)
 
 
 def view_axis_and_side(view: str) -> tuple[str, int]:
@@ -645,7 +663,7 @@ def deduplicate_list(param_list, param_name):
 # even when the YAML value is a list.
 _SECTION_LIST_FIELDS = {
     "simulation": [],
-    "detector": [],
+    "detector": ["dispersion", "lit_band", "slit_image_tilt"],
     "telescope": ["psf_params", "fiducial_centres", "fiducial_lengths"],
     "filter": [],
 }

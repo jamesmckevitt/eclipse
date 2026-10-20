@@ -263,6 +263,25 @@ def test_spectral_pixel_width_is_read_from_the_cube():
     assert spectral_pixel_width(_line_cube()).to_value(u.AA) == pytest.approx(0.0169)
 
 
+def test_a_decreasing_wavelength_axis_gives_the_same_intensities():
+    """The pixel width is above zero, so the intensities are too."""
+    increasing = _line_cube()
+    wcs = increasing.wcs.deepcopy()
+    wcs.wcs.cdelt[0] = -wcs.wcs.cdelt[0]
+    decreasing = NDCube(increasing.data[..., ::-1], wcs=wcs, unit=increasing.unit)
+    assert spectral_pixel_width(decreasing).to_value(u.AA) == pytest.approx(0.0169)
+    intensities = []
+    for cube in (increasing, decreasing):
+        data, units = fit_cube_gauss(cube, n_jobs=1)
+        quantities = fit_quantities(data, units, spectral_pixel_width(cube), REST0)
+        intensities.append(quantities["components"]["195.1190 Angstrom"]["intensity"])
+    assert np.all(intensities[1] > 0)
+    assert intensities[1].value == pytest.approx(intensities[0].value, rel=1e-6)
+    negative = fit_quantities(data, units, -spectral_pixel_width(cube), REST0)
+    assert negative["components"]["195.1190 Angstrom"]["intensity"].value == pytest.approx(
+        intensities[1].value, rel=1e-12)
+
+
 # --- the Monte Carlo keeps them ----------------------------------------------
 
 def _intensity_cube(n_slit=3, n_scan=2, n_wave=16, peak=2.0e4):
@@ -537,3 +556,39 @@ def test_every_velocity_and_width_map_holds_its_own_quantity():
     assert len({tuple(np.ravel(analysis[key].value)) for key, _ in pairs}) == len(pairs)
     for key, name in pairs:
         assert maps[name].data == pytest.approx(analysis[key].value, rel=1e-9), name
+
+
+@pytest.mark.parametrize("uniform_mode", [False, True], ids=["per-iteration", "uniform"])
+def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monkeypatch,
+                                                                           uniform_mode):
+    """
+    A NaN DN and photon count in one pixel: the DN's uncertainty is NaN too.
+
+    The run goes on, and that spectrum is fitted on its other pixels.
+    """
+    mc = sys.modules["eclipse.monte_carlo"]
+    simulate = mc.simulate_once
+
+    def with_a_nan_pixel(*args, **kwargs):
+        signals = list(simulate(*args, **kwargs))
+        for index in (5, 9):  # photon arrivals and DN
+            cube = signals[index]
+            data = np.array(cube.data, dtype=float)
+            data[0, 0, 5] = np.nan
+            signals[index] = NDCube(data, wcs=cube.wcs, unit=cube.unit, meta=cube.meta)
+        return tuple(signals)
+
+    monkeypatch.setattr(mc, "simulate_once", with_a_nan_pixel)
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
+    np.random.seed(8)
+    # Some 800 photons at the peak, for velocities within a few km/s.
+    # Uniform mode fits only the first row along the slit, so give it one row.
+    cube = _intensity_cube(n_slit=1 if uniform_mode else 3, peak=1e13)
+    _, dn_stats, _, photon_stats = monte_carlo(cube, 40 * u.s, det, tel, sim, n_iter=2,
+                                               uniform_mode=uniform_mode)
+    name = "195.1190 Angstrom"
+    for stats in (dn_stats, photon_stats):
+        assert not stats["failed_fits"].any()
+        velocity = stats["components"][name]["velocity"]["mean"].value
+        assert abs(velocity[0, 0] - np.mean(velocity.ravel()[1:])) < 10

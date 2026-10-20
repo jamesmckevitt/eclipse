@@ -29,6 +29,10 @@ from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, 
                              read_synthesis, read_synthesis_products, write_line_cubes,
                              write_synthesis)
 from .results_file import convert_results_pickle
+from .band import (BandLines, IonLines, band_contribution_functions, read_band_lines,
+                   write_band_lines)
+from .readout import FocalPlane_SWC, ReadoutSequence
+from .full_frame import FullFrame, full_ccd_frame, write_full_frame
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -37,8 +41,8 @@ from .analysis import (
     get_results_for_combination,
     summary_table,
     create_sunpy_maps_from_combo,
-    get_dem_data_from_results
 )
+from .deprecated import get_dem_data_from_results
 
 __all__ = [
     "Detector_SWC", "Detector_EIS", "Telescope_EUVST", "Telescope_EIS", 
@@ -70,6 +74,16 @@ __all__ = [
     "read_synthesis",
     "write_synthesis",
     "convert_results_pickle",
+    "BandLines",
+    "IonLines",
+    "band_contribution_functions",
+    "read_band_lines",
+    "write_band_lines",
+    "FocalPlane_SWC",
+    "ReadoutSequence",
+    "FullFrame",
+    "full_ccd_frame",
+    "write_full_frame",
     "load_instrument_response_results",
     "get_parameter_combinations",
     "analyse_fit_statistics", 

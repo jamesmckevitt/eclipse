@@ -31,14 +31,16 @@ fp.row_edges("left")                            # 2049 wavelengths, for binning 
 
 The wavelength of each row comes from a quadratic fitted to the focal plane positions in RSC-2022021C. The spacing changes along the chip, from 17.0 mA per row at the short-wavelength end to 16.8 at the long one. A single spacing of 16.9, from the middle, would put a line up to about seven rows out at the ends.
 
+The wavelength scale, `dispersion`, and the settings below are settings of the detector, `Detector_SWC`, and `from_detector` takes them from it. They can also be given to `FocalPlane_SWC` directly.
+
 - `wavelength_offset`: added to every row's wavelength, for a wavelength calibration of the camera as built or in flight. The design positions are good to about a row, but the camera's alignment to the beam is quoted at +/-0.79 Angstrom, some 47 rows.
 - `lit_band`: the wavelengths between which light reaches the chip. Outside them a baffle blocks the beam, which leaves 380 dark rows on the left CCD and 1290 on the right. Charge from the lit rows is moved across all of them.
 - `slit_image_tilt`: how far a line moves along the dispersion between the middle of the slit and its ends. By default a line falls on the same row all along the slit, and the `column` argument these methods take makes no difference. Pass `MEASURED_SLIT_IMAGE_TILT` to model the shift the optical design shows, about two rows from end to end:
 
 ```python
-from eclipse.readout import MEASURED_SLIT_IMAGE_TILT
+from eclipse.config import MEASURED_SLIT_IMAGE_TILT
 
-tilted = FocalPlane_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT)
+tilted = FocalPlane_SWC.from_detector(Detector_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT))
 tilted.row_of_wavelength(195.119 * u.Angstrom, column=1904)   # ('left', 1863.3)
 ```
 

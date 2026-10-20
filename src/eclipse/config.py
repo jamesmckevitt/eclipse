@@ -4,7 +4,9 @@ Configuration classes for instruments, detectors, and simulation parameters.
 
 from __future__ import annotations
 import dataclasses
+import functools
 import os
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,7 +15,7 @@ import numpy as np
 import astropy.units as u
 import scipy.interpolate
 from . import eis_calibration
-from .utils import angle_to_distance
+from .utils import _warn_outside, angle_to_distance
 from importlib.resources import files
 
 
@@ -21,12 +23,234 @@ from importlib.resources import files
 #  Detector materials and shared properties
 # ------------------------------------------------------------------
 
-# Material properties (Fano factors)
+# Properties of each detector material. A detector's `fano_factor`,
+# `pair_energy_300k` and `pair_energy_slope` default to its material's.
+# The energy to free one electron-hole pair in silicon is 3.71 eV at 300 K
+# and rises by 0.0006 eV per kelvin of cooling.
 DETECTOR_MATERIALS = {
     "silicon": {
         "fano_factor": 0.115,
+        "pair_energy_300k": 3.71 * u.eV,
+        "pair_energy_slope": -0.0006 * u.eV / u.K,
     }
 }
+
+# Wavelength in Angstrom against position along the dispersion, in mm from the
+# SW focal plane centre (the middle of the gap), positive toward longer
+# wavelength. Fitted to the RSC-2022021C positions of the two detector edges,
+# the focal plane centre, the chief ray and the dispersion there, and to the
+# ray-traced line positions on its SW footprint figure. A linear scale is not
+# good enough: the design runs from 17.0 mA per row at the short-wavelength
+# end to 16.8 at the long end, so the nominal 16.9 misplaces a line by up to
+# about seven rows.
+DISPERSION_COEFFICIENTS = (198.885944, 1.2516577, -1.361114e-4)
+
+# A spectral line is an image of the slit, and the optics do not put it on
+# exactly one row: it drifts along the dispersion from one end of the slit to
+# the other. These are the row offsets at 140 arcsec from the field centre,
+# linear term then quadratic, measured from the ray-traced line positions on
+# the SW footprint figure of RSC-2022021C. All eleven lines drawn there agree
+# on them to a few tenths of a row. Set them as `Detector_SWC.slit_image_tilt`
+# to model the drift; by default a line lands on one row along the whole slit.
+MEASURED_SLIT_IMAGE_TILT = (0.991, 0.605)
+
+# The field angle those offsets are quoted at.
+TILT_REFERENCE_ANGLE = 140.0 * u.arcsec
+
+
+def _material_value(det, name: str):
+    """Detector setting `name`, or its material's when the setting is None or missing."""
+    value = getattr(det, name, None)
+    material = getattr(det, "material", "silicon")
+    return DETECTOR_MATERIALS[material][name] if value is None else value
+
+
+def _pair_energy(det) -> u.Quantity:
+    """Energy to free one electron-hole pair at the detector's CCD temperature."""
+    temp_kelvin = det.ccd_temperature.to_value(u.K, equivalencies=u.temperature())
+    at_300k = _material_value(det, "pair_energy_300k").to_value(u.eV)
+    slope = _material_value(det, "pair_energy_slope").to_value(u.eV / u.K)
+    return (at_300k + slope * (temp_kelvin - 300.0)) * u.eV
+
+
+class _RenamedSetting:
+    """Old name of a setting, which reads and sets the new one with a FutureWarning."""
+
+    def __init__(self, old: str, new: str):
+        self.old, self.new = old, new
+
+    def warn(self, section: str = "") -> None:
+        """Warn that the old name is used; `section`, such as "detector.", prefixes it."""
+        _warn_outside(f"{section}{self.old} is renamed {self.new}; the old name will be "
+                      f"removed in a future release.")
+
+    def __get__(self, obj, owner=None):
+        self.warn()
+        return getattr(owner if obj is None else obj, self.new)
+
+    def __set__(self, obj, value):
+        self.warn()
+        setattr(obj, self.new, value)
+
+
+def _old_names_used(cls, given, section: str = "", replacing: bool = False,
+                    error=TypeError) -> dict:
+    """
+    Old names of `cls`'s settings among the keys of `given`, mapped to their new names.
+
+    Each warns with a FutureWarning. Both names of one setting are refused
+    with `error`, unless `replacing`, when the old name's value is meant.
+    """
+    used = {}
+    for old, new in cls._OLD_NAMES.items():
+        if old in given:
+            if new in given and not replacing:
+                raise error(f"Give {section}{new} only, not {section}{old} as well.")
+            _RenamedSetting(old, new).warn(section)
+            used[old] = new
+    return used
+
+
+def _keep_old_names(cls):
+    """
+    Accept the names in `cls._OLD_NAMES` for their new ones, with a FutureWarning.
+
+    They work as constructor arguments and attributes, and an object
+    pickled with an old name reads back with the new one.
+    `dataclasses.replace` with an old name passes both names, the new one
+    with the object's current value, so there the old name's value is used.
+    """
+    init = cls.__init__
+
+    @functools.wraps(init)
+    def __init__(self, *args, **kwargs):
+        replacing = sys._getframe(1).f_globals.get("__name__") == "dataclasses"
+        for old, new in _old_names_used(cls, kwargs, replacing=replacing).items():
+            kwargs.pop(new, None)
+            kwargs[new] = kwargs.pop(old)
+        init(self, *args, **kwargs)
+
+    def __setstate__(self, state):
+        state = dict(state)
+        for old, new in cls._OLD_NAMES.items():
+            if old in state:
+                state.setdefault(new, state.pop(old))
+        self.__dict__.update(state)
+
+    cls.__init__ = __init__
+    cls.__setstate__ = __setstate__
+    for old, new in cls._OLD_NAMES.items():
+        setattr(cls, old, _RenamedSetting(old, new))
+    return cls
+
+
+def _check_detector_material(det, section: str) -> None:
+    """Check the settings that default to the material's, and fill those left as None."""
+    fano = det.fano_factor
+    if fano is not None and (isinstance(fano, bool)
+                             or not isinstance(fano, (int, float, np.integer, np.floating))
+                             or not np.isfinite(fano) or fano < 0):
+        raise ValueError(f"{section}.fano_factor must be a number, zero or more, or left out "
+                         f"for the material's; got {fano!r}.")
+    for name, unit, example in (("pair_energy_300k", u.eV, "3.71 eV"),
+                                ("pair_energy_slope", u.eV / u.K, "-0.0006 eV / K")):
+        value = getattr(det, name)
+        if value is not None and not (isinstance(value, u.Quantity) and value.isscalar
+                                      and value.unit.is_equivalent(unit)
+                                      and np.isfinite(value.value)):
+            raise ValueError(f"{section}.{name} must be in a unit of {unit.physical_type}, such "
+                             f"as {example}, or left out for the material's; got {value!r}.")
+    energy = _pair_energy(det)
+    if not energy.value > 0:
+        raise ValueError(f"{section}.pair_energy_300k and pair_energy_slope give {energy} per "
+                         f"electron-hole pair at {det.ccd_temperature}; it must be above zero.")
+    # Filled in, so a run records the values it used.
+    for name in ("fano_factor", "pair_energy_300k", "pair_energy_slope"):
+        setattr(det, name, _material_value(det, name))
+
+
+def _numbers(value, count, section: str, name: str, example: str) -> tuple:
+    """
+    `value` as a tuple of finite floats.
+
+    Refused unless `count`, a test of how many there are, is true of them.
+    """
+    def number(item):
+        if isinstance(item, u.Quantity) and item.unit == u.dimensionless_unscaled:
+            item = item.value
+        if isinstance(item, bool) or not isinstance(item, (int, float, np.integer, np.floating)):
+            raise TypeError
+        return float(item)
+
+    try:
+        numbers = tuple(number(item) for item in value)
+    except TypeError:
+        numbers = None
+    if numbers is None or not count(len(numbers)) or not np.all(np.isfinite(numbers)):
+        raise ValueError(f"{section}.{name} must be {example}; got {value!r}.")
+    return numbers
+
+
+# The SW focal plane settings, which a detector and a focal plane both hold.
+_FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
+
+
+def _same_setting(first, second) -> bool:
+    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
+    first, second = u.Quantity(first), u.Quantity(second)
+    if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
+        return False
+    return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
+
+
+def _one_length(value, zero: bool = False):
+    """
+    `value` as one length, read with `u.Quantity`, or None if it is not one.
+
+    With `zero`, a plain zero is taken as 0 Angstrom, as it adds to a wavelength.
+    """
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        items = ([] if isinstance(value, (str, u.Quantity))
+                 else np.ravel(np.asarray(value, dtype=object)))
+        if any(isinstance(item, (bool, np.bool_)) for item in items):
+            return None
+        value = u.Quantity(value)
+    except (TypeError, ValueError):
+        return None
+    if value.size != 1:
+        return None
+    value = value.reshape(())
+    if zero and value.unit == u.dimensionless_unscaled and value.value == 0:
+        value = value.value * u.Angstrom
+    if not (value.unit.is_equivalent(u.AA) and np.isfinite(value.value)):
+        return None
+    return value
+
+
+def _check_focal_plane(det, section: str = "detector") -> None:
+    """Check the SW focal plane settings of a detector or focal plane; store the lists as tuples."""
+    offset = _one_length(det.wavelength_offset, zero=True)
+    if offset is None:
+        raise ValueError(f"{section}.wavelength_offset must be one wavelength, such as "
+                         f"0.1 Angstrom; got {det.wavelength_offset!r}.")
+    det.wavelength_offset = offset
+    det.dispersion = _numbers(det.dispersion, lambda n: n >= 2, section, "dispersion",
+                              "two or more coefficients, lowest order first, such as "
+                              "[198.9, 1.25]")
+    det.slit_image_tilt = _numbers(det.slit_image_tilt, lambda n: n == 2, section,
+                                   "slit_image_tilt", "two numbers of rows, such as [0.991, 0.605]")
+    band = det.lit_band
+    try:
+        limits = None if isinstance(band, str) else tuple(_one_length(item) for item in band)
+    except TypeError:
+        limits = None
+    if limits is None or len(limits) != 2 or any(limit is None for limit in limits):
+        raise ValueError(f"{section}.lit_band must be two wavelengths, such as [170.0 Angstrom, "
+                         f"212.3 Angstrom]; got {band!r}.")
+    det.lit_band = tuple(sorted(limits, key=lambda limit: limit.to_value(u.AA)))
+
 
 def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple = (),
                     fractions: tuple = (), optional: tuple = ()) -> None:
@@ -177,7 +401,7 @@ def _check_detector(det, section: str = "detector") -> None:
                     positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size", "wvl_res",
                               "plate_scale_angle", "filter_distance", "ccd_gap",
                               "row_transfer_time", "pixel_period"),
-                    non_negative=("read_noise_rms", "_dark_current_293k"),
+                    non_negative=("read_noise_rms", "dark_current_293k"),
                     fractions=("qe_euv", "qe_vis"))
     if det.ccd_temperature.to_value(u.K, equivalencies=u.temperature()) <= 0:
         raise ValueError(f"{section}.ccd_temperature must be above absolute zero, got "
@@ -185,6 +409,7 @@ def _check_detector(det, section: str = "detector") -> None:
     if det.material not in DETECTOR_MATERIALS:
         raise ValueError(f"{section}.material must be one of {sorted(DETECTOR_MATERIALS)}, got "
                          f"{det.material!r}.")
+    _check_detector_material(det, section)
 
 
 def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: str = "NIMO") -> u.Quantity:
@@ -415,6 +640,9 @@ class AluminiumFilter:
         transmission. Default the packaged tables.
     table_thickness : u.Quantity
         Thickness the tables are for. Default 1000 angstrom.
+    visible_decade_thickness : u.Quantity
+        Thickness of aluminium that cuts visible light by a factor of 10.
+        Default 170 angstrom. Keyword only.
     """
     al_thickness: u.Quantity = 1485 * u.angstrom
     oxide_thickness: u.Quantity = 95 * u.angstrom
@@ -424,9 +652,10 @@ class AluminiumFilter:
     oxide_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
     c_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
     table_thickness: u.Quantity = 1000 * u.angstrom
+    visible_decade_thickness: u.Quantity = field(default=170.0 * u.angstrom, kw_only=True)
 
     def __post_init__(self):
-        _check_settings(self, "filter", positive=("table_thickness",),
+        _check_settings(self, "filter", positive=("table_thickness", "visible_decade_thickness"),
                         non_negative=("al_thickness", "oxide_thickness", "c_thickness"),
                         fractions=("mesh_throughput",))
         _check_tables(self, ("al_table", "oxide_table", "c_table"), "filter")
@@ -459,16 +688,18 @@ class AluminiumFilter:
         """
         Visible-light transmission of the filter, including the mesh.
 
-        It falls by a factor of 10 per 170 angstrom of aluminium.
+        It falls by a factor of 10 per `visible_decade_thickness` of
+        aluminium.
         """
         thickness_aa = self.al_thickness.to(u.angstrom).value
-        layers = thickness_aa / 170.0
+        layers = thickness_aa / self.visible_decade_thickness.to_value(u.angstrom)
         return 10.0 ** (-layers) * self.mesh_throughput
 
 
 # -----------------------------------------------------------------------------
 # Configuration objects
 # -----------------------------------------------------------------------------
+@_keep_old_names
 @dataclass
 class Detector_SWC:
     """
@@ -486,6 +717,11 @@ class Detector_SWC:
         and 0.76.
     read_noise_rms : u.Quantity
         Read noise. Default 10 electron per pixel.
+    dark_current_293k : u.Quantity
+        Dark current at 293 K, scaled to `ccd_temperature` by the
+        non-inverted mode law of :func:`calculate_dark_current`. Default
+        20000 electron per pixel per second. `_dark_current_293k` is an old
+        name for it, which still works with a FutureWarning.
     gain_e_per_dn : u.Quantity
         Electrons per DN. Default 2.78.
     max_dn : u.Quantity
@@ -539,13 +775,45 @@ class Detector_SWC:
         at -60 Celsius at the start of the mission, and
         SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1 gives 0.99999 as typical for
         both.
+    fano_factor : float or None
+        Fano factor, which sets the spread in electrons per photon. Default
+        None, for the material's in :data:`DETECTOR_MATERIALS` (0.115 for
+        silicon).
+    pair_energy_300k, pair_energy_slope : u.Quantity or None
+        Energy to free one electron-hole pair at 300 K, and its change per
+        kelvin; it sets the electrons each photon frees. Default None, for
+        the material's in :data:`DETECTOR_MATERIALS` (3.71 eV and -0.0006 eV
+        per kelvin for silicon).
+    dispersion : tuple of float
+        Wavelength in Angstrom against position along the dispersion in mm
+        from the focal plane centre: polynomial coefficients, lowest order
+        first. Default :data:`DISPERSION_COEFFICIENTS`.
+    wavelength_offset : u.Quantity
+        Added to every row's wavelength, for a wavelength calibration of the
+        camera as built or in flight. Default 0 Angstrom.
+    lit_band : tuple of u.Quantity
+        Wavelengths between which light reaches the CCDs; outside them a
+        baffle blocks the beam. Default 170.0 and 212.3 Angstrom.
+    slit_image_tilt : tuple of float
+        Drift of a line along the dispersion, in rows, between the field
+        centre and 140 arcsec from it: a linear and a quadratic term.
+        Default (0, 0), a line on one row along the whole slit.
+        :data:`MEASURED_SLIT_IMAGE_TILT` is measured from the ray-traced
+        spots in the SW footprint figure of RSC-2022021C.
+
+    The last four describe the SW focal plane, which
+    :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
+    does not use the focal plane yet, and refuses values other than the
+    defaults.
     """
+    _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
+
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_vis: float = 1.0
     qe_euv: float = 0.76
     read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
     dark_current: u.Quantity = field(init=False)
-    _dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293 K
+    dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)
     gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     # Peak charge storage of the CCD42-40 in non-inverted mode, where
@@ -575,9 +843,19 @@ class Detector_SWC:
     parallel_overscan_rows: int = field(default=20, kw_only=True)
     cte_parallel: float = field(default=1.0, kw_only=True)
     cte_serial: float = field(default=1.0, kw_only=True)
+    # Properties of the material, None for those in DETECTOR_MATERIALS.
+    fano_factor: float | None = field(default=None, kw_only=True)
+    pair_energy_300k: u.Quantity | None = field(default=None, kw_only=True)
+    pair_energy_slope: u.Quantity | None = field(default=None, kw_only=True)
+    # The SW focal plane, which eclipse.readout models.
+    dispersion: tuple = field(default=DISPERSION_COEFFICIENTS, kw_only=True)
+    wavelength_offset: u.Quantity = field(default=0.0 * u.Angstrom, kw_only=True)
+    lit_band: tuple = field(default=(170.0 * u.Angstrom, 212.3 * u.Angstrom), kw_only=True)
+    slit_image_tilt: tuple = field(default=(0.0, 0.0), kw_only=True)
 
     def __post_init__(self):
         _check_detector(self)
+        _check_focal_plane(self)
         for name in ("cte_parallel", "cte_serial"):
             value = getattr(self, name)
             if (isinstance(value, bool) or not isinstance(value, (int, float, np.floating))
@@ -596,12 +874,17 @@ class Detector_SWC:
                 raise ValueError(f"detector.{name} can be set between {least} and {most}, "
                                  f"got {value}.")
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
-                                                        self._dark_current_293k)
+                                                        self.dark_current_293k)
 
     @property
     def si_fano(self) -> float:
-        """Fano factor of the detector material, which sets the spread in electrons per photon."""
-        return DETECTOR_MATERIALS[self.material]["fano_factor"]
+        """Fano factor: `fano_factor`, or the material's."""
+        return _material_value(self, "fano_factor")
+
+    @property
+    def pair_energy(self) -> u.Quantity:
+        """Energy to free one electron-hole pair at `ccd_temperature`."""
+        return _pair_energy(self)
 
     @staticmethod
     def calculate_dark_current(temp: u.Quantity,
@@ -623,7 +906,7 @@ class Detector_SWC:
         u.Quantity
             Dark current in electron per pixel per second.
         """
-        rate = Detector_SWC._dark_current_293k if dark_current_293k is None else dark_current_293k
+        rate = Detector_SWC.dark_current_293k if dark_current_293k is None else dark_current_293k
         return calculate_dark_current(temp, rate, ccd_type="NIMO")
 
     @property
@@ -632,6 +915,7 @@ class Detector_SWC:
         return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
 
 
+@_keep_old_names
 @dataclass
 class Detector_EIS:
     """
@@ -640,31 +924,45 @@ class Detector_EIS:
     The pixel, noise and gain settings of `Detector_SWC`, with EIS values:
     quantum efficiency 0.64 for EUV and 0.65 for visible light, read noise 5
     electron per pixel, 6.3 electron per DN, 22.3 mA per pixel and 1 arcsec
-    per pixel along the slit. It has none of SWC's full-well, filter,
-    shutter or CCD read-out settings.
+    per pixel along the slit. Its `dark_current_293k` is 250 electron per
+    pixel per second, scaled by the advanced inverted mode law of
+    :func:`calculate_dark_current`. `fano_factor`, `pair_energy_300k` and
+    `pair_energy_slope` are as for `Detector_SWC`. It has none of SWC's
+    full-well, filter, shutter, focal plane or CCD read-out settings.
     """
+    _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
+
     ccd_temperature: u.Quantity = -60 * u.deg_C
     qe_euv: float = 0.64  # EIS SW Note 2
     qe_vis: float = 0.65  # MSSL engineering test report
     read_noise_rms: u.Quantity = 5.0 * u.electron / u.pixel
     dark_current: u.Quantity = field(init=False)
-    _dark_current_293k: u.Quantity = 250.0 * u.electron / (u.pixel * u.s)  # Q_d0 at 293K for EIS
+    dark_current_293k: u.Quantity = 250.0 * u.electron / (u.pixel * u.s)
     gain_e_per_dn: u.Quantity = 6.3 * u.electron / u.DN
     max_dn: u.Quantity = 65535 * u.DN / u.pixel
     pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
     wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel
     plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel
     material: str = "silicon"
+    # Properties of the material, None for those in DETECTOR_MATERIALS.
+    fano_factor: float | None = field(default=None, kw_only=True)
+    pair_energy_300k: u.Quantity | None = field(default=None, kw_only=True)
+    pair_energy_slope: u.Quantity | None = field(default=None, kw_only=True)
 
     @property
     def si_fano(self) -> float:
-        """Fano factor of the detector material, which sets the spread in electrons per photon."""
-        return DETECTOR_MATERIALS[self.material]["fano_factor"]
+        """Fano factor: `fano_factor`, or the material's."""
+        return _material_value(self, "fano_factor")
+
+    @property
+    def pair_energy(self) -> u.Quantity:
+        """Energy to free one electron-hole pair at `ccd_temperature`."""
+        return _pair_energy(self)
 
     def __post_init__(self):
         _check_detector(self)
         self.dark_current = self.calculate_dark_current(self.ccd_temperature,
-                                                        self._dark_current_293k)
+                                                        self.dark_current_293k)
 
     @property
     def plate_scale_length(self) -> u.Quantity:
@@ -690,7 +988,7 @@ class Detector_EIS:
         u.Quantity
             Dark current in electron per pixel per second.
         """
-        rate = Detector_EIS._dark_current_293k if dark_current_293k is None else dark_current_293k
+        rate = Detector_EIS.dark_current_293k if dark_current_293k is None else dark_current_293k
         return calculate_dark_current(temp, rate, ccd_type="AIMO")
 
 
@@ -1142,6 +1440,9 @@ class Simulation:
     pinhole_positions_spectral : list of float
         Position of each pinhole along the spectral axis, as a fraction from
         0 to 1. Default empty, for the middle.
+    pinhole_visible_wavelength : u.Quantity
+        Wavelength of the visible light through the pinholes, which sets its
+        diffraction. Default 600 nm. Keyword only.
     """
     expos: u.Quantity = 1.0 * u.s  # Single exposure time
     n_iter: int = 10
@@ -1183,13 +1484,15 @@ class Simulation:
     # at the centre of the spectral window. On a slit-scan spectrograph this
     # fraction decides which emission lines a pinhole contaminates.
     pinhole_positions_spectral: List[float] = field(default_factory=list)
+    pinhole_visible_wavelength: u.Quantity = field(default=600.0 * u.nm, kw_only=True)
 
     @property
     def slit_scan_step(self) -> u.Quantity:
         return self.slit_width
 
     def __post_init__(self):
-        _check_settings(self, "simulation", positive=("expos", "slit_width"),
+        _check_settings(self, "simulation",
+                        positive=("expos", "slit_width", "pinhole_visible_wavelength"),
                         non_negative=("vis_sl",))
         if isinstance(self.n_iter, bool) or not isinstance(self.n_iter, int) or self.n_iter < 1:
             raise ValueError(f"n_iter must be a whole number of iterations, 1 or more, got "

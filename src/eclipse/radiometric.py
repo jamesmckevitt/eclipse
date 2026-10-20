@@ -12,6 +12,7 @@ from scipy.signal import convolve2d
 from scipy.special import erf
 from scipy.stats import binom, poisson
 from . import resolution_budget
+from .config import _pair_energy
 from .sampling import _carry_photon_wavelengths
 from .utils import wl_to_vel, vel_to_wl, debug_break, _fwhm_to_sigma
 
@@ -69,27 +70,31 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
     """
     Mean number of electrons a detected photon frees in the detector silicon.
 
-    This is the photon energy over the energy per electron-hole pair, which
-    depends on the CCD temperature.
+    This is the photon energy over the detector's `pair_energy`, the energy
+    per electron-hole pair, which depends on the CCD temperature.
 
     Parameters
     ----------
     rest_wavelength : u.Quantity
         Photon wavelength, one value or an array.
     det : Detector_SWC or Detector_EIS
-        Detector, with its `ccd_temperature`.
+        Detector. Another object needs a `ccd_temperature`, and is taken as
+        silicon unless it gives a `material` or `pair_energy_300k` and
+        `pair_energy_slope`.
 
     Returns
     -------
     np.ndarray
         Electrons per photon, same shape as `rest_wavelength`.
     """
-    if not hasattr(det, 'ccd_temperature'):
-        raise ValueError("CCD temperature not set. Pass ccd_temperature when constructing the Detector instance.")
-    temp_kelvin = det.ccd_temperature.to(u.K, equivalencies=u.temperature()).value
+    pair_energy = getattr(det, "pair_energy", None)
+    if pair_energy is None:
+        if not hasattr(det, "ccd_temperature"):
+            raise ValueError("The detector has no ccd_temperature, which sets the energy to "
+                             "free an electron-hole pair.")
+        pair_energy = _pair_energy(det)
     photon_energy_ev = (const.h * const.c / (rest_wavelength.to(u.angstrom))).to(u.eV).value
-    w_T = 3.71 - 0.0006 * (temp_kelvin - 300.0)  # eV per electron-hole pair
-    return np.asarray(photon_energy_ev / w_T, dtype=float)
+    return np.asarray(photon_energy_ev / pair_energy.to_value(u.eV), dtype=float)
 
 
 def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
@@ -247,6 +252,69 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     electron_counts[mask_positive] = total_electrons
     
     return electron_counts
+
+
+def _detected_photons(photons: np.ndarray, det, *, noise: bool = True,
+                      inverse_transform: bool = False) -> np.ndarray:
+    """
+    Photons detected in each pixel, given the quantum efficiency `det.qe_euv`.
+
+    With `noise` on, each pixel is a binomial draw over its whole photons,
+    and fractions of a photon are dropped. With `noise` off, it is the mean,
+    `qe_euv` times the photons. `inverse_transform` draws by
+    inverse-transform sampling, for common random numbers.
+    """
+    if not noise:
+        return (np.asarray(photons) * det.qe_euv).astype(float, copy=False)
+    trials = np.asarray(photons).astype(np.int64)
+    if inverse_transform:
+        detected = _binomial_inverse_transform(trials, det.qe_euv)
+    else:
+        detected = np.random.binomial(trials, det.qe_euv)
+    return detected.astype(float)
+
+
+def _dark_electrons(mean, shape: tuple, *, noise: bool = True,
+                    inverse_transform: bool = False) -> np.ndarray:
+    """
+    Dark current electrons in each pixel.
+
+    `mean` is in electrons per pixel, one value for all pixels or an array
+    that broadcasts to `shape`. With `noise` on, each pixel is a Poisson
+    draw. With `noise` off, it is the mean. `inverse_transform` draws by
+    inverse-transform sampling, for common random numbers. Raises
+    ValueError for a `mean` that does not broadcast to `shape`.
+    """
+    mean = np.asarray(mean, dtype=float)
+    try:
+        full = np.broadcast_to(mean, shape)
+    except ValueError:
+        raise ValueError(f"The dark mean, shaped {np.shape(mean)}, does not broadcast to "
+                         f"the pixels, shaped {tuple(shape)}.") from None
+    if not noise:
+        return np.array(full)
+    if inverse_transform:
+        return _poisson_inverse_transform(mean, size=shape)
+    return np.random.poisson(mean, size=shape)
+
+
+def _read_noise(shape: tuple, det) -> np.ndarray:
+    """Read noise in electrons per pixel, a normal draw of rms `det.read_noise_rms`."""
+    return np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel), shape)
+
+
+def _digitise(electrons: np.ndarray, det, *, rounded: bool = True) -> np.ndarray:
+    """
+    DN per pixel in each pixel.
+
+    The electrons are divided by the gain, rounded to the nearest DN and
+    clipped at `det.max_dn`. With `rounded` False they are not rounded, as
+    for the mean DN.
+    """
+    dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
+    if rounded:
+        dn = np.round(dn)
+    return np.minimum(dn, det.max_dn.to_value(u.DN / u.pixel))
 
 
 def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
@@ -562,6 +630,46 @@ def spectral_psf_margin(tel, det, slit_width: u.Quantity) -> int:
     return max(0, spectral_psf_reach(tel, det, slit_width) - optics)
 
 
+def _spectral_response(tel, det, slit_width: u.Quantity, spectral_psf: str) -> tuple:
+    """
+    Spectral response as a Gaussian convolved with a rectangle, in pixels.
+
+    Returns the Gaussian's standard deviation and the rectangle's width. With
+    `spectral_psf="quadrature"` the slit is in the Gaussian, of FWHM
+    :func:`spectral_psf_fwhm`, and the width is 0. With
+    `spectral_psf="convolution"` the Gaussian is the blur without the slit,
+    of FWHM :func:`spectral_blur_fwhm`, and the rectangle is the slit's
+    image.
+
+    Raises ValueError for any other `spectral_psf`, and wherever
+    :func:`spectral_psf_fwhm` or :func:`spectral_blur_fwhm` does, such as
+    for `"convolution"` with a telescope that has no `psf_slit_width`.
+    """
+    if spectral_psf == "quadrature":
+        return _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width)), 0.0
+    if spectral_psf == "convolution":
+        return _fwhm_to_sigma(spectral_blur_fwhm(tel, det)), slit_image_width(slit_width, det)
+    raise ValueError(
+        f"spectral_psf must be 'quadrature' or 'convolution', got {spectral_psf!r}."
+    )
+
+
+def _spectral_kernel(tel, det, slit_width: u.Quantity, spectral_psf: str) -> np.ndarray:
+    """
+    Spectral response at whole pixels out to :func:`spectral_psf_reach`.
+
+    With `spectral_psf="quadrature"` a Gaussian, not normalised. With
+    `spectral_psf="convolution"` :func:`spectral_line_spread`, which sums to
+    one. Raises ValueError as :func:`_spectral_response` does.
+    """
+    if spectral_psf == "convolution":
+        return spectral_line_spread(tel, det, slit_width)
+    sigma, _ = _spectral_response(tel, det, slit_width, spectral_psf)
+    reach = spectral_psf_reach(tel, det, slit_width)
+    offsets = np.arange(-reach, reach + 1)
+    return np.exp(-0.5 * (offsets / sigma) ** 2)
+
+
 def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     """
     Spectral PSF as a Gaussian convolved with the slit's image, per pixel.
@@ -590,8 +698,8 @@ def spectral_line_spread(tel, det, slit_width: u.Quantity) -> np.ndarray:
     # the slit, convolved with a rectangle the width of the slit. Like the
     # Gaussian kernel, it is taken at pixel centres over the same pixels
     # (spectral_psf_reach).
-    sigma = _fwhm_to_sigma(spectral_blur_fwhm(tel, det))
-    half = 0.5 * slit_image_width(slit_width, det)
+    sigma, width = _spectral_response(tel, det, slit_width, "convolution")
+    half = 0.5 * width
     reach = spectral_psf_reach(tel, det, slit_width)
     x = np.arange(-reach, reach + 1)
     scale = np.sqrt(2.0) * sigma
@@ -671,31 +779,15 @@ def apply_focusing_optics_psf(
             "[spatial_fwhm, spectral_fwhm] in pixel units."
         )
 
-    if sim.spectral_psf not in ("quadrature", "convolution"):
-        raise ValueError(
-            f"spectral_psf must be 'quadrature' or 'convolution', got "
-            f"{sim.spectral_psf!r}."
-        )
+    # Along lambda (axis 1 of each frame) the profile depends on the slit.
+    spectral_1d = _spectral_kernel(tel, det, sim.slit_width, sim.spectral_psf)
+    kx = spectral_1d.size
     quadrature = sim.spectral_psf == "quadrature"
 
     # FWHM in pixels along the slit (axis 0 of each frame)
     spatial_fwhm = spatial_psf_fwhm(tel, det)
     sigma_spatial = _fwhm_to_sigma(spatial_fwhm)
-
-    # Kernel size: 6*sigma rounded up to next odd integer, minimum 7
-    ky = max(7, int(np.ceil(6 * sigma_spatial)))
-    if ky % 2 == 0:
-        ky += 1
-
-    # Along lambda (axis 1 of each frame) the profile depends on the slit.
-    if quadrature:
-        sigma_spectral = _fwhm_to_sigma(spectral_psf_fwhm(tel, det, sim.slit_width))
-        kx = 2 * spectral_psf_reach(tel, det, sim.slit_width) + 1
-        x_1d = np.arange(kx) - kx // 2
-        spectral_1d = np.exp(-0.5 * (x_1d / sigma_spectral) ** 2)
-    else:
-        spectral_1d = spectral_line_spread(tel, det, sim.slit_width)
-        kx = spectral_1d.size
+    ky = 2 * _reach(spatial_fwhm) + 1
 
     if not convolve_spatial:
         # Spectral axis only. Zero padding is correct here: the wavelength
@@ -709,6 +801,7 @@ def apply_focusing_optics_psf(
         return _blurred_cube(signal, blur)
 
     if quadrature:
+        sigma_spectral, _ = _spectral_response(tel, det, sim.slit_width, "quadrature")
         # Coordinate grids centred at zero
         cy, cx = ky // 2, kx // 2
         y, x = np.mgrid[:ky, :kx]
@@ -861,18 +954,12 @@ def to_electrons(
     else:
         rest_wavelength = rms_wavelength = meta["rest_wav"]
 
-    # Apply quantum efficiency: a binomial draw over whole photons, or without
-    # noise its expectation qe * N, with no cast to integers.
     incident = photon_counts.to(u.photon / u.pix).data
-    if not noise:
-        photons_detected = incident * det.qe_euv
-    elif photon_shot_inverse_transform:
-        photons_detected = _binomial_inverse_transform(incident.astype(int), det.qe_euv)
-    else:
-        photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
+    photons_detected = _detected_photons(incident, det, noise=noise,
+                                         inverse_transform=photon_shot_inverse_transform)
 
     # Apply Fano noise per pixel, vectorized
-    electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
+    electron_counts = _vectorized_fano_noise(photons_detected,
                                              rest_wavelength, det, noise=noise,
                                              every_pixel=photon_shot_inverse_transform,
                                              rms_wavelength=rms_wavelength)
@@ -881,21 +968,14 @@ def to_electrons(
 
     # Add dark current with Poisson shot noise (per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    if not noise:
-        dark_current_counts = np.full(photon_counts.data.shape, dark_current_mean)
-    elif dark_current_inverse_transform:
-        dark_current_counts = _poisson_inverse_transform(
-            dark_current_mean, size=photon_counts.data.shape
-        )
-    else:
-        dark_current_counts = np.random.poisson(dark_current_mean, size=photon_counts.data.shape)
-    dark_current_signal = dark_current_counts * (u.electron / u.pixel)
-    e += dark_current_signal
+    dark_current_counts = _dark_electrons(dark_current_mean, photon_counts.data.shape,
+                                          noise=noise,
+                                          inverse_transform=dark_current_inverse_transform)
+    e += dark_current_counts * (u.electron / u.pixel)
 
     # Add read noise. It has zero mean, so without noise nothing is added.
     if noise:
-        e += np.random.normal(0, det.read_noise_rms.value,
-                              photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
+        e += _read_noise(photon_counts.data.shape, det) * (u.electron / u.pixel)
 
     # Not clipped at zero: a CCD reads out above a bias level, so read noise
     # takes a dark pixel below it as often as above, and ECLIPSE's
@@ -929,18 +1009,12 @@ def to_dn(electrons: NDCube, det) -> NDCube:
     Returns
     -------
     NDCube
-        DN in each pixel.
+        DN in each pixel, in DN per pixel.
     """
-    dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
-    dn_q = dn_q.to(det.max_dn.unit)
-
-    dn_val = np.round(dn_q.value)                                         # round to nearest whole number
-    dn_val[dn_val > det.max_dn.value] = det.max_dn.value                  # clip
-
     return NDCube(
-        data=dn_val,
+        data=_digitise(electrons.unit.to(u.electron / u.pixel) * electrons.data, det),
         wcs=electrons.wcs.deepcopy(),
-        unit=dn_q.unit,
+        unit=u.DN / u.pixel,
         meta=electrons.meta,
     )
 
@@ -1166,8 +1240,7 @@ def add_pinhole_visible_light(electrons: NDCube, t_exp: u.Quantity, det, sim, te
     # Get detector and data properties
     data_shape = electrons.data.shape  # Should be (n_slit, n_scan, n_spectral)
     
-    # Visible light wavelength (typical)
-    visible_wavelength = 600 * u.nm
+    visible_wavelength = sim.pinhole_visible_wavelength
     
     # Initialize additional electron contributions
     additional_electrons = np.zeros_like(electrons.data)

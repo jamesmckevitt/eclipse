@@ -95,8 +95,8 @@ def test_weighting_by_each_pixels_own_uncertainty_measures_a_bright_line_more_pr
 
 
 @pytest.mark.parametrize("uncertainty, message", [
-    (np.zeros(31), "finite and above zero"),
-    (np.full(31, np.nan), "finite and above zero"),
+    (np.zeros(31), "must be above zero"),
+    (np.full(31, -1.0), "must be above zero"),
     (np.ones(30), "does not match the spectra"),
 ])
 def test_an_uncertainty_a_fit_cannot_weight_by_is_refused(uncertainty, message):
@@ -197,6 +197,7 @@ def test_scipy_and_mpfit_find_the_same_poisson_fit(components):
 @pytest.mark.parametrize("counts, uncertainty, message", [
     (np.full(31, 3.0), np.ones(31), "give poisson or uncertainty, not both"),
     (np.full(31, -1.0), None, "counts, which are zero or more"),
+    (np.r_[np.nan, np.full(30, -1.0)], None, "counts, which are zero or more"),
 ])
 def test_a_poisson_fit_it_cannot_make_is_refused(counts, uncertainty, message):
     with pytest.raises(ValueError, match=message):

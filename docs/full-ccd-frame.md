@@ -9,8 +9,7 @@ A frame is made from a synthesis file from ECLIPSE's [synthesis of an MHD simula
 `band_contribution_functions` works out the contribution function of every CHIANTI line in the band, on the synthesis's grids and with its abundances, and `write_band_lines` keeps them in a file:
 
 ```python
-from eclipse import read_synthesis_products
-from eclipse.band import band_contribution_functions, write_band_lines
+from eclipse import band_contribution_functions, read_synthesis_products, write_band_lines
 
 if __name__ == "__main__":
     products = read_synthesis_products("synthesis.h5", keys=["logT_grid", "logN_grid", "config"])
@@ -42,8 +41,7 @@ This takes about 6 minutes on 16 cores.
 ## 3. The frame
 
 ```python
-from eclipse.band import read_band_lines
-from eclipse.full_frame import full_ccd_frame, write_full_frame
+from eclipse import full_ccd_frame, read_band_lines, write_full_frame
 
 lines = read_band_lines("band_lines.h5")
 frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
@@ -53,6 +51,18 @@ write_full_frame(frame, "frame.h5")
 ```
 
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit.
+
+The slit width, PSF and noise can instead be taken from a `Simulation`, as in an instrument-response run:
+
+```python
+from eclipse import Simulation
+
+sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=True)
+frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
+                       exposure=10 * u.s, sim=sim, continuum=(wavelength, free, two_photon))
+```
+
+The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf` and `noise`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these four arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame takes the Sun beyond the edges of the synthesis as dark. With the PSF on, `psf_boundary` must therefore be `"zero"`. A frame does not model the slit's fiducials, pinholes or visible stray light. `slit_mask` and `vis_sl` must be left off, and no pinholes enabled. `instrument` must be `"SWC"`.
 
 For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about 20 minutes and 55 GB of memory on 16 cores. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
@@ -72,3 +82,20 @@ For each CCD, `"left"` and `"right"`:
 - `photon_rms_wavelength`: the wavelength of the root mean square energy of each pixel's photons, which sets how far their electrons spread.
 
 `dn` holds each row as the two outputs read it: the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The parallel overscan rows follow the image's rows.
+
+## How a frame differs from a run
+
+A frame and an `eclipse` run share the instrument's throughput, PSF and detector settings, but they do not yet model all the same effects:
+
+| Effect | `eclipse` run | Full-CCD frame |
+| --- | --- | --- |
+| The slit's ends and fiducials | with `simulation.slit_mask` | not modelled: every column along the slit gets light |
+| Pinholes in the filter | with `simulation.enable_pinholes` | not modelled |
+| Visible stray light | with `simulation.vis_sl` | not modelled |
+| The Sun beyond the scene along the slit | set by `simulation.psf_boundary` | dark |
+| Dark current | over the exposure | over the clear, the exposure and the read-out |
+| Wavelength of each pixel | a fixed step, `detector.wvl_res` | the focal plane's dispersion, from 17.0 to 16.8 mA per row |
+| The 1 mm gap between the CCDs | not modelled: a window sees an unbroken spectrum | no rows from 198.26 to 199.51 Angstrom |
+| Rows outside the 170.0 to 212.3 Angstrom band | lit | dark |
+| Smear without a shutter, and charge transfer | refused | modelled |
+| Prescan and overscan | none | both |

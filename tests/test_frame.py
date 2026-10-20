@@ -28,6 +28,7 @@ from eclipse.frame import (
 )
 from eclipse.radiometric import (
     apply_focusing_optics_psf,
+    photons_per_energy,
     spectral_psf_fwhm,
     spectral_psf_reach,
     to_electrons,
@@ -478,6 +479,20 @@ def test_detect_agrees_with_the_cube_chain_at_one_wavelength():
     assert mine == pytest.approx(chain, rel=1e-12)
 
 
+def test_detect_draws_as_the_cube_chain_does_with_noise_on():
+    # Both take their detection, Fano, dark current and read noise from the
+    # same shared stages, in the same order, so one seed gives one result.
+    det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
+    photons = np.random.default_rng(1).poisson(250.0, (4, 5)).astype(float)
+    np.random.seed(20261020)
+    mine = detect(photons, np.full(4, 195.119) * u.Angstrom, 2.0 * u.s, det)
+    cube = NDCube(photons[np.newaxis], wcs=WCS(naxis=3), unit=u.photon / u.pix,
+                  meta={"rest_wav": 195.119 * u.Angstrom})
+    np.random.seed(20261020)
+    chain = to_electrons(cube, 2.0 * u.s, det).data[0]
+    np.testing.assert_array_equal(mine, chain)
+
+
 def test_noise_draws_around_the_same_mean():
     np.random.seed(20260918)
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
@@ -724,3 +739,19 @@ def test_the_overscan_wavelengths_of_a_ccd_one_column_wide():
         np.full((3, 1), 2.0), [195.0, 196.0, 197.0] * u.AA, 1.0 * u.s, one)
     assert photons.shape == mean.shape == (3, 6)
     assert np.allclose(mean.to_value(u.AA), [[195.0], [196.0], [197.0]])
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+def test_a_lines_rows_are_never_below_zero(spectral_psf):
+    """No row is below zero, and the rows still hold the line's photons."""
+    focal_plane, telescope = FocalPlane_SWC(), Telescope_EUVST()
+    intensity = 1.0 * u.erg / (u.s * u.cm**2 * u.sr)
+    rows = photons_from_lines(focal_plane, "right", telescope, SLIT_WIDTH * u.arcsec,
+                              [211.317] * u.Angstrom, u.Quantity([intensity]),
+                              [0.03] * u.Angstrom, det=Detector_SWC(),
+                              spectral_psf=spectral_psf).value
+    assert (rows >= 0).all()
+    expected = (intensity * pixel_solid_angle(focal_plane, SLIT_WIDTH * u.arcsec)
+                * photons_per_energy(telescope, 211.317 * u.Angstrom)[0]).to_value(u.s**-1)
+    assert rows.sum() == pytest.approx(expected, rel=1e-3)
+    np.random.default_rng(0).poisson(rows)

@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`, the lines of a band, in `eclipse.band`, and full-CCD frames, in `eclipse.full_frame`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -98,8 +98,6 @@ These are the steps `simulate_once` takes, in order.
 
 ::: eclipse.create_sunpy_maps_from_combo
 
-::: eclipse.get_dem_data_from_results
-
 ## Atmosphere files
 
 ::: eclipse.Atmosphere
@@ -152,25 +150,29 @@ These are the steps `simulate_once` takes, in order.
 
 A full-CCD frame holds every line in the band, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, and keep them in a file.
 
-::: eclipse.band.band_contribution_functions
+::: eclipse.band_contribution_functions
 
-::: eclipse.band.BandLines
+::: eclipse.BandLines
 
-::: eclipse.band.IonLines
+::: eclipse.IonLines
 
-::: eclipse.band.write_band_lines
+::: eclipse.write_band_lines
 
-::: eclipse.band.read_band_lines
+::: eclipse.read_band_lines
 
 ## Full-CCD frames
 
-A frame of both SW CCDs at one slit position, with every line in the band and the continuum. [A full-CCD frame](full-ccd-frame.md) shows them in use.
+A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [A full-CCD frame](full-ccd-frame.md) shows how to make a frame.
 
-::: eclipse.full_frame.full_ccd_frame
+::: eclipse.full_ccd_frame
 
-::: eclipse.full_frame.FullFrame
+::: eclipse.FullFrame
 
-::: eclipse.full_frame.write_full_frame
+::: eclipse.write_full_frame
+
+::: eclipse.FocalPlane_SWC
+
+::: eclipse.ReadoutSequence
 
 ## Results files
 
@@ -185,3 +187,11 @@ A frame of both SW CCDs at one slit position, with every line in the band and th
 ::: eclipse.angle_to_distance
 
 ::: eclipse.distance_to_angle
+
+## Deprecated
+
+These warn when called and will be removed in a future release. Each can still be imported from where it was before.
+
+::: eclipse.frame.apply_spectral_psf
+
+::: eclipse.get_dem_data_from_results
