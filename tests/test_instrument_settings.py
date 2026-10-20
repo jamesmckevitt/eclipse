@@ -211,6 +211,7 @@ def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
 
 
 def test_a_results_file_with_the_old_name_and_none_of_the_new_settings_reads_back(tmp_path):
+    """Without a warning, as the new settings' defaults are the values runs had before."""
     encoded = results_file._jsonable(Detector_SWC(dark_current_293k=7 * DARK))
     fields = encoded["fields"]
     fields["_dark_current_293k"] = fields.pop("dark_current_293k")
@@ -221,12 +222,33 @@ def test_a_results_file_with_the_old_name_and_none_of_the_new_settings_reads_bac
     with h5py.File(path, "r+") as f:
         f.attrs["detector"] = json.dumps(encoded)
         f.attrs["eclipse_order"] = json.dumps(["instrument", "detector"])
-    with pytest.warns(UserWarning, match="today's defaults") as seen:
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
         det = load_results(path)["detector"]
-    assert not any("_dark_current_293k" in str(w.message) for w in seen)
+    assert not seen, [str(w.message) for w in seen]
     assert det.dark_current_293k == 7 * DARK
     assert FocalPlane_SWC.from_detector(det) == FocalPlane_SWC()
     assert det.si_fano == 0.115 and det.pair_energy == Detector_SWC().pair_energy
+
+
+def test_a_results_file_without_the_other_new_settings_reads_back_without_a_warning(tmp_path):
+    objects = {"eis": (Detector_EIS(), ("fano_factor", "pair_energy_300k", "pair_energy_slope")),
+               "filter": (AluminiumFilter(), ("visible_decade_thickness",)),
+               "simulation": (Simulation(), ("pinhole_visible_wavelength",))}
+    path = save_results(tmp_path / "hand.h5", {"instrument": "SWC"})
+    with h5py.File(path, "r+") as f:
+        for key, (obj, names) in objects.items():
+            encoded = results_file._jsonable(obj)
+            for name in names:
+                del encoded["fields"][name]
+            f.attrs[key] = json.dumps(encoded)
+        f.attrs["eclipse_order"] = json.dumps(["instrument", *objects])
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        restored = load_results(path)
+    assert not seen, [str(w.message) for w in seen]
+    for key, (obj, _) in objects.items():
+        assert repr(restored[key]) == repr(obj)
 
 
 def test_the_new_settings_round_trip_through_a_results_file(tmp_path):
