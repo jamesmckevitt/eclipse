@@ -58,6 +58,10 @@ nav:
 not_in_nav: |
   /internal/
 
+# Fills in the tables of instrument-sources.md from euvst_response/config.py.
+hooks:
+  - hooks/instrument_sources.py
+
 extra_css:
   - stylesheets/extra.css
 
