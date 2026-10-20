@@ -6,7 +6,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST telescope and optics
 
-<!-- SWC settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST filter
 
-<!-- SWC settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST-SW detector
 
-<!-- SWC settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
@@ -45,7 +45,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `detector.wvl_res` | 16.9 mA per pixel | RSC-2022021C: 1.253 mA per micron at the chief ray |
 | `detector.ccd_gap` | 1 mm | SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 7.1; RSC-2022021C |
 | `detector.ccd_temperature` | -60 Celsius | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 5.5.2.1, gives a goal of -50 to -60 Celsius |
-| `detector.qe_euv`, `detector.qe_vis` | 0.76 and 1 | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of 0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71 |
+| `detector.qe_euv`, `detector.qe_vis` | 0.76 and 1.0 | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of 0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71 |
 | `detector.read_noise_rms` | 10 electrons | Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.1 requires 6 electrons rms; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, predicts 11.0 electrons at most |
 | `detector.gain_e_per_dn` | 2.78 electrons per DN | MSSL engineering model test results; SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5, gives the same design value |
 | `detector.dark_current_293k` | 20000 electrons per pixel per second | SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement) |
@@ -64,19 +64,19 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run does not use them yet, and the frame does not yet take the slit image tilt.
 
-<!-- SWC settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
 | `detector.dispersion` | quadratic in position along the dispersion | Fitted to RSC-2022021C: the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
-| `detector.lit_band` | 170 to 212.3 Angstrom | The required range, RSC-2022021C REQ-103 and SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the baffle's edges, so where the band stops to within a row or two is a modelling choice |
+| `detector.lit_band` | 170.0 to 212.3 Angstrom | The required range, RSC-2022021C REQ-103 and SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the baffle's edges, so where the band stops to within a row or two is a modelling choice |
 | `detector.wavelength_offset` | 0 Angstrom; the alignment of the camera to the beam is known to +/-0.79 Angstrom | SOLC-EUVST-MSSL-RP-0007 v1.2, page 45 |
 | `detector.slit_image_tilt` | none; measured as a drift along the dispersion of 0.991 f + 0.605 f^2 rows, where f is the angle along the slit over 140 arcsec | No document gives it. Measured from the ray-traced spots in the SW footprint figure of RSC-2022021C, where a row is about a quarter of a pixel of the figure |
 | Clear and read-out sequence, set in the code | dump, exposure, row-by-row read with windows | SOLC-EUVST-MSSL-SP-0001 v1.4, SOLC-EUVST-MSSL-RS-0002 v2.0, SOLC-EUVST-MSSL-ICD-0003 v3.1 |
 
 ## Detector material and visible light
 
-<!-- SWC settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
@@ -87,7 +87,7 @@ These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) us
 
 ## Hinode/EIS
 
-<!-- EIS settings: rows naming a setting are written by tools/update_instrument_sources.py -->
+<!-- EIS settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |

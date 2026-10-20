@@ -1,16 +1,19 @@
 """
-Write the defaults and sources in docs/instrument-sources.md from the code.
+Write the sources in docs/instrument-sources.md, and simple defaults, from the code.
 
-Each table of settings follows a comment line naming its instrument, such as
-`<!-- SWC settings: ... -->`. A row whose first cell names settings, such as
-`detector.pix_size`, gets the settings' defaults, in the `unit` of their field
-metadata, and their `source`. Other rows are left as they are. Run it as
-`python tools/update_instrument_sources.py`; it reads this checkout's code.
+The tables this script writes follow a comment line naming their instrument,
+`<!-- SWC settings: ... -->` or `<!-- EIS settings: ... -->`, and a blank
+line. In those tables, a row whose first cell names settings in backticks
+gets their `source` from the field metadata in `euvst_response.config`. Its
+Default cell is written too when the row names one setting and the cell holds
+only a value, such as `65535 DN`. Other Default cells are worded by hand, and
+`hand_written_problems` lists those that no longer show the code's defaults.
+Run it as `python tools/update_instrument_sources.py`.
 """
 
 import dataclasses
+import math
 import re
-import string
 import sys
 from pathlib import Path
 
@@ -21,13 +24,12 @@ if __name__ == "__main__":
     # This checkout's package, not one installed elsewhere.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from euvst_response import resolution_budget  # noqa: E402
-from euvst_response.config import (DETECTOR_MATERIALS, MEASURED_SLIT_IMAGE_TILT,  # noqa: E402
-                                   TILT_REFERENCE_ANGLE, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, Telescope_EIS, Telescope_EUVST,
-                                   _material_value)
+from euvst_response.config import (DETECTOR_MATERIALS, AluminiumFilter,  # noqa: E402
+                                   Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
+                                   Telescope_EUVST)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
+PAGE_NAME = "docs/instrument-sources.md"
 
 # The class behind each configuration section, for each instrument.
 INSTRUMENTS = {
@@ -36,10 +38,11 @@ INSTRUMENTS = {
     "EIS": {"detector": Detector_EIS, "telescope": Telescope_EIS},
 }
 
-TABLE_MARK = re.compile(r"^<!-- (\w+) settings: .*-->$")
+TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
+NUMBER = r"[-+]?\d+(?:\.\d+)?"
 
-# Words of the "unit" metadata, and the units they stand for.
+# Words of the `unit` metadata, and the units they stand for.
 UNIT_WORDS = {
     "Angstrom": u.AA, "arcsec": u.arcsec, "Celsius": u.deg_C, "DN": u.DN,
     "electrons": u.electron, "eV": u.eV, "K": u.K, "m": u.m, "mA": u.mAA, "micron": u.um,
@@ -47,55 +50,13 @@ UNIT_WORDS = {
     "us": u.us,
 }
 
-# The RSC-2022021C design values that `Telescope_EUVST.FIELDS_OF_VIEW` gives in
-# pixels. tests/test_instrument_sources.py checks the two agree.
-EUVST_PSF = ("0.423 arcsec along the slit for the default 280 x 280 arcsec field (0.195 and "
-             "0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit")
-
-# Wording of rows whose default needs more than the values, keyed by one
-# setting of the row. `{name}` is a setting of the row, `{all}` all of them as a
-# row without wording shows them, and the other names are those of
-# `CONSTANTS` and `material`, the row's detector material. The format specs are those of `Value`.
-WORDING = {
-    "SWC": {
-        "telescope.psf_params": EUVST_PSF,
-        "telescope.psf_slit_width": "{psf_slit_width}, the slit the spectral PSF above is "
-                                    "given for",
-        "telescope.psf_across_slit": "{psf_across_slit}: across the slit only the budget terms "
-                                     "below",
-        "telescope.pointing_jitter": "{pointing_jitter}: the budget's {budget_jitter:.3f} arcsec, "
-                                     "or no jitter with `resolution_budget: none`",
-        "simulation.slit_width": "{slit_width}; the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide",
-        "telescope.fiducial_centres": "{fiducial_centres[0]} and {fiducial_centres[1]:+} arcsec; "
-                                      "{fiducial_lengths[0]} arcsec, {fiducial_lengths[3]} "
-                                      "arcsec for the widest slit",
-        "filter.al_table": "packaged tables for {table_thickness} layers",
-        "detector.pix_size": "{pix_size}, {n_rows} by {n_columns}",
-        "detector.serial_prescan": "{all}; each settable from 0 to 200",
-        "detector.cte_parallel": "{all}, a perfect transfer",
-        "detector.dispersion": "{dispersion:degree} in position along the dispersion",
-        "detector.lit_band": "{lit_band:range}",
-        "detector.wavelength_offset": "{wavelength_offset}; the alignment of the camera to the "
-                                      "beam is known to +/-0.79 Angstrom",
-        "detector.slit_image_tilt": "{slit_image_tilt:none}; measured as a drift along the "
-                                    "dispersion of {tilt[0]} f + {tilt[1]} f^2 rows, where f "
-                                    "is the angle along the slit over {tilt_angle}",
-        "detector.fano_factor": "{fano_factor}, for {material}",
-        "detector.pair_energy_300k": "{pair_energy_300k} and {pair_energy_slope}, for "
-                                     "{material}",
-        "filter.visible_decade_thickness": "{visible_decade_thickness}: visible light falls by a "
-                                           "factor 10 per {visible_decade_thickness} of "
-                                           "aluminium, times the mesh",
-    },
-    "EIS": {
-        "telescope.psf_params": "{psf_params:each} FWHM",
-    },
+# Hand-written Default cells that do not show the setting's value, and why.
+# tests/test_instrument_sources.py checks what they show instead.
+NOT_SHOWN = {
+    ("SWC", "telescope.psf_params"): "None, for the design values of field_of_view",
+    ("SWC", "telescope.field_of_view"): "None, for 280x280; the cell gives the design values",
+    ("SWC", "detector.dispersion"): "coefficients, shown as the polynomial's degree",
 }
-
-DEGREES = {1: "linear", 2: "quadratic", 3: "cubic"}
-
-# Detector settings that default to their material's value.
-MATERIAL_PROPERTIES = {name for material in DETECTOR_MATERIALS.values() for name in material}
 
 
 def _number(value):
@@ -104,290 +65,275 @@ def _number(value):
     return "0" if text == "-0" else text
 
 
-def _join(texts):
-    """Texts joined with commas and a final "and"."""
-    return texts[0] if len(texts) == 1 else ", ".join(texts[:-1]) + " and " + texts[-1]
-
-
 def _unit(label, name):
     """Unit for a label such as "electrons per pixel per second"."""
     parts = label.split(" per ")
     unknown = [part for part in parts if part not in UNIT_WORDS]
     if unknown:
         raise ValueError(f"{name} has unit {label!r}, with words this script does not know: "
-                         f"{unknown}.")
+                         f"{unknown}. Add them to UNIT_WORDS in tools/"
+                         f"update_instrument_sources.py.")
     unit = UNIT_WORDS[parts[0]]
     for part in parts[1:]:
         unit = unit / UNIT_WORDS[part]
     return unit
 
 
-class Number(float):
-    """A number formatted as the page shows it; `+` adds a plus sign."""
-
-    def __format__(self, spec):
-        if spec in ("", "+"):
-            text = _number(self)
-            return "+" + text if spec == "+" and self > 0 else text
-        return float.__format__(self, spec)
-
-
-class Value:
+def display_numbers(name, value, label):
     """
-    Default of one setting, formatted for the page.
-
-    Format specs: none for the default with its unit, `n` without its unit,
-    `each` for a list shown once when its values are equal, `range` for a
-    pair as "a to b", `none` for "none" when every value is zero, and
-    `degree` for the degree of a polynomial's coefficients. Indexing gives
-    one value of a list as a `Number`.
-    """
-
-    def __init__(self, name, value, label=""):
-        self.name, self.label, self.value = name, label, value
-        self.numbers = None
-        if value is None or isinstance(value, (bool, str)) or hasattr(value, "is_file"):
-            return
-        values = list(value) if isinstance(value, (list, tuple)) or np.ndim(value) else [value]
-        quantity = any(isinstance(v, u.Quantity) for v in values)
-        if quantity and not label:
-            raise ValueError(f"{name} is a quantity, so needs a `unit` in its metadata.")
-        if not quantity and label:
-            raise ValueError(f"{name} is a plain number, so takes no `unit` in its metadata.")
-        if quantity:
-            unit = _unit(label, name)
-            converted = []
-            for v in values:
-                try:
-                    converted.append(v.to_value(unit, equivalencies=u.temperature()))
-                except u.UnitConversionError:
-                    # A value per pixel shown without "per pixel", such as 10 electrons.
-                    try:
-                        converted.append((v * u.pix).to_value(unit))
-                    except u.UnitConversionError:
-                        raise ValueError(f"{name} is in {v.unit}, which cannot be shown in "
-                                         f"{label!r}.") from None
-            values = converted
-        self.numbers = [Number(v) for v in values]
-
-    def __getitem__(self, index):
-        return self.numbers[index]
-
-    def _with_unit(self, text):
-        return f"{text} {self.label}" if self.label else text
-
-    def __format__(self, spec):
-        if self.numbers is None:
-            if spec:
-                raise ValueError(f"{self.name} has no numbers for the format {spec!r}.")
-            if self.value is None:
-                return "none"
-            if isinstance(self.value, bool):
-                return str(self.value).lower()
-            if isinstance(self.value, str):
-                return f"`{self.value}`"
-            return "packaged table"
-        numbers = [format(n) for n in self.numbers]
-        if spec == "each" and len(set(numbers)) == 1:
-            return self._with_unit(numbers[0])
-        if spec == "range":
-            if len(numbers) != 2:
-                raise ValueError(f"{self.name} is shown as a range, so needs two values.")
-            return self._with_unit(f"{numbers[0]} to {numbers[1]}")
-        if spec == "none":
-            return "none" if not any(self.numbers) else self._with_unit(_join(numbers))
-        if spec == "degree":
-            return DEGREES[len(numbers) - 1]
-        if spec == "n":
-            return _join(numbers)
-        if spec in ("", "each"):
-            return self._with_unit(_join(numbers))
-        raise ValueError(f"Unknown format {spec!r} for {self.name}.")
-
-
-def _default(cls, f):
-    """Default of field `f` of `cls`, or its material's where the default is None."""
-    if f.default_factory is not dataclasses.MISSING:
-        return f.default_factory()
-    if f.default is None and hasattr(cls, "material") and f.name in MATERIAL_PROPERTIES:
-        return _material_value(cls, f.name)
-    return f.default
-
-
-def _budget_jitter():
-    """Pointing jitter of the default resolution budget, in arcsec."""
-    column = resolution_budget._column(Telescope_EUVST.resolution_budget)
-    if column is None:
-        raise ValueError("The pointing jitter wording quotes the default resolution budget, "
-                         "which is none.")
-    return Number(resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW][column])
-
-
-# Values from the code that the wording quotes besides the settings.
-CONSTANTS = {
-    "budget_jitter": _budget_jitter,
-    "tilt": lambda: Value("MEASURED_SLIT_IMAGE_TILT", MEASURED_SLIT_IMAGE_TILT),
-    "tilt_angle": lambda: Value("TILT_REFERENCE_ANGLE", TILT_REFERENCE_ANGLE, "arcsec"),
-}
-
-
-def _plain(values):
-    """Default cell for settings with no wording of their own."""
-    texts = [format(v) for v in values]
-    if len(set(texts)) == 1:
-        return texts[0]
-    if (len({v.label for v in values}) == 1
-            and all(v.numbers and len(v.numbers) == 1 for v in values)):
-        # One unit, given once: 1485, 95 and 0 Angstrom.
-        return values[0]._with_unit(_join([format(v, "n") for v in values]))
-    return ", ".join(texts)
-
-
-def cells(instrument, keys):
-    """
-    Default and Source cells of a row naming settings that share a source.
+    Numbers of a default in its display unit, or None if it holds no numbers.
 
     Parameters
     ----------
-    instrument : str
-        `"SWC"` or `"EIS"`.
-    keys : list of str
-        Configuration keys, such as `"detector.pix_size"`.
-
-    Returns
-    -------
-    tuple of str
-        Default and source.
+    name : str
+        Setting, for error messages.
+    value : object
+        Default.
+    label : str
+        Display unit from the `unit` metadata, such as "micron", or "".
 
     Raises
     ------
     ValueError
-        If the instrument is unknown, a key is not one of its settings with a
-        source, the row names one field twice, the settings' sources differ,
-        the row has wording under more than one setting, or its wording
-        leaves out one of its settings, names a setting not in the row, or
-        shares a name with a setting.
+        If a quantity has no unit, a plain number has one, or the unit does
+        not fit.
+    """
+    if value is None or isinstance(value, (bool, str)) or hasattr(value, "is_file"):
+        return None
+    values = list(value) if isinstance(value, (list, tuple)) or np.ndim(value) else [value]
+    quantity = any(isinstance(v, u.Quantity) for v in values)
+    if quantity and not label:
+        raise ValueError(f"{name} is a quantity, so needs a `unit` in its field metadata.")
+    if not quantity:
+        if label:
+            raise ValueError(f"{name} is a plain number, so takes no `unit` in its field "
+                             f"metadata.")
+        return [float(v) for v in values]
+    unit = _unit(label, name)
+    numbers = []
+    for v in values:
+        try:
+            numbers.append(v.to_value(unit, equivalencies=u.temperature()))
+        except u.UnitConversionError:
+            # A value per pixel shown without "per pixel", such as 10 electrons.
+            try:
+                numbers.append((v * u.pix).to_value(unit))
+            except u.UnitConversionError:
+                raise ValueError(f"{name} is in {v.unit}, which cannot be shown in "
+                                 f"{label!r}.") from None
+    return numbers
+
+
+def _words(value):
+    """How the page shows a default that holds no numbers."""
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, str):
+        return f"`{value}`"
+    return "packaged table"
+
+
+def plain_default(name, value, label):
+    """Default as a Default cell holding only a value: "13.5 micron", "true"."""
+    numbers = display_numbers(name, value, label)
+    if numbers is None:
+        return _words(value)
+    texts = [_number(n) for n in numbers]
+    text = texts[0] if len(texts) == 1 else ", ".join(texts[:-1]) + " and " + texts[-1]
+    return f"{text} {label}" if label else text
+
+
+def _is_plain(cell, value, label):
+    """Whether a Default cell holds only a value of the kind of `value`."""
+    if not cell:
+        return True
+    if display_numbers("", value, label) is None:
+        return cell in ("none", "true", "false", "packaged table") or bool(
+            re.fullmatch(r"`[^`]*`", cell))
+    unit = " " + re.escape(label) if label else ""
+    return bool(re.fullmatch(rf"{NUMBER}(?:(?:, | and ){NUMBER})*{unit}", cell))
+
+
+def setting(instrument, key):
+    """
+    Field and default of a setting.
+
+    Returns
+    -------
+    field : dataclasses.Field
+        Its field, whose metadata gives `source` and `unit`.
+    default : object
+        Its default, or its material's value where the default is None.
+
+    Raises
+    ------
+    ValueError
+        If the instrument is unknown, or the key is not one of its settings
+        with a source.
     """
     if instrument not in INSTRUMENTS:
-        raise ValueError(f"Unknown instrument {instrument!r}; use {', '.join(INSTRUMENTS)}.")
-    values, sources, hidden, material = {}, set(), [], None
-    for key in keys:
-        section, _, name = key.partition(".")
-        cls = INSTRUMENTS[instrument].get(section)
-        fields = {f.name: f for f in dataclasses.fields(cls)} if cls else {}
-        if name not in fields or "source" not in fields[name].metadata:
-            raise ValueError(f"{key} is not an {instrument} setting with a source.")
-        if name in values:
-            raise ValueError(f"The row for {', '.join(keys)} names the field {name} twice.")
-        f = fields[name]
-        default = _default(cls, f)
-        values[name] = Value(key, default, f.metadata.get("unit", ""))
-        sources.add(f.metadata["source"])
-        material = getattr(cls, "material", material)
-        if default is not None and not hasattr(default, "is_file"):
-            hidden.append(name)
-    if len(sources) > 1:
-        raise ValueError(f"{', '.join(keys)} have different sources, so need a row each.")
-
-    worded = [key for key in keys if key in WORDING[instrument]]
-    if len(worded) > 1:
-        raise ValueError(f"The row for {', '.join(keys)} has wording under {len(worded)} keys.")
-    wording = WORDING[instrument][worded[0]] if worded else None
-    if wording is None:
-        default = _plain(list(values.values()))
+        raise ValueError(f"Unknown instrument {instrument!r} in a table mark of {PAGE_NAME}; "
+                         f"use {', '.join(INSTRUMENTS)}.")
+    section, _, name = key.partition(".")
+    cls = INSTRUMENTS[instrument].get(section)
+    fields = {f.name: f for f in dataclasses.fields(cls)} if cls else {}
+    if name not in fields or "source" not in fields[name].metadata:
+        raise ValueError(f"{key}, in an {instrument} table of {PAGE_NAME}, is not an "
+                         f"{instrument} setting with a source in its field metadata.")
+    f = fields[name]
+    if f.default_factory is not dataclasses.MISSING:
+        default = f.default_factory()
     else:
-        used = {re.split(r"[.\[]", name)[0]
-                for _, name, _, _ in string.Formatter().parse(wording) if name}
-        missing = [name for name in hidden if name not in used and "all" not in used]
-        if missing:
-            raise ValueError(f"The wording for {worded[0]} leaves out {', '.join(missing)}.")
-        names = {"all": _plain(list(values.values()))}
-        if material is not None:
-            names["material"] = material
-        names.update({name: CONSTANTS[name]() for name in used if name in CONSTANTS})
-        clash = set(names) & set(values)
-        if clash:
-            raise ValueError(f"The row for {', '.join(keys)} has settings named as its "
-                             f"wording's other names: {', '.join(sorted(clash))}.")
-        unknown = used - set(values) - set(names)
-        if unknown:
-            raise ValueError(f"The wording for {worded[0]} names "
-                             f"{', '.join(sorted(unknown))}, which are not in its row.")
-        default = wording.format(**names, **values)
-    row = (default, sources.pop())
-    if any("|" in cell for cell in row):
-        raise ValueError(f"A '|' in the row for {', '.join(keys)} would split its table cell.")
-    return row
+        default = f.default
+    material = DETECTOR_MATERIALS.get(getattr(cls, "material", None), {})
+    if default is None and name in material:
+        default = material[name]
+    return f, default
 
 
-def setting_rows(lines):
+def table_rows(lines):
     """
-    Rows of the page's lines that name settings.
+    Rows of the tables that follow a table mark.
 
     Yields
     ------
     index : int
         Line of the row.
     instrument : str
-        Instrument of its table.
+        Instrument the mark names.
     cells : list of str
         Its cells.
-    keys : list of str
-        Settings its first cell names.
-    """
-    instrument, in_table = None, False
-    for index, line in enumerate(lines):
-        line = line.rstrip()
-        mark = TABLE_MARK.match(line)
-        if mark:
-            instrument, in_table = mark.group(1), False
-        elif not line.startswith("|"):
-            if in_table:
-                instrument, in_table = None, False
-        elif instrument:
-            in_table = True
-            row = [cell.strip() for cell in line.strip("|").split("|")]
-            keys = SETTING.findall(row[0])
-            if keys:
-                yield index, instrument, row, keys
-
-
-def updated_page(text):
-    """
-    Page `text` with the Default and Source cells of each setting's row rewritten.
 
     Raises
     ------
     ValueError
-        If a row cannot be written.
+        If a mark is malformed or is not followed by a blank line and a table.
+    """
+    instrument, pending, row = None, None, None
+    for index, line in enumerate(lines):
+        line = line.rstrip()
+        if line.startswith("<!--") and "settings" in line:
+            mark = TABLE_MARK.fullmatch(line)
+            if not mark:
+                raise ValueError(f"Line {index + 1} of {PAGE_NAME} looks like a table mark "
+                                 f"but is not one: {line!r}.")
+            if pending or row is not None:
+                raise ValueError(f"The table mark on line {index + 1} of {PAGE_NAME} must "
+                                 f"follow a blank line and be followed by one.")
+            pending, instrument = mark.group(1), None
+            if index + 1 >= len(lines) or lines[index + 1].strip():
+                raise ValueError(f"The table mark on line {index + 1} of {PAGE_NAME} must be "
+                                 f"followed by a blank line and its table.")
+        elif line.startswith("|"):
+            if row is None:
+                instrument, pending, row = pending, None, 0
+            else:
+                row += 1
+            # The first two lines of a table are its header and separator.
+            if instrument and row >= 2:
+                yield index, instrument, [cell.strip() for cell in line.strip("|").split("|")]
+        elif line or row is not None:
+            if pending and line:
+                raise ValueError(f"The table mark before line {index + 1} of {PAGE_NAME} "
+                                 f"must be followed by a blank line and its table.")
+            instrument, row = None, None
+    if pending:
+        raise ValueError(f"The last table mark of {PAGE_NAME} has no table.")
+
+
+def _setting_rows(text):
+    """Rows naming settings: line, instrument, cells and keys."""
+    lines = text.split("\n")
+    for index, instrument, cells in table_rows(lines):
+        keys = SETTING.findall(cells[0])
+        if keys:
+            if len(cells) != 3:
+                raise ValueError(f"The row for {cells[0]} in {PAGE_NAME} has {len(cells)} "
+                                 f"cells, not 3.")
+            yield index, instrument, cells, keys
+
+
+def _check_cell(text, key):
+    """Refuse text that would break a table row."""
+    if "\n" in text or "|" in text or text.endswith("\\"):
+        raise ValueError(f"The text for {key} has a newline, a '|' or a final backslash, "
+                         f"which would break its row in {PAGE_NAME}: {text!r}.")
+
+
+def updated_page(text):
+    """
+    Page `text` with the sources, and the Default cells holding only a value, rewritten.
+
+    Raises
+    ------
+    ValueError
+        If a row names settings with different sources, or text would break
+        a row.
     """
     lines = text.split("\n")
-    for index, instrument, row, keys in list(setting_rows(lines)):
-        if len(row) != 3:
-            raise ValueError(f"Row for {row[0]} has {len(row)} cells, not 3.")
-        lines[index] = "| " + " | ".join([row[0], *cells(instrument, keys)]) + " |"
+    for index, instrument, cells, keys in list(_setting_rows(text)):
+        found = [(key, *setting(instrument, key)) for key in keys]
+        sources = {f.metadata["source"] for _, f, _ in found}
+        if len(sources) > 1:
+            raise ValueError(f"{', '.join(keys)} have different sources, so need a row each "
+                             f"in {PAGE_NAME}.")
+        source = sources.pop()
+        _check_cell(source, keys[0])
+        default = cells[1]
+        if len(keys) == 1:
+            key, f, value = found[0]
+            label = f.metadata.get("unit", "")
+            if _is_plain(default, value, label):
+                default = plain_default(key, value, label)
+                _check_cell(default, key)
+        lines[index] = f"| {cells[0]} | {default} | {source} |"
     return "\n".join(lines)
 
 
-def unused_wording(text):
-    """Keys of `WORDING`, such as "SWC detector.pix_size", that no row of `text` names."""
-    named = {(instrument, key) for _, instrument, _, keys in setting_rows(text.split("\n"))
-             for key in keys}
-    return [f"{instrument} {key}" for instrument, wording in WORDING.items()
-            for key in wording if (instrument, key) not in named]
+def _shows(cell, numbers, words, label):
+    """Whether a hand-written Default cell shows a default's numbers or words, and unit."""
+    if numbers is None:
+        return words in cell
+    if words == "none" and not any(numbers) and "none" in cell:
+        return True
+    shown = [float(token) for token in re.findall(NUMBER, cell)]
+    return (all(any(math.isclose(n, s, rel_tol=1e-9, abs_tol=1e-12) for s in shown)
+                for n in numbers)
+            and (not label or label in cell))
+
+
+def hand_written_problems(text):
+    """Settings whose hand-written Default cell does not show the code's default."""
+    problems = []
+    for _, instrument, cells, keys in _setting_rows(text):
+        for key in keys:
+            f, value = setting(instrument, key)
+            label = f.metadata.get("unit", "")
+            if (instrument, key) in NOT_SHOWN:
+                continue
+            if len(keys) == 1 and _is_plain(cells[1], value, label):
+                continue
+            numbers = display_numbers(key, value, label)
+            words = "none" if numbers is not None and not any(numbers) else _words(value)
+            if not _shows(cells[1], numbers, words, label):
+                problems.append(f"Edit the Default cell of the {instrument} row for {cells[0]} "
+                                f"in {PAGE_NAME} by hand: it should show {key} as "
+                                f"{plain_default(key, value, label)}.")
+    return problems
 
 
 def main():
     text = PAGE.read_text()
-    unused = unused_wording(text)
-    if unused:
-        raise ValueError(f"No row names the setting of the wording for {', '.join(unused)}.")
     updated = updated_page(text)
-    if updated == text:
-        print(f"{PAGE.name} is up to date.")
-    else:
+    if updated != text:
         PAGE.write_text(updated)
-        print(f"Updated {PAGE.name}.")
+        print(f"Updated {PAGE_NAME}.")
+    problems = hand_written_problems(updated)
+    for problem in problems:
+        print(problem)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
