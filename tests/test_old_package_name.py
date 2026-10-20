@@ -5,19 +5,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import eclipse.config
 from eclipse import results_file
 
 MESSAGE = "euvst_response package is now called eclipse"
 
 
-def _run(code):
-    """Run `code` in a new interpreter that imports the package under test."""
+def _python(*args, cwd=None):
+    """Run a new interpreter with `args`, importing the package under test."""
     source = str(Path(eclipse.config.__file__).resolve().parents[1])
     path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
-    return subprocess.run([sys.executable, "-W", "always::FutureWarning", "-c", code],
-                          capture_output=True, text=True, check=True,
+    return subprocess.run([sys.executable, "-W", "always::FutureWarning", *args],
+                          capture_output=True, text=True, check=True, cwd=cwd,
                           env={**os.environ, "PYTHONPATH": path})
+
+
+def _run(code, cwd=None):
+    """Run `code` in a new interpreter that imports the package under test."""
+    return _python("-c", code, cwd=cwd)
 
 
 def test_the_old_name_warns_gives_the_new_modules_and_loads_old_pickles():
@@ -45,8 +52,62 @@ def test_the_old_name_warns_gives_the_new_modules_and_loads_old_pickles():
     assert "<frozen importlib" not in result.stderr
 
 
+def test_a_plain_import_warns_at_the_import_line():
+    result = _run("x = 1\nimport euvst_response\n")
+    assert f"<string>:2: FormerNameWarning: The {MESSAGE}" in result.stderr
+
+
 def test_importing_the_new_name_does_not_warn_of_the_old():
     assert MESSAGE not in _run("import eclipse").stderr
+
+
+@pytest.mark.parametrize("name", ["cli", "main", "synthesis_cli", "atmosphere"])
+def test_the_commands_run_as_modules_under_either_name(name):
+    for package in ("eclipse", "euvst_response"):
+        assert "usage:" in _python("-m", f"{package}.{name}", "--help").stdout
+
+
+def test_a_module_without_a_command_runs_under_the_old_name():
+    _python("-m", "euvst_response.science_cases")
+
+
+def test_the_modules_left_for_python_m_are_those_with_a_main_block():
+    """Each of these is left out of `sys.modules` under the old name until imported."""
+    source = Path(eclipse.config.__file__).parent
+    runnable = {path.stem for path in source.glob("*.py")
+                if 'if __name__ == "__main__"' in path.read_text()}
+    left = _run("import euvst_response\nprint(sorted(euvst_response._COMMANDS))").stdout
+    assert left.strip() == str(sorted(runnable))
+
+
+@pytest.mark.parametrize("first", ["the module", "the function"])
+def test_a_function_named_as_its_module_stays_the_function(first):
+    """`monte_carlo` is a function of the package and the module that holds it."""
+    imports = ["import euvst_response.monte_carlo", "from euvst_response import monte_carlo"]
+    if first == "the function":
+        imports.reverse()
+    _run("import sys, types\n"
+         "import euvst_response\n"
+         "assert sys.modules['euvst_response.monte_carlo'] is sys.modules['eclipse.monte_carlo']\n"
+         + "\n".join(imports) + "\n"
+         "from euvst_response import monte_carlo, main\n"
+         "import euvst_response.main\n"
+         "assert isinstance(monte_carlo, types.FunctionType)\n"
+         "assert euvst_response.monte_carlo is monte_carlo and euvst_response.main is main\n"
+         "assert isinstance(main, types.FunctionType)\n")
+
+
+def test_the_package_data_are_found_under_the_old_name(tmp_path):
+    _run("from importlib.resources import files\n"
+         "from pathlib import Path\n"
+         "import euvst_response\n"
+         "table = 'throughput/grating_reflection_efficiency.dat'\n"
+         "text = (files('eclipse') / 'data' / table).read_text()\n"
+         "assert text and (files('euvst_response') / 'data' / table).read_text() == text\n"
+         "assert (Path(euvst_response.__file__).parent / 'data' / table).read_text() == text\n"
+         "import sys\n"
+         "assert sys.modules['euvst_response.config'] is sys.modules['eclipse.config']\n",
+         cwd=tmp_path)
 
 
 def test_a_packaged_table_named_under_the_old_name_is_read_from_this_installation():

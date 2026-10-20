@@ -1122,6 +1122,10 @@ def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
         )
 
 
+class FormerNameWarning(FutureWarning):
+    """Warning given on importing the package under its former name, `euvst_response`."""
+
+
 def _unpickle(handle):
     """
     Object from an older version's pickle, which may name the package's former modules.
@@ -1132,5 +1136,5 @@ def _unpickle(handle):
     import dill
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="The euvst_response package is now called")
+        warnings.simplefilter("ignore", FormerNameWarning)
         return dill.load(handle)
