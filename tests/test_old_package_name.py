@@ -114,7 +114,7 @@ TABLE = Path("data/throughput/grating_reflection_efficiency.dat")
 
 
 def _tables_read_back(tmp_path, recorded):
-    """`grating_table` read back from a results pickle naming `recorded`, and from its conversion."""
+    """`grating_table` read back from a pickle naming `recorded`, and from its conversion."""
     import dill
 
     telescope = eclipse.config.Telescope_EUVST()
