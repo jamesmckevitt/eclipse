@@ -456,3 +456,37 @@ def test_an_iteration_raises_no_warnings_about_the_cube_having_no_observer():
     about_the_observer = [str(w.message) for w in caught
                           if "ICRS" in str(w.message) or "observer" in str(w.message)]
     assert about_the_observer == []
+
+
+def test_dark_electrons_without_noise_is_a_writable_mean():
+    from euvst_response.radiometric import _dark_electrons
+    dark = _dark_electrons(3.5, (2, 3), noise=False)
+    assert dark.shape == (2, 3) and np.all(dark == 3.5)
+    dark += 1.0
+    assert np.all(dark == 4.5)
+
+
+def test_dark_electrons_refuses_a_mean_with_the_wrong_axes():
+    from euvst_response.radiometric import _dark_electrons
+    with pytest.raises(ValueError, match="axes"):
+        _dark_electrons(np.ones(3), (2, 3))
+
+
+def test_dark_electrons_by_inverse_transform_takes_a_mean_per_pixel():
+    from euvst_response.radiometric import _dark_electrons
+    mean = np.array([[0.0, 5.0], [50.0, 500.0]])
+    np.random.seed(0)
+    draws = np.array([_dark_electrons(mean, mean.shape, inverse_transform=True)
+                      for _ in range(2000)])
+    assert np.all(draws[:, 0, 0] == 0)
+    np.testing.assert_allclose(draws.mean(axis=0), mean, rtol=0.03, atol=0.2)
+
+
+def test_digitise_without_rounding_keeps_fractional_dn():
+    from euvst_response.radiometric import _digitise
+    det = Detector_SWC()
+    gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
+    max_dn = det.max_dn.to_value(u.DN / u.pixel)
+    electrons = np.array([0.3 * gain, 10.6 * gain, 10 * max_dn * gain])
+    np.testing.assert_allclose(_digitise(electrons, det, rounded=False), [0.3, 10.6, max_dn])
+    np.testing.assert_array_equal(_digitise(electrons, det), [0.0, 11.0, max_dn])

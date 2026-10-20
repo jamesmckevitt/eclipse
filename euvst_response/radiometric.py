@@ -249,6 +249,64 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
     return electron_counts
 
 
+def _detected_photons(photons: np.ndarray, det, *, noise: bool = True,
+                      inverse_transform: bool = False) -> np.ndarray:
+    """
+    Photons detected in each pixel, given the quantum efficiency `det.qe_euv`.
+
+    With `noise` on, a binomial draw over the whole photons in each pixel
+    (fractions are dropped); with it off, its mean, `qe_euv` times the
+    photons. `inverse_transform` draws by inverse-transform sampling, for
+    common random numbers.
+    """
+    if not noise:
+        return np.asarray(photons, dtype=float) * det.qe_euv
+    trials = np.asarray(photons).astype(np.int64)
+    if inverse_transform:
+        detected = _binomial_inverse_transform(trials, det.qe_euv)
+    else:
+        detected = np.random.binomial(trials, det.qe_euv)
+    return detected.astype(float)
+
+
+def _dark_electrons(mean, shape: tuple, *, noise: bool = True,
+                    inverse_transform: bool = False) -> np.ndarray:
+    """
+    Dark current electrons in each pixel.
+
+    `mean` is in electrons per pixel, one value for all pixels or an array
+    of `shape`. With `noise` on, a Poisson draw; with it off, the mean.
+    `inverse_transform` draws by inverse-transform sampling, for common
+    random numbers.
+    """
+    if np.ndim(mean) not in (0, len(shape)):
+        raise ValueError(f"The dark mean must be one value or have {len(shape)} axes, "
+                         f"not {np.ndim(mean)}.")
+    if not noise:
+        return np.array(np.broadcast_to(np.asarray(mean, dtype=float), shape))
+    if inverse_transform:
+        return _poisson_inverse_transform(mean, size=shape)
+    return np.random.poisson(mean, size=shape)
+
+
+def _read_noise(shape: tuple, det) -> np.ndarray:
+    """Read noise in electrons per pixel, a normal draw of rms `det.read_noise_rms`."""
+    return np.random.normal(0.0, det.read_noise_rms.to_value(u.electron / u.pixel), shape)
+
+
+def _digitise(electrons: np.ndarray, det, *, rounded: bool = True) -> np.ndarray:
+    """
+    DN in each pixel: electrons divided by the gain, rounded to the nearest
+    DN and clipped at `det.max_dn`.
+
+    With `rounded` False the DN are not rounded, as for the mean DN.
+    """
+    dn = np.asarray(electrons, dtype=float) / det.gain_e_per_dn.to_value(u.electron / u.DN)
+    if rounded:
+        dn = np.round(dn)
+    return np.minimum(dn, det.max_dn.to_value(u.DN / u.pixel))
+
+
 def photons_per_energy(tel, wavelength: u.Quantity) -> u.Quantity:
     """
     Photons the telescope collects per erg of incident light, at each wavelength.
@@ -864,15 +922,11 @@ def to_electrons(
     # Apply quantum efficiency: a binomial draw over whole photons, or without
     # noise its expectation qe * N, with no cast to integers.
     incident = photon_counts.to(u.photon / u.pix).data
-    if not noise:
-        photons_detected = incident * det.qe_euv
-    elif photon_shot_inverse_transform:
-        photons_detected = _binomial_inverse_transform(incident.astype(int), det.qe_euv)
-    else:
-        photons_detected = np.random.binomial(incident.astype(int), det.qe_euv)
+    photons_detected = _detected_photons(incident, det, noise=noise,
+                                         inverse_transform=photon_shot_inverse_transform)
 
     # Apply Fano noise per pixel, vectorized
-    electron_counts = _vectorized_fano_noise(photons_detected.astype(float),
+    electron_counts = _vectorized_fano_noise(photons_detected,
                                              rest_wavelength, det, noise=noise,
                                              every_pixel=photon_shot_inverse_transform,
                                              rms_wavelength=rms_wavelength)
@@ -881,21 +935,14 @@ def to_electrons(
 
     # Add dark current with Poisson shot noise (per pixel)
     dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
-    if not noise:
-        dark_current_counts = np.full(photon_counts.data.shape, dark_current_mean)
-    elif dark_current_inverse_transform:
-        dark_current_counts = _poisson_inverse_transform(
-            dark_current_mean, size=photon_counts.data.shape
-        )
-    else:
-        dark_current_counts = np.random.poisson(dark_current_mean, size=photon_counts.data.shape)
-    dark_current_signal = dark_current_counts * (u.electron / u.pixel)
-    e += dark_current_signal
+    dark_current_counts = _dark_electrons(dark_current_mean, photon_counts.data.shape,
+                                          noise=noise,
+                                          inverse_transform=dark_current_inverse_transform)
+    e += dark_current_counts * (u.electron / u.pixel)
 
     # Add read noise. It has zero mean, so without noise nothing is added.
     if noise:
-        e += np.random.normal(0, det.read_noise_rms.value,
-                              photon_counts.data.shape) * (u.electron / u.pixel)  # read noise
+        e += _read_noise(photon_counts.data.shape, det) * (u.electron / u.pixel)
 
     # Not clipped at zero: a CCD reads out above a bias level, so read noise
     # takes a dark pixel below it as often as above, and ECLIPSE's
@@ -931,16 +978,10 @@ def to_dn(electrons: NDCube, det) -> NDCube:
     NDCube
         DN in each pixel.
     """
-    dn_q = (electrons.data * electrons.unit) / det.gain_e_per_dn          # Quantity
-    dn_q = dn_q.to(det.max_dn.unit)
-
-    dn_val = np.round(dn_q.value)                                         # round to nearest whole number
-    dn_val[dn_val > det.max_dn.value] = det.max_dn.value                  # clip
-
     return NDCube(
-        data=dn_val,
+        data=_digitise(electrons.unit.to(u.electron / u.pixel) * electrons.data, det),
         wcs=electrons.wcs.deepcopy(),
-        unit=dn_q.unit,
+        unit=det.max_dn.unit,
         meta=electrons.meta,
     )
 
