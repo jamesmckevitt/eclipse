@@ -34,7 +34,8 @@ INSTRUMENTS = {
 
 TABLE_MARK = re.compile(r"<!-- (\w+) settings: [^\n]*-->")
 # A comment that names settings like a table mark, and so must be one.
-MARK_LIKE = re.compile(r"<!--\s*\w+\s+settings\b", re.IGNORECASE)
+MARK_LIKE = re.compile(rf"<!--\s*(?:\w+\s+settings\s*:|(?:{'|'.join(INSTRUMENTS)})\b)",
+                       re.IGNORECASE)
 FENCE = re.compile(r" {0,3}(```|~~~)")
 SETTING = re.compile(r"`([a-z]+\.\w+)`")
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
@@ -353,7 +354,8 @@ def _shows(cell, found):
     """
     Whether a hand-written Default cell shows the defaults of its settings.
 
-    A cell starting with "none" shows defaults that are None, empty or zero.
+    A cell starting with "none" shows defaults that are None, empty, or a
+    list of zeros.
     Otherwise the cell starts with the defaults' numbers, in order, and lists
     no more after them. Equal numbers in a row may be given once, either
     within a setting or, when all are equal, for the whole row. The cell
@@ -363,18 +365,20 @@ def _shows(cell, found):
     for key, f, value in found:
         label = f.metadata.get("unit", "")
         shown = display_numbers(key, value, label)
-        if not shown:
-            words.append(_words(value if shown is None else None))
+        if not shown or (len(shown) > 1 and not any(shown)):
+            words.append("none" if shown is not None else _words(value))
         else:
             raw += shown
             collapsed += _collapse(shown)
             labels.add(label)
-    if cell.startswith("none") or (not raw and "none" in words):
-        return cell.startswith("none") and all(w == "none" for w in words) and not any(raw)
-    candidates = [raw, collapsed, _collapse(raw)[:1] if len(_collapse(raw)) == 1 else raw]
+    starts_none = cell.startswith("none")
+    if starts_none or (not raw and "none" in words):
+        return starts_none and not raw and all(word == "none" for word in words)
+    merged = _collapse(raw)
+    candidates = [raw, collapsed] + ([merged] if len(merged) == 1 else [])
     return (any(_starts_with(cell, wanted) for wanted in candidates)
             and all(label in cell for label in labels if label)
-            and all(word in cell for word in words if word != "none"))
+            and all(word in cell for word in words))
 
 
 def hand_written_problems(text):

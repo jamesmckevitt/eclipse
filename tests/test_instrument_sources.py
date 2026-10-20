@@ -137,6 +137,8 @@ def test_writes_sources_and_plain_defaults_only():
     ("detector.lit_band", (171.0 * u.AA, 212.3 * u.AA)),
     ("simulation.slit_width", None),
     ("telescope.fiducial_centres", []),
+    ("telescope.fiducial_lengths", []),
+    ("telescope.pointing_jitter", 0.0 * u.arcsec),
 ])
 def test_hand_written_defaults_are_checked(monkeypatch, key, value):
     """A changed default fails the check until its hand-written cell is edited."""
