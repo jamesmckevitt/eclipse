@@ -9,6 +9,8 @@ line in the band (`euvst_response.band`).
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import multiprocessing as mp
 import os
 import warnings
@@ -488,55 +490,81 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
                            image_dn[:, half:], pieces[3]], axis=1)
 
 
-class _Default:
-    """Default of a `full_ccd_frame` argument that a `Simulation` can set instead."""
+# Arguments of `full_ccd_frame` that a `Simulation` sets.
+_FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 
-    def __init__(self, value):
-        self.value = value
-
-    def __repr__(self) -> str:
-        return repr(self.value)
+# `Simulation` fields a frame does not use, as they do not change it. `expos`
+# is replaced by the `exposure` argument.
+_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
 
 
-def _settings_from_simulation(sim: Simulation, given: Dict[str, object]) -> dict:
+def _same(a, b) -> bool:
+    """Whether `a` and `b` are equal, False if they cannot be compared."""
+    try:
+        return bool(np.all(a == b))
+    except Exception:
+        return False
+
+
+def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
+                              exposure: u.Quantity) -> dict:
     """
     Slit width, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
 
-    Raises TypeError if `sim` is not a `Simulation`, and ValueError if any of
-    `given` was also passed to `full_ccd_frame` or if `sim` asks for an effect
-    the frame does not model.
+    An argument in `given` equal to its default takes the value in `sim`.
+    Raises TypeError if `sim` is not a `Simulation`. Raises one ValueError
+    listing every argument that differs from both its default and `sim`, and
+    every setting in `sim` the frame does not model. Warns if `sim.expos` is
+    set and differs from `exposure`.
     """
+    from .pinhole_diffraction import _pinholes_on
+
     if not isinstance(sim, Simulation):
         raise TypeError(f"sim must be a Simulation, got {type(sim).__name__}.")
-    both = [name for name, value in given.items() if not isinstance(value, _Default)]
-    if both:
-        raise ValueError(f"{', '.join(both)} given both directly and by sim; give each setting "
-                         f"once.")
-    unmodelled = []
-    if sim.instrument.upper() != "SWC":
-        unmodelled.append(f"instrument {sim.instrument!r} (a frame is of SWC)")
-    if sim.psf and sim.psf_boundary != "zero":
-        unmodelled.append(f"psf_boundary {sim.psf_boundary!r} (the frame takes the Sun "
-                          f"beyond the synthesis's edges as dark, psf_boundary 'zero')")
-    if sim.slit_mask:
-        unmodelled.append("slit_mask (the slit's ends and fiducials)")
-    if sim.enable_pinholes:
-        unmodelled.append("enable_pinholes (pinholes in the filter)")
-    if np.any(u.Quantity(sim.vis_sl).value > 0):
-        unmodelled.append("vis_sl (visible stray light)")
-    if unmodelled:
-        raise ValueError(f"The full-CCD frame does not model {'; '.join(unmodelled)}. Change "
-                         f"these settings in sim.")
-    return {"slit_width": sim.slit_width, "psf": sim.psf, "spectral_psf": sim.spectral_psf,
-            "noise": sim.noise}
+    defaults = inspect.signature(full_ccd_frame).parameters
+    problems = [f"{name} is {value!r} here and {getattr(sim, name)!r} in sim"
+                for name, value in given.items()
+                if not _same(value, defaults[name].default)
+                and not _same(value, getattr(sim, name))]
+    pinhole_fields = ("enable_pinholes", "pinhole_sizes", "pinhole_positions",
+                      "pinhole_positions_spectral")
+    for f in dataclasses.fields(Simulation):
+        name, value = f.name, getattr(sim, f.name)
+        if name in _FROM_SIMULATION or name in _IGNORED_SIMULATION_FIELDS:
+            continue
+        if name == "instrument":
+            if str(value).upper() != "SWC":
+                problems.append(f"instrument {value!r}: a frame is of SWC")
+        elif name == "psf_boundary":
+            if sim.psf and value != "zero":
+                problems.append(f"psf_boundary {value!r}: the frame takes the Sun beyond the "
+                                f"synthesis's edges as dark, psf_boundary 'zero'")
+        elif name in pinhole_fields:
+            if name == "enable_pinholes" and _pinholes_on(sim):
+                problems.append("enable_pinholes: the frame does not model pinholes in the "
+                                "filter")
+        else:
+            default = (f.default_factory() if f.default is dataclasses.MISSING
+                       else f.default)
+            if not _same(value, default):
+                problems.append(f"{name} {value!r}: the frame does not model it")
+    if problems:
+        raise ValueError("full_ccd_frame cannot take these settings: " + "; ".join(problems)
+                         + ".")
+    default_expos = next(f.default for f in dataclasses.fields(Simulation)
+                         if f.name == "expos")
+    if not _same(sim.expos, default_expos) and not _same(sim.expos, u.Quantity(exposure)):
+        warnings.warn(f"The frame's exposure is {exposure}, from exposure; sim.expos, "
+                      f"{sim.expos}, is not used.", UserWarning, stacklevel=3)
+    return {name: getattr(sim, name) for name in _FROM_SIMULATION}
 
 
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
-                   exposure: u.Quantity, *, slit_width: u.Quantity = _Default(0.2 * u.arcsec),
+                   exposure: u.Quantity, *, slit_width: u.Quantity = 0.2 * u.arcsec,
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
-                   psf: bool = _Default(True), spectral_psf: str = _Default("quadrature"),
+                   psf: bool = True, spectral_psf: str = "quadrature",
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
-                   noise: bool = _Default(True), n_workers: int = 0,
+                   noise: bool = True, n_workers: int = 0,
                    sim: Optional[Simulation] = None) -> FullFrame:
     """
     Full-CCD frame of the SW camera from a synthesis and every line in the band.
@@ -582,9 +610,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         on Windows, one process is used.
     sim : Simulation, optional
         Settings to take `slit_width`, `psf`, `spectral_psf` and `noise`
-        from, in place of those arguments. A `Simulation` has the PSF off
-        unless `psf=True` is given. Its `expos`, `n_iter` and `ncpu` are not
-        used. Default None.
+        from. One of these arguments left at its default takes the
+        `Simulation`'s value; one set to another value must agree with it. A
+        `Simulation` has the PSF off unless `psf=True` is given. Its `expos`,
+        `n_iter` and `ncpu` are not used, nor `psf_boundary` with the PSF off,
+        nor the pinhole lists with pinholes off. Default None.
 
     Returns
     -------
@@ -595,23 +625,29 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     TypeError
         If `sim` is not a `Simulation`.
     ValueError
-        If `sim` is given with any of `slit_width`, `psf`, `spectral_psf` or
-        `noise`, or asks for an effect the frame does not model: an
-        instrument other than SWC, `psf_boundary` `"replicate"` with the PSF
-        on, `slit_mask`, pinholes or visible stray light.
+        If an argument is out of range, the synthesis, `lines`, `continuum`,
+        `focal_plane` and `det` do not fit together, or `focal_plane` has a
+        tilted slit image. With
+        `sim`, if an argument differs from both its default and the
+        `Simulation`, or the `Simulation` asks for something the frame does
+        not model: an instrument other than SWC, `psf_boundary` `"replicate"`
+        with the PSF on, `slit_mask`, pinholes or visible stray light. One
+        error lists every such setting.
+
+    Warns
+    -----
+    UserWarning
+        If `sim.expos` is set and differs from `exposure`, which is used.
     """
     from . import frame as frame_module
     from .config import Detector_SWC, Telescope_EUVST
 
-    given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
-             "noise": noise}
     if sim is not None:
-        settings = _settings_from_simulation(sim, given)
-    else:
-        settings = {name: value.value if isinstance(value, _Default) else value
-                    for name, value in given.items()}
-    slit_width, psf = settings["slit_width"], settings["psf"]
-    spectral_psf, noise = settings["spectral_psf"], settings["noise"]
+        given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
+                 "noise": noise}
+        settings = _settings_from_simulation(sim, given, exposure)
+        slit_width, psf = settings["slit_width"], settings["psf"]
+        spectral_psf, noise = settings["spectral_psf"], settings["noise"]
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
     focal_plane = FocalPlane_SWC.from_detector(det) if focal_plane is None else focal_plane

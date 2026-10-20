@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`, and `IonLines`, which is in `euvst_response.band`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `euvst_response`, such as `from euvst_response import monte_carlo`, except the synthesis functions, which are in `euvst_response.synthesis` and `euvst_response.continuum`. [Using ECLIPSE from Python](python.md) shows them in use.
 
 ## The instrument
 
@@ -154,7 +154,7 @@ A full-CCD frame holds every line in the band, not only the lines a synthesis na
 
 ::: euvst_response.BandLines
 
-::: euvst_response.band.IonLines
+::: euvst_response.IonLines
 
 ::: euvst_response.write_band_lines
 
@@ -162,7 +162,7 @@ A full-CCD frame holds every line in the band, not only the lines a synthesis na
 
 ## Full-CCD frames
 
-A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how the frame is read out; both are taken from the detector by default. [A full-CCD frame](full-ccd-frame.md) shows them in use.
+A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [A full-CCD frame](full-ccd-frame.md) shows how to make a frame.
 
 ::: euvst_response.full_ccd_frame
 

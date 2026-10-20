@@ -1,5 +1,7 @@
 """The full-CCD frame of the SW camera, from a synthesis and every line in the band."""
+import inspect
 import sys
+import warnings
 
 import astropy.constants as const
 import astropy.units as u
@@ -11,7 +13,7 @@ from euvst_response.atmosphere import Atmosphere, write_atmosphere
 from euvst_response.band import BandLines, IonLines
 from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
 from euvst_response.frame import photons_from_lines
-from euvst_response.full_frame import (_Default, _density_shares, _settings_from_simulation,
+from euvst_response.full_frame import (_density_shares, _settings_from_simulation,
                                        full_ccd_frame, lay_out_register, write_full_frame)
 from euvst_response.readout import FocalPlane_SWC
 from euvst_response.synthesis_file import read_synthesis_products
@@ -409,13 +411,59 @@ def test_a_frame_takes_its_settings_from_a_simulation(uniform_synthesis, blurred
     frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), sim=sim,
                            n_workers=1)
-    assert frame.settings == blurred_frame.settings
-    assert frame.slit_width == blurred_frame.slit_width
+    _same_frames(frame, blurred_frame)
+
+
+def _same_frames(a, b):
+    assert a.settings == b.settings
+    assert a.slit_width == b.slit_width
     for name in ("rate", "photons", "dn", "wavelength", "photon_wavelength",
                  "photon_rms_wavelength"):
         for ccd in ("left", "right"):
-            assert np.array_equal(u.Quantity(getattr(frame, name)[ccd]).value,
-                                  u.Quantity(getattr(blurred_frame, name)[ccd]).value)
+            assert np.array_equal(u.Quantity(getattr(a, name)[ccd]).value,
+                                  u.Quantity(getattr(b, name)[ccd]).value)
+
+
+def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
+        uniform_synthesis):
+    """With the same seed, noise, convolution and a 0.4 arcsec slit give the same frame."""
+    products = read_synthesis_products(uniform_synthesis)
+    lines = _one_line(products)
+    common = dict(telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
+    sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
+                     spectral_psf="convolution", noise=True)
+    np.random.seed(170)
+    from_sim = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 10 * u.s, sim=sim, **common)
+    np.random.seed(170)
+    from_keywords = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 10 * u.s,
+                                   slit_width=0.4 * u.arcsec, spectral_psf="convolution",
+                                   **common)
+    assert from_sim.slit_width == 0.4 * u.arcsec
+    assert from_sim.settings["spectral_psf"] == "convolution" and from_sim.settings["noise"]
+    _same_frames(from_sim, from_keywords)
+
+
+def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame):
+    """`psf=None` is taken as false, as before `sim` was added, and recorded as given."""
+    products = read_synthesis_products(uniform_synthesis)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), psf=None,
+                           noise=False, n_workers=1)
+    assert frame.settings["psf"] is None
+    frame.settings["psf"] = False
+    _same_frames(frame, sharp_frame)
+
+
+def test_the_signature_keeps_its_plain_defaults():
+    """The defaults read from the signature are those of a call without `sim`."""
+    parameters = inspect.signature(full_ccd_frame).parameters
+    assert parameters["slit_width"].default == 0.2 * u.arcsec
+    assert parameters["psf"].default is True
+    assert parameters["spectral_psf"].default == "quadrature"
+    assert parameters["noise"].default is True
+    assert parameters["n_workers"].default == 0
+    assert parameters["sim"].default is None
+    assert parameters["psf"].annotation == "bool"
 
 
 @pytest.mark.parametrize("settings, message", [
@@ -423,7 +471,7 @@ def test_a_frame_takes_its_settings_from_a_simulation(uniform_synthesis, blurred
     ({"psf": True, "psf_boundary": "zero", "slit_mask": True}, "slit_mask"),
     ({"enable_pinholes": True, "pinhole_sizes": [5 * u.um], "pinhole_positions": [0.5]},
      "pinholes"),
-    ({"vis_sl": 1e3 * u.photon / (u.s * u.cm**2)}, "visible stray light"),
+    ({"vis_sl": 1e3 * u.photon / (u.s * u.cm**2)}, "vis_sl"),
     ({"instrument": "EIS", "slit_width": 1 * u.arcsec}, "instrument 'EIS'"),
 ])
 def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings, message):
@@ -433,22 +481,81 @@ def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings
                        sim=Simulation(**settings))
 
 
+def test_one_error_lists_every_unsupported_setting_and_conflict():
+    sim = Simulation(psf=True, slit_mask=True, vis_sl=1 * u.photon / (u.s * u.cm**2))
+    with pytest.raises(ValueError) as error:
+        full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim=sim,
+                       noise=False, spectral_psf="convolution")
+    for name in ("psf_boundary", "slit_mask", "vis_sl", "noise", "spectral_psf"):
+        assert name in str(error.value)
+
+
+def test_a_simulation_field_the_frame_does_not_know_is_refused(monkeypatch):
+    """A field added to `Simulation` is refused once set, until the frame handles it."""
+    import dataclasses
+
+    from euvst_response import full_frame
+
+    @dataclasses.dataclass
+    class Extended(Simulation):
+        new_effect: bool = dataclasses.field(default=False, kw_only=True)
+
+    monkeypatch.setattr(full_frame, "Simulation", Extended)
+    given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+             "noise": True}
+    _settings_from_simulation(Extended(), given, 1 * u.s)
+    with pytest.raises(ValueError, match="new_effect"):
+        _settings_from_simulation(Extended(new_effect=True), given, 1 * u.s)
+
+
+def test_settings_a_frame_does_not_use_are_accepted():
+    """Pinholes switched on without any, the PSF boundary with the PSF off, and the
+    iterations and CPUs of a run change nothing in a frame."""
+    sim = Simulation(enable_pinholes=True, psf_boundary="replicate", n_iter=3, ncpu=2,
+                     pinhole_positions_spectral=[])
+    given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+             "noise": True}
+    assert _settings_from_simulation(sim, given, 1 * u.s)["psf"] is False
+
+
 def test_a_simulation_gives_the_frame_its_slit_width_psf_and_noise():
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
                      spectral_psf="convolution", noise=False)
-    given = dict.fromkeys(("slit_width", "psf", "spectral_psf", "noise"), _Default(None))
-    assert _settings_from_simulation(sim, given) == {
+    given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+             "noise": True}
+    assert _settings_from_simulation(sim, given, 1 * u.s) == {
         "slit_width": 0.4 * u.arcsec, "psf": True, "spectral_psf": "convolution", "noise": False}
 
 
-def test_a_frame_refuses_settings_given_both_directly_and_by_a_simulation():
-    sim = Simulation(psf=False)
-    for given in ({"psf": False}, {"slit_width": 0.2 * u.arcsec}, {"noise": True},
-                  {"spectral_psf": "quadrature"}):
-        with pytest.raises(ValueError, match="both directly and by sim"):
+def test_an_argument_set_both_ways_must_agree_with_the_simulation():
+    """An argument at its default takes the `Simulation`'s value; one set otherwise must
+    match it."""
+    sim = Simulation(slit_width=0.4 * u.arcsec, psf=False, spectral_psf="convolution",
+                     noise=False)
+    defaults = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+                "noise": True}
+    expected = {"slit_width": 0.4 * u.arcsec, "psf": False, "spectral_psf": "convolution",
+                "noise": False}
+    assert _settings_from_simulation(sim, defaults, 1 * u.s) == expected
+    assert _settings_from_simulation(sim, {**defaults, "slit_width": 400 * u.mas, "psf": False,
+                                           "noise": False}, 1 * u.s) == expected
+    for given in ({"slit_width": 0.8 * u.arcsec}, {"psf": None}, {"noise": None},
+                  {"slit_width": None}):
+        with pytest.raises(ValueError, match=f"{next(iter(given))} is"):
             full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim=sim, **given)
     with pytest.raises(TypeError, match="must be a Simulation"):
         full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim={"psf": False})
+
+
+def test_a_frame_warns_that_the_simulation_exposure_is_not_used():
+    given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+             "noise": True}
+    with pytest.warns(UserWarning, match="sim.expos"):
+        _settings_from_simulation(Simulation(expos=5 * u.s), given, 10 * u.s)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _settings_from_simulation(Simulation(expos=10 * u.s), given, 10 * u.s)
+        _settings_from_simulation(Simulation(), given, 10 * u.s)
 
 
 def test_the_frame_api_is_exported_from_the_package():
@@ -458,8 +565,8 @@ def test_the_frame_api_is_exported_from_the_package():
 
     for module, names in ((full_frame, ("full_ccd_frame", "write_full_frame", "FullFrame")),
                           (readout, ("FocalPlane_SWC", "ReadoutSequence")),
-                          (band, ("BandLines", "band_contribution_functions", "read_band_lines",
-                                  "write_band_lines"))):
+                          (band, ("BandLines", "IonLines", "band_contribution_functions",
+                                  "read_band_lines", "write_band_lines"))):
         for name in names:
             assert getattr(euvst_response, name) is getattr(module, name)
             assert name in euvst_response.__all__

@@ -103,7 +103,8 @@ class FocalPlane_SWC:
         :data:`MEASURED_SLIT_IMAGE_TILT` to model the drift in the optical
         design, about two rows end to end. Which end of the slit it runs
         toward is not documented, so the sign may need flipping against a
-        calibration.
+        calibration. `full_ccd_frame` does not yet take a tilted slit
+        image.
     """
 
     n_rows: int = Detector_SWC.n_rows
