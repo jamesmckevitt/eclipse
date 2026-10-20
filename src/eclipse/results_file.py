@@ -1013,6 +1013,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
             FutureWarning, stacklevel=_stacklevel)
         payload = _load_pickle(path)
         _give_earlier_values(payload)
+        _move_old_tables(payload)
         if _from_before_weighting(payload):
             warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning,
                           stacklevel=_stacklevel)
@@ -1081,40 +1082,56 @@ def _from_before_weighting(payload) -> bool:
     return True
 
 
-def _give_earlier_values(value, seen=None, *, earlier: bool = True) -> None:
-    """
-    Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
-
-    An object pickled before a setting existed would otherwise read the
-    class default, such as a telescope's `resolution_budget`, which runs
-    then did not have. Packaged tables named under the package's former
-    name, `euvst_response`, that no longer exist are read from this
-    installation's copy. With `earlier` False, only the tables are changed.
-    """
+def _configuration_objects(value, seen=None):
+    """Each configuration object in an unpickled payload, however deeply it is held."""
     seen = set() if seen is None else seen
     if id(value) in seen:
         return
     seen.add(id(value))
     if isinstance(value, dict):
-        for item in value.values():
-            _give_earlier_values(item, seen, earlier=earlier)
+        items = list(value.values())
     elif isinstance(value, (list, tuple)):
-        for item in value:
-            _give_earlier_values(item, seen, earlier=earlier)
+        items = list(value)
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
         own = getattr(value, "__dict__", None)
-        if own is not None:
-            if earlier:
-                for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
-                    if name not in own:
-                        object.__setattr__(value, name, item)
-            for name, item in list(own.items()):
-                if isinstance(item, Path) or hasattr(item, "__fspath__"):
-                    moved = _moved_package_file(item)
-                    if moved is not None:
-                        object.__setattr__(value, name, moved)
-                else:
-                    _give_earlier_values(item, seen, earlier=earlier)
+        if own is None:
+            return
+        yield value
+        items = list(own.values())
+    else:
+        return
+    for item in items:
+        yield from _configuration_objects(item, seen)
+
+
+def _give_earlier_values(payload) -> None:
+    """
+    Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
+
+    An object pickled before a setting existed would otherwise read the
+    class default, such as a telescope's `resolution_budget`, which runs
+    then did not have.
+    """
+    for value in _configuration_objects(payload):
+        own = value.__dict__
+        for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
+            if name not in own:
+                object.__setattr__(value, name, item)
+
+
+def _move_old_tables(payload) -> None:
+    """
+    Read the missing packaged tables an unpickled payload names under the former name.
+
+    Each is read from this installation's copy instead (see
+    :func:`_moved_package_file`).
+    """
+    for value in _configuration_objects(payload):
+        for name, item in list(value.__dict__.items()):
+            if isinstance(item, Path) or hasattr(item, "__fspath__"):
+                moved = _moved_package_file(item)
+                if moved is not None:
+                    object.__setattr__(value, name, moved)
 
 
 def _load_pickle(path: Path) -> dict:
@@ -1138,9 +1155,11 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     check. A setting that did not exist when the pickle was made gets
     today's default, with a warning, unless runs then had another value:
     their fits were unweighted, so the file records `fit_weighted` False,
-    and `weighted` False for a FitConfig in it. A pickle holding no results,
-    such as a synthesis pickle, is refused. Reading a pickle runs whatever
-    code it holds, so only convert files you trust.
+    and `weighted` False for a FitConfig in it. A packaged table the pickle
+    names in the package's former folder, `euvst_response/data`, is recorded
+    as this installation's copy if the old one is gone. A pickle holding no
+    results, such as a synthesis pickle, is refused. Reading a pickle runs
+    whatever code it holds, so only convert files you trust.
 
     Parameters
     ----------
@@ -1177,11 +1196,11 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     if target.is_symlink():
         target = Path(os.path.realpath(target))
     payload = _load_pickle(pickle_path)
-    _give_earlier_values(payload, earlier=False)
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, dict) or "all_combinations" not in results:
         raise ValueError(f"{pickle_path} holds no results. A synthesis pickle converts with "
                          f"eclipse.convert_synthesis_pickle.")
+    _move_old_tables(payload)
     # Recorded in the new file, so reading it does not warn again.
     if _from_before_weighting(payload):
         warnings.warn(_BEFORE_WEIGHTING.format(path=pickle_path), UserWarning, stacklevel=2)

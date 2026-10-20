@@ -96,7 +96,7 @@ class _Package(types.ModuleType):
         # Importing `euvst_response.<name>` sets the module on this package.
         # Keep the attribute `eclipse` gave it instead, such as the function `main`.
         if (isinstance(value, types.ModuleType) and value.__name__ == f"eclipse.{name}"
-                and name in self.__dict__):
+                and getattr(self, name, value) is not value):
             return
         super().__setattr__(name, value)
 
