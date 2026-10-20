@@ -215,6 +215,23 @@ def test_pinhole_light_contributes_its_mean():
                    for scan in range(1, NSCAN))
 
 
+def test_the_pinhole_light_diffracts_at_the_wavelength_set():
+    """Light of a shorter wavelength spreads less, so more of it falls in the brightest pixel."""
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    settings = dict(instrument="SWC", slit_width=0.2 * u.arcsec,
+                    vis_sl=1.0e12 * u.photon / (u.s * u.cm**2), enable_pinholes=True,
+                    pinhole_sizes=[50 * u.um], pinhole_positions=[0.25])
+    light = {}
+    for wavelength in (600 * u.nm, 400 * u.nm):
+        sim = Simulation(**settings, pinhole_visible_wavelength=wavelength)
+        light[wavelength] = add_pinhole_visible_light(_electron_cube(), 10 * u.s, det, sim, tel,
+                                                      noise=False).data
+    assert light[400 * u.nm].max() > light[600 * u.nm].max()
+    default = add_pinhole_visible_light(_electron_cube(), 10 * u.s, det,
+                                        Simulation(**settings), tel, noise=False).data
+    assert np.array_equal(default, light[600 * u.nm])
+
+
 def test_a_noiseless_run_is_reproducible_end_to_end():
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, noise=False)

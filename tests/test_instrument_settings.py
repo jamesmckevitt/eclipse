@@ -46,7 +46,7 @@ def _run(tmp_path, monkeypatch, config):
     return saved["payload"]
 
 
-# --- defaults are the values the code had as constants --------------------------------
+# --- defaults --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("det", [Detector_SWC(), Detector_EIS(),
                                  Detector_SWC(ccd_temperature=-100 * u.deg_C)])
@@ -192,7 +192,8 @@ def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
     """As pickled by an older version, before the new settings existed."""
     state = dict(Detector_SWC(dark_current_293k=7 * DARK).__dict__)
     state["_dark_current_293k"] = state.pop("dark_current_293k")
-    for name in ("fano_factor", "dispersion", "lit_band", "slit_image_tilt"):
+    for name in ("fano_factor", "pair_energy_300k", "pair_energy_slope", "dispersion",
+                 "wavelength_offset", "lit_band", "slit_image_tilt"):
         del state[name]
 
     class Old:
@@ -203,7 +204,10 @@ def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
         warnings.simplefilter("error", FutureWarning)
         det = pickle.loads(pickle.dumps(Old()))
     assert det.dark_current_293k == 7 * DARK and "_dark_current_293k" not in det.__dict__
-    assert det.si_fano == 0.115 and det.dispersion == DISPERSION_COEFFICIENTS
+    assert det.si_fano == 0.115 and det.pair_energy == Detector_SWC().pair_energy
+    assert FocalPlane_SWC.from_detector(det) == FocalPlane_SWC()
+    np.testing.assert_array_equal(electrons_per_photon(195 * u.AA, det),
+                                  electrons_per_photon(195 * u.AA, Detector_SWC()))
 
 
 def test_a_results_file_with_the_old_name_and_none_of_the_new_settings_reads_back(tmp_path):
