@@ -505,6 +505,22 @@ def test_a_simulation_field_the_frame_does_not_know_is_refused():
         _settings_from_simulation(Extended(new_effect=True), given, 1 * u.s)
 
 
+def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
+    import dataclasses
+
+    @dataclasses.dataclass
+    class Masked(Simulation):
+        slit_mask: bool = dataclasses.field(default=True, kw_only=True)
+        expos: u.Quantity = 5 * u.s
+
+    given = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
+             "noise": True}
+    with pytest.raises(ValueError, match="slit_mask"):
+        _settings_from_simulation(Masked(), given, 1 * u.s)
+    with pytest.warns(UserWarning, match="sim.expos"):
+        _settings_from_simulation(Masked(slit_mask=False), given, 1 * u.s)
+
+
 def test_settings_a_frame_does_not_use_are_accepted():
     """Pinholes switched on without any, the PSF boundary with the PSF off, and the
     iterations and CPUs of a run change nothing in a frame."""

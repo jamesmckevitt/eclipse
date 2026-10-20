@@ -494,10 +494,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
 _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 
 # `Simulation` fields a frame does not use, as they do not change it. `expos`
-# is replaced by the `exposure` argument, and the pinhole lists are checked
-# through `enable_pinholes`.
-_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu", "pinhole_sizes", "pinhole_positions",
-                              "pinhole_positions_spectral")
+# is replaced by the `exposure` argument.
+_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
+
+# Pinhole lists, checked through `enable_pinholes`.
+_PINHOLE_LISTS = ("pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral")
 
 
 def _same(a, b) -> bool:
@@ -506,6 +507,15 @@ def _same(a, b) -> bool:
         return bool(np.all(a == b))
     except (TypeError, ValueError):
         return False
+
+
+def _field_default(f: dataclasses.Field):
+    """Default of a dataclass field, or `dataclasses.MISSING` if it has none."""
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    if f.default_factory is not dataclasses.MISSING:
+        return f.default_factory()
+    return dataclasses.MISSING
 
 
 def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
@@ -528,13 +538,12 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
                 for name, value in given.items()
                 if not _same(value, arguments[name].default)
                 and not _same(value, getattr(sim, name))]
-    defaults = {f.name: (f.default if f.default is not dataclasses.MISSING
-                         else f.default_factory() if f.default_factory is not dataclasses.MISSING
-                         else dataclasses.MISSING)
-                for f in dataclasses.fields(sim)}
-    for name, default in defaults.items():
-        value = getattr(sim, name)
-        if name in _FROM_SIMULATION or name in _IGNORED_SIMULATION_FIELDS:
+    # Defaults of `Simulation` itself, so a subclass cannot hide a setting by
+    # changing its default.
+    base = {f.name: f for f in dataclasses.fields(Simulation)}
+    for f in dataclasses.fields(sim):
+        name, value = f.name, getattr(sim, f.name)
+        if name in _FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS + _PINHOLE_LISTS:
             continue
         if name == "instrument":
             if str(value).upper() != "SWC":
@@ -547,12 +556,12 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
             if _pinholes_on(sim):
                 problems.append("enable_pinholes: the frame does not model pinholes in the "
                                 "filter")
-        elif not _same(value, default):
+        elif not _same(value, _field_default(base.get(name, f))):
             problems.append(f"{name} {value!r}: the frame does not model it")
     if problems:
         raise ValueError("full_ccd_frame cannot take these settings: " + "; ".join(problems)
                          + ".")
-    if not _same(sim.expos, defaults["expos"]) and not _same(sim.expos, exposure):
+    if not _same(sim.expos, _field_default(base["expos"])) and not _same(sim.expos, exposure):
         warnings.warn(f"The frame's exposure is {exposure}, from exposure; sim.expos, "
                       f"{sim.expos}, is not used.", UserWarning, stacklevel=3)
     return {name: getattr(sim, name) for name in _FROM_SIMULATION}
