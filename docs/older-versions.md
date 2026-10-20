@@ -1,6 +1,6 @@
 # Older versions
 
-ECLIPSE 0.12 and earlier were imported as `euvst_response`. ECLIPSE 0.11.0 and earlier also wrote pickles rather than HDF5 files, and read MURaM's own files directly. These still work, with a warning, until a future release stops them. This page says how to move over.
+Some things from older versions of ECLIPSE still work, with a warning, until a future release stops them. These include the package's former name, the pickles that ECLIPSE 0.11.0 and earlier wrote, and reading MURaM's own files directly. This page says how to move over.
 
 ## The package's name
 

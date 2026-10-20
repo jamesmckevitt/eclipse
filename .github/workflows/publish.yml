@@ -68,11 +68,11 @@ jobs:
           data = {path for path in (source / "eclipse/data").rglob("*") if path.is_file()}
           if not data:
               raise SystemExit("no src/eclipse/data files in the checkout")
-          modules = set((source / "eclipse").rglob("*.py")) - data
-          expected = {
-              path.relative_to(source).as_posix()
-              for path in data | modules | {source / "euvst_response/__init__.py"}
-          }
+          modules = set((source / "eclipse").rglob("*.py"))
+          modules |= set((source / "euvst_response").rglob("*.py"))
+          if source / "euvst_response/__init__.py" not in modules:
+              raise SystemExit("no src/euvst_response/__init__.py in the checkout")
+          expected = {path.relative_to(source).as_posix() for path in data | modules}
 
           wheel = glob.glob("dist/*.whl")[0]
           packaged = set(zipfile.ZipFile(wheel).namelist())

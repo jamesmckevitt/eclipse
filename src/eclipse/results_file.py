@@ -113,13 +113,14 @@ def _moved_package_file(path):
     Older versions were installed as `euvst_response`, so their results can
     name the packaged tables inside it, a folder an upgrade removes. None if
     `path` exists, is not such a table, or the table is not in this installation.
+    A path that cannot be reached counts as missing.
     """
     path = Path(os.fspath(path))
     parts = path.parts
     for i in range(len(parts) - 2, -1, -1):
         if parts[i] == "euvst_response" and parts[i + 1] == "data":
             relative = _package_parts(Path(*parts[i + 1:]).as_posix())
-            if relative is None or path.exists():
+            if relative is None or os.path.exists(path):
                 return None
             moved = _package_root().joinpath(*relative)
             return moved if moved.is_file() else None
@@ -484,7 +485,7 @@ def _unjson(value, reading: _Reading):
     if tag == "date":
         return datetime.date.fromisoformat(value["value"])
     if tag == "path":
-        return _moved_package_file(value["value"]) or Path(value["value"])
+        return Path(value["value"])
     if tag == "resource":
         # Check the path as written, before touching the filesystem, so a
         # file cannot make the reader look outside the package at all.
@@ -1080,7 +1081,7 @@ def _from_before_weighting(payload) -> bool:
     return True
 
 
-def _give_earlier_values(value, seen=None) -> None:
+def _give_earlier_values(value, seen=None, *, earlier: bool = True) -> None:
     """
     Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
 
@@ -1088,7 +1089,7 @@ def _give_earlier_values(value, seen=None) -> None:
     class default, such as a telescope's `resolution_budget`, which runs
     then did not have. Packaged tables named under the package's former
     name, `euvst_response`, that no longer exist are read from this
-    installation's copy.
+    installation's copy. With `earlier` False, only the tables are changed.
     """
     seen = set() if seen is None else seen
     if id(value) in seen:
@@ -1096,23 +1097,24 @@ def _give_earlier_values(value, seen=None) -> None:
     seen.add(id(value))
     if isinstance(value, dict):
         for item in value.values():
-            _give_earlier_values(item, seen)
+            _give_earlier_values(item, seen, earlier=earlier)
     elif isinstance(value, (list, tuple)):
         for item in value:
-            _give_earlier_values(item, seen)
+            _give_earlier_values(item, seen, earlier=earlier)
     elif dataclasses.is_dataclass(value) and not isinstance(value, type):
         own = getattr(value, "__dict__", None)
         if own is not None:
-            for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
-                if name not in own:
-                    object.__setattr__(value, name, item)
+            if earlier:
+                for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
+                    if name not in own:
+                        object.__setattr__(value, name, item)
             for name, item in list(own.items()):
                 if isinstance(item, Path) or hasattr(item, "__fspath__"):
                     moved = _moved_package_file(item)
                     if moved is not None:
                         object.__setattr__(value, name, moved)
                 else:
-                    _give_earlier_values(item, seen)
+                    _give_earlier_values(item, seen, earlier=earlier)
 
 
 def _load_pickle(path: Path) -> dict:
@@ -1175,6 +1177,7 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     if target.is_symlink():
         target = Path(os.path.realpath(target))
     payload = _load_pickle(pickle_path)
+    _give_earlier_values(payload, earlier=False)
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, dict) or "all_combinations" not in results:
         raise ValueError(f"{pickle_path} holds no results. A synthesis pickle converts with "

@@ -103,10 +103,12 @@ def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypat
     assert "config" not in seen and seen["sizes"] == [5 * u.um]
 
 
-def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path):
-    """A copy of ECLIPSE inside some other repository is not a checkout of ECLIPSE."""
+@pytest.mark.parametrize("inside", [
+    Path(".venv/lib/site-packages/eclipse"), Path("libraries/eclipse/src/eclipse")])
+def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path, inside):
+    """An environment or a copy of ECLIPSE inside some other repository is not a checkout."""
     project = tmp_path / "project"
-    package = project / "libraries" / "eclipse" / "src" / "eclipse"
+    package = project / inside
     package.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(project)], check=True)
     import importlib.resources
