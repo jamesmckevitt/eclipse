@@ -285,7 +285,8 @@ def _tie_root(fit_config: FitConfig, key: str, index: int) -> int:
 
 # Fraction of the background-subtracted peak: the starting amplitude of a
 # component whose centre is tied or shared with an earlier one, and the
-# lowest start of the others.
+# lowest start of the others. Also the starting ratio of a component held
+# fainter than another when the spectrum does not give one.
 _GUESS_FRACTION = 0.15
 
 
@@ -405,7 +406,7 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     back = float(np.median(prof[finite])) if finite.any() else 0.0
     height = np.where(finite, prof - back, 0.0)
     smooth = np.convolve(height, np.ones(3) / 3, mode="same") if prof.size >= 3 else height
-    peak_idx = int(np.nanargmax(smooth))
+    peak_idx = int(np.argmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
     centre = wv[peak_idx]
     sigma = _start_sigma(_half_max_fwhm(wv, smooth, peak_idx), wv)
@@ -1380,7 +1381,7 @@ def fit_quantities(fit_data: np.ndarray, units: list,
     units : list of Unit
         One unit per parameter, as from :func:`fit_cube_gauss`.
     wavelength_step : u.Quantity
-        Width of one spectral pixel.
+        Width of one spectral pixel; its sign is ignored.
     rest_wavelength : u.Quantity
         Rest wavelength of a single-Gaussian fit. With components, each uses
         its own.
@@ -1408,7 +1409,7 @@ def fit_quantities(fit_data: np.ndarray, units: list,
         peak = fit_data[..., 3 * i] * units[3 * i]
         centre = fit_data[..., 3 * i + 1] * units[3 * i + 1]
         sigma = fit_data[..., 3 * i + 2] * units[3 * i + 2]
-        pixels = (sigma / wavelength_step).to(u.dimensionless_unscaled)
+        pixels = (sigma / abs(wavelength_step)).to(u.dimensionless_unscaled)
         components[name] = {
             "intensity": np.sqrt(2 * np.pi) * peak * pixels * u.pix,
             "velocity": ((centre - lam0) / lam0 * const.c).to(u.km / u.s),

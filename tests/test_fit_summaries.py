@@ -277,6 +277,9 @@ def test_a_decreasing_wavelength_axis_gives_the_same_intensities():
         intensities.append(quantities["components"]["195.1190 Angstrom"]["intensity"])
     assert np.all(intensities[1] > 0)
     assert intensities[1].value == pytest.approx(intensities[0].value, rel=1e-6)
+    negative = fit_quantities(data, units, -spectral_pixel_width(cube), REST0)
+    assert negative["components"]["195.1190 Angstrom"]["intensity"].value == pytest.approx(
+        intensities[1].value, rel=1e-12)
 
 
 # --- the Monte Carlo keeps them ----------------------------------------------
