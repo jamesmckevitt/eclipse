@@ -57,11 +57,12 @@ PLAIN = re.compile(rf"{NUMBER}(?:(?:, | and ){NUMBER})*(?: (?:{_WORD})(?: per (?
                    r"|none|true|false|packaged table|`[^`|]*`")
 
 # Settings whose hand-written Default cell does not give the default itself.
-# The PSF row gives the design values used when the defaults are None, and
-# the dispersion row gives the polynomial's degree.
+# The PSF row gives the design values used when the defaults are None, the
+# dispersion row gives the polynomial's degree, and the fiducial row gives
+# one length for the narrow slits and one for the widest.
 # tests/test_instrument_sources.py checks these cells.
 NOT_SHOWN = {("SWC", "telescope.psf_params"), ("SWC", "telescope.field_of_view"),
-             ("SWC", "detector.dispersion")}
+             ("SWC", "detector.dispersion"), ("SWC", "telescope.fiducial_lengths")}
 
 
 def _number(value):
@@ -361,58 +362,87 @@ def updated_page(text):
     return "\n".join(lines)
 
 
-def _collapse(numbers):
-    """Numbers with each run of equal ones kept once."""
-    out = []
-    for number in numbers:
-        if not out or not math.isclose(out[-1], number, rel_tol=1e-9, abs_tol=1e-12):
-            out.append(number)
-    return out
+# Items a hand-written Default cell gives, in order: numbers and words.
+ITEM = re.compile(rf"(?<![\w.]){NUMBER}(?![\w.])|\b(?:none|true|false|packaged tables?)\b"
+                  r"|`[^`]*`")
 
 
-def _starts_with(cell, wanted):
-    """Whether the numbers in `cell` start with `wanted` and list no more after them."""
-    tokens = list(re.finditer(NUMBER, cell))
-    if len(tokens) < len(wanted) or not all(
-            math.isclose(float(t.group(0)), n, rel_tol=1e-9, abs_tol=1e-12)
-            for t, n in zip(tokens, wanted)):
-        return False
-    if wanted and len(tokens) > len(wanted):
-        between = cell[tokens[len(wanted) - 1].end():tokens[len(wanted)].start()]
-        return not LIST_JOIN.fullmatch(between)
-    return True
+def _same(a, b):
+    """Whether two items are the same number or word."""
+    if isinstance(a, float) and isinstance(b, float):
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)
+    return a == b
+
+
+def _expected(key, f, value):
+    """
+    Items that show one setting's default, as alternatives.
+
+    Returns
+    -------
+    list of list
+        The default's items in full, and, for a list of equal numbers, the
+        number once.
+    """
+    shown = display_numbers(key, value, f.metadata.get("unit", ""))
+    if shown is None:
+        return [[_words(value)]]
+    if not shown or _reads_as_none(shown):
+        return [["none"]]
+    if len(shown) > 1 and all(_same(n, shown[0]) for n in shown):
+        return [shown, shown[:1]]
+    return [shown]
+
+
+def _cell_items(cell):
+    """Numbers and words of a cell, with where each ends and the next starts."""
+    items = []
+    for match in ITEM.finditer(cell):
+        text = match.group(0)
+        item = "packaged table" if text.startswith("packaged") else text
+        if re.fullmatch(NUMBER, text):
+            item = float(text)
+        items.append((item, match.start(), match.end()))
+    return items
 
 
 def _shows(cell, found):
     """
     Whether a hand-written Default cell shows the defaults of its settings.
 
-    A cell starting with "none" shows defaults that are None, empty, or a
-    list of zeros.
-    Otherwise the cell starts with the defaults' numbers, in order, and lists
-    no more after them. Equal numbers in a row may be given once, either
-    within a setting or, when all are equal, for the whole row. The cell
-    must also give their units and words.
+    The cell starts with each setting's default, in the order of the
+    settings, and lists no more after them. A default reads as numbers, or
+    as "none" for None, empty or a list of zeros, "true", "false", a
+    backticked string or "packaged table". A list of equal numbers may be
+    given once, and so may a default shared by every setting of the row or
+    by neighbouring settings that are not numbers. The cell must also give
+    the units.
     """
-    raw, collapsed, labels, words = [], [], set(), []
+    options = [[]]
     for key, f, value in found:
-        label = f.metadata.get("unit", "")
-        shown = display_numbers(key, value, label)
-        if not shown or _reads_as_none(shown):
-            words.append("none" if shown is not None else _words(value))
-        else:
-            raw += shown
-            collapsed += _collapse(shown)
-            labels.add(label)
-    starts_none = cell.startswith("none")
-    if starts_none or (not raw and "none" in words):
-        return starts_none and not raw and all(word == "none" for word in words)
-    merged = _collapse(raw)
-    candidates = [raw, collapsed] + ([merged] if len(merged) == 1 else [])
-    return (any(_starts_with(cell, wanted) for wanted in candidates)
-            and all(re.search(rf"(?<!\w){re.escape(label)}(?!\w)", cell)
-                    for label in labels if label)
-            and all(word in cell for word in words))
+        options = [done + more for done in options for more in _expected(key, f, value)]
+    for wanted in list(options):
+        merged = [item for index, item in enumerate(wanted)
+                  if index == 0 or isinstance(item, float) or not _same(item, wanted[index - 1])]
+        options.append(merged)
+        if all(_same(item, wanted[0]) for item in wanted):
+            options.append(wanted[:1])
+    items = _cell_items(cell)
+    labels = {f.metadata.get("unit", "") for key, f, value in found
+              if isinstance(_expected(key, f, value)[0][0], float)} - {""}
+    if not all(re.search(rf"(?<!\w){re.escape(label)}(?!\w)", cell) for label in labels):
+        return False
+    for wanted in options:
+        if not items or items[0][1] > 0 or len(items) < len(wanted):
+            continue
+        if not all(_same(item[0], w) for item, w in zip(items, wanted)):
+            continue
+        if len(items) > len(wanted):
+            between = cell[items[len(wanted) - 1][2]:items[len(wanted)][1]]
+            if LIST_JOIN.fullmatch(between):
+                continue
+        return True
+    return False
 
 
 def hand_written_problems(text):
