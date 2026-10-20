@@ -377,6 +377,11 @@ def _half_max_fwhm(wv: np.ndarray, height: np.ndarray, peak_idx: int) -> float:
     return abs(float(wv[hi] - wv[lo])) + step
 
 
+def _start_sigma(fwhm: float, wv: np.ndarray) -> float:
+    """Starting Gaussian width from a FWHM, or a tenth of the window if the FWHM is zero."""
+    return _fwhm_to_sigma(fwhm) if fwhm > 0 else (np.max(wv) - np.min(wv)) / 10
+
+
 def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     """
     Starting peak, centre, width and background for a Gaussian fit.
@@ -403,9 +408,7 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     peak_idx = int(np.nanargmax(smooth))
     peak = max(float(height[peak_idx]), float(smooth[peak_idx]), 0.0)
     centre = wv[peak_idx]
-    fwhm = _half_max_fwhm(wv, smooth, peak_idx)
-    sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
-             else (wv.max() - wv.min()) / 10)
+    sigma = _start_sigma(_half_max_fwhm(wv, smooth, peak_idx), wv)
     return [peak, centre, sigma, back]
 
 
@@ -972,22 +975,11 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     levels = np.interp(centres, wv, prof_c, left=0.0, right=0.0)
 
     if peak == 0:
-        sigma = (wv.max() - wv.min()) / 10
+        sigma = _start_sigma(0.0, wv)
     else:
-        # Width of the feature containing the peak, not of everything above
-        # half maximum.
-        #
-        # In a blend, the first and last pixels above half maximum span the
-        # whole blend, not one line. Every component then starts several
-        # pixels wide, and the fit can settle there: on a seven-component EIS
-        # window the widths came out at 89 mA and 16 mA either side of a 28 mA
-        # instrumental floor, with a residual 45 percent of the peak and the
-        # requested line fitted at effectively zero. Walking out from the peak
-        # to half maximum measures the peak feature alone, and for a single
-        # line it matches the first and last pixels. The walk also stops
-        # halfway to the next component's centre either side, as the wings of
-        # two close lines can hold the spectrum between them above half
-        # maximum.
+        # Width of the run of pixels at or above half maximum around the peak,
+        # cut halfway to the next centre either side, so a blend starts with
+        # the width of one line rather than of the whole blend.
         peak_idx = int(np.argmax(prof_c))
         # The peak belongs to the nearest centre. Of centres equally near, to
         # within rounding, it takes the one where the spectrum is higher, then
@@ -1002,20 +994,15 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             inside &= wv >= 0.5 * (own + lower.max())
         if upper.size:
             inside &= wv <= 0.5 * (own + upper.min())
+        # Rounding can leave a peak on a midpoint just outside its own cell.
         inside[peak_idx] = True
-        fwhm = _half_max_fwhm(wv, np.where(inside, prof_c, 0.0), peak_idx)
-        sigma = (_fwhm_to_sigma(fwhm) if fwhm > 0
-                 else (wv.max() - wv.min()) / 10)
+        sigma = _start_sigma(_half_max_fwhm(wv, np.where(inside, prof_c, 0.0), peak_idx), wv)
 
-    # The primary, and every component whose centre is free, starts at the
-    # height of the spectrum at its guessed centre, as the peak pixel need
-    # not be the primary's. It starts at no less than a fixed fraction of
-    # the peak, so a line that is not there can still grow. Other components
-    # start at that fraction. A component whose centre is tied could
-    # otherwise take over the primary's line with the whole comb one spacing
-    # off, which fits a noisy close blend such as Fe XII 195.119 and 195.179
-    # about as well. A second component at the same centre would otherwise
-    # start identical to the first, and the two would stay identical.
+    # The primary and each free component start at the spectrum's height at
+    # their centre, but at least `_GUESS_FRACTION` of the peak so an absent
+    # line can grow. Tied components, and one at an earlier one's centre,
+    # start at that fraction, so a tied one does not take the primary's line
+    # and two at one centre do not start identical.
     order = [fit_config.primary_component] + [
         i for i in range(fit_config.n_components) if i != fit_config.primary_component]
     from_level: list = []
