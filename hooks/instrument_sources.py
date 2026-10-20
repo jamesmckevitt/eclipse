@@ -168,7 +168,8 @@ def setting_row(instrument, keys):
         # The same default for each, such as 1 for both transfer efficiencies.
         value, unit = values[0]
         default = f"{value} {unit}".strip() + notes[0]
-    elif len(units) == 1 and not any(notes) and not any(" and " in v or " to " in v for v, _ in values):
+    elif (len(units) == 1 and not any(notes)
+          and not any(" and " in v or " to " in v for v, _ in values)):
         # One unit, given once: 1485, 95 and 0 Angstrom.
         default = f"{_join([v for v, _ in values])} {units.pop()}".strip()
     else:
