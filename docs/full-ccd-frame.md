@@ -85,5 +85,7 @@ A frame and an `eclipse` run share the instrument's throughput, PSF and detector
 | The Sun beyond the scene along the slit | set by `simulation.psf_boundary` | dark |
 | Dark current | over the exposure | over the clear, the exposure and the read-out |
 | Wavelength of each pixel | a fixed step, `detector.wvl_res` | the focal plane's dispersion, from 17.0 to 16.8 mA per row |
+| The 1 mm gap between the CCDs | not modelled: a window sees an unbroken spectrum | no rows from 198.26 to 199.51 Angstrom |
+| Rows outside the 170.0 to 212.3 Angstrom band | lit | dark |
 | Smear without a shutter, and charge transfer | refused | modelled |
 | Prescan and overscan | none | both |
