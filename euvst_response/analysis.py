@@ -433,13 +433,12 @@ def get_results_for_combination(results: Dict[str, Any], **kwargs) -> Dict[str, 
             "enough parameters to select a unique one."
         )
 
-    renamed = _old_names_used(Detector_SWC, {key[len("detector."):] for key in kwargs
-                                             if key.startswith("detector.")},
-                              "detector.", error=ValueError)
+    detector = {key.partition(".")[2] for key in kwargs if key.startswith("detector.")}
+    renamed = _old_names_used(Detector_SWC, detector, "detector.", error=ValueError)
     query = {}
     for key, value in kwargs.items():
-        name = key[len("detector."):]
-        if key.startswith("detector.") and name in renamed:
+        section, _, name = key.partition(".")
+        if section == "detector" and name in renamed:
             key = f"detector.{renamed[name]}"
         query[key] = value
 

@@ -17,7 +17,7 @@ import yaml
 from euvst_response import results_file
 from euvst_response.config import (DETECTOR_MATERIALS, DISPERSION_COEFFICIENTS,
                                    MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, _same_setting)
+                                   Detector_SWC, Simulation)
 from euvst_response.main import _validate_config_keys, main
 from euvst_response.radiometric import electrons_per_photon
 from euvst_response.readout import FocalPlane_SWC
@@ -136,11 +136,10 @@ def test_the_focal_plane_takes_any_wavelength_offset_that_adds_to_a_wavelength(o
     assert moved.to_value(u.AA) == pytest.approx(shift, abs=1e-12)
 
 
-def test_a_lit_band_matches_its_reverse_but_a_dispersion_does_not():
+def test_a_lit_band_is_kept_shortest_wavelength_first():
     band = Detector_SWC().lit_band
-    assert _same_setting("lit_band", band[::-1], band)
-    assert not _same_setting("lit_band", (171 * u.AA, 212.3 * u.AA), band)
-    assert not _same_setting("dispersion", (1.0, 2.0), (2.0, 1.0))
+    assert Detector_SWC(lit_band=band[::-1]).lit_band == band
+    assert FocalPlane_SWC(lit_band=(212.3 * u.AA, 17 * u.nm)).lit_band == (17 * u.nm, 212.3 * u.AA)
 
 
 def test_a_scalar_dispersion_is_refused_with_a_message():
@@ -161,6 +160,7 @@ def test_a_scalar_dispersion_is_refused_with_a_message():
     (lambda: Detector_SWC(wavelength_offset=0.1), "detector.wavelength_offset needs a unit"),
     (lambda: Detector_SWC(wavelength_offset=[0, 0.1] * u.AA), "must be one wavelength"),
     (lambda: FocalPlane_SWC(wavelength_offset=False), "focal_plane.wavelength_offset must be one"),
+    (lambda: FocalPlane_SWC(wavelength_offset=[False]), "focal_plane.wavelength_offset must be"),
     (lambda: Detector_SWC(lit_band=(0, 212.3 * u.AA)), "detector.lit_band must be two"),
     (lambda: FocalPlane_SWC(lit_band=(170.0, 212.3)), "focal_plane.lit_band must be two"),
     (lambda: FocalPlane_SWC.from_detector(Detector_SWC(), slit_image_tilt=(1, 2, 3)),
@@ -249,6 +249,13 @@ def test_a_results_file_with_the_old_name_and_none_of_the_new_settings_reads_bac
     assert det.dark_current_293k == 7 * DARK
     assert FocalPlane_SWC.from_detector(det) == FocalPlane_SWC()
     assert det.si_fano == 0.115 and det.pair_energy == Detector_SWC().pair_energy
+
+
+def test_every_earlier_value_is_a_setting_of_its_class():
+    classes = results_file._dataclass_registry()
+    for name, earlier in results_file._EARLIER_VALUES.items():
+        fields = {field.name for field in dataclasses.fields(classes[name]) if field.init}
+        assert set(earlier) <= fields, name
 
 
 def test_a_results_file_without_the_other_new_settings_reads_back_without_a_warning(tmp_path):

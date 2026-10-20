@@ -105,7 +105,7 @@ def _old_names_used(cls, given, section: str = "", replacing: bool = False,
     for old, new in cls._OLD_NAMES.items():
         if old in given:
             if new in given and not replacing:
-                raise error(f"Give {section}{new} only, not {old} as well.")
+                raise error(f"Give {section}{new} only, not {section}{old} as well.")
             _RenamedSetting(old, new).warn(section)
             used[old] = new
     return used
@@ -195,11 +195,9 @@ def _numbers(value, count, section: str, name: str, example: str) -> tuple:
 _FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
 
 
-def _same_setting(name: str, first, second) -> bool:
-    """Whether two values of focal plane setting `name` are the same, to a part in 1e12."""
+def _same_setting(first, second) -> bool:
+    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
     first, second = u.Quantity(first), u.Quantity(second)
-    if name == "lit_band":
-        first, second = np.sort(first), np.sort(second)
     if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
         return False
     return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
@@ -211,7 +209,11 @@ def _one_length(value, zero: bool = False):
 
     With `zero`, a plain zero is taken as 0 Angstrom, as it adds to a wavelength.
     """
-    if isinstance(value, (bool, np.bool_)) or (isinstance(value, str) and not value.strip()):
+    if isinstance(value, str) and not value.strip():
+        return None
+    items = ([] if isinstance(value, (str, u.Quantity))
+             else np.ravel(np.asarray(value, dtype=object)))
+    if any(isinstance(item, (bool, np.bool_)) for item in items):
         return None
     try:
         value = u.Quantity(value)
@@ -247,7 +249,7 @@ def _check_focal_plane(det, section: str = "detector") -> None:
     if limits is None or len(limits) != 2 or any(limit is None for limit in limits):
         raise ValueError(f"{section}.lit_band must be two wavelengths, such as [170.0 Angstrom, "
                          f"212.3 Angstrom]; got {band!r}.")
-    det.lit_band = limits
+    det.lit_band = tuple(sorted(limits, key=lambda limit: limit.to_value(u.AA)))
 
 
 def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple = (),
