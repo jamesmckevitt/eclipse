@@ -72,3 +72,20 @@ For each CCD, `"left"` and `"right"`:
 - `photon_rms_wavelength`: the wavelength of the root mean square energy of each pixel's photons, which sets how far their electrons spread.
 
 `dn` holds each row as the two outputs read it: the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The parallel overscan rows follow the image's rows.
+
+## How a frame differs from a run
+
+A frame and an `eclipse` run share the instrument's throughput, PSF and detector settings, but they do not yet model all the same effects:
+
+| Effect | `eclipse` run | Full-CCD frame |
+| --- | --- | --- |
+| The slit's ends and fiducials | with `simulation.slit_mask` | not modelled: every column along the slit gets light |
+| Pinholes in the filter | with `simulation.enable_pinholes` | not modelled |
+| Visible stray light | with `simulation.vis_sl` | not modelled |
+| The Sun beyond the scene along the slit | set by `simulation.psf_boundary` | dark |
+| Dark current | over the exposure | over the clear, the exposure and the read-out |
+| Wavelength of each pixel | a fixed step, `detector.wvl_res` | the focal plane's dispersion, from 17.0 to 16.8 mA per row |
+| The 1 mm gap between the CCDs | not modelled: a window sees an unbroken spectrum | no rows from 198.26 to 199.51 Angstrom |
+| Rows outside the 170.0 to 212.3 Angstrom band | lit | dark |
+| Smear without a shutter, and charge transfer | refused | modelled |
+| Prescan and overscan | none | both |

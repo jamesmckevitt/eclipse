@@ -739,11 +739,7 @@ def apply_focusing_optics_psf(
     # FWHM in pixels along the slit (axis 0 of each frame)
     spatial_fwhm = spatial_psf_fwhm(tel, det)
     sigma_spatial = _fwhm_to_sigma(spatial_fwhm)
-
-    # Kernel size: 6*sigma rounded up to next odd integer, minimum 7
-    ky = max(7, int(np.ceil(6 * sigma_spatial)))
-    if ky % 2 == 0:
-        ky += 1
+    ky = 2 * _reach(spatial_fwhm) + 1
 
     # Along lambda (axis 1 of each frame) the profile depends on the slit.
     if quadrature:
