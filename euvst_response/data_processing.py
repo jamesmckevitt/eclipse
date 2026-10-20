@@ -16,6 +16,7 @@ from tqdm import tqdm
 from .pinhole_diffraction import _filter_transmission, _pinholes_on
 from .radiometric import (_carry_photon_meta, _spectral_response, across_slit_fwhm,
                           photons_per_energy, spatial_psf_fwhm, spectral_psf_margin)
+from .radiometric import slit_image_width, spectral_blur_fwhm, spectral_psf_fwhm  # noqa: F401
 from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
                        pixel_weights_through)
 from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,

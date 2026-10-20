@@ -26,7 +26,10 @@ from .radiometric import (
     _spectral_response,
     _vectorized_fano_noise,
     photons_per_energy,
+    slit_image_width,  # noqa: F401
+    spectral_blur_fwhm,  # noqa: F401
     spectral_line_spread,  # noqa: F401
+    spectral_psf_fwhm,  # noqa: F401
     spectral_psf_reach,  # noqa: F401
 )
 from .deprecated import apply_spectral_psf  # noqa: F401  (deprecated)
