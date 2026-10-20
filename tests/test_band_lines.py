@@ -10,8 +10,8 @@ import pytest
 from eclipse import synthesis
 from eclipse.atmosphere import Atmosphere, write_atmosphere
 from eclipse.band import (BandLines, IonLines, _solve_dropping_unfed_levels,
-                                 _unfed_levels_dropped, band_contribution_functions,
-                                 read_band_lines, write_band_lines)
+                          _unfed_levels_dropped, band_contribution_functions,
+                          read_band_lines, write_band_lines)
 from eclipse.synthesis_file import read_synthesis_products
 
 

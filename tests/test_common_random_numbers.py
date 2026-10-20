@@ -11,7 +11,7 @@ from ndcube import NDCube
 
 from eclipse.config import Detector_SWC
 from eclipse.radiometric import (_binomial_inverse_transform, _vectorized_fano_noise,
-                                        sample_photon_arrivals, to_electrons)
+                                 sample_photon_arrivals, to_electrons)
 
 REST = 195.119 * u.Angstrom
 

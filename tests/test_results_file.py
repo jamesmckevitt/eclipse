@@ -18,8 +18,8 @@ from ndcube import NDCube
 
 from eclipse import results_file
 from eclipse.config import (AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, Telescope_EIS,
-                                   Telescope_EUVST)
+                            Detector_SWC, Simulation, Telescope_EIS,
+                            Telescope_EUVST)
 from eclipse.fitting import FitComponent, FitConfig
 from eclipse.raster import RasterPlan, SynthesisSettings
 from eclipse.results_file import is_results_file, load_results, save_results

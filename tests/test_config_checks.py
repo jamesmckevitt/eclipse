@@ -13,7 +13,7 @@ import yaml
 
 from eclipse.atmosphere import Atmosphere
 from eclipse.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST, _load_throughput_table)
+                            Telescope_EIS, Telescope_EUVST, _load_throughput_table)
 from eclipse.fitting import FitComponent, FitConfig
 from eclipse.main import main
 

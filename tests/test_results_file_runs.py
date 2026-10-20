@@ -16,7 +16,7 @@ from ndcube import NDCube
 
 from eclipse.analysis import load_instrument_response_results, summary_table
 from eclipse.results_file import (_holds_array, convert_results_pickle, is_results_file,
-                                         load_results)
+                                  load_results)
 from eclipse.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis, write_synthesis
 
 LINE = "Fe12_195.1190"

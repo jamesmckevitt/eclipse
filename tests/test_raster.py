@@ -26,7 +26,7 @@ from eclipse.raster import (
     SynthesisSettings,
 )
 from eclipse.synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, load_synthesis,
-                                           read_synthesis, write_synthesis)
+                                    read_synthesis, write_synthesis)
 from eclipse.utils import angle_to_distance
 
 LINE = "Fe12_195.1190"

@@ -17,17 +17,17 @@ from ndcube import NDCube
 
 from eclipse.analysis import analyse_fit_statistics, load_instrument_response_results
 from eclipse.config import (Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST)
+                            Telescope_EIS, Telescope_EUVST)
 from eclipse.data_processing import (_spectra_on_the_detector,
-                                            create_uniform_intensity_cube, pad_spectral_axis)
+                                     create_uniform_intensity_cube, pad_spectral_axis)
 from eclipse.frame import _response, _row_bounds
 from eclipse.main import _validate_config_keys
 from eclipse.radiometric import (_spectral_kernel, _spectral_response,
-                                        apply_focusing_optics_psf, slit_image_width,
-                                        spectral_blur_fwhm, spectral_line_spread,
-                                        spectral_optics_fwhm,
-                                        spectral_psf_fwhm, spectral_psf_margin,
-                                        spectral_psf_reach)
+                                 apply_focusing_optics_psf, slit_image_width,
+                                 spectral_blur_fwhm, spectral_line_spread,
+                                 spectral_optics_fwhm,
+                                 spectral_psf_fwhm, spectral_psf_margin,
+                                 spectral_psf_reach)
 from eclipse.readout import FocalPlane_SWC
 from eclipse.synthesis_file import write_line_cubes
 from eclipse.utils import VELOCITY_CONVENTION, _fwhm_to_sigma

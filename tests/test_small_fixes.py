@@ -263,7 +263,7 @@ def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
 def test_a_synthesis_files_text_attributes_written_as_one_element_arrays_are_read(tmp_path):
     """As IDL writes them, in a synthesis written by another code."""
     from eclipse.synthesis_file import (FORMAT_NAME, SpectralLine, Synthesis, read_synthesis,
-                                               read_synthesis_layout, write_synthesis)
+                                        read_synthesis_layout, write_synthesis)
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA

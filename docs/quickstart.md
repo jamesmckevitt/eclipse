@@ -44,7 +44,7 @@ This observes the line in exposures of 5 s and 20 s, and writes the results to `
 ```python
 import astropy.units as u
 from eclipse import (analyse_fit_statistics, get_results_for_combination,
-                            load_instrument_response_results, summary_table)
+                     load_instrument_response_results, summary_table)
 
 results = load_instrument_response_results("run/result/first_run.h5")
 summary_table(results)

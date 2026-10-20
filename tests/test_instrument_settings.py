@@ -16,8 +16,8 @@ import yaml
 
 from eclipse import results_file
 from eclipse.config import (DETECTOR_MATERIALS, DISPERSION_COEFFICIENTS,
-                                   MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation)
+                            MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
+                            Detector_SWC, Simulation)
 from eclipse.main import _validate_config_keys, main
 from eclipse.radiometric import electrons_per_photon
 from eclipse.readout import FocalPlane_SWC

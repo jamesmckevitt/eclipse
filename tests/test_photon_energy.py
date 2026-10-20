@@ -15,7 +15,7 @@ from eclipse.data_processing import rebin_atmosphere
 from eclipse.monte_carlo import simulate_once
 from eclipse.pinhole_diffraction import apply_euv_pinhole_diffraction
 from eclipse.radiometric import (_vectorized_fano_noise, electrons_per_photon,
-                                         photons_per_energy, to_electrons)
+                                 photons_per_energy, to_electrons)
 from eclipse.sampling import light_onto_pixels, photons_onto_pixels
 from eclipse.utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offchip
 
@@ -218,7 +218,7 @@ def test_with_the_psf_off_a_run_still_observes_through_the_telescope(tmp_path, m
 
     from eclipse.data_processing import rebin_spectra
     from eclipse.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
-                                               write_synthesis)
+                                        write_synthesis)
 
     edges = np.arange(5) * 0.3 * u.Mm
     wavelength = REST + np.arange(-60, 61) * 0.003 * u.AA

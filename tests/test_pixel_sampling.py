@@ -16,7 +16,7 @@ from eclipse.data_processing import rebin_atmosphere
 from eclipse.fitting import fit_cube_gauss
 from eclipse.monte_carlo import simulate_once
 from eclipse.radiometric import (across_slit_fwhm, apply_focusing_optics_psf,
-                                        spectral_psf_fwhm, spectral_psf_margin)
+                                 spectral_psf_fwhm, spectral_psf_margin)
 from eclipse.sampling import centred_edges, pixel_weights
 from eclipse.utils import _fwhm_to_sigma, angle_to_distance
 
@@ -204,7 +204,7 @@ def test_a_sweep_over_the_filter_observes_each_through_its_own_throughput(tmp_pa
     from eclipse.config import AluminiumFilter
     from eclipse.data_processing import rebin_spectra
     from eclipse.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
-                                               write_synthesis)
+                                        write_synthesis)
 
     edges = np.arange(5) * 0.3 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-60, 61) * 0.003 * u.AA

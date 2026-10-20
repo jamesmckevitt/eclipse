@@ -14,7 +14,7 @@ from eclipse.band import BandLines, IonLines
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.frame import photons_from_lines
 from eclipse.full_frame import (_density_shares, _settings_from_simulation,
-                                       full_ccd_frame, lay_out_register, write_full_frame)
+                                full_ccd_frame, lay_out_register, write_full_frame)
 from eclipse.readout import FocalPlane_SWC
 from eclipse.synthesis_file import read_synthesis_products
 

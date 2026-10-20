@@ -14,9 +14,9 @@ import pytest
 from eclipse import synthesis
 from eclipse.atmosphere import Atmosphere, write_atmosphere
 from eclipse.continuum import (compute_continuum_fiasco, continuum_spectra,
-                                      continuum_windows, is_continuum)
+                               continuum_windows, is_continuum)
 from eclipse.synthesis_file import (SpectralLine, Synthesis, load_synthesis,
-                                           read_synthesis, read_synthesis_products)
+                                    read_synthesis, read_synthesis_products)
 
 C_CM_S = const.c.to_value(u.cm / u.s)
 

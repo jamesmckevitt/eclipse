@@ -9,8 +9,8 @@ import pytest
 from eclipse import resolution_budget, results_file
 from eclipse.config import Detector_SWC, Telescope_EUVST
 from eclipse.radiometric import (across_slit_fwhm, spatial_psf_fwhm, spectral_blur_fwhm,
-                                        spectral_line_spread, spectral_optics_fwhm,
-                                        spectral_psf_fwhm)
+                                 spectral_line_spread, spectral_optics_fwhm,
+                                 spectral_psf_fwhm)
 from eclipse.results_file import load_results, save_results
 
 DET = Detector_SWC()
