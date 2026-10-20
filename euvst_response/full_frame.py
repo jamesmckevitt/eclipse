@@ -487,6 +487,18 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
                            image_dn[:, half:], pieces[3]], axis=1)
 
 
+# Settings that both the detector and the focal plane hold.
+_FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
+
+
+def _same_setting(first, second) -> bool:
+    """Whether two values of a focal plane setting are the same, to a part in 1e12."""
+    first, second = u.Quantity(first), u.Quantity(second)
+    if first.shape != second.shape or not second.unit.is_equivalent(first.unit):
+        return False
+    return bool(np.allclose(first.value, second.to_value(first.unit), rtol=1e-12, atol=0.0))
+
+
 def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
                    exposure: u.Quantity, *, slit_width: u.Quantity = 0.2 * u.arcsec,
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
@@ -515,7 +527,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     det, telescope : optional
         Default `Detector_SWC()` and `Telescope_EUVST()`.
     focal_plane : FocalPlane_SWC, optional
-        Default `FocalPlane_SWC.from_detector(det)`.
+        Default `FocalPlane_SWC.from_detector(det)`. Its `dispersion`,
+        `wavelength_offset`, `lit_band` and `slit_image_tilt` must be the
+        detector's.
     psf : bool, optional
         Blur with the telescope's PSF along the slit and in wavelength, and
         across the slit if the telescope gives that. Default True.
@@ -558,6 +572,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if any(value != 0.0 for value in focal_plane.slit_image_tilt):
         raise ValueError("The slit's image is tilted, so each column's rows have their own "
                          "wavelengths, which this frame does not yet work out.")
+    differ = [name for name in _FOCAL_PLANE_SETTINGS
+              if not _same_setting(getattr(det, name), getattr(focal_plane, name))]
+    if differ:
+        raise ValueError(
+            f"The detector and the focal plane give different {', '.join(differ)}. Set them on "
+            f"the detector, Detector_SWC, and leave out focal_plane, or make it with "
+            f"FocalPlane_SWC.from_detector(det).")
     across = across_slit_fwhm(telescope) if psf else None
     scene = read_slit_scene(synthesis_path, slit_position, slit_width, across)
     if not np.array_equal(scene.logT_grid, lines.logT_grid):

@@ -274,6 +274,15 @@ def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_sy
     with pytest.raises(ValueError, match="tilted"):
         full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=tilted,
                        n_workers=1)
+    # The detector and the focal plane must agree on the focal plane settings.
+    shifted = FocalPlane_SWC.from_detector(Detector_SWC(), wavelength_offset=0.1 * u.AA)
+    with pytest.raises(ValueError, match="different wavelength_offset"):
+        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=shifted,
+                       n_workers=1)
+    det = Detector_SWC(dispersion=(199.0, 1.25), lit_band=(171 * u.AA, 211 * u.AA))
+    with pytest.raises(ValueError, match="different dispersion, lit_band"):
+        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, det=det,
+                       focal_plane=FocalPlane_SWC(), n_workers=1)
 
 
 def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synthesis,
