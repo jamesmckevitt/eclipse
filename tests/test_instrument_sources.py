@@ -79,7 +79,7 @@ def test_page_shows_every_setting_with_a_source():
      "3.71 eV and -0.0006 eV per K, for silicon"),
     ("SWC", ["detector.shutter"], "true"),
     ("SWC", ["detector.lit_band"], "170 to 212.3 Angstrom"),
-    ("EIS", ["telescope.psf_params"], "3 and 3 pixels FWHM"),
+    ("EIS", ["telescope.psf_params"], "3 pixels FWHM"),
     ("EIS", ["telescope.calibration"], "`ground`"),
 ])
 def test_defaults_in_their_display_units(instrument, keys, row):
@@ -96,10 +96,12 @@ def test_row_refuses_unknown_settings_and_mixed_sources():
         hook.setting_row("SW", ["detector.qe_euv"])
     with pytest.raises(ValueError, match="do not know"):
         hook._unit("arcseconds")
+    with pytest.raises(ValueError, match="plain count"):
+        hook._unit("DN per rows")
 
 
 def test_row_escapes_pipes(monkeypatch):
-    """A `|` in a source would otherwise start a new table column."""
+    """A `|` outside code would otherwise start a new table column."""
     f = next(f for f in dataclasses.fields(Detector_SWC) if f.name == "max_dn")
-    monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2"})
-    assert hook.setting_row("SWC", ["detector.max_dn"]).endswith("| Table 6-1 \\| 6-2 |")
+    monkeypatch.setattr(f, "metadata", {**f.metadata, "source": "Table 6-1 | 6-2, `a|b`"})
+    assert hook.setting_row("SWC", ["detector.max_dn"]).endswith("| Table 6-1 \\| 6-2, `a|b` |")

@@ -39,12 +39,15 @@ _UNIT_WORDS = {
 
 def _unit(label):
     """Unit for a label such as "electrons per pixel per second", or None for a plain number."""
-    unknown = [word for word in label.split(" per ") if word not in _UNIT_WORDS]
+    parts = label.split(" per ")
+    unknown = [part for part in parts if part not in _UNIT_WORDS]
     if unknown:
         raise ValueError(f"Unit {label!r} has words the docs do not know: {unknown}.")
-    words = [_UNIT_WORDS[word] for word in label.split(" per ")]
-    if words[0] is None:
+    words = [_UNIT_WORDS[part] for part in parts]
+    if words[0] is None and len(words) == 1:
         return None
+    if None in words:
+        raise ValueError(f"Unit {label!r} mixes a plain count with units.")
     unit = words[0]
     for word in words[1:]:
         unit = unit / word
@@ -53,7 +56,7 @@ def _unit(label):
 
 def _number(value):
     """Number as it reads in the docs: 13.5, 2048, -0.0006."""
-    return f"{value:.12g}"
+    return f"{value:.9g}"
 
 
 def _default(cls, f):
@@ -110,8 +113,12 @@ def default_value(cls, f):
                 converted.append((v * u.pix).to_value(unit))
         values = converted
     numbers = [_number(v) for v in values]
-    if meta.get("range") and len(numbers) == 2:
+    if meta.get("range"):
+        if len(numbers) != 2:
+            raise ValueError(f"{f.name} is shown as a range, so needs two values.")
         return f"{numbers[0]} to {numbers[1]}", label
+    if len(set(numbers)) == 1:
+        numbers = numbers[:1]
     return _join(numbers), label
 
 
@@ -161,7 +168,7 @@ def setting_row(instrument, keys):
         # The same default for each, such as 1 for both transfer efficiencies.
         value, unit = values[0]
         default = f"{value} {unit}".strip() + notes[0]
-    elif len(units) == 1 and not any(notes) and not any(" and " in v for v, _ in values):
+    elif len(units) == 1 and not any(notes) and not any(" and " in v or " to " in v for v, _ in values):
         # One unit, given once: 1485, 95 and 0 Angstrom.
         default = f"{_join([v for v, _ in values])} {units.pop()}".strip()
     else:
@@ -169,7 +176,14 @@ def setting_row(instrument, keys):
                          for (value, unit), note in zip(values, notes)])
     settings = ", ".join(f"`{key}`" for key in keys)
     cells = [settings, default + shared_note, sources.pop()]
-    return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
+    return "| " + " | ".join(_escape_pipes(cell) for cell in cells) + " |"
+
+
+def _escape_pipes(text):
+    """`text` with each `|` outside code spans escaped, so it stays in its table cell."""
+    pieces = text.split("`")
+    pieces[::2] = [piece.replace("|", "\\|") for piece in pieces[::2]]
+    return "`".join(pieces)
 
 
 def render(markdown):
