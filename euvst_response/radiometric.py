@@ -566,11 +566,12 @@ def _spectral_response(tel, det, slit_width: u.Quantity, spectral_psf: str) -> t
     """
     Spectral response as a Gaussian convolved with a rectangle, in pixels.
 
-    Returns the Gaussian's standard deviation and the rectangle's width. For
-    `spectral_psf` `"quadrature"` the slit is in the Gaussian, of FWHM
-    :func:`spectral_psf_fwhm`, and the width is 0. For `"convolution"` the
-    Gaussian is the optics, of FWHM :func:`spectral_blur_fwhm`, and the
-    rectangle is the slit's image.
+    Returns the Gaussian's standard deviation and the rectangle's width. With
+    `spectral_psf="quadrature"` the slit is in the Gaussian, of FWHM
+    :func:`spectral_psf_fwhm`, and the width is 0. With
+    `spectral_psf="convolution"` the Gaussian is the blur without the slit,
+    of FWHM :func:`spectral_blur_fwhm`, and the rectangle is the slit's
+    image. Raises ValueError for any other `spectral_psf`.
     """
     if spectral_psf == "quadrature":
         return _fwhm_to_sigma(spectral_psf_fwhm(tel, det, slit_width)), 0.0

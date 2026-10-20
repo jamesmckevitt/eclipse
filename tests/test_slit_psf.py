@@ -20,8 +20,10 @@ from euvst_response.config import (Detector_EIS, Detector_SWC, Simulation,
                                    Telescope_EIS, Telescope_EUVST)
 from euvst_response.data_processing import create_uniform_intensity_cube, pad_spectral_axis
 from euvst_response.main import _validate_config_keys
-from euvst_response.radiometric import (apply_focusing_optics_psf, slit_image_width,
-                                        spectral_line_spread, spectral_optics_fwhm,
+from euvst_response.radiometric import (_spectral_kernel, _spectral_response,
+                                        apply_focusing_optics_psf, slit_image_width,
+                                        spectral_blur_fwhm, spectral_line_spread,
+                                        spectral_optics_fwhm,
                                         spectral_psf_fwhm, spectral_psf_margin,
                                         spectral_psf_reach)
 from euvst_response.synthesis_file import write_line_cubes
@@ -379,10 +381,9 @@ def test_a_widened_window_keeps_a_line_blurred_by_the_budget(jitter):
 @pytest.mark.parametrize("tel, det, spectral_psf", [
     (TEL, DET, "quadrature"), (TEL, DET, "convolution"),
     (Telescope_EIS(), Detector_EIS(), "quadrature")])
-def test_one_spectral_response_for_runs_and_frames(tel, det, spectral_psf):
-    """Runs and frames share one response: the slit in the Gaussian, or convolved with it."""
-    from euvst_response.radiometric import _spectral_kernel, _spectral_response, spectral_blur_fwhm
-    slit = 0.4 * u.arcsec
+def test_the_spectral_response_is_the_slit_in_the_gaussian_or_convolved_with_it(
+        tel, det, spectral_psf):
+    slit = (1.0 if isinstance(det, Detector_EIS) else 0.4) * u.arcsec
     sigma, width = _spectral_response(tel, det, slit, spectral_psf)
     kernel = _spectral_kernel(tel, det, slit, spectral_psf)
     reach = spectral_psf_reach(tel, det, slit)
@@ -398,7 +399,6 @@ def test_one_spectral_response_for_runs_and_frames(tel, det, spectral_psf):
 
 
 def test_an_unknown_spectral_response_is_refused():
-    from euvst_response.radiometric import _spectral_kernel, _spectral_response
     for function in (_spectral_response, _spectral_kernel):
         with pytest.raises(ValueError, match="spectral_psf must be"):
             function(TEL, DET, 0.2 * u.arcsec, "gaussian")
@@ -406,3 +406,28 @@ def test_an_unknown_spectral_response_is_refused():
     sim.spectral_psf = "gaussian"
     with pytest.raises(ValueError, match="spectral_psf must be"):
         apply_focusing_optics_psf(cube, TEL, DET, sim)
+
+
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+def test_a_run_blurs_a_line_with_the_shared_kernel(spectral_psf):
+    profile = _profile(0.4, spectral_psf)
+    kernel = _spectral_kernel(TEL, DET, 0.4 * u.arcsec, spectral_psf)
+    half = kernel.size // 2
+    centre = N_WAVE // 2
+    np.testing.assert_allclose(profile[centre - half:centre + half + 1], kernel / kernel.sum(),
+                               rtol=1e-12, atol=0)
+
+
+def test_eis_cannot_convolve_its_psf_with_a_slit():
+    for function in (_spectral_response, _spectral_kernel):
+        with pytest.raises(ValueError, match="psf_slit_width"):
+            function(Telescope_EIS(), Detector_EIS(), 1.0 * u.arcsec, "convolution")
+
+
+def test_rebinning_a_synthesis_refuses_an_unknown_spectral_response():
+    from euvst_response.data_processing import _spectra_on_the_detector
+    sim = Simulation(psf=True)
+    sim.spectral_psf = "gaussian"
+    wavelength = (195.0 + 0.002 * np.arange(50)) * u.Angstrom
+    with pytest.raises(ValueError, match="spectral_psf must be"):
+        _spectra_on_the_detector(np.ones((1, 50)), wavelength, DET, sim, TEL)
