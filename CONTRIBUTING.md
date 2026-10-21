@@ -1,5 +1,17 @@
 # Contributing
 
+## Instrument settings
+
+Each instrument setting in `src/eclipse/config.py` gives the source of its default in its field metadata, as `source`. A setting that is a quantity also gives `unit`, the unit to show it in, such as `micron`. A plain number or a path takes no unit.
+
+`docs/instrument-sources.md` lists the settings in tables. Each of these tables follows a comment line that names its instrument, `<!-- SWC settings: ... -->` or `<!-- EIS settings: ... -->`, with a blank line before and after it. In those tables, a row whose first cell names settings in backticks is a setting's row. Other rows, such as the dark current laws, are written by hand.
+
+`python tools/update_instrument_sources.py` writes the Source cell of every setting's row. It also writes the Default cell of a row that names one setting when the cell is empty or holds only a value, such as `65535 DN` or `none`. Other Default cells are worded by hand. So are the rows of the settings in `NOT_SHOWN` in the script, which give design values or a description instead of the default. The script lists the hand-written cells that are empty or no longer show the code's defaults, and you edit those yourself. A list of zeros, such as no slit image tilt, reads as `none`.
+
+To add a setting, give its field a `source`, and a `unit` if it is a quantity. Then add a row for it to a table of its instrument, with its key in backticks in the first cell, and run the script. For a row with one setting, you can leave the Default cell empty for the script to fill. For a row with several settings, or a default that needs words, write the Default cell by hand, starting with the defaults in the order of the settings. A setting that is not a fact about the instrument, such as a choice of a run, goes in `WITHOUT_SOURCE` in `tests/test_instrument_sources.py`, with the reason.
+
+After changing a default or a source, run the script, and edit any Default cell it lists. The tests fail until the page agrees with the code.
+
 ## Releases
 
 ### Release when
