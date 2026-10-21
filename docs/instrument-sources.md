@@ -6,6 +6,8 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST telescope and optics
 
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
 | Setting | Default | Source |
 | --- | --- | --- |
 | `telescope.D_ap` | 0.28 m | RSC-2022021C, Optical Design Summary: entrance pupil 280 mm |
@@ -24,6 +26,8 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST filter
 
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
 | Setting | Default | Source |
 | --- | --- | --- |
 | `filter.al_thickness`, `filter.oxide_thickness`, `filter.c_thickness` | 1485, 95 and 0 Angstrom | Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a 1500 Angstrom aluminium foil |
@@ -31,6 +35,8 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `filter.al_table`, `filter.oxide_table`, `filter.c_table`, `filter.table_thickness` | packaged tables for 1000 Angstrom layers | Henke filter transmission calculator (henke.lbl.gov) |
 
 ## EUVST-SW detector
+
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |
@@ -58,6 +64,8 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run does not use them yet, and the frame does not yet take the slit image tilt.
 
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
 | Setting | Default | Source |
 | --- | --- | --- |
 | `detector.dispersion` | quadratic in position along the dispersion | Fitted to RSC-2022021C: the detector edges, the focal plane centre, the chief ray and the ray-traced line positions |
@@ -68,6 +76,8 @@ These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) us
 
 ## Detector material and visible light
 
+<!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
 | Setting | Default | Source |
 | --- | --- | --- |
 | `detector.fano_factor` | 0.115, for silicon | Not recorded |
@@ -76,6 +86,8 @@ These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) us
 | `simulation.pinhole_visible_wavelength` | 600 nm | Not recorded |
 
 ## Hinode/EIS
+
+<!-- EIS settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
 | Setting | Default | Source |
 | --- | --- | --- |

@@ -620,6 +620,26 @@ def _fractions(values: list, name: str) -> list:
     return out
 
 
+# Each instrument setting gives where its default comes from, as `source` in
+# its field's metadata, and a quantity also the `unit` to show it in.
+# tools/update_instrument_sources.py writes them to docs/instrument-sources.md.
+# These sources are shared by several settings.
+_FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "
+                            "1500 Angstrom aluminium foil")
+_HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
+_SENSITIVITY_BUDGET = "RSC-2022035A, Sensitivity Budget (13 Dec 2024)"
+_SLIT_REQUIREMENTS = "TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170"
+_SW_CCD_SPEC = "SOLC-EUVST-MSSL-SP-0001 v1.4"
+_SW_QE_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of "
+                 "0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71")
+_SCAN_SOURCE = ("SOLC-EUVST-MSSL-RS-0002 v2.0 for the range. The read-out times of "
+                "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 5-11, follow from 50 prescan and 16 "
+                "overscan")
+_CTE_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than "
+               "0.999993; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, gives 0.99999 as typical")
+_NOT_RECORDED = "Not recorded"
+
+
 @dataclass
 class AluminiumFilter:
     """
@@ -644,15 +664,30 @@ class AluminiumFilter:
         Thickness of aluminium that cuts visible light by a factor of 10.
         Default 170 angstrom. Keyword only.
     """
-    al_thickness: u.Quantity = 1485 * u.angstrom
-    oxide_thickness: u.Quantity = 95 * u.angstrom
-    c_thickness: u.Quantity = 0 * u.angstrom
-    mesh_throughput: float = 0.8
-    al_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat')
-    oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat')
-    c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat')
-    table_thickness: u.Quantity = 1000 * u.angstrom
-    visible_decade_thickness: u.Quantity = field(default=170.0 * u.angstrom, kw_only=True)
+    al_thickness: u.Quantity = field(
+        default=1485 * u.angstrom,
+        metadata={"source": _FILTER_THICKNESS_SOURCE, "unit": "Angstrom"})
+    oxide_thickness: u.Quantity = field(
+        default=95 * u.angstrom,
+        metadata={"source": _FILTER_THICKNESS_SOURCE, "unit": "Angstrom"})
+    c_thickness: u.Quantity = field(
+        default=0 * u.angstrom,
+        metadata={"source": _FILTER_THICKNESS_SOURCE, "unit": "Angstrom"})
+    mesh_throughput: float = field(
+        default=0.8,
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2: 80% transmission, to be "
+                            "confirmed. Its effective area in Sec. 7.1.3 uses 0.81"})
+    al_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat',
+                           metadata={"source": _HENKE})
+    oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat',
+                              metadata={"source": _HENKE})
+    c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat',
+                          metadata={"source": _HENKE})
+    table_thickness: u.Quantity = field(default=1000 * u.angstrom,
+                                        metadata={"source": _HENKE, "unit": "Angstrom"})
+    visible_decade_thickness: u.Quantity = field(
+        default=170.0 * u.angstrom, kw_only=True,
+        metadata={"source": _NOT_RECORDED, "unit": "Angstrom"})
 
     def __post_init__(self):
         _check_settings(self, "filter", positive=("table_thickness", "visible_decade_thickness"),
@@ -808,14 +843,31 @@ class Detector_SWC:
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
-    ccd_temperature: u.Quantity = -60 * u.deg_C
-    qe_vis: float = 1.0
-    qe_euv: float = 0.76
-    read_noise_rms: u.Quantity = 10.0 * u.electron / u.pixel
+    ccd_temperature: u.Quantity = field(
+        default=-60 * u.deg_C,
+        metadata={"source": "Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 5.5.2.1, gives a "
+                            "goal of -50 to -60 Celsius", "unit": "Celsius"})
+    qe_vis: float = field(default=1.0, metadata={"source": _SW_QE_SOURCE})
+    qe_euv: float = field(default=0.76, metadata={"source": _SW_QE_SOURCE})
+    read_noise_rms: u.Quantity = field(
+        default=10.0 * u.electron / u.pixel,
+        metadata={"source": "Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.1 requires 6 "
+                            "electrons rms; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, predicts "
+                            "11.0 electrons at most", "unit": "electrons"})
     dark_current: u.Quantity = field(init=False)
-    dark_current_293k: u.Quantity = 20000.0 * u.electron / (u.pixel * u.s)
-    gain_e_per_dn: u.Quantity = 2.78 * u.electron / u.DN  # MSSL EM test results
-    max_dn: u.Quantity = 65535 * u.DN / u.pixel
+    dark_current_293k: u.Quantity = field(
+        default=20000.0 * u.electron / (u.pixel * u.s),
+        metadata={"source": "SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.7.3 (requirement)",
+                  "unit": "electrons per pixel per second"})
+    gain_e_per_dn: u.Quantity = field(
+        default=2.78 * u.electron / u.DN,
+        metadata={"source": "MSSL engineering model test results; SOLC-EUVST-MSSL-RP-0012 v2.0, "
+                            "Table 5-5, gives the same design value",
+                  "unit": "electrons per DN"})
+    max_dn: u.Quantity = field(
+        default=65535 * u.DN / u.pixel,
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0012 v2.0, Table 5-5: a 16-bit converter",
+                  "unit": "DN"})
     # Peak charge storage of the CCD42-40 in non-inverted mode, where
     # resolution begins to degrade: 150 ke- typical, 80 ke- minimum (Teledyne
     # e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January 2024). It is
@@ -823,35 +875,85 @@ class Detector_SWC:
     # does. Nothing is clipped or spilled at it; it only shows which pixels a
     # frame would saturate. Keyword-only, so the fields after it keep their
     # places in the constructor.
-    full_well: u.Quantity = field(default=150000 * u.electron / u.pixel, kw_only=True)
-    pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
-    wvl_res: u.Quantity = (16.9 * u.mAA).cgs / u.pixel
-    plate_scale_angle: u.Quantity = 0.159 * u.arcsec / u.pixel
+    full_well: u.Quantity = field(
+        default=150000 * u.electron / u.pixel, kw_only=True,
+        metadata={"source": "Teledyne e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1 "
+                            "(January 2024); SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.6.1 requires "
+                            "more than 100000, typically 150000. SOLC-EUVST-MSSL-RP-0007 v1.2, "
+                            "Table 6-1, gives 75000 typical for the image area",
+                  "unit": "electrons"})
+    pix_size: u.Quantity = field(default=(13.5 * u.um).cgs / u.pixel,
+                                 metadata={"source": _SW_CCD_SPEC, "unit": "micron"})
+    wvl_res: u.Quantity = field(
+        default=(16.9 * u.mAA).cgs / u.pixel,
+        metadata={"source": "RSC-2022021C: 1.253 mA per micron at the chief ray",
+                  "unit": "mA per pixel"})
+    plate_scale_angle: u.Quantity = field(
+        default=0.159 * u.arcsec / u.pixel,
+        metadata={"source": "RSC-2022021C: 0.0118 arcsec per micron", "unit": "arcsec per pixel"})
     material: str = "silicon"
-    filter_distance: u.Quantity = 250 * u.mm  # Distance from filter to detector for pinhole diffraction
+    filter_distance: u.Quantity = field(default=250 * u.mm,
+                                        metadata={"source": _NOT_RECORDED, "unit": "mm"})
     # Settings of the camera's CCDs and their read-out, which
     # euvst_response.readout models. An instrument run only checks and
     # records them.
-    shutter: bool = field(default=True, kw_only=True)
-    n_rows: int = field(default=2048, kw_only=True)
-    n_columns: int = field(default=2048, kw_only=True)
-    ccd_gap: u.Quantity = field(default=1.0 * u.mm, kw_only=True)
-    row_transfer_time: u.Quantity = field(default=15.0 * u.us, kw_only=True)
-    pixel_period: u.Quantity = field(default=500.0 * u.ns, kw_only=True)
-    serial_prescan: int = field(default=50, kw_only=True)
-    serial_overscan: int = field(default=20, kw_only=True)
-    parallel_overscan_rows: int = field(default=20, kw_only=True)
-    cte_parallel: float = field(default=1.0, kw_only=True)
-    cte_serial: float = field(default=1.0, kw_only=True)
+    shutter: bool = field(
+        default=True, kw_only=True,
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a "
+                            "mechanical shutter"})
+    n_rows: int = field(default=2048, kw_only=True, metadata={"source": _SW_CCD_SPEC})
+    n_columns: int = field(default=2048, kw_only=True, metadata={"source": _SW_CCD_SPEC})
+    ccd_gap: u.Quantity = field(
+        default=1.0 * u.mm, kw_only=True,
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 7.1; RSC-2022021C", "unit": "mm"})
+    row_transfer_time: u.Quantity = field(
+        default=15.0 * u.us, kw_only=True,
+        metadata={"source": "SWC modes table; it gives the read-out times of "
+                            "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 5-11", "unit": "us"})
+    pixel_period: u.Quantity = field(
+        default=500.0 * u.ns, kw_only=True,
+        metadata={"source": "SOLC-EUVST-MSSL-RS-0002 v2.0", "unit": "ns"})
+    serial_prescan: int = field(
+        default=50, kw_only=True,
+        metadata={"source": _SCAN_SOURCE})
+    serial_overscan: int = field(
+        default=20, kw_only=True,
+        metadata={"source": _SCAN_SOURCE})
+    parallel_overscan_rows: int = field(default=20, kw_only=True,
+                                        metadata={"source": _NOT_RECORDED})
+    cte_parallel: float = field(default=1.0, kw_only=True,
+                                metadata={"source": _CTE_SOURCE})
+    cte_serial: float = field(default=1.0, kw_only=True,
+                              metadata={"source": _CTE_SOURCE})
     # Properties of the material, None for those in DETECTOR_MATERIALS.
-    fano_factor: float | None = field(default=None, kw_only=True)
-    pair_energy_300k: u.Quantity | None = field(default=None, kw_only=True)
-    pair_energy_slope: u.Quantity | None = field(default=None, kw_only=True)
+    fano_factor: float | None = field(
+        default=None, kw_only=True,
+        metadata={"source": _NOT_RECORDED})
+    pair_energy_300k: u.Quantity | None = field(
+        default=None, kw_only=True,
+        metadata={"source": _NOT_RECORDED, "unit": "eV"})
+    pair_energy_slope: u.Quantity | None = field(
+        default=None, kw_only=True,
+        metadata={"source": _NOT_RECORDED, "unit": "eV per K"})
     # The SW focal plane, which euvst_response.readout models.
-    dispersion: tuple = field(default=DISPERSION_COEFFICIENTS, kw_only=True)
-    wavelength_offset: u.Quantity = field(default=0.0 * u.Angstrom, kw_only=True)
-    lit_band: tuple = field(default=(170.0 * u.Angstrom, 212.3 * u.Angstrom), kw_only=True)
-    slit_image_tilt: tuple = field(default=(0.0, 0.0), kw_only=True)
+    dispersion: tuple = field(
+        default=DISPERSION_COEFFICIENTS, kw_only=True,
+        metadata={"source": "Fitted to RSC-2022021C: the detector edges, the focal plane "
+                            "centre, the chief ray and the ray-traced line positions"})
+    wavelength_offset: u.Quantity = field(
+        default=0.0 * u.Angstrom, kw_only=True,
+        metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, page 45", "unit": "Angstrom"})
+    lit_band: tuple = field(
+        default=(170.0 * u.Angstrom, 212.3 * u.Angstrom), kw_only=True,
+        metadata={"source": "The required range, RSC-2022021C REQ-103 and "
+                            "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 7-2. No document gives the "
+                            "baffle's edges, so where the band stops to within a row or two is "
+                            "a modelling choice", "unit": "Angstrom"})
+    slit_image_tilt: tuple = field(
+        default=(0.0, 0.0), kw_only=True,
+        metadata={"source": "No document gives it. Measured from the ray-traced spots in the SW "
+                            "footprint figure of RSC-2022021C, where a row is about a quarter "
+                            "of a pixel of the figure"})
 
     def __post_init__(self):
         _check_detector(self)
@@ -932,17 +1034,28 @@ class Detector_EIS:
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
-    ccd_temperature: u.Quantity = -60 * u.deg_C
-    qe_euv: float = 0.64  # EIS SW Note 2
-    qe_vis: float = 0.65  # MSSL engineering test report
-    read_noise_rms: u.Quantity = 5.0 * u.electron / u.pixel
+    ccd_temperature: u.Quantity = field(default=-60 * u.deg_C,
+                                        metadata={"source": _NOT_RECORDED, "unit": "Celsius"})
+    qe_euv: float = field(default=0.64, metadata={"source": "EIS Software Note 2"})
+    qe_vis: float = field(default=0.65, metadata={"source": "MSSL engineering test report"})
+    read_noise_rms: u.Quantity = field(default=5.0 * u.electron / u.pixel,
+                                       metadata={"source": _NOT_RECORDED, "unit": "electrons"})
     dark_current: u.Quantity = field(init=False)
-    dark_current_293k: u.Quantity = 250.0 * u.electron / (u.pixel * u.s)
-    gain_e_per_dn: u.Quantity = 6.3 * u.electron / u.DN
-    max_dn: u.Quantity = 65535 * u.DN / u.pixel
-    pix_size: u.Quantity = (13.5 * u.um).cgs / u.pixel
-    wvl_res: u.Quantity = (22.3 * u.mAA).cgs / u.pixel
-    plate_scale_angle: u.Quantity = 1 * u.arcsec / u.pixel
+    dark_current_293k: u.Quantity = field(
+        default=250.0 * u.electron / (u.pixel * u.s),
+        metadata={"source": _NOT_RECORDED, "unit": "electrons per pixel per second"})
+    gain_e_per_dn: u.Quantity = field(
+        default=6.3 * u.electron / u.DN,
+        metadata={"source": _NOT_RECORDED, "unit": "electrons per DN"})
+    max_dn: u.Quantity = field(default=65535 * u.DN / u.pixel,
+                               metadata={"source": _NOT_RECORDED, "unit": "DN"})
+    pix_size: u.Quantity = field(default=(13.5 * u.um).cgs / u.pixel,
+                                 metadata={"source": _NOT_RECORDED, "unit": "micron"})
+    wvl_res: u.Quantity = field(default=(22.3 * u.mAA).cgs / u.pixel,
+                                metadata={"source": _NOT_RECORDED, "unit": "mA per pixel"})
+    plate_scale_angle: u.Quantity = field(
+        default=1 * u.arcsec / u.pixel,
+        metadata={"source": _NOT_RECORDED, "unit": "arcsec per pixel"})
     material: str = "silicon"
     # Properties of the material, None for those in DETECTOR_MATERIALS.
     fano_factor: float | None = field(default=None, kw_only=True)
@@ -1046,45 +1159,64 @@ class Telescope_EUVST:
         Tables of primary mirror reflectance and grating efficiency, two
         columns: wavelength in nm and value. Default the packaged tables.
     """
-    D_ap: u.Quantity = 0.28 * u.m
-    microroughness_sigma: u.Quantity = 0.3 * u.nm  # RMS microroughness for primary mirror
+    D_ap: u.Quantity = field(
+        default=0.28 * u.m,
+        metadata={"source": "RSC-2022021C, Optical Design Summary: entrance pupil 280 mm",
+                  "unit": "m"})
+    microroughness_sigma: u.Quantity = field(default=0.3 * u.nm,
+                                             metadata={"source": _NOT_RECORDED, "unit": "nm"})
     filter: AluminiumFilter = field(default_factory=AluminiumFilter)
     psf_type: str = "gaussian"
     # [spatial_fwhm, spectral_fwhm] in pixels, or None to take them from
     # field_of_view (FIELDS_OF_VIEW).
-    psf_params: list | None = None
+    psf_params: list | None = field(default=None,
+                                    metadata={"source": "RSC-2022021C"})
     # Slit width the spectral FWHM in psf_params is for. RSC-2022021C quotes
     # the spectral resolution for the 0.2 arcsec slit as the optics FWHM after
     # the slit (0.352 arcsec at 212.3 A) added in quadrature to the slit width
     # (giving 0.405 arcsec, 43.00 mA). The spectral PSF for any other slit is
     # derived from it; see radiometric.spectral_psf_fwhm.
-    psf_slit_width: u.Quantity = 0.2 * u.arcsec
+    psf_slit_width: u.Quantity = field(
+        default=0.2 * u.arcsec,
+        metadata={"source": "RSC-2022021C, Appendix A.2", "unit": "arcsec"})
     # Telescope optics' blur across the slit: the FWHM of their image at the
     # slit, which sets how much light from beside the slit falls into it. None
     # leaves it out; the resolution budget's blur before the slit still
     # applies (radiometric.across_slit_fwhm). This is not psf_params[0], the
     # blur along the slit measured at the detector, which includes the
     # spectrograph after the slit.
-    psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
-    field_of_view: str | None = field(default=None, kw_only=True)
-    resolution_budget: str = field(default="current_estimate", kw_only=True)
-    pointing_jitter: u.Quantity | None = field(default=None, kw_only=True)
+    psf_across_slit: u.Quantity | None = field(
+        default=None, kw_only=True,
+        metadata={"source": _NOT_RECORDED, "unit": "arcsec"})
+    field_of_view: str | None = field(default=None, kw_only=True,
+                                      metadata={"source": "RSC-2022021C"})
+    resolution_budget: str = field(
+        default="current_estimate", kw_only=True,
+        metadata={"source": "RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1"})
+    pointing_jitter: u.Quantity | None = field(
+        default=None, kw_only=True,
+        metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20", "unit": "arcsec"})
     # The slits are 4.07 mm long, 300 arcsec at the slit's 13.57 um per arcsec,
     # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
     # narrow slits and 21.8 um (1.6 arcsec) in the widest, centred -340 um
     # (-25 arcsec) and +950 um (+70 arcsec) from its centre along the slit
     # (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170). The documents
     # do not say which end of the slit is positive on the detector.
-    slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True)
+    slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True,
+                                    metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
-        default_factory=lambda: [-25.0 * u.arcsec, 70.0 * u.arcsec], kw_only=True)
+        default_factory=lambda: [-25.0 * u.arcsec, 70.0 * u.arcsec], kw_only=True,
+        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_lengths: list = field(
         default_factory=lambda: [0.8 * u.arcsec, 0.8 * u.arcsec, 0.8 * u.arcsec, 1.6 * u.arcsec],
-        kw_only=True)
+        kw_only=True,
+        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
 
     # Wavelength-dependent efficiency tables
-    pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat')
-    grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat')
+    pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat',
+                           metadata={"source": _SENSITIVITY_BUDGET})
+    grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat',
+                                metadata={"source": _SENSITIVITY_BUDGET})
 
     # Worst-case FWHMs of the optical design's PSF in each field, in pixels
     # at 0.159 arcsec per pixel, from RSC-2022021C (Mar 2025). Along the slit,
@@ -1291,7 +1423,9 @@ class Telescope_EIS:
     >>> tel = Telescope_EIS(calibration="dz2025", date="2012-06-03")
     """
     psf_type: str = "gaussian"
-    psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel])  # [spatial_fwhm, spectral_fwhm] in pixels
+    psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel],  # [spatial_fwhm, spectral_fwhm] in pixels
+                             metadata={"source": "Ugarte-Urra (2016), EIS Software Note 2",
+                                       "unit": "pixels"})
     # The EIS PSF is not tied to a slit width, so its spectral FWHM is the
     # same for every slit. Setting this gives the slit psf_params was measured
     # with, and the spectral PSF then follows the slit as for SWC.
@@ -1299,7 +1433,12 @@ class Telescope_EIS:
     # Telescope blur across the slit, the FWHM of its image at the slit, as
     # for Telescope_EUVST. None leaves it out.
     psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
-    calibration: str = "ground"
+    calibration: str = field(
+        default="ground",
+        metadata={"source": "Pre-flight MSSL calibration, April 2007 (Lang et al. 2006, Applied "
+                            "Optics, 45, 8689); `dz2013`, `warren2014` and `dz2025` from Del "
+                            "Zanna (2013), Warren, Ugarte-Urra & Landi (2014) and Del Zanna et "
+                            "al. (2025)"})
     date: str | None = None
 
     def __post_init__(self):
@@ -1446,7 +1585,9 @@ class Simulation:
     """
     expos: u.Quantity = 1.0 * u.s  # Single exposure time
     n_iter: int = 10
-    slit_width: u.Quantity = 0.2 * u.arcsec
+    slit_width: u.Quantity = field(
+        default=0.2 * u.arcsec,
+        metadata={"source": "RSC-2022021C", "unit": "arcsec"})
     ncpu: int = -1
     instrument: str = "SWC"
     vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before SWC's filter; at EIS's CCD
@@ -1484,7 +1625,8 @@ class Simulation:
     # at the centre of the spectral window. On a slit-scan spectrograph this
     # fraction decides which emission lines a pinhole contaminates.
     pinhole_positions_spectral: List[float] = field(default_factory=list)
-    pinhole_visible_wavelength: u.Quantity = field(default=600.0 * u.nm, kw_only=True)
+    pinhole_visible_wavelength: u.Quantity = field(
+        default=600.0 * u.nm, kw_only=True, metadata={"source": _NOT_RECORDED, "unit": "nm"})
 
     @property
     def slit_scan_step(self) -> u.Quantity:
