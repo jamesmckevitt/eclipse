@@ -8,10 +8,10 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import resolution_budget
-from euvst_response.config import (MEASURED_SLIT_IMAGE_TILT, TILT_REFERENCE_ANGLE,
-                                   AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST)
+from eclipse import resolution_budget
+from eclipse.config import (MEASURED_SLIT_IMAGE_TILT, TILT_REFERENCE_ANGLE,
+                            AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
+                            Telescope_EIS, Telescope_EUVST)
 
 ROOT = Path(__file__).resolve().parents[1]
 

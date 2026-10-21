@@ -14,15 +14,15 @@ import numpy as np
 import pytest
 import yaml
 
-from euvst_response import results_file
-from euvst_response.config import (DETECTOR_MATERIALS, DISPERSION_COEFFICIENTS,
-                                   MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation)
-from euvst_response.main import _validate_config_keys, main
-from euvst_response.radiometric import electrons_per_photon
-from euvst_response.readout import FocalPlane_SWC
-from euvst_response.results_file import load_results, save_results
-from euvst_response.utils import _parse_section, load_yaml_config
+from eclipse import results_file
+from eclipse.config import (DETECTOR_MATERIALS, DISPERSION_COEFFICIENTS,
+                            MEASURED_SLIT_IMAGE_TILT, AluminiumFilter, Detector_EIS,
+                            Detector_SWC, Simulation)
+from eclipse.main import _validate_config_keys, main
+from eclipse.radiometric import electrons_per_photon
+from eclipse.readout import FocalPlane_SWC
+from eclipse.results_file import load_results, save_results
+from eclipse.utils import _parse_section, load_yaml_config
 
 UNIFORM = {"instrument": "SWC", "n_iter": 1, "uniform_intensity": "5000 erg / (s cm2 sr)"}
 DARK = u.electron / (u.pixel * u.s)
@@ -30,7 +30,7 @@ DARK = u.electron / (u.pixel * u.s)
 
 def _run(tmp_path, monkeypatch, config):
     """Run `config` and return the payload it saves."""
-    main_module = sys.modules["euvst_response.main"]
+    main_module = sys.modules["eclipse.main"]
     saved, save = {}, main_module.save_results
 
     def keep(path, payload, **kwargs):
@@ -85,7 +85,7 @@ def test_the_default_focal_plane_is_the_detectors():
     assert det.lit_band == (170.0 * u.AA, 212.3 * u.AA)
     assert FocalPlane_SWC.from_detector(det) == FocalPlane_SWC()
     # The constants can still be imported from the read-out module.
-    from euvst_response.readout import DISPERSION_COEFFICIENTS as from_readout
+    from eclipse.readout import DISPERSION_COEFFICIENTS as from_readout
     assert from_readout is DISPERSION_COEFFICIENTS
 
 
@@ -370,7 +370,7 @@ def test_a_run_records_the_old_dark_current_key_as_the_config_gives_it(tmp_path,
 def test_a_sweep_of_the_visible_decade_thickness_lays_the_scene_once(tmp_path, monkeypatch,
                                                                      capsys):
     """It changes only the visible light, which the Monte Carlo adds, not the EUV cube."""
-    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+    from eclipse.synthesis_file import SpectralLine, Synthesis, write_synthesis
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA

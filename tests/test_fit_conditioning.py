@@ -11,7 +11,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import FitConfig, fit_cube_gauss
+from eclipse.fitting import FitConfig, fit_cube_gauss
 
 C_KM_S = 299792.458
 REST = 192.028 * u.AA

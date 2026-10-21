@@ -9,13 +9,13 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.monte_carlo import simulate_once
-from euvst_response.pinhole_diffraction import (
+from eclipse.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.monte_carlo import simulate_once
+from eclipse.pinhole_diffraction import (
     airy_peak_fraction_per_pixel,
     calculate_pinhole_diffraction_pattern,
 )
-from euvst_response.radiometric import (
+from eclipse.radiometric import (
     add_pinhole_visible_light,
     add_telescope_throughput,
     add_visible_stray_light,

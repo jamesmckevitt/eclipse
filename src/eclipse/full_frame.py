@@ -4,7 +4,7 @@ Full-CCD frames of the SW camera: every line in the band, at one slit position.
 A frame is made from a synthesis file, which must hold each pixel's
 emission measure by temperature and line-of-sight velocity and the electron
 density at each temperature, and from the contribution functions of every
-line in the band (`euvst_response.band`).
+line in the band (`eclipse.band`).
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ class _Layout:
     A line is laid onto the rows by exact integrals of its Gaussian, with the
     telescope throughput and photon energy at its centre. It is then
     corrected cell by cell for how those change across the line (see
-    :func:`euvst_response.frame.photons_from_lines`). The cells are fixed in
+    :func:`eclipse.frame.photons_from_lines`). The cells are fixed in
     the plasma's rest frame and move and stretch with the Doppler shift, so
     each velocity bin has its own mapping onto the rows.
     """
@@ -590,7 +590,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         Synthesis file from ECLIPSE's synthesis.
     lines : BandLines
         Every line in the band, from
-        `euvst_response.band.band_contribution_functions`. Must be on the
+        `eclipse.band.band_contribution_functions`. Must be on the
         synthesis's temperatures, with its abundances, and on a density grid
         that has the synthesis's densities, such as the default one.
     slit_position : u.Quantity
@@ -616,7 +616,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         Continuum per unit emission measure: wavelengths, free-free and
         free-bound emission (nT, n_wavelength) and two-photon emission (nN,
         nT, n_wavelength). As returned by
-        `euvst_response.continuum.compute_continuum_fiasco` on the grids of
+        `eclipse.continuum.compute_continuum_fiasco` on the grids of
         `lines`, within the telescope's throughput tables. Default None, for
         no continuum.
     noise : bool, optional

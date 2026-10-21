@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import create_uniform_intensity_cube
-from euvst_response.monte_carlo import simulate_once
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import create_uniform_intensity_cube
+from eclipse.monte_carlo import simulate_once
 
 # CODATA, and the IAU definition of the astronomical unit.
 HC_ERG_CM = 6.62607015e-27 * 2.99792458e10

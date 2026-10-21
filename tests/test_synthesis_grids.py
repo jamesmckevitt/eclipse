@@ -6,7 +6,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response.synthesis import (
+from eclipse.synthesis import (
     create_atmosphere_ndcube,
     create_line_cube,
     require_uniform_grid,
@@ -184,8 +184,8 @@ def test_a_uniform_grid_still_synthesises_end_to_end():
 # ----------------------------------------------------------------------
 # The velocity grid, and what falls off it
 # ----------------------------------------------------------------------
-from euvst_response.synthesis import build_em_tv, compute_dem  # noqa: E402
-from euvst_response.utils import velocity_grid  # noqa: E402
+from eclipse.synthesis import build_em_tv, compute_dem  # noqa: E402
+from eclipse.utils import velocity_grid  # noqa: E402
 
 
 @pytest.mark.parametrize("res, lim", [(0.7, 300), (5, 300)])
@@ -254,7 +254,7 @@ def test_a_plain_array_makes_a_cube_with_no_unit():
 # ----------------------------------------------------------------------
 # The density grid, sized to the atmosphere
 # ----------------------------------------------------------------------
-from euvst_response.synthesis import density_grid, synthesise_cubes  # noqa: E402
+from eclipse.synthesis import density_grid, synthesise_cubes  # noqa: E402
 
 LOG_T = np.linspace(4.0, 9.0, 101)
 

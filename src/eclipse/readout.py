@@ -49,7 +49,7 @@ class FocalPlane_SWC:
     """
     Geometry of the SW focal plane, and the wavelength each row records.
 
-    Every setting defaults to that of :class:`euvst_response.config.Detector_SWC`,
+    Every setting defaults to that of :class:`eclipse.config.Detector_SWC`,
     and :meth:`from_detector` takes them from a configured detector.
 
     Parameters
@@ -63,7 +63,7 @@ class FocalPlane_SWC:
     dispersion : tuple of float
         Coefficients of the wavelength scale, lowest order first, in Angstrom
         for a position in mm. See
-        :data:`~euvst_response.config.DISPERSION_COEFFICIENTS`.
+        :data:`~eclipse.config.DISPERSION_COEFFICIENTS`.
     wavelength_offset : u.Quantity
         Added to every row's wavelength. The design positions are good to
         about a row, but the camera's alignment to the beam is quoted at
@@ -80,7 +80,7 @@ class FocalPlane_SWC:
         140 arcsec from it, in rows: a linear and a quadratic term. The
         default `(0.0, 0.0)` puts each line on one row along the whole slit,
         and the methods then ignore their `column` argument. Pass
-        :data:`~euvst_response.config.MEASURED_SLIT_IMAGE_TILT` to model the
+        :data:`~eclipse.config.MEASURED_SLIT_IMAGE_TILT` to model the
         drift in the optical design, about two rows end to end. Which end of
         the slit it runs toward is not documented, so the sign may need
         flipping against a calibration. `full_ccd_frame` does not yet take a
@@ -291,7 +291,7 @@ class ReadoutSequence:
     (SOLC-EUVST-MSSL-RS-0002 v2.0 SolC-FPGA-RS-033).
 
     The shutter, timing and register layout belong to the camera, and
-    default to those of :class:`euvst_response.config.Detector_SWC`;
+    default to those of :class:`eclipse.config.Detector_SWC`;
     :meth:`from_detector` takes them from a configured detector. The windows
     and the clear belong to an observation, and are given here.
 
@@ -796,10 +796,10 @@ def expose(rate: np.ndarray, exposure: u.Quantity, sequence: ReadoutSequence) ->
         Mean photons per pixel, shaped
         `(n_rows + parallel_overscan_rows, n_columns)`. Without a shutter a
         pixel holds photons from every row its charge crossed, so for a frame
-        :func:`euvst_response.frame.expose_with_wavelengths` gives these with
+        :func:`eclipse.frame.expose_with_wavelengths` gives these with
         the wavelengths of each pixel's mean and root mean square photon
         energies. A Poisson draw of whole photons in each pixel goes to
-        :func:`euvst_response.frame.detect` with those wavelengths and
+        :func:`eclipse.frame.detect` with those wavelengths and
         :func:`dark_current_time`. For the frame's mean, pass the means
         instead, with `noise=False`.
 

@@ -16,11 +16,11 @@ import numpy as np
 
 if __name__ == "__main__":
     # This checkout's package, not one installed elsewhere.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from euvst_response.config import (DETECTOR_MATERIALS, AluminiumFilter,  # noqa: E402
-                                   Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
-                                   Telescope_EUVST)
+from eclipse.config import (DETECTOR_MATERIALS, AluminiumFilter,  # noqa: E402
+                            Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
+                            Telescope_EUVST)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
 PAGE_NAME = "docs/instrument-sources.md"

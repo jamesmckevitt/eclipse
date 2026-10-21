@@ -7,8 +7,8 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response.synthesis import build_em_tv, compute_dem, synthesise_spectra
-from euvst_response.utils import velocity_centers_to_edges, velocity_grid
+from eclipse.synthesis import build_em_tv, compute_dem, synthesise_spectra
+from eclipse.utils import velocity_centers_to_edges, velocity_grid
 
 LOGT = np.array([6.10, 6.15, 6.20, 6.25])
 GRID = velocity_grid(5 * u.km / u.s, 300 * u.km / u.s)

@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 from mendeleev import element
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import (
+from eclipse import synthesis
+from eclipse.atmosphere import (
     Atmosphere,
     edges_from_centres,
     main as eclipse_atmosphere,
@@ -23,13 +23,13 @@ from euvst_response.atmosphere import (
     read_atmosphere,
     write_atmosphere,
 )
-from euvst_response.synthesis import (
+from eclipse.synthesis import (
     along_line_of_sight,
     apply_cube_cropping,
     create_atmosphere_ndcube,
     load_cube,
 )
-from euvst_response.synthesis_file import load_synthesis
+from eclipse.synthesis_file import load_synthesis
 
 LINE = "Fe12_195.1190"
 REST = 195.119 * u.Angstrom
@@ -233,7 +233,7 @@ def test_an_integer_version_of_any_width_is_read(tmp_path, version):
 
 def test_info_describes_a_file_without_loading_its_cubes(tmp_path, capsys):
     """Cubes are as large as the simulation, so the description must not read them."""
-    from euvst_response.atmosphere import describe_atmosphere_file
+    from eclipse.atmosphere import describe_atmosphere_file
     path = tmp_path / "huge.h5"
     nz, ny, nx = SHAPE
     with h5py.File(path, "w") as f:
@@ -265,7 +265,7 @@ def test_info_describes_a_file_without_loading_its_cubes(tmp_path, capsys):
 
 
 def test_the_mass_per_electron_must_be_finite_and_positive(tmp_path, monkeypatch):
-    from euvst_response.atmosphere import require_mass_per_electron
+    from eclipse.atmosphere import require_mass_per_electron
     for bad in (0.0, -1.0, float("nan"), float("inf"), "many"):
         with pytest.raises(ValueError, match="finite, positive"):
             require_mass_per_electron(bad)
@@ -287,7 +287,7 @@ def test_the_mass_per_electron_must_be_finite_and_positive(tmp_path, monkeypatch
 
 
 def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path, monkeypatch):
-    from euvst_response.utils import require_downsample_divides
+    from eclipse.utils import require_downsample_divides
     # True equals 1, so it must be refused before any shortcut for a factor of 1.
     for bad in (0, -2, 2.0, True):
         with pytest.raises(ValueError, match="whole number of 1 or more"):

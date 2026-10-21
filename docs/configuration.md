@@ -104,7 +104,7 @@ The last four settings describe the SW focal plane. A run does not use the focal
 
 A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. Lines starting with `#`, and any lines before the data, are skipped.
 
-The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/euvst_response/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/euvst_response/resolution_budget.py).
+The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
 
 ## filter
 

@@ -9,10 +9,10 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import rebin_atmosphere
-from euvst_response.sampling import centred_edges, pixel_weights, pixel_weights_through
-from euvst_response.utils import VELOCITY_CONVENTION, _parse_section, angle_to_distance
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import rebin_atmosphere
+from eclipse.sampling import centred_edges, pixel_weights, pixel_weights_through
+from eclipse.utils import VELOCITY_CONVENTION, _parse_section, angle_to_distance
 
 REST = 195.119 * u.AA
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
@@ -153,8 +153,8 @@ def test_a_rebinned_scene_says_whether_it_was_masked():
 
 def test_the_mask_is_refused_for_a_cube_it_was_not_applied_to():
     """Such as a uniform intensity from Python, which would otherwise come out unmasked."""
-    from euvst_response.data_processing import create_uniform_intensity_cube
-    from euvst_response.monte_carlo import monte_carlo, simulate_once
+    from eclipse.data_processing import create_uniform_intensity_cube
+    from eclipse.monte_carlo import monte_carlo, simulate_once
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1, slit_mask=True)
@@ -175,9 +175,9 @@ def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
     import astropy.constants as const
     import yaml
 
-    from euvst_response.analysis import load_instrument_response_results
-    from euvst_response.main import main
-    from euvst_response.synthesis_file import write_line_cubes
+    from eclipse.analysis import load_instrument_response_results
+    from eclipse.main import main
+    from eclipse.synthesis_file import write_line_cubes
 
     n_spec, n_cells = 121, 8
     step = (5 * u.km / u.s / const.c * REST).to_value(u.cm)
@@ -212,7 +212,7 @@ def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
 
 def test_a_cube_masked_without_the_psf_is_not_blurred_afterwards():
     """The blur comes before the slit, so masking first and blurring later is refused."""
-    from euvst_response.monte_carlo import monte_carlo, simulate_once
+    from eclipse.monte_carlo import monte_carlo, simulate_once
 
     det, tel = Detector_SWC(), Telescope_EUVST()
     scene = _scene(np.ones((40, 4, 21)), 0.1 * u.arcsec)

@@ -16,7 +16,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 from sunpy.util.exceptions import SunpyMetadataWarning
 
-from euvst_response.analysis import create_sunpy_maps_from_combo
+from eclipse.analysis import create_sunpy_maps_from_combo
 
 REST = 195.119 * u.Angstrom
 NX, NY, NWAVE = 3, 5, 4
@@ -104,7 +104,7 @@ def test_a_date_object_is_accepted():
 
 def test_an_eis_calibration_date_is_used_when_no_date_is_given():
     """A time-dependent EIS calibration carries a real observing date."""
-    from euvst_response.config import Telescope_EIS
+    from eclipse.config import Telescope_EIS
 
     telescope = Telescope_EIS(calibration="dz2025", date="2012-06-03")
     maps = _make(telescope=telescope)
@@ -112,7 +112,7 @@ def test_an_eis_calibration_date_is_used_when_no_date_is_given():
 
 
 def test_an_explicit_date_beats_the_calibration_date():
-    from euvst_response.config import Telescope_EIS
+    from eclipse.config import Telescope_EIS
 
     telescope = Telescope_EIS(calibration="dz2025", date="2012-06-03")
     maps = _make(telescope=telescope, date_obs=WHEN)

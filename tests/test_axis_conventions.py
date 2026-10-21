@@ -14,22 +14,22 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.analysis import (
+from eclipse.analysis import (
     create_sunpy_maps_from_combo,
     load_instrument_response_results,
 )
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import create_uniform_intensity_cube, load_atmosphere
-from euvst_response.radiometric import apply_focusing_optics_psf
-from euvst_response.results_file import save_results
-from euvst_response.synthesis import (
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import create_uniform_intensity_cube, load_atmosphere
+from eclipse.radiometric import apply_focusing_optics_psf
+from eclipse.results_file import save_results
+from eclipse.synthesis import (
     apply_cube_cropping,
     create_atmosphere_ndcube,
     create_line_cube,
     load_cube,
     synthesise_spectra,
 )
-from euvst_response.utils import VELOCITY_CONVENTION, rebin_slit_offchip
+from eclipse.utils import VELOCITY_CONVENTION, rebin_slit_offchip
 
 REST = 195.119 * u.Angstrom
 

@@ -5,7 +5,7 @@ search:
 
 # Reading out without a shutter
 
-The SW camera has a mechanical shutter that keeps the CCDs dark while a frame is cleared and read. Without it, or if it does not close, light keeps falling on the chip the whole time. Each packet of charge then picks up light from every row it is moved through on its way to the serial register, so a bright line also shows up faintly in other rows. During the read-out, the packets of the rows beyond the line pass through it on their way to the register. During the clear before the exposure, the packets that end up in the rows between the line and the register pass through it too. `euvst_response.readout` models this smear.
+The SW camera has a mechanical shutter that keeps the CCDs dark while a frame is cleared and read. Without it, or if it does not close, light keeps falling on the chip the whole time. Each packet of charge then picks up light from every row it is moved through on its way to the serial register, so a bright line also shows up faintly in other rows. During the read-out, the packets of the rows beyond the line pass through it on their way to the register. During the clear before the exposure, the packets that end up in the rows between the line and the register pass through it too. `eclipse.readout` models this smear.
 
 There is no configuration key for it, only a Python API, because the read-out depends on the window layout of a particular observation, which the configuration file does not describe.
 
@@ -13,12 +13,12 @@ There is no configuration key for it, only a Python API, because the read-out de
 
 The two CCDs sit side by side along the dispersion, with their serial registers on the outer edges. So a row is one wavelength, the columns of a row run along the slit, and charge is moved along the dispersion. Rows are counted from the register: row 0 is the outermost row of each CCD, and row 2047 is at the edge where the two meet.
 
-The camera itself, its CCDs' format and pixels, its shutter and its read-out timing, is described by `Detector_SWC` in `euvst_response.config`, which the `detector` section of a configuration file sets. The two classes below take those settings from a detector with `from_detector`, and use its defaults when made on their own.
+The camera itself, its CCDs' format and pixels, its shutter and its read-out timing, is described by `Detector_SWC` in `eclipse.config`, which the `detector` section of a configuration file sets. The two classes below take those settings from a detector with `from_detector`, and use its defaults when made on their own.
 
 ```python
 import astropy.units as u
-from euvst_response.config import Detector_SWC
-from euvst_response.readout import FocalPlane_SWC
+from eclipse.config import Detector_SWC
+from eclipse.readout import FocalPlane_SWC
 
 det = Detector_SWC()
 fp = FocalPlane_SWC.from_detector(det)          # the same as FocalPlane_SWC() for the default camera
@@ -38,7 +38,7 @@ The wavelength scale, `dispersion`, and the settings below are settings of the d
 - `slit_image_tilt`: how far a line moves along the dispersion between the middle of the slit and its ends. By default a line falls on the same row all along the slit, and the `column` argument these methods take makes no difference. Pass `MEASURED_SLIT_IMAGE_TILT` to model the shift the optical design shows, about two rows from end to end:
 
 ```python
-from euvst_response.config import MEASURED_SLIT_IMAGE_TILT
+from eclipse.config import MEASURED_SLIT_IMAGE_TILT
 
 tilted = FocalPlane_SWC.from_detector(Detector_SWC(slit_image_tilt=MEASURED_SLIT_IMAGE_TILT))
 tilted.row_of_wavelength(195.119 * u.Angstrom, column=1904)   # ('left', 1863.3)
@@ -51,7 +51,7 @@ tilted.row_of_wavelength(195.119 * u.Angstrom, column=1904)   # ('left', 1863.3)
 ## The read-out
 
 ```python
-from euvst_response.readout import ReadoutSequence, windows_from_wavelengths
+from eclipse.readout import ReadoutSequence, windows_from_wavelengths
 
 windows = windows_from_wavelengths(fp, [(194.9 * u.Angstrom, 195.3 * u.Angstrom)])
 sequence = ReadoutSequence.from_detector(det, windows=windows, shutter=False)
@@ -81,11 +81,11 @@ The windows and the clear belong to an observation, and are given to `from_detec
 
 ## Putting light on it
 
-`euvst_response.frame` turns a spectrum into the photons per second each row receives. It uses the same radiometric equation as the rest of ECLIPSE, but integrates the radiance between each row's edges rather than multiplying it by one pixel's bandwidth. That matters here, because the rows are not evenly spaced and a frame spans the whole band.
+`eclipse.frame` turns a spectrum into the photons per second each row receives. It uses the same radiometric equation as the rest of ECLIPSE, but integrates the radiance between each row's edges rather than multiplying it by one pixel's bandwidth. That matters here, because the rows are not evenly spaced and a frame spans the whole band.
 
 ```python
-from euvst_response.config import Detector_SWC, Telescope_EUVST
-from euvst_response.frame import photons_from_lines, thermal_width
+from eclipse.config import Detector_SWC, Telescope_EUVST
+from eclipse.frame import photons_from_lines, thermal_width
 
 telescope, det, slit = Telescope_EUVST(), Detector_SWC(), 0.4 * u.arcsec
 width = thermal_width(192.030 * u.Angstrom, 1.8e7 * u.K, 55.845 * u.u)     # Fe XXIV where it forms
@@ -106,7 +106,7 @@ rows = photons_from_lines(fp, "left", telescope, slit,
 
 ```python
 import numpy as np
-from euvst_response.readout import expose
+from eclipse.readout import expose
 
 rate = np.repeat(rows[:, np.newaxis], fp.n_columns, axis=1)   # the same along the slit
 
@@ -117,11 +117,11 @@ The frame has `parallel_overscan_rows` more rows than the image area. With a shu
 
 `dark_current_time` gives how long each packet collects dark current, which is the time it spends in the image area. For an image row, that is its part of the clear, the exposure, and the wait while the rows before it are read. For a parallel overscan row, it is the time it takes to cross the chip during the read-out. It is the same with a shutter as without one, and longest for the rows read last.
 
-`detect` and `digitise` in `euvst_response.frame` take the frame through the same detector stages as the rest of ECLIPSE, to electrons and then to DN. A full-band frame needs two things more: a dark current time for each row, and photon energies for each pixel, since a 170 A photon frees a quarter more electrons than a 212 A one. Without a shutter, a pixel holds photons from every row its charge crossed, so they have a spread of energies. `expose_with_wavelengths` works this out: it exposes the rate weighted by the photon energy, and by its square, alongside the photons, and gives each pixel the wavelengths of their mean and root mean square energies. The first sets the electrons the photons free, and the second how far those spread.
+`detect` and `digitise` in `eclipse.frame` take the frame through the same detector stages as the rest of ECLIPSE, to electrons and then to DN. A full-band frame needs two things more: a dark current time for each row, and photon energies for each pixel, since a 170 A photon frees a quarter more electrons than a 212 A one. Without a shutter, a pixel holds photons from every row its charge crossed, so they have a spread of energies. `expose_with_wavelengths` works this out: it exposes the rate weighted by the photon energy, and by its square, alongside the photons, and gives each pixel the wavelengths of their mean and root mean square energies. The first sets the electrons the photons free, and the second how far those spread.
 
 ```python
-from euvst_response.frame import detect, digitise, expose_with_wavelengths
-from euvst_response.readout import dark_current_time
+from eclipse.frame import detect, digitise, expose_with_wavelengths
+from eclipse.readout import dark_current_time
 
 wavelength = fp.wavelength(np.arange(fp.n_rows), "left")
 frame, mean, rms = expose_with_wavelengths(rate, wavelength, 1.0 * u.s, sequence)

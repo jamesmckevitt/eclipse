@@ -5,8 +5,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import FitConfig, _fit_one, _guess_params, fit_cube_gauss
-from euvst_response.utils import gaussian
+from eclipse.fitting import FitConfig, _fit_one, _guess_params, fit_cube_gauss
+from eclipse.utils import gaussian
 
 C = 299792.458
 REST, STEP, SIGMA, BACK = 195.119, 0.0169, 0.03, 5.0

@@ -1,14 +1,22 @@
 # Older versions
 
-ECLIPSE 0.11.0 and earlier wrote pickles rather than HDF5 files, and read MURaM's own files directly. These still work, with a warning, until a future release stops them. This page says how to move over.
+Some things from older versions of ECLIPSE still work, with a warning, until a future release stops them. These include the package's former name, the pickles that ECLIPSE 0.11.0 and earlier wrote, and reading MURaM's own files directly. This page says how to move over.
+
+## The package's name
+
+ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it. Its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name. The package is still installed with `pip install solarc-eclipse`.
+
+The package's code is now in the `src` folder of the repository. If you installed ECLIPSE from a clone with `pip install -e .`, run that command in the clone again after updating it. If you use a clone without installing it, by putting the clone on `PYTHONPATH`, put `<clone>/src` on `PYTHONPATH` instead.
+
+A file of your own named `eclipse.py`, in the folder you run Python from or on `PYTHONPATH`, is now imported in place of the package. Rename the file if you have one.
 
 ## Synthesis files
 
-ECLIPSE 0.11.0 and earlier wrote the synthesis as a pickle. `eclipse` still reads one, and `synthesise-spectra` still writes one if `--output-name` ends in `.pkl`, both with a warning, until a future release stops them. `euvst_response.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites a pickle as a synthesis file, keeping everything it held.
+ECLIPSE 0.11.0 and earlier wrote the synthesis as a pickle. `eclipse` still reads one, and `synthesise-spectra` still writes one if `--output-name` ends in `.pkl`, both with a warning, until a future release stops them. `eclipse.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites a pickle as a synthesis file, keeping everything it held.
 
 ## Results files
 
-ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_response_results` still reads one, with a warning, until a future release stops it. Rerunning `run.yaml` writes a new `run.h5`, and renames the old `run.pkl` to `run.pkl.old`, or `run.pkl.old.1` and so on if that name is taken. A script that loads `run.pkl` with ECLIPSE's functions then reads `run.h5` instead, with a warning. `euvst_response.convert_results_pickle("run.pkl")` converts an old pickle to the new format without rerunning.
+ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_response_results` still reads one, with a warning, until a future release stops it. Rerunning `run.yaml` writes a new `run.h5`, and renames the old `run.pkl` to `run.pkl.old`, or `run.pkl.old.1` and so on if that name is taken. A script that loads `run.pkl` with ECLIPSE's functions then reads `run.h5` instead, with a warning. `eclipse.convert_results_pickle("run.pkl")` converts an old pickle to the new format without rerunning. Some pickles name packaged tables inside an older installation's `euvst_response/data` folder. If such a table no longer exists, this installation's copy is used instead.
 
 ## Reading MURaM's own files
 

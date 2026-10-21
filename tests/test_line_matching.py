@@ -11,7 +11,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response.synthesis import compute_goft_fiasco
+from eclipse.synthesis import compute_goft_fiasco
 
 # A few temperatures and densities are enough to tell the lines apart.
 GRID = {"nT": 3, "logT_min": 5.6, "logT_max": 6.4, "nN": 2, "logN_min": 9.0,

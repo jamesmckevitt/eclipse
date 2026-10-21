@@ -61,7 +61,7 @@ CALIBRATIONS = ("ground", "dz2013", "warren2014", "dz2025")
 # 'ground' is the pre-flight calibration and has no epoch; the others do.
 TIME_DEPENDENT_CALIBRATIONS = ("dz2013", "warren2014", "dz2025")
 
-_DATA_DIR = files("euvst_response") / "data" / "eis_response"
+_DATA_DIR = files("eclipse") / "data" / "eis_response"
 _DZ2025_SAV = _DATA_DIR / "fit_eis_ea_2023-05-04_smooth.sav"
 
 # CCD quantum efficiency included in the tabulated areas (EIS SW Note 2).

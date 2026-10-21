@@ -2,7 +2,7 @@
 Results file: the instrument simulation's results as HDF5.
 
 `eclipse --config run.yaml` writes `run/result/run.h5`, which
-:func:`euvst_response.load_instrument_response_results` reads. Reading a
+:func:`eclipse.load_instrument_response_results` reads. Reading a
 file runs no code from it, and any language can read it.
 
 File layout, version 1
@@ -103,7 +103,28 @@ def _dataclass_registry() -> dict:
 
 def _package_root() -> Path:
     """Directory of this ECLIPSE installation's package data."""
-    return Path(os.fspath(files("euvst_response")))
+    return Path(os.fspath(files("eclipse")))
+
+
+def _moved_package_file(path):
+    """
+    This installation's copy of a packaged table named under the package's former name.
+
+    Older versions were installed as `euvst_response`, so their results can
+    name the packaged tables inside it, a folder an upgrade removes. None if
+    `path` exists, is not such a table, or the table is not in this installation.
+    A path that cannot be reached counts as missing.
+    """
+    path = Path(os.fspath(path))
+    parts = path.parts
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] == "euvst_response" and parts[i + 1] == "data":
+            relative = _package_parts(Path(*parts[i + 1:]).as_posix())
+            if relative is None or os.path.exists(path):
+                return None
+            moved = _package_root().joinpath(*relative)
+            return moved if moved.is_file() else None
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -968,7 +989,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
                     raise FileNotFoundError(
                         f"No results file {path}. {older}, beside it, is a results pickle from "
                         f"an older version of ECLIPSE: load_instrument_response_results reads "
-                        f"it, and euvst_response.convert_results_pickle rewrites it as a "
+                        f"it, and eclipse.convert_results_pickle rewrites it as a "
                         f"results file.")
         raise FileNotFoundError(f"No results file {path}.")
     if not is_results_file(path):
@@ -987,11 +1008,12 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
         warnings.warn(
             f"{path} is a results pickle, as older versions of ECLIPSE wrote them. Pickles "
             f"are deprecated and will not be read in a future release: convert it with "
-            f"euvst_response.convert_results_pickle, or re-run the simulation. Reading a "
+            f"eclipse.convert_results_pickle, or re-run the simulation. Reading a "
             f"pickle runs whatever code it holds, so only read files you trust.{later}",
             FutureWarning, stacklevel=_stacklevel)
         payload = _load_pickle(path)
         _give_earlier_values(payload)
+        _move_old_tables(payload)
         if _from_before_weighting(payload):
             warnings.warn(_BEFORE_WEIGHTING.format(path=path), UserWarning,
                           stacklevel=_stacklevel)
@@ -1060,7 +1082,29 @@ def _from_before_weighting(payload) -> bool:
     return True
 
 
-def _give_earlier_values(value, seen=None) -> None:
+def _configuration_objects(value, seen=None):
+    """Each configuration object in an unpickled payload, however deeply it is held."""
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+    if isinstance(value, dict):
+        items = list(value.values())
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        own = getattr(value, "__dict__", None)
+        if own is None:
+            return
+        yield value
+        items = list(own.values())
+    else:
+        return
+    for item in items:
+        yield from _configuration_objects(item, seen)
+
+
+def _give_earlier_values(payload) -> None:
     """
     Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
 
@@ -1068,30 +1112,34 @@ def _give_earlier_values(value, seen=None) -> None:
     class default, such as a telescope's `resolution_budget`, which runs
     then did not have.
     """
-    seen = set() if seen is None else seen
-    if id(value) in seen:
-        return
-    seen.add(id(value))
-    if isinstance(value, dict):
-        for item in value.values():
-            _give_earlier_values(item, seen)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _give_earlier_values(item, seen)
-    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-        own = getattr(value, "__dict__", None)
-        if own is not None:
-            for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
-                if name not in own:
-                    object.__setattr__(value, name, item)
+    for value in _configuration_objects(payload):
+        own = value.__dict__
+        for name, item in _EARLIER_VALUES.get(type(value).__name__, {}).items():
+            if name not in own:
+                object.__setattr__(value, name, item)
+
+
+def _move_old_tables(payload) -> None:
+    """
+    Point missing packaged tables named under the former name at this installation's copies.
+
+    Changes the configuration objects of an unpickled payload in place; see
+    :func:`_moved_package_file`.
+    """
+    for value in _configuration_objects(payload):
+        for name, item in list(value.__dict__.items()):
+            if isinstance(item, Path) or hasattr(item, "__fspath__"):
+                moved = _moved_package_file(item)
+                if moved is not None:
+                    object.__setattr__(value, name, moved)
 
 
 def _load_pickle(path: Path) -> dict:
-    import dill
+    from .utils import _unpickle
 
     with open(path, "rb") as handle:
         try:
-            return dill.load(handle)
+            return _unpickle(handle)
         # Such as a pickle of a class only another version or branch of ECLIPSE had.
         except (AttributeError, ImportError) as error:
             raise ValueError(f"{path} cannot be unpickled by this version of ECLIPSE: "
@@ -1107,9 +1155,11 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     check. A setting that did not exist when the pickle was made gets
     today's default, with a warning, unless runs then had another value:
     their fits were unweighted, so the file records `fit_weighted` False,
-    and `weighted` False for a FitConfig in it. A pickle holding no results,
-    such as a synthesis pickle, is refused. Reading a pickle runs whatever
-    code it holds, so only convert files you trust.
+    and `weighted` False for a FitConfig in it. Missing packaged tables
+    named in the former folder `euvst_response/data` are recorded as this
+    installation's copies. A pickle holding no results, such as a synthesis
+    pickle, is refused. Reading a pickle runs
+    whatever code it holds, so only convert files you trust.
 
     Parameters
     ----------
@@ -1149,7 +1199,8 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, dict) or "all_combinations" not in results:
         raise ValueError(f"{pickle_path} holds no results. A synthesis pickle converts with "
-                         f"euvst_response.convert_synthesis_pickle.")
+                         f"eclipse.convert_synthesis_pickle.")
+    _move_old_tables(payload)
     # Recorded in the new file, so reading it does not warn again.
     if _from_before_weighting(payload):
         warnings.warn(_BEFORE_WEIGHTING.format(path=pickle_path), UserWarning, stacklevel=2)

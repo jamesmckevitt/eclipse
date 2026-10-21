@@ -572,14 +572,17 @@ def get_git_commit_id() -> str:
     """
     Get the last git commit ID from the package's git repository.
 
-    Only a git checkout of ECLIPSE, with the package at its top level, has
-    one. An environment inside another repository, such as a project's
+    Only a git checkout of ECLIPSE, with the package in its `src` folder,
+    has one. An environment inside another repository, such as a project's
     .venv, is not part of it, and that repository's commit says nothing
     about ECLIPSE.
     """
     try:
         from importlib.resources import files
-        pkg_path = Path(str(files("euvst_response"))).parent
+        package = Path(str(files("eclipse"))).resolve()
+        pkg_path = package.parent.parent
+        if pkg_path / "src" / "eclipse" != package:
+            return "unknown (not installed from a git checkout of ECLIPSE)"
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, cwd=pkg_path, timeout=5,
@@ -602,8 +605,8 @@ def get_git_commit_id() -> str:
 def _get_software_version() -> str:
     """Get the installed package version."""
     try:
-        import euvst_response
-        return euvst_response.__version__
+        import eclipse
+        return eclipse.__version__
     except Exception:
         return "unknown"
 
@@ -1118,3 +1121,20 @@ def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
             f"a factor that divides every dimension."
         )
 
+
+class FormerNameWarning(FutureWarning):
+    """Warning given on importing the package under its former name, `euvst_response`."""
+
+
+def _unpickle(handle):
+    """
+    Object from an older version's pickle, which may name the package's former modules.
+
+    Those load through `euvst_response`, whose warning to change an import is
+    not for the reader of a file, so it is not shown here.
+    """
+    import dill
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FormerNameWarning)
+        return dill.load(handle)

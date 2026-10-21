@@ -5,7 +5,7 @@
 ## Loading the results
 
 ```python
-from euvst_response import load_instrument_response_results, summary_table
+from eclipse import load_instrument_response_results, summary_table
 
 results = load_instrument_response_results("run/result/config.h5")
 summary_table(results)
@@ -19,7 +19,7 @@ A run makes one set of results for each combination of the settings it swept thr
 
 ```python
 import astropy.units as u
-from euvst_response import get_results_for_combination
+from eclipse import get_results_for_combination
 
 combination = get_results_for_combination(results, **{
     "simulation.expos": 20 * u.s,
@@ -32,7 +32,7 @@ Values with units need their units. If what you give matches more than one combi
 ## How precisely each line was measured
 
 ```python
-from euvst_response import analyse_fit_statistics
+from eclipse import analyse_fit_statistics
 
 stats = analyse_fit_statistics(combination)
 print(stats["v_std"])
@@ -62,7 +62,7 @@ The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no 
 `create_sunpy_maps_from_combo` makes SunPy maps of a combination's results:
 
 ```python
-from euvst_response import create_sunpy_maps_from_combo
+from eclipse import create_sunpy_maps_from_combo
 
 maps = create_sunpy_maps_from_combo(combination, date_obs="2024-03-20T00:00:00")
 maps["velocity_std"].peek()

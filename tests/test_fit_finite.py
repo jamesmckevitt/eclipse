@@ -6,8 +6,8 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import (FitComponent, FitConfig, _fit_finite, _n_free_params,
-                                   _unmeasurable, fit_cube_gauss)
+from eclipse.fitting import (FitComponent, FitConfig, _fit_finite, _n_free_params,
+                             _unmeasurable, fit_cube_gauss)
 
 C = const.c.to_value(u.km / u.s)
 STEP = 0.0169e-8

@@ -5,10 +5,10 @@ import astropy.units as u
 import pytest
 import yaml
 
-from euvst_response import science_cases as sc
-from euvst_response.analysis import load_instrument_response_results
-from euvst_response.config import Simulation
-from euvst_response.utils import parse_yaml_input
+from eclipse import science_cases as sc
+from eclipse.analysis import load_instrument_response_results
+from eclipse.config import Simulation
+from eclipse.utils import parse_yaml_input
 
 TABLE = sc.load_science_cases()
 CASE_KEYS = {"task", "name", "description", "target", "observables", "source",
@@ -213,7 +213,7 @@ def test_the_list_refuses_a_line_choice_that_matches_nothing(capsys):
 
 def test_a_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
     """Uses the brightest line, with few iterations to keep it quick."""
-    from euvst_response.main import main
+    from eclipse.main import main
 
     paths, _ = sc.write_science_case_configs(
         tmp_path, cases=["II-1-2"], lines=["Fe XXIV"],

@@ -11,14 +11,14 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 from scipy.signal import fftconvolve
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import rebin_atmosphere
-from euvst_response.fitting import fit_cube_gauss
-from euvst_response.monte_carlo import simulate_once
-from euvst_response.radiometric import (across_slit_fwhm, apply_focusing_optics_psf,
-                                        spectral_psf_fwhm, spectral_psf_margin)
-from euvst_response.sampling import centred_edges, pixel_weights
-from euvst_response.utils import _fwhm_to_sigma, angle_to_distance
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import rebin_atmosphere
+from eclipse.fitting import fit_cube_gauss
+from eclipse.monte_carlo import simulate_once
+from eclipse.radiometric import (across_slit_fwhm, apply_focusing_optics_psf,
+                                 spectral_psf_fwhm, spectral_psf_margin)
+from eclipse.sampling import centred_edges, pixel_weights
+from eclipse.utils import _fwhm_to_sigma, angle_to_distance
 
 REST = 195.119 * u.AA
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
@@ -201,10 +201,10 @@ def test_a_sweep_over_the_filter_observes_each_through_its_own_throughput(tmp_pa
 
     import yaml
 
-    from euvst_response.config import AluminiumFilter
-    from euvst_response.data_processing import rebin_spectra
-    from euvst_response.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
-                                               write_synthesis)
+    from eclipse.config import AluminiumFilter
+    from eclipse.data_processing import rebin_spectra
+    from eclipse.synthesis_file import (SpectralLine, Synthesis, read_synthesis,
+                                        write_synthesis)
 
     edges = np.arange(5) * 0.3 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-60, 61) * 0.003 * u.AA
@@ -219,7 +219,7 @@ def test_a_sweep_over_the_filter_observes_each_through_its_own_throughput(tmp_pa
         "instrument": "SWC", "n_iter": 1, "ncpu": 1, "synthesis_file": str(tmp_path / "file.h5"),
         "simulation": {"expos": "5 s", "slit_width": "0.4 arcsec", "psf": True},
         "filter": {"al_thickness": thicknesses}}))
-    main_module = importlib.import_module("euvst_response.main")
+    main_module = importlib.import_module("eclipse.main")
     observed = []
     real = main_module.monte_carlo
 

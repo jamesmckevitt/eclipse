@@ -11,7 +11,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 from scipy.special import erf
 
-from euvst_response.fitting import FitComponent, FitConfig, fit_cube_gauss, ground_truth_summary
+from eclipse.fitting import FitComponent, FitConfig, fit_cube_gauss, ground_truth_summary
 
 REST = 195.119 * u.AA
 BLEND = 195.179 * u.AA

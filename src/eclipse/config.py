@@ -677,11 +677,11 @@ class AluminiumFilter:
         default=0.8,
         metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2: 80% transmission, to be "
                             "confirmed. Its effective area in Sec. 7.1.3 uses 0.81"})
-    al_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat',
+    al_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_aluminium_1000_angstrom.dat',
                            metadata={"source": _HENKE})
-    oxide_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat',
+    oxide_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_aluminium_oxide_1000_angstrom.dat',
                               metadata={"source": _HENKE})
-    c_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat',
+    c_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'throughput_carbon_1000_angstrom.dat',
                           metadata={"source": _HENKE})
     table_thickness: u.Quantity = field(default=1000 * u.angstrom,
                                         metadata={"source": _HENKE, "unit": "Angstrom"})
@@ -779,7 +779,7 @@ class Detector_SWC:
         Whether frames are taken with the mechanical shutter, which keeps the
         CCDs dark while a frame is cleared and read. Default True. An
         instrument run models frames taken with it and refuses False; the
-        read-out model, :mod:`euvst_response.readout`, takes either. Keyword
+        read-out model, :mod:`eclipse.readout`, takes either. Keyword
         only, as are the settings below, which describe the SW camera's CCDs
         and their read-out.
     n_rows, n_columns : int
@@ -837,7 +837,7 @@ class Detector_SWC:
         spots in the SW footprint figure of RSC-2022021C.
 
     The last four describe the SW focal plane, which
-    :class:`euvst_response.readout.FocalPlane_SWC` models. An instrument run
+    :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
     does not use the focal plane yet, and refuses values other than the
     defaults.
     """
@@ -895,7 +895,7 @@ class Detector_SWC:
     filter_distance: u.Quantity = field(default=250 * u.mm,
                                         metadata={"source": _NOT_RECORDED, "unit": "mm"})
     # Settings of the camera's CCDs and their read-out, which
-    # euvst_response.readout models. An instrument run only checks and
+    # eclipse.readout models. An instrument run only checks and
     # records them.
     shutter: bool = field(
         default=True, kw_only=True,
@@ -935,7 +935,7 @@ class Detector_SWC:
     pair_energy_slope: u.Quantity | None = field(
         default=None, kw_only=True,
         metadata={"source": _NOT_RECORDED, "unit": "eV per K"})
-    # The SW focal plane, which euvst_response.readout models.
+    # The SW focal plane, which eclipse.readout models.
     dispersion: tuple = field(
         default=DISPERSION_COEFFICIENTS, kw_only=True,
         metadata={"source": "Fitted to RSC-2022021C: the detector edges, the focal plane "
@@ -1213,9 +1213,9 @@ class Telescope_EUVST:
         metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
 
     # Wavelength-dependent efficiency tables
-    pm_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat',
+    pm_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat',
                            metadata={"source": _SENSITIVITY_BUDGET})
-    grating_table: Path = field(default_factory=lambda: files('euvst_response') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat',
+    grating_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'grating_reflection_efficiency.dat',
                                 metadata={"source": _SENSITIVITY_BUDGET})
 
     # Worst-case FWHMs of the optical design's PSF in each field, in pixels

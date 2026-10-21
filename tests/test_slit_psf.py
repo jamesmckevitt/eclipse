@@ -15,22 +15,22 @@ import yaml
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.analysis import analyse_fit_statistics, load_instrument_response_results
-from euvst_response.config import (Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST)
-from euvst_response.data_processing import (_spectra_on_the_detector,
-                                            create_uniform_intensity_cube, pad_spectral_axis)
-from euvst_response.frame import _response, _row_bounds
-from euvst_response.main import _validate_config_keys
-from euvst_response.radiometric import (_spectral_kernel, _spectral_response,
-                                        apply_focusing_optics_psf, slit_image_width,
-                                        spectral_blur_fwhm, spectral_line_spread,
-                                        spectral_optics_fwhm,
-                                        spectral_psf_fwhm, spectral_psf_margin,
-                                        spectral_psf_reach)
-from euvst_response.readout import FocalPlane_SWC
-from euvst_response.synthesis_file import write_line_cubes
-from euvst_response.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
+from eclipse.analysis import analyse_fit_statistics, load_instrument_response_results
+from eclipse.config import (Detector_EIS, Detector_SWC, Simulation,
+                            Telescope_EIS, Telescope_EUVST)
+from eclipse.data_processing import (_spectra_on_the_detector,
+                                     create_uniform_intensity_cube, pad_spectral_axis)
+from eclipse.frame import _response, _row_bounds
+from eclipse.main import _validate_config_keys
+from eclipse.radiometric import (_spectral_kernel, _spectral_response,
+                                 apply_focusing_optics_psf, slit_image_width,
+                                 spectral_blur_fwhm, spectral_line_spread,
+                                 spectral_optics_fwhm,
+                                 spectral_psf_fwhm, spectral_psf_margin,
+                                 spectral_psf_reach)
+from eclipse.readout import FocalPlane_SWC
+from eclipse.synthesis_file import write_line_cubes
+from eclipse.utils import VELOCITY_CONVENTION, _fwhm_to_sigma
 
 # The optical design alone, whose widths these tests check.
 TEL = Telescope_EUVST(resolution_budget="none")
@@ -266,7 +266,7 @@ def test_the_window_is_widened_only_along_wavelength():
 
 def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
     """The grids are cached and sized by slit width."""
-    from euvst_response.main import main
+    from eclipse.main import main
 
     config = tmp_path / "sweep.yaml"
     config.write_text(yaml.safe_dump({
@@ -282,7 +282,7 @@ def test_the_reference_slit_cannot_be_swept(tmp_path, monkeypatch):
 
 def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, monkeypatch):
     """End to end, from a synthesis file with the default window to the saved rebinned cubes."""
-    from euvst_response.main import main
+    from eclipse.main import main
 
     n_spec, n_cells = 121, 8  # 300 km/s either side at 5 km/s; 1.5 Mm square
     step = (5 * u.km / u.s / const.c * REST).to_value(u.cm)
@@ -322,7 +322,7 @@ def test_an_instrument_run_widens_a_synthesis_window_for_a_wide_slit(tmp_path, m
 
 def test_an_instrument_run_measures_the_width_each_slit_gives(tmp_path, monkeypatch):
     """End to end, from a configuration to fitted widths, with the noise off."""
-    from euvst_response.main import main
+    from eclipse.main import main
 
     config = tmp_path / "slits.yaml"
     config.write_text(yaml.safe_dump({

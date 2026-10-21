@@ -2,7 +2,7 @@
 
 ## Instrument settings
 
-Each instrument setting in `euvst_response/config.py` gives the source of its default in its field metadata, as `source`. A setting that is a quantity also gives `unit`, the unit to show it in, such as `micron`. A plain number or a path takes no unit.
+Each instrument setting in `src/eclipse/config.py` gives the source of its default in its field metadata, as `source`. A setting that is a quantity also gives `unit`, the unit to show it in, such as `micron`. A plain number or a path takes no unit.
 
 `docs/instrument-sources.md` lists the settings in tables. Each of these tables follows a comment line that names its instrument, `<!-- SWC settings: ... -->` or `<!-- EIS settings: ... -->`, with a blank line before and after it. In those tables, a row whose first cell names settings in backticks is a setting's row. Other rows, such as the dark current laws, are written by hand.
 
@@ -38,11 +38,11 @@ Whatever the size of the bump, if output changes for identical input, say so pro
 
 ### Making a release
 
-1. Bump `__version__` in `euvst_response/__init__.py`. `pyproject.toml` reads it with `version = {attr = "euvst_response.__version__"}`, so that is the only place the version is written. `master` takes pull requests only, so this goes through one like anything else.
+1. Bump `__version__` in `src/eclipse/__init__.py`. `pyproject.toml` reads it with `version = {attr = "eclipse.__version__"}`, so that is the only place the version is written. `master` takes pull requests only, so this goes through one like anything else.
 2. Tag `vX.Y.Z` on the merged bump, and push the tag.
 3. `gh release create vX.Y.Z` with notes covering what merged, leading with any change to numerical output.
 
-Publishing the release runs `.github/workflows/publish.yml`, which builds the sdist and wheel and uploads them to PyPI. Nothing is published by hand. The workflow refuses to upload if the tag disagrees with `__version__`, or if the wheel is missing the `euvst_response/data` files, because a PyPI version cannot be replaced once it exists.
+Publishing the release runs `.github/workflows/publish.yml`, which builds the sdist and wheel and uploads them to PyPI. Nothing is published by hand. The workflow refuses to upload if the tag disagrees with `__version__`, or if the wheel is missing the `eclipse/data` files, because a PyPI version cannot be replaced once it exists.
 
 Read the Docs builds its `stable` version from the latest tag, so a release is also what moves the published documentation forward.
 

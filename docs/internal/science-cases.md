@@ -51,4 +51,4 @@ Its settings replace the defaults. A `simulation` section in it can also replace
 | II-2-1 | Energy buildup | Active region | 1.6 | 0.5 | 4 |
 | II-2-2 | Eruption physics | Active region | 0.4 | 0.5 | 4 |
 
-The cases and their lines are in `euvst_response/data/science_cases.yaml`.
+The cases and their lines are in `src/eclipse/data/science_cases.yaml`.

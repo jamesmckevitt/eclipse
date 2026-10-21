@@ -2,7 +2,7 @@
 Deprecated functions, which warn when called and will be removed in a future release.
 
 Each can still be imported from where it was before, such as
-`euvst_response.frame.apply_spectral_psf`, so existing scripts still run.
+`eclipse.frame.apply_spectral_psf`, so existing scripts still run.
 """
 
 from __future__ import annotations
@@ -32,11 +32,11 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     Blur a frame's rows with the instrument's spectral response.
 
     Along the dispersion a pixel is a row. The response is that of
-    :func:`~euvst_response.radiometric.apply_focusing_optics_psf` for a
+    :func:`~eclipse.radiometric.apply_focusing_optics_psf` for a
     synthesis through the same slit, on the same rows: for `spectral_psf`
     `"quadrature"` a Gaussian of
-    :func:`~euvst_response.radiometric.spectral_psf_fwhm`, and for
-    `"convolution"` :func:`~euvst_response.radiometric.spectral_line_spread`.
+    :func:`~eclipse.radiometric.spectral_psf_fwhm`, and for
+    `"convolution"` :func:`~eclipse.radiometric.spectral_line_spread`.
     The slit's image is part of the line profile, so a wider slit gives a
     wider response: a FWHM of 2.54 rows for the 0.2 arcsec slit and 3.35
     for the 0.4 arcsec slit.
@@ -46,9 +46,9 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     of a CCD do receive light from just off the chip, and at the butted edge
     the spectrum continues across the gap. To include this, lay the spectrum
     with a `margin` of at least
-    :func:`~euvst_response.radiometric.spectral_psf_reach` rows past each
-    end (:func:`~euvst_response.frame.photons_from_lines` and
-    :func:`~euvst_response.frame.photons_from_spectrum` take one), and pass
+    :func:`~eclipse.radiometric.spectral_psf_reach` rows past each
+    end (:func:`~eclipse.frame.photons_from_lines` and
+    :func:`~eclipse.frame.photons_from_spectrum` take one), and pass
     the same margin here. The result is then the chip's own rows. The
     kernel is normalised, so flux that stays within the rows is conserved.
 
@@ -56,8 +56,8 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     moves a line narrower than a row toward the middle of its row, by up to
     a few km/s.
     Give `spectral_psf` and `det` to
-    :func:`~euvst_response.frame.photons_from_lines` or
-    :func:`~euvst_response.frame.photons_from_spectrum` instead, which blur
+    :func:`~eclipse.frame.photons_from_lines` or
+    :func:`~eclipse.frame.photons_from_spectrum` instead, which blur
     the light as it is laid onto the rows.
     """
     _warn("apply_spectral_psf",
@@ -109,12 +109,12 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     _warn("get_dem_data_from_results",
           "no released version wrote DEM data into the results. The DEM is in the synthesis "
           "file; read it with "
-          "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv']).")
+          "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv']).")
     if "dem_data" not in results:
         raise KeyError(
             "DEM data is not in the results, as no released version wrote it there. It is "
             "in the synthesis file: read it with "
-            "euvst_response.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
+            "eclipse.read_synthesis_products(path, keys=['dem_map', 'em_tv'])."
         )
 
     return results["dem_data"]

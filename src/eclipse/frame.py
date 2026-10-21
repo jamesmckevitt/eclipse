@@ -115,7 +115,7 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     slit's image it is convolved with, both in Angstrom. With `spectral_psf`
     `"quadrature"` the slit is included in the Gaussian and the width is 0.
 
-    The response is set in rows, as :func:`~euvst_response.radiometric._spectral_response`
+    The response is set in rows, as :func:`~eclipse.radiometric._spectral_response`
     gives it, and converted at the width of the row each wavelength falls
     in. The row width changes by less than a part in 1e4 across the
     response.
@@ -161,7 +161,7 @@ def _check_margin(margin: int, lit_only: bool) -> None:
 
 def _photons_per_energy(telescope, wavelength: u.Quantity) -> u.Quantity:
     """
-    :func:`~euvst_response.radiometric.photons_per_energy` at each wavelength.
+    :func:`~eclipse.radiometric.photons_per_energy` at each wavelength.
 
     Raises ValueError for a wavelength outside the telescope's throughput
     tables, where it has no effective area: a single one would turn every
@@ -232,7 +232,7 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     spectral_psf : str, optional
         `"quadrature"` or `"convolution"`, as in the configuration: blur the
         lines with the spectral response of
-        :func:`~euvst_response.radiometric.apply_focusing_optics_psf` for a
+        :func:`~eclipse.radiometric.apply_focusing_optics_psf` for a
         synthesis through the same slit. None, the default, lays the lines
         as emitted.
 
@@ -402,7 +402,7 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     """
     Photons in each pixel of a frame and the wavelength of their mean energy.
 
-    The photons are as from :func:`~euvst_response.readout.expose`. This is
+    The photons are as from :func:`~eclipse.readout.expose`. This is
     :func:`expose_with_wavelengths` without the spread of photon energies,
     which :func:`detect` also takes.
 
@@ -433,7 +433,7 @@ def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: 
     Photons in each pixel of a frame and the wavelengths of their mean and
     root mean square energies.
 
-    The photons are as from :func:`~euvst_response.readout.expose`. Without
+    The photons are as from :func:`~eclipse.readout.expose`. Without
     a shutter a pixel holds photons from every row its charge crossed.
     :func:`detect` needs their mean energy to convert them to electrons, and
     their root mean square energy for the spread in electrons from photons
@@ -484,7 +484,7 @@ def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quan
     wavelengths of their mean and root mean square energies.
 
     As :func:`expose_with_wavelengths`, for the samples of
-    :func:`~euvst_response.readout.expose_serial_overscan`. A sample no
+    :func:`~eclipse.readout.expose_serial_overscan`. A sample no
     photons reach takes the wavelength of the image pixel next to it.
 
     Returns
@@ -528,7 +528,7 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
     """
     Electrons per pixel from the photons a frame recorded.
 
-    The stages are those of :func:`euvst_response.radiometric.to_electrons`:
+    The stages are those of :func:`eclipse.radiometric.to_electrons`:
     quantum efficiency, electrons per photon with their Fano spread, dark
     current and read noise. A frame spans the band, so each row has its own
     photon energy. Without a shutter each row waits a different time to be
@@ -546,7 +546,7 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         energy, as from :func:`expose_with_wavelengths`.
     dark_time : u.Quantity
         Time each row collects dark current, one per row or one for all, as
-        from :func:`euvst_response.readout.dark_current_time`, or one per
+        from :func:`eclipse.readout.dark_current_time`, or one per
         pixel, same shape as `photons`.
     det : Detector_SWC
         Detector.
@@ -589,6 +589,6 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
 def digitise(electrons: np.ndarray, det) -> np.ndarray:
     """
     DN per pixel: electrons divided by the gain, rounded and clipped at the
-    detector's maximum, as in :func:`euvst_response.radiometric.to_dn`.
+    detector's maximum, as in :func:`eclipse.radiometric.to_dn`.
     """
     return _digitise(electrons, det)

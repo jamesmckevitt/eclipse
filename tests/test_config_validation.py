@@ -7,11 +7,11 @@ import sys
 
 import pytest
 
-from euvst_response.main import (
+from eclipse.main import (
     _FITTING_COMPONENT_KEYS, _FITTING_KEYS, _RASTER_KEYS, _SIMULATION_KEYS,
     _SYNTHESIS_KEYS, _TOP_LEVEL_KEYS, _validate_config_keys, main,
 )
-from euvst_response.utils import check_config_keys, suggest_config_key
+from eclipse.utils import check_config_keys, suggest_config_key
 
 MINIMAL = {"instrument": "SWC", "uniform_intensity": "5000 erg / (s cm2 sr)"}
 
@@ -219,7 +219,7 @@ def _keys_main_reads(*names, readers=_CONFIG_READERS):
 
     from pathlib import Path
 
-    source = Path(importlib.import_module("euvst_response.main").__file__)
+    source = Path(importlib.import_module("eclipse.main").__file__)
     tree = ast.parse(source.read_text())
     functions = [node for node in tree.body
                  if isinstance(node, ast.FunctionDef) and node.name in readers]

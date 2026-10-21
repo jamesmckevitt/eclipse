@@ -9,11 +9,11 @@ import sys
 import numpy as np
 import pytest
 
-from euvst_response import cli
-from euvst_response.main import _allowed_cpus, _cpu_list, _rank_cpus
+from eclipse import cli
+from eclipse.main import _allowed_cpus, _cpu_list, _rank_cpus
 
 # The package attribute monte_carlo is the function, so import the module.
-monte_carlo = importlib.import_module("euvst_response.monte_carlo")
+monte_carlo = importlib.import_module("eclipse.monte_carlo")
 
 
 def test_each_rank_draws_its_own_numbers_and_again_the_same_ones():
@@ -67,7 +67,7 @@ def test_a_failing_rank_says_so_and_ends_the_run(monkeypatch, capfd):
             aborted.append(code)
             raise SystemExit(code)
 
-    monkeypatch.setattr("euvst_response.utils._get_mpi_info", lambda: (Comm(), 3, 4))
+    monkeypatch.setattr("eclipse.utils._get_mpi_info", lambda: (Comm(), 3, 4))
     with pytest.raises(SystemExit):
         cli._fail("Error during simulation: out of memory")
     assert aborted == [1]
@@ -77,7 +77,7 @@ def test_a_failing_rank_says_so_and_ends_the_run(monkeypatch, capfd):
 @pytest.mark.parametrize("ncpu", [0, 2.5, True])
 def test_ncpu_is_a_whole_number_of_cpus_or_minus_one(ncpu, tmp_path, monkeypatch):
     import yaml
-    from euvst_response.main import main
+    from eclipse.main import main
 
     config = tmp_path / "run.yaml"
     config.write_text(yaml.safe_dump({"instrument": "SWC", "ncpu": ncpu,

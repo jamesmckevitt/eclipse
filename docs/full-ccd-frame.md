@@ -9,7 +9,7 @@ A frame is made from a synthesis file from ECLIPSE's [synthesis of an MHD simula
 `band_contribution_functions` works out the contribution function of every CHIANTI line in the band, on the synthesis's grids and with its abundances, and `write_band_lines` keeps them in a file:
 
 ```python
-from euvst_response import band_contribution_functions, read_synthesis_products, write_band_lines
+from eclipse import band_contribution_functions, read_synthesis_products, write_band_lines
 
 if __name__ == "__main__":
     products = read_synthesis_products("synthesis.h5", keys=["logT_grid", "logN_grid", "config"])
@@ -28,7 +28,7 @@ The continuum is optional. It is worked out on wavelengths finer than a detector
 ```python
 import astropy.units as u
 import numpy as np
-from euvst_response.continuum import compute_continuum_fiasco
+from eclipse.continuum import compute_continuum_fiasco
 
 if __name__ == "__main__":
     wavelength = np.linspace(170.0, 214.0, 10481) * u.AA
@@ -41,7 +41,7 @@ This takes about 6 minutes on 16 cores.
 ## 3. The frame
 
 ```python
-from euvst_response import full_ccd_frame, read_band_lines, write_full_frame
+from eclipse import full_ccd_frame, read_band_lines, write_full_frame
 
 lines = read_band_lines("band_lines.h5")
 frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
@@ -55,7 +55,7 @@ write_full_frame(frame, "frame.h5")
 The slit width, PSF and noise can instead be taken from a `Simulation`, as in an instrument-response run:
 
 ```python
-from euvst_response import Simulation
+from eclipse import Simulation
 
 sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=True)
 frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,

@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
 from scipy.sparse import csr_matrix
@@ -19,7 +18,7 @@ from .radiometric import (_carry_photon_meta, _spectral_response, across_slit_fw
 from .radiometric import slit_image_width, spectral_blur_fwhm, spectral_psf_fwhm  # noqa: F401
 from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
                        pixel_weights_through)
-from .utils import (_bin_edges, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
+from .utils import (_bin_edges, _unpickle, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
 
 
@@ -71,7 +70,7 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
             f"{pkl_file} is neither a synthesis file, which is HDF5, nor a synthesis pickle "
             f"as older versions of ECLIPSE wrote.")
     with open(pkl_file, "rb") as f:
-        tmp = dill.load(f)
+        tmp = _unpickle(f)
     
     # Handle new synthesis format
     if "line_cubes" not in tmp:
@@ -449,13 +448,13 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     spectral PSF if `sim.psf` is on. Blurring them on the pixels, as the
     Monte Carlo does for a cube without `psf_applied`, moves a line narrower
     than a pixel toward its middle; here each wavelength keeps its place.
-    The pixels extend :func:`~euvst_response.radiometric.spectral_psf_margin`
+    The pixels extend :func:`~eclipse.radiometric.spectral_psf_margin`
     further at each end, as :func:`pad_spectral_axis` does for a PSF on the
     pixels.
 
     Each wavelength's light is converted to photons at that wavelength,
     with the telescope's area and the photon energy there
-    (:func:`~euvst_response.radiometric.photons_per_energy`), before the
+    (:func:`~eclipse.radiometric.photons_per_energy`), before the
     blur. The Monte Carlo counts a pixel's photons at the pixel's
     wavelength, so the returned spectra are the radiance that gives each
     pixel its photons that way. A photon frees electrons by its own energy,
@@ -467,7 +466,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
 
     Returns `(spectra, grid, meta)`, with the grid in cm and `meta` the
     cube's photon `meta` entries, named as in
-    :func:`~euvst_response.radiometric._carry_photon_meta`.
+    :func:`~eclipse.radiometric._carry_photon_meta`.
     """
     step = (det.wvl_res * u.pix).to_value(u.cm)
     centres = spectral_world.to_value(u.cm)
@@ -612,7 +611,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
 
     Parameters
     ----------
-    synthesis : euvst_response.synthesis_file.Synthesis
+    synthesis : eclipse.synthesis_file.Synthesis
         Spectra read from a synthesis file.
     reference_line : str
         Line whose window is observed and whose velocity is measured.
@@ -624,7 +623,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
         `synthesis.summed(reference_line)`, if already computed.
     meta : dict, optional
         Cube metadata beyond what
-        :meth:`~euvst_response.synthesis_file.Synthesis.summed_meta` gives,
+        :meth:`~eclipse.synthesis_file.Synthesis.summed_meta` gives,
         such as the synthesis's `dynamic_mode`, or a time series' `raster`
         entries, whose columns are its exposures and are kept as they are.
     tel : Telescope_EUVST or Telescope_EIS, optional
@@ -679,7 +678,7 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
     reference pixel moves with the data, so existing pixels keep their
     wavelengths. Used to widen a synthesis window for a spectral PSF that
     reaches beyond its margin
-    (:func:`~euvst_response.radiometric.spectral_psf_margin`).
+    (:func:`~eclipse.radiometric.spectral_psf_margin`).
     """
     if n < 0:
         raise ValueError(f"Cannot pad by a negative number of pixels, got {n}.")

@@ -10,7 +10,7 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.fitting import FitComponent, FitConfig, _unmeasurable, fit_cube_gauss
+from eclipse.fitting import FitComponent, FitConfig, _unmeasurable, fit_cube_gauss
 
 REST = 195.119 * u.Angstrom
 BLEND = 195.179 * u.Angstrom

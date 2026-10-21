@@ -15,9 +15,9 @@ import h5py
 import numpy as np
 import pytest
 
-from euvst_response import cli, utils
-from euvst_response.atmosphere import Atmosphere, describe_atmosphere_file, read_atmosphere, write_atmosphere
-from euvst_response.raster import AtmosphereSeries
+from eclipse import cli, utils
+from eclipse.atmosphere import Atmosphere, describe_atmosphere_file, read_atmosphere, write_atmosphere
+from eclipse.raster import AtmosphereSeries
 
 
 def test_the_logo_is_no_syntax_warning():
@@ -83,7 +83,7 @@ def test_debug_opens_in_the_frame_of_the_function_that_failed(monkeypatch):
 
 def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypatch):
     """When raised in a function the decorated one calls, it opens there, not in the caller."""
-    from euvst_response.config import check_pinhole_lists
+    from eclipse.config import check_pinhole_lists
 
     seen = {}
 
@@ -103,15 +103,33 @@ def test_debug_opens_in_the_frame_of_eclipses_own_function_that_raised(monkeypat
     assert "config" not in seen and seen["sizes"] == [5 * u.um]
 
 
-def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path):
-    """An environment inside some other repository is not a checkout of ECLIPSE."""
+@pytest.mark.parametrize("inside", [
+    Path(".venv/lib/site-packages/eclipse"), Path("libraries/eclipse/src/eclipse")])
+def test_the_git_commit_is_only_eclipses_own(monkeypatch, tmp_path, inside):
+    """An environment or a copy of ECLIPSE inside some other repository is not a checkout."""
     project = tmp_path / "project"
-    package = project / ".venv" / "lib" / "site-packages" / "euvst_response"
+    package = project / inside
     package.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(project)], check=True)
     import importlib.resources
     monkeypatch.setattr(importlib.resources, "files", lambda name: package)
     assert utils.get_git_commit_id() == "unknown (not installed from a git checkout of ECLIPSE)"
+
+
+def test_the_git_commit_of_a_checkout_with_the_package_in_src(monkeypatch, tmp_path):
+    checkout = tmp_path / "eclipse"
+    package = checkout / "src" / "eclipse"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    for command in (["init", "-q"], ["add", "."],
+                    ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                     "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "t"]):
+        subprocess.run(["git", "-C", str(checkout), *command], check=True)
+    head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    import importlib.resources
+    monkeypatch.setattr(importlib.resources, "files", lambda name: package)
+    assert utils.get_git_commit_id() == head
 
 
 def _atmosphere(tmp_path, name="box.h5", **overrides):
@@ -156,7 +174,7 @@ def test_text_attributes_written_as_one_element_arrays_are_read(tmp_path):
 
 
 def test_the_old_name_of_the_mass_per_electron_set_by_a_script_is_used():
-    from euvst_response.synthesis import resolve_mass_per_electron
+    from eclipse.synthesis import resolve_mass_per_electron
     args = argparse.Namespace(mass_per_electron=None, mean_mol_wt=1.29,
                               abundance="sun_coronal_2021_chianti")
     with pytest.warns(FutureWarning, match="mean_mol_wt is the old name"):
@@ -164,14 +182,14 @@ def test_the_old_name_of_the_mass_per_electron_set_by_a_script_is_used():
 
 
 def test_the_science_cases_refuse_a_time_series_in_the_base_settings():
-    from euvst_response.science_cases import science_case_configs
+    from eclipse.science_cases import science_case_configs
     for key in ("atmosphere_series", "synthesis_series", "raster", "synthesis"):
         with pytest.raises(ValueError, match=f"cannot set '{key}'.*not a time series"):
             science_case_configs(base={key: "x"})
 
 
 def test_each_science_case_configuration_has_its_own_lists():
-    from euvst_response.science_cases import DEFAULT_SETTINGS, science_case_configs
+    from eclipse.science_cases import DEFAULT_SETTINGS, science_case_configs
     configs, _ = science_case_configs()
     first, second = configs[0].config, configs[1].config
     first["offchip_bin_slit"].append(99)
@@ -182,7 +200,7 @@ def test_each_science_case_configuration_has_its_own_lists():
 
 
 def test_dynamic_mode_refuses_a_view_along_x(monkeypatch):
-    from euvst_response import synthesis
+    from eclipse import synthesis
     monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--slit-rest-time", "10 s",
                                       "--slit-width", "0.4 arcsec", "--integration-axis", "x",
                                       "--lines", "Fe12_195.1190"])
@@ -193,7 +211,7 @@ def test_dynamic_mode_refuses_a_view_along_x(monkeypatch):
 
 
 def test_a_crop_one_cell_wide_keeps_the_axis():
-    from euvst_response.synthesis import apply_cube_cropping, create_atmosphere_ndcube
+    from eclipse.synthesis import apply_cube_cropping, create_atmosphere_ndcube
     cubes = [create_atmosphere_ndcube(np.ones((4, 5, 6)) * unit, 1 * u.Mm, 1 * u.Mm, 1 * u.Mm)
              for unit in (u.K, u.g / u.cm**3, u.cm / u.s)]
     cropped = apply_cube_cropping(*cubes, ["0.1 Mm", "0.2 Mm"], None, None)
@@ -229,8 +247,8 @@ def test_an_exposure_that_starts_where_the_series_ends_is_refused():
 
 
 def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
-    from euvst_response.raster import RasterSynthesiser
-    from euvst_response.utils import angle_to_distance
+    from eclipse.raster import RasterSynthesiser
+    from eclipse.utils import angle_to_distance
 
     class Series:
         x_edges = np.arange(13) * 0.1 * u.Mm
@@ -246,8 +264,8 @@ def test_a_slit_a_rounding_error_past_the_edge_of_the_box_is_inside_it():
 
 def test_a_synthesis_files_text_attributes_written_as_one_element_arrays_are_read(tmp_path):
     """As IDL writes them, in a synthesis written by another code."""
-    from euvst_response.synthesis_file import (FORMAT_NAME, SpectralLine, Synthesis, read_synthesis,
-                                               read_synthesis_layout, write_synthesis)
+    from eclipse.synthesis_file import (FORMAT_NAME, SpectralLine, Synthesis, read_synthesis,
+                                        read_synthesis_layout, write_synthesis)
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA

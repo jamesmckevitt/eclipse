@@ -11,11 +11,11 @@ import numpy as np
 import pytest
 import yaml
 
-from euvst_response.atmosphere import Atmosphere
-from euvst_response.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-                                   Telescope_EIS, Telescope_EUVST, _load_throughput_table)
-from euvst_response.fitting import FitComponent, FitConfig
-from euvst_response.main import main
+from eclipse.atmosphere import Atmosphere
+from eclipse.config import (AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
+                            Telescope_EIS, Telescope_EUVST, _load_throughput_table)
+from eclipse.fitting import FitComponent, FitConfig
+from eclipse.main import main
 
 UNIFORM = {"instrument": "SWC", "n_iter": 1, "uniform_intensity": "5000 erg / (s cm2 sr)"}
 
@@ -132,7 +132,7 @@ def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as
     with pytest.warns(UserWarning, match=r"line 1: '17.0 0.l03' is taken as a header, but it "
                                          r"begins with a number"):
         assert _load_throughput_table(tmp_path / "first.dat")[1].tolist() == [0.103, 0.110]
-    for table in (files("euvst_response") / "data" / "throughput").iterdir():
+    for table in (files("eclipse") / "data" / "throughput").iterdir():
         if not table.name.endswith(".dat"):
             continue
         copy = tmp_path / table.name
@@ -205,8 +205,8 @@ def test_a_run_with_charge_left_behind_is_refused_rather_than_taken_as_without(
 
 def test_the_cameras_read_out_settings_are_taken_from_the_configuration():
     """They describe the camera for the read-out model; a run accepts them and builds it."""
-    from euvst_response.main import _validate_config_keys
-    from euvst_response.utils import _parse_section, load_yaml_config
+    from eclipse.main import _validate_config_keys
+    from eclipse.utils import _parse_section, load_yaml_config
 
     config = load_yaml_config(yaml.safe_dump({**UNIFORM, "detector": {
         "shutter": True, "n_rows": 1024, "ccd_gap": "2 mm", "row_transfer_time": "20 us",
@@ -222,7 +222,7 @@ def test_the_cameras_read_out_settings_are_taken_from_the_configuration():
 
 
 def test_a_yaml_merge_key_is_read_as_yaml_reads_it():
-    from euvst_response.utils import load_yaml_config
+    from eclipse.utils import load_yaml_config
 
     text = "a: &a {x: 1, y: 1}\nb:\n  <<: *a\n  y: 2\n"
     assert load_yaml_config(text) == yaml.safe_load(text) == {"a": {"x": 1, "y": 1},
@@ -293,7 +293,7 @@ def test_a_spectral_psf_the_telescope_and_detector_cannot_give_is_refused_before
 def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combination_runs(
         tmp_path, monkeypatch, capsys):
     """A one-row scene can be binned by 1 but not 2; 2 was found only when its turn came."""
-    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+    from eclipse.synthesis_file import SpectralLine, Synthesis, write_synthesis
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
@@ -309,7 +309,7 @@ def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combinati
 
 
 def test_the_line_of_a_uniform_intensity_is_said_to_be_ignored_elsewhere(tmp_path, monkeypatch):
-    from euvst_response.synthesis_file import SpectralLine, Synthesis, write_synthesis
+    from eclipse.synthesis_file import SpectralLine, Synthesis, write_synthesis
 
     edges = np.arange(3) * 0.1 * u.Mm
     wavelength = 195.119 * u.AA + np.arange(-30, 31) * 0.003 * u.AA
@@ -346,7 +346,7 @@ def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
 ])
 def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(monkeypatch, name,
                                                                              message):
-    from euvst_response import synthesis
+    from eclipse import synthesis
 
     def never(*args, **kwargs):
         raise AssertionError("the atmosphere was read")
@@ -359,7 +359,7 @@ def test_a_line_name_that_cannot_be_read_is_refused_before_the_atmosphere_is(mon
 
 
 def test_a_line_name_is_read_as_its_element_stage_and_wavelength():
-    from euvst_response.synthesis import _parse_line_name
+    from eclipse.synthesis import _parse_line_name
 
     assert _parse_line_name("Fe12_195.1190") == ("Fe", 12, 195.119)
     assert _parse_line_name("H1_1215.67") == ("H", 1, 1215.67)
@@ -367,8 +367,8 @@ def test_a_line_name_is_read_as_its_element_stage_and_wavelength():
 
 
 def test_each_element_is_read_from_mendeleev_once(monkeypatch):
-    from euvst_response import utils
-    from euvst_response.synthesis import _parse_line_name
+    from eclipse import utils
+    from eclipse.synthesis import _parse_line_name
 
     looked_up = []
     real_element = utils.element

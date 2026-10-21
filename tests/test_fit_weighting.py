@@ -9,11 +9,11 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.data_processing import create_uniform_intensity_cube
-from euvst_response.fitting import FitComponent, FitConfig, _poisson_residuals, fit_cube_gauss
-from euvst_response.monte_carlo import expected_dn_uncertainty
-from euvst_response.radiometric import dn_variance, to_dn, to_electrons
+from eclipse.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.data_processing import create_uniform_intensity_cube
+from eclipse.fitting import FitComponent, FitConfig, _poisson_residuals, fit_cube_gauss
+from eclipse.monte_carlo import expected_dn_uncertainty
+from eclipse.radiometric import dn_variance, to_dn, to_electrons
 
 REST = 195.119 * u.AA
 STEP = 0.0223 * u.AA

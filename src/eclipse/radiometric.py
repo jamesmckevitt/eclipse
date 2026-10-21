@@ -487,7 +487,7 @@ def spatial_psf_fwhm(tel, det) -> float:
     FWHM of the PSF along the slit, in detector pixels.
 
     `tel.psf_params[0]`, the optical design, and the resolution budget's
-    other terms (:func:`~euvst_response.resolution_budget.along_slit_fwhm`)
+    other terms (:func:`~eclipse.resolution_budget.along_slit_fwhm`)
     added in quadrature.
     """
     optics = tel.psf_params[0].to_value(u.pixel)
@@ -499,7 +499,7 @@ def across_slit_fwhm(tel) -> u.Quantity | None:
     FWHM of the telescope's blur across the slit, or None for none.
 
     `tel.psf_across_slit` and the resolution budget's terms before the slit
-    (:func:`~euvst_response.resolution_budget.across_slit_fwhm`) added in
+    (:func:`~eclipse.resolution_budget.across_slit_fwhm`) added in
     quadrature.
     """
     optics = getattr(tel, "psf_across_slit", None)
@@ -513,7 +513,7 @@ def spectral_blur_fwhm(tel, det) -> float:
     FWHM of the spectral PSF without the slit, in detector pixels.
 
     The optics (:func:`spectral_optics_fwhm`) and the resolution budget's
-    other terms (:func:`~euvst_response.resolution_budget.spectral_fwhm`)
+    other terms (:func:`~eclipse.resolution_budget.spectral_fwhm`)
     added in quadrature. This is the Gaussian convolved with the slit's
     image for `spectral_psf="convolution"`.
     """
@@ -558,7 +558,7 @@ def spectral_psf_fwhm(tel, det, slit_width: u.Quantity) -> float:
     slit. The optics FWHM and the slit image width add in quadrature, and
     `tel.psf_params[1]` is the FWHM for the slit `tel.psf_slit_width`. The
     resolution budget's other terms
-    (:func:`~euvst_response.resolution_budget.spectral_fwhm`) are added in
+    (:func:`~eclipse.resolution_budget.spectral_fwhm`) are added in
     quadrature too. For EUVST-SW's optics alone this gives 2.54, 3.35, 5.49
     and 10.30 pixels for the 0.2, 0.4, 0.8 and 1.6 arcsec slits. A
     telescope without `psf_slit_width` has the same optics FWHM for every

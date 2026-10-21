@@ -16,13 +16,13 @@ from astropy.io import fits
 from astropy.wcs import WCS, Sip
 from ndcube import NDCube
 
-from euvst_response import results_file
-from euvst_response.config import (AluminiumFilter, Detector_EIS,
-                                   Detector_SWC, Simulation, Telescope_EIS,
-                                   Telescope_EUVST)
-from euvst_response.fitting import FitComponent, FitConfig
-from euvst_response.raster import RasterPlan, SynthesisSettings
-from euvst_response.results_file import is_results_file, load_results, save_results
+from eclipse import results_file
+from eclipse.config import (AluminiumFilter, Detector_EIS,
+                            Detector_SWC, Simulation, Telescope_EIS,
+                            Telescope_EUVST)
+from eclipse.fitting import FitComponent, FitConfig
+from eclipse.raster import RasterPlan, SynthesisSettings
+from eclipse.results_file import is_results_file, load_results, save_results
 
 REST = 195.119 * u.Angstrom
 
@@ -363,7 +363,7 @@ def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
 
     assert str(results_file._package_root()).encode() not in path.read_bytes()
 
-    elsewhere = tmp_path / "another_install" / "euvst_response"
+    elsewhere = tmp_path / "another_install" / "eclipse"
     monkeypatch.setattr(results_file, "_package_root", lambda: elsewhere)
     restored = load_results(path)["telescope"]
 
@@ -935,7 +935,7 @@ def test_another_save_of_the_same_name_is_left_alone(tmp_path, monkeypatch):
     This holds even when both draw the same partial-file name.
     """
     draws = iter(["aaaa", "bbbb"])
-    monkeypatch.setattr("euvst_response.atmosphere.secrets.token_hex", lambda size: next(draws))
+    monkeypatch.setattr("eclipse.atmosphere.secrets.token_hex", lambda size: next(draws))
     theirs = tmp_path / "out.h5.aaaa.part"
     theirs.write_bytes(b"another run's")
     path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
@@ -1085,7 +1085,7 @@ def _combinations(first, second):
 
 def test_the_simulation_results_are_checked_as_they_are_put_together(tmp_path):
     """Signals are multiplied by units only, each signal once, and what is missing is named."""
-    from euvst_response.analysis import load_instrument_response_results
+    from eclipse.analysis import load_instrument_response_results
 
     signal = np.arange(24.0).reshape(2, 3, 4)
     path = save_results(tmp_path / "out.h5", _combinations((signal, u.DN), (signal * 2, u.DN)))

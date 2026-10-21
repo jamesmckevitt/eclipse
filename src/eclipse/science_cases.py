@@ -88,7 +88,7 @@ def load_science_cases(path: str | Path | None = None) -> list[dict]:
         One entry per case, as written in the table.
     """
     if path is None:
-        source = files("euvst_response") / "data" / "science_cases.yaml"
+        source = files("eclipse") / "data" / "science_cases.yaml"
     else:
         source = Path(path)
     return yaml.safe_load(source.read_text())

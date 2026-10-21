@@ -11,12 +11,12 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from euvst_response import synthesis
-from euvst_response.atmosphere import Atmosphere, write_atmosphere
-from euvst_response.continuum import (compute_continuum_fiasco, continuum_spectra,
-                                      continuum_windows, is_continuum)
-from euvst_response.synthesis_file import (SpectralLine, Synthesis, load_synthesis,
-                                           read_synthesis, read_synthesis_products)
+from eclipse import synthesis
+from eclipse.atmosphere import Atmosphere, write_atmosphere
+from eclipse.continuum import (compute_continuum_fiasco, continuum_spectra,
+                               continuum_windows, is_continuum)
+from eclipse.synthesis_file import (SpectralLine, Synthesis, load_synthesis,
+                                    read_synthesis, read_synthesis_products)
 
 C_CM_S = const.c.to_value(u.cm / u.s)
 
@@ -255,7 +255,7 @@ class _FakeIon:
 def test_two_photon_beyond_the_rates_uses_the_single_ion_model_at_every_density(monkeypatch):
     import fiasco
 
-    from euvst_response.continuum import _two_photon
+    from eclipse.continuum import _two_photon
 
     monkeypatch.setattr(fiasco, "Ion", _FakeIon)
     temperature = 10 ** np.array([6.0, 6.1, 6.2, 6.3, 6.4]) * u.K

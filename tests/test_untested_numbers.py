@@ -7,9 +7,9 @@ import pytest
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from euvst_response.config import Detector_SWC, Simulation, Telescope_EUVST
-from euvst_response.radiometric import add_visible_stray_light, to_dn, to_electrons
-from euvst_response.readout import MEASURED_SLIT_IMAGE_TILT, FocalPlane_SWC
+from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
+from eclipse.radiometric import add_visible_stray_light, to_dn, to_electrons
+from eclipse.readout import MEASURED_SLIT_IMAGE_TILT, FocalPlane_SWC
 
 REST = 195.119 * u.AA
 # Energy per electron-hole pair in silicon at -60 C, the SWC operating
@@ -72,7 +72,7 @@ def test_electrons_are_rounded_to_the_nearest_dn():
 
 def test_a_synthesised_line_has_the_brightness_and_the_thermal_width_it_should():
     """G EM / 4 pi, spread over a Gaussian of sigma lambda0 sqrt(kT / m) / c."""
-    from euvst_response.synthesis import synthesise_spectra
+    from eclipse.synthesis import synthesise_spectra
     log_t = np.array([6.2])
     grid = np.arange(-200, 201) * u.km / u.s
     emission_measure = 1.0e27
@@ -161,7 +161,7 @@ chianti = pytest.mark.chianti
 @chianti
 def test_the_contribution_function_is_fiascos_times_the_proton_electron_ratio():
     """fiasco's G(T, n) per n_e^2 for the line, times n_H / n_e, on the right axes."""
-    from euvst_response.synthesis import compute_goft_fiasco
+    from eclipse.synthesis import compute_goft_fiasco
 
     temperature = 10 ** np.array([6.1, 6.3]) * u.K
     density = 10 ** np.array([8.0, 10.0]) / u.cm**3
@@ -180,5 +180,5 @@ def test_the_contribution_function_is_fiascos_times_the_proton_electron_ratio():
 @chianti
 def test_the_mass_per_electron_of_coronal_abundances():
     """About 1.16 atomic mass units per free electron, fully ionised."""
-    from euvst_response.atmosphere import mass_per_electron
+    from eclipse.atmosphere import mass_per_electron
     assert mass_per_electron("sun_coronal_2021_chianti") == pytest.approx(1.158, abs=0.002)
