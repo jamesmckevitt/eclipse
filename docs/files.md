@@ -131,7 +131,7 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 | Attribute | Value |
 | --- | --- |
 | `exposure`, `slit_position`, `slit_width` | Each with its unit in `exposure_unit`, `slit_position_unit` and `slit_width_unit` |
-| `psf`, `spectral_psf`, `noise`, `psf_boundary`, `slit_mask`, `continuum` | The options the frame was made with. Files written by version 0.12.1 or earlier have no `psf_boundary` or `slit_mask`; those frames were made as with `"zero"` and `False`. |
+| `psf`, `spectral_psf`, `noise`, `psf_boundary`, `slit_mask`, `continuum` | The options the frame was made with |
 | `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
 | `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
 | `parallel_overscan_rows` | The overscan rows read after the image |
