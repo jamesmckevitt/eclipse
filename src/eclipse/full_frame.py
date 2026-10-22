@@ -687,13 +687,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         Among others: if `exposure` or `slit_width` is not above zero,
         `psf_boundary` is not `"replicate"` or `"zero"`, `slit_mask` is on
         and the telescope does not give the slit's openings for this slit
-        width, the slit is off the synthesis, `lines` or `continuum` are not on the synthesis's grids,
-        or `focal_plane` does not match `det` or has a tilted slit image.
-        With `sim`, if an argument differs from both its default and the
-        `Simulation`, or the `Simulation` asks for something the frame does
-        not model: an instrument other than SWC, pinholes, visible stray
-        light, or a field a subclass adds. One error lists
-        every such setting.
+        width, the slit is off the synthesis, `lines` or `continuum` are
+        not on the synthesis's grids, or `focal_plane` does not match `det`
+        or has a tilted slit image. With `sim`, if an argument differs from
+        both its default and the `Simulation`, or the `Simulation` asks for
+        something the frame does not model: an instrument other than SWC,
+        pinholes, visible stray light, or a field a subclass adds. One
+        error lists every such setting.
 
     Warns
     -----
