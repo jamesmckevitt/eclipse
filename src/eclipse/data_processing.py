@@ -17,7 +17,7 @@ from .radiometric import (_carry_photon_meta, _spectral_response, across_slit_fw
                           photons_per_energy, spatial_psf_fwhm, spectral_psf_margin)
 from .radiometric import slit_image_width, spectral_blur_fwhm, spectral_psf_fwhm  # noqa: F401
 from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
-                       pixel_weights_through)
+                       pixel_weights_through, points_onto_pixels)
 from .utils import (_bin_edges, _unpickle, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
                     onto_wavelength_bins)
 
@@ -713,6 +713,12 @@ def create_uniform_intensity_cube(
     within its wavelengths, however narrow the line. The tails beyond
     `n_sigma_extent` are left out.
 
+    With `tel` given and `sim.psf` on, the line is blurred by the spectral
+    response (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
+    `sim.spectral_psf`) before it is integrated over the pixels. `meta`
+    then records this in `psf_applied`, so the Monte Carlo does not blur it
+    again. The line is uniform along the slit, so it needs no blur there.
+
     Parameters
     ----------
     total_intensity : u.Quantity
@@ -724,7 +730,7 @@ def create_uniform_intensity_cube(
     det : Detector_SWC or Detector_EIS
         Detector whose pixels the cube is on.
     sim : Simulation
-        Simulation, which sets the slit.
+        Simulation, which sets the slit, `psf` and `spectral_psf`.
     n_sigma_extent : float, optional
         Number of sigma of the line to hold either side of its centre.
         Default 8.
@@ -734,8 +740,8 @@ def create_uniform_intensity_cube(
         noise. Default 1.
     tel : Telescope_EUVST or Telescope_EIS, optional
         Telescope. If given, the wavelength range is wide enough to hold the
-        line after the spectral PSF blurs it. Give it if the PSF will be on.
-        Default None.
+        line after the spectral PSF blurs it, and with `sim.psf` on the line
+        is blurred by it. Give it if the PSF will be on. Default None.
 
     Returns
     -------
@@ -784,11 +790,20 @@ def create_uniform_intensity_cube(
     # in pixels from the line centre, since absolute wavelengths would lose
     # a part in 1e12 of a pixel to rounding. Each pixel's upper edge is the
     # next one's lower edge, so nothing is counted twice or missed.
-    edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
-             / (np.sqrt(2.0) * sigma_lam)).decompose().value
-    profile = (total_intensity * 0.5 * np.diff(erf(edges)) / dlam).to(
-        u.erg / (u.s * u.cm**2 * u.sr * u.cm)
-    )
+    blurred = _through_the_optics(tel, sim)
+    if blurred:
+        # The line convolved with the response is a Gaussian of the two
+        # widths in quadrature, convolved with the slit's image for
+        # spectral_psf "convolution", integrated exactly over each pixel.
+        sigma, width = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+        sigma = np.hypot((sigma_lam / dlam).decompose().value, sigma)
+        edges = np.arange(n_lam + 1) - n_pix_half - 0.5
+        share = points_onto_pixels(0.0, edges, sigma, width).toarray()[:, 0]
+    else:
+        edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
+                 / (np.sqrt(2.0) * sigma_lam)).decompose().value
+        share = 0.5 * np.diff(erf(edges))
+    profile = (total_intensity * share / dlam).to(u.erg / (u.s * u.cm**2 * u.sr * u.cm))
     # Tile the profile along the slit axis. Every slit pixel holds the same
     # intensity but gets its own noise downstream, which rebin_slit_offchip
     # needs to sum them.
@@ -819,5 +834,6 @@ def create_uniform_intensity_cube(
             "thermal_width": thermal_width,
             "line_name": "uniform",
             "uniform_mode": True,
+            **({"psf_applied": True} if blurred else {}),
         },
     )

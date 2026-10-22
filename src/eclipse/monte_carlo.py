@@ -4,6 +4,7 @@ Monte Carlo simulation functions for instrument response analysis.
 
 from __future__ import annotations
 import dataclasses
+import warnings
 from typing import Tuple
 import numpy as np
 import astropy.units as u
@@ -117,8 +118,9 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     np.ndarray
         Uncertainty in DN, same shape as the binned DN.
     """
+    _warn_blur_on_pixels(I_cube, sim, stacklevel=2)
     quiet = dataclasses.replace(sim, noise=False)
-    steps = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
+    steps = _simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
     electrons = steps[8]
     # Clip each pixel at the digitiser's maximum before binning, as to_dn
     # does, but do not round, as the mean DN is not rounded.
@@ -129,6 +131,17 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     mean, rms = binned_photon_wavelengths(steps[5], offchip_bin_slit)
     return np.sqrt(dn_variance(dn, mean, t_exp, det, visible, offchip_bin_slit,
                                rms_wavelength=rms))
+
+
+def _warn_blur_on_pixels(I_cube: NDCube, sim, stacklevel: int) -> None:
+    """Warn that `simulate_once` will blur `I_cube` on its pixels, if it will."""
+    if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
+        warnings.warn(
+            "The PSF blurs this cube on the detector's pixels, which pulls a line narrower than "
+            "a pixel toward the pixel's centre. To avoid this, blur the spectrum by the spectral "
+            "response before laying it onto the pixels, as rebin_atmosphere and rebin_spectra "
+            "given the telescope, or create_uniform_intensity_cube given the telescope, do, and "
+            "set meta['psf_applied'] = True.", UserWarning, stacklevel=stacklevel + 1)
 
 
 def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
@@ -190,8 +203,8 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         photons_pixels = _with_filter_transmission(photons_pixels, tel)
 
     # Apply focusing optics PSF (primary mirror + diffraction grating),
-    # unless the cube was laid onto the pixels through it (rebin_atmosphere
-    # with a telescope). That is exact; blurring the pixels is not.
+    # unless the cube was laid onto the pixels through it. That is exact;
+    # blurring the pixels is not.
     if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
         photons_focused = apply_focusing_optics_psf(
             photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
@@ -226,6 +239,15 @@ def simulate_once(
     The steps, in order, are the exposure, telescope, pixels, PSF, pinholes,
     photon arrivals, detector, stray light and digitiser.
 
+    With `sim.psf` on, a cube whose `meta["psf_applied"]` is True is not
+    blurred again. This is set by :func:`~eclipse.data_processing.rebin_atmosphere`
+    and :func:`~eclipse.data_processing.rebin_spectra` given the telescope,
+    and by :func:`~eclipse.data_processing.create_uniform_intensity_cube`
+    given the telescope and `sim.psf` on, which blur the spectrum before
+    laying it onto the pixels. Any other cube is blurred on its pixels.
+    This pulls a line narrower than a pixel toward the pixel's centre, and
+    a UserWarning says so.
+
     Parameters
     ----------
     I_cube : NDCube
@@ -258,6 +280,16 @@ def simulate_once(
         photons arriving, electrons, electrons with stray light, electrons
         with the pinholes' visible light, and DN.
     """
+    _warn_blur_on_pixels(I_cube, sim, stacklevel=2)
+    return _simulate_once(I_cube, t_exp, det, tel, sim, uniform_mode=uniform_mode,
+                          photon_shot_inverse_transform=photon_shot_inverse_transform,
+                          dark_current_inverse_transform=dark_current_inverse_transform)
+
+
+def _simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, *,
+                   uniform_mode: bool = False, photon_shot_inverse_transform: bool = False,
+                   dark_current_inverse_transform: bool = False) -> Tuple[NDCube, ...]:
+    """:func:`simulate_once` without the warning."""
     (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
      photons_euv_pinholes) = _photons_on_the_detector(I_cube, t_exp, det, tel, sim,
                                                       uniform_mode)
@@ -381,6 +413,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")
 
+    _warn_blur_on_pixels(I_cube, sim, stacklevel=2)
     do_dn = fit_signals in ("both", "dn")
     do_photon = fit_signals in ("both", "photon")
     rest_wavelength = I_cube.meta["rest_wav"]
@@ -427,7 +460,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                       disable=not show_progress):
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(
+             electrons_pinholes, dn) = _simulate_once(
                 I_cube, t_exp, det, tel, sim,
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
@@ -508,7 +541,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             # Simulate one run
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(
+             electrons_pinholes, dn) = _simulate_once(
                 I_cube, t_exp, det, tel, sim,
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
