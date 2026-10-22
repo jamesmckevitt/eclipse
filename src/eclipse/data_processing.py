@@ -714,6 +714,26 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
 _CELLS_PER_PIXEL = 64
 
 
+def _line_in_cells(centre: float, sigma: float, n_pix_half: int, step: float,
+                   offset: float = 0.0) -> tuple:
+    """
+    Cell edges over `2 * n_pix_half + 1` pixels of width `step` centred on
+    `centre`, `_CELLS_PER_PIXEL` cells to a pixel, and the share of a
+    Gaussian line of `sigma` pixels in each.
+
+    The line is `offset` pixels above `centre`. A `sigma` of 0 puts the
+    line in the cell holding its centre.
+    """
+    in_pixels = (np.arange((2 * n_pix_half + 1) * _CELLS_PER_PIXEL + 1) / _CELLS_PER_PIXEL
+                 - n_pix_half - 0.5)
+    from_line = in_pixels - offset
+    if sigma > 0:
+        below = 0.5 * erf(from_line / (np.sqrt(2.0) * sigma))
+    else:
+        below = 0.5 * np.sign(from_line)
+    return centre + in_pixels * step, np.diff(below)
+
+
 def create_uniform_intensity_cube(
     total_intensity: u.Quantity,
     rest_wavelength: u.Quantity,
@@ -821,14 +841,14 @@ def create_uniform_intensity_cube(
         # The line goes onto the pixels as a synthesis does: the photons of
         # each cell at its own wavelength, then the spectral response. Each
         # cell holds the line integrated over it, and the cells are fine
-        # enough that the result does not depend on them.
+        # enough that the result does not depend on them. The pixels then
+        # hold the radiance that gives their photons at their own
+        # wavelengths, so they add up to the intensity only where the
+        # effective area and photon energy do not change across the line.
         response = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
         step = dlam.to_value(u.cm)
-        in_pixels = (np.arange(n_lam * _CELLS_PER_PIXEL + 1) / _CELLS_PER_PIXEL
-                     - n_pix_half - 0.5)
-        cells = lam0.value + in_pixels * step
-        share = 0.5 * np.diff(erf(in_pixels * (dlam / (np.sqrt(2.0) * sigma_lam))
-                                  .decompose().value))
+        cells, share = _line_in_cells(lam0.value, (sigma_lam / dlam).decompose().value,
+                                      n_pix_half, step)
         radiance = total_intensity.to_value(unit * u.cm) * share / np.diff(cells)
         grid = lam0.value + (np.arange(n_lam) - n_pix_half) * step
         profile, photon_meta = _cells_onto_pixels(radiance, 0.5 * (cells[:-1] + cells[1:]),

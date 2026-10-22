@@ -164,7 +164,7 @@ def _narrow_cube(instrument, sim, offset=0.0):
 
     The cube always has the line on the middle of a pixel. For other
     offsets its data are replaced by the same line laid on the same pixels
-    the same way, from cells moved by `offset`. Without the PSF the line is
+    the same way, with the line moved by `offset`. Without the PSF it is
     integrated over the pixels as it is. At offset 0 this gives the cube.
     """
     det, tel, _ = INSTRUMENTS[instrument]
@@ -178,11 +178,8 @@ def _narrow_cube(instrument, sim, offset=0.0):
     radiance = INTENSITY.to_value(cube.unit * u.cm)
     meta = dict(cube.meta)
     if sim.psf:
-        n_cells = cube.data.shape[-1] * dp._CELLS_PER_PIXEL
-        in_pixels = np.arange(n_cells + 1) / dp._CELLS_PER_PIXEL - n_half - 0.5
-        cells = REST.to_value(u.cm) + (in_pixels + offset) * step
-        mean = (radiance * 0.5 * np.diff(erf(in_pixels / (np.sqrt(2.0) * NARROW)))
-                / np.diff(cells))
+        cells, share = dp._line_in_cells(REST.to_value(u.cm), NARROW, n_half, step, offset)
+        mean = radiance * share / np.diff(cells)
         grid = REST.to_value(u.cm) + (np.arange(2 * n_half + 1) - n_half) * step
         data, photons = dp._cells_onto_pixels(mean, 0.5 * (cells[1:] + cells[:-1]), cells,
                                               grid, det, sim, tel)
@@ -259,7 +256,7 @@ def test_a_cube_without_psf_applied_is_blurred_on_its_pixels_and_warns(instrumen
 @pytest.mark.parametrize("width", [3, 30])
 @pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
 @pytest.mark.parametrize("instrument", ["SWC", "EIS"])
-def test_the_line_is_laid_as_a_synthesis_of_it_is(instrument, spectral_psf, width):
+def test_the_line_matches_the_same_line_through_rebin_spectra(instrument, spectral_psf, width):
     """
     The line, sampled at 64 points per pixel into a synthesis and laid onto
     the pixels by `rebin_spectra`, gives the same pixels and photon
@@ -394,3 +391,11 @@ def test_a_line_made_for_another_response_is_refused(change):
         simulate_once(cube, 1 * u.s, DET, TEL, other, uniform_mode=True)
     with pytest.raises(ValueError, match=reason):
         monte_carlo(cube, 1 * u.s, DET, TEL, other, n_iter=1, uniform_mode=True)
+
+
+def test_a_line_of_no_width_is_laid_through_the_response():
+    """With the PSF, a line of zero width takes the shape of the response alone."""
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True)
+    cube = _cube(0, sim=sim)
+    assert np.all(np.isfinite(cube.data)) and cube.data.max() > 0
+    assert np.isclose(np.argmax(cube.data[0, 0]), cube.data.shape[-1] // 2)
