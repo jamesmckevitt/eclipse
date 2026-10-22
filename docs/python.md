@@ -115,6 +115,10 @@ print(f"Velocity precision: {primary['velocity']['std'].squeeze():.2f}")
 
 `dn_stats` and `photon_stats` hold the fits to the signal in DN and in photons. For each fitted component, by name, they hold its intensity, velocity and width, each as the first fit and the mean and standard deviation over the iterations, in each pixel.
 
+Given the telescope and a simulation with `psf=True`, `create_uniform_intensity_cube` blurs the line by the spectral response before it lays the line onto the pixels, and sets `cube.meta["psf_applied"]`. `monte_carlo` and `simulate_once` do not blur such a cube again.
+
+A cube you make yourself is blurred on its pixels, unless `meta["psf_applied"]` is True. Blurring the pixels pulls a line narrower than a pixel toward the pixel's centre, which biases its fitted velocity, and a warning says so. To avoid this, blur your spectra by the spectral response before you average them onto the pixels, and set `meta["psf_applied"] = True`. [`spectral_psf_fwhm`](#the-spectral-psf) gives the width of the response for each slit.
+
 To observe a synthesis file, use `eclipse`.
 
 ## Common random numbers

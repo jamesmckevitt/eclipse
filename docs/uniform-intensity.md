@@ -36,7 +36,7 @@ offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 
 ## The point spread function
 
-The line is the same all along the slit, so with `psf: True` ECLIPSE blurs it in wavelength only. Blurring it along the slit would make no difference.
+With `psf: True`, ECLIPSE blurs the line by the instrument's spectral response, set by the slit width and `spectral_psf`, before it lays the line onto the wavelength pixels. Each pixel then holds the blurred line integrated over that pixel. The line is the same all along the slit, so it is not blurred along the slit, where it would make no difference.
 
 ## Why use it
 
