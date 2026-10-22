@@ -13,7 +13,7 @@ from tqdm import tqdm
 from .radiometric import (
     apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput,
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
-    add_pinhole_visible_light, dn_variance, _digitise
+    add_pinhole_visible_light, dn_variance, _digitise, _spectral_response
 )
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
                                   apply_euv_pinhole_diffraction)
@@ -134,14 +134,30 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
 
 
 def _warn_blur_on_pixels(I_cube: NDCube, sim, stacklevel: int) -> None:
-    """Warn that `simulate_once` will blur `I_cube` on its pixels, if it will."""
-    if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
+    """Warn that `simulate_once` will blur `I_cube` on its pixels, if it will, on one rank."""
+    if (sim.psf and not (I_cube.meta or {}).get("psf_applied", False)
+            and _get_mpi_info()[1] == 0):
         warnings.warn(
             "The PSF blurs this cube on the detector's pixels, which pulls a line narrower than "
-            "a pixel toward the pixel's centre. To avoid this, blur the spectrum by the spectral "
-            "response before laying it onto the pixels, as rebin_atmosphere and rebin_spectra "
-            "given the telescope, or create_uniform_intensity_cube given the telescope, do, and "
-            "set meta['psf_applied'] = True.", UserWarning, stacklevel=stacklevel + 1)
+            "a pixel toward the pixel's centre. To avoid this, blur the scene by the PSF, in "
+            "wavelength and along the slit, before averaging it onto the pixels, as "
+            "rebin_atmosphere and rebin_spectra do given the telescope, or make a single line "
+            "with create_uniform_intensity_cube given the telescope, and set "
+            "meta['psf_applied'] = True.", UserWarning, stacklevel=stacklevel + 1)
+
+
+def _check_spectral_response(I_cube: NDCube, det, tel, sim) -> None:
+    """Refuse a cube made through a spectral response other than the one `sim` observes with."""
+    made = (I_cube.meta or {}).get("spectral_response")
+    if made is None:
+        return
+    observed = (_spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+                if sim.psf else None)
+    if observed is None or not np.allclose(made, observed, rtol=1e-12, atol=0.0):
+        raise ValueError(
+            "This cube was made through the spectral response for another PSF, slit width or "
+            "spectral_psf than this simulation's. Make it again with "
+            "create_uniform_intensity_cube for this simulation and telescope.")
 
 
 def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
@@ -170,6 +186,8 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
             "simulation.slit_mask and psf are both on, but this cube was masked without the "
             "PSF, so blurring it now would put light back behind the fiducials. Lay the scene "
             "onto the pixels again with rebin_atmosphere or rebin_spectra, with both on.")
+
+    _check_spectral_response(I_cube, det, tel, sim)
 
     # Apply exposure time
     intensity_exp = apply_exposure(I_cube, t_exp)
@@ -246,7 +264,9 @@ def simulate_once(
     given the telescope and `sim.psf` on, which blur the spectrum before
     laying it onto the pixels. Any other cube is blurred on its pixels.
     This pulls a line narrower than a pixel toward the pixel's centre, and
-    a UserWarning says so.
+    a UserWarning says so. A cube from `create_uniform_intensity_cube` made
+    through another spectral response than `sim` gives is refused with a
+    ValueError.
 
     Parameters
     ----------

@@ -717,7 +717,9 @@ def create_uniform_intensity_cube(
     response (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
     `sim.spectral_psf`) before it is integrated over the pixels. `meta`
     then records this in `psf_applied`, so the Monte Carlo does not blur it
-    again. The line is uniform along the slit, so it needs no blur there.
+    again, and the response in `spectral_response`. The line is uniform
+    along the slit, so it needs no blur there. Observe the cube with the
+    same telescope, slit and `spectral_psf`.
 
     Parameters
     ----------
@@ -764,12 +766,11 @@ def create_uniform_intensity_cube(
     # The grid must hold the line as measured, not as emitted, so add the
     # spectral PSF to the thermal width in quadrature, as Gaussian widths
     # add. The PSF is often the broader: at the default 20 km/s the line is
-    # 0.77 pixels against a PSF of 1.08. The grid is always widened, not only
-    # when psf is set, because psf may be swept and is not known when the
-    # cube is built and cached. The PSF is the one for this slit, with the
-    # slit added in quadrature, which is at least as broad as the slit
-    # convolved with the optics, so the grid holds the line under either
-    # spectral_psf.
+    # 0.77 pixels against a PSF of 1.08. The grid is widened with psf on or
+    # off, so the line with and without the PSF is on the same pixels. The
+    # PSF is the one for this slit, with the slit added in quadrature, which
+    # is at least as broad as the slit convolved with the optics, so the
+    # grid holds the line under either spectral_psf.
     sigma_total = sigma_lam
     if tel is not None:
         sigma_psf = _spectral_response(tel, det, sim.slit_width, "quadrature")[0] * dlam
@@ -795,10 +796,10 @@ def create_uniform_intensity_cube(
         # The line convolved with the response is a Gaussian of the two
         # widths in quadrature, convolved with the slit's image for
         # spectral_psf "convolution", integrated exactly over each pixel.
-        sigma, width = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
-        sigma = np.hypot((sigma_lam / dlam).decompose().value, sigma)
+        response = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+        sigma = np.hypot((sigma_lam / dlam).decompose().value, response[0])
         edges = np.arange(n_lam + 1) - n_pix_half - 0.5
-        share = points_onto_pixels(0.0, edges, sigma, width).toarray()[:, 0]
+        share = points_onto_pixels(0.0, edges, sigma, response[1]).toarray()[:, 0]
     else:
         edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
                  / (np.sqrt(2.0) * sigma_lam)).decompose().value
@@ -834,6 +835,6 @@ def create_uniform_intensity_cube(
             "thermal_width": thermal_width,
             "line_name": "uniform",
             "uniform_mode": True,
-            **({"psf_applied": True} if blurred else {}),
+            **({"psf_applied": True, "spectral_response": response} if blurred else {}),
         },
     )

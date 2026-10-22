@@ -567,7 +567,7 @@ def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monke
     The run goes on, and that spectrum is fitted on its other pixels.
     """
     mc = sys.modules["eclipse.monte_carlo"]
-    simulate = mc.simulate_once
+    simulate = mc._simulate_once
 
     def with_a_nan_pixel(*args, **kwargs):
         signals = list(simulate(*args, **kwargs))
@@ -578,7 +578,7 @@ def test_a_nan_pixel_in_a_run_is_left_out_of_the_weighted_and_poisson_fits(monke
             signals[index] = NDCube(data, wcs=cube.wcs, unit=cube.unit, meta=cube.meta)
         return tuple(signals)
 
-    monkeypatch.setattr(mc, "simulate_once", with_a_nan_pixel)
+    monkeypatch.setattr(mc, "_simulate_once", with_a_nan_pixel)
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     np.random.seed(8)

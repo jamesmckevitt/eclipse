@@ -6,6 +6,7 @@ cent. The expected photon count is the radiometric equation with literal
 constants. With the PSF on, the line is blurred by the spectral response
 before it is integrated, so a narrow line keeps its place within a pixel.
 """
+import dataclasses
 import importlib
 import sys
 import warnings
@@ -216,7 +217,7 @@ def test_a_line_narrower_than_a_pixel_keeps_its_fitted_centre(instrument, spectr
 
 
 @pytest.mark.parametrize("instrument", ["SWC", "EIS"])
-def test_a_cube_blurred_on_its_pixels_is_as_before_and_warns(instrument):
+def test_a_cube_without_psf_applied_is_blurred_on_its_pixels_and_warns(instrument):
     """
     A cube passed in without `psf_applied` is blurred on its pixels, in
     wavelength only for a uniform intensity, and the line is pulled toward
@@ -310,3 +311,17 @@ def test_a_run_lays_the_line_through_each_combinations_response(tmp_path, monkey
         assert cube.meta.get("psf_applied", False) is sim.psf
         dn = simulate_once(cube, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
         assert np.array_equal(combination["first_dn_signal_data"], dn.data), sim
+
+
+@pytest.mark.parametrize("change", [{"psf": False}, {"spectral_psf": "convolution"},
+                                    {"slit_width": 0.4 * u.arcsec}])
+def test_a_line_made_for_another_response_is_refused(change):
+    """The line was blurred for one simulation, so observing it with another would be wrong."""
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=False)
+    cube = _cube(8, sim=sim)
+    simulate_once(cube, 1 * u.s, DET, TEL, sim, uniform_mode=True)
+    other = dataclasses.replace(sim, **change)
+    with pytest.raises(ValueError, match="another PSF, slit width or spectral_psf"):
+        simulate_once(cube, 1 * u.s, DET, TEL, other, uniform_mode=True)
+    with pytest.raises(ValueError, match="another PSF, slit width or spectral_psf"):
+        monte_carlo(cube, 1 * u.s, DET, TEL, other, n_iter=1, uniform_mode=True)

@@ -26,8 +26,8 @@ from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
 from .pinhole_diffraction import _pinholes_on
-from .radiometric import (_spectral_response, across_slit_fwhm, spectral_optics_fwhm,
-                          spectral_psf_fwhm, spectral_psf_margin)
+from .radiometric import (across_slit_fwhm, spectral_optics_fwhm, spectral_psf_fwhm,
+                          spectral_psf_margin)
 from .utils import (
     parse_yaml_input, ensure_list, set_debug_mode, debug_break, debug_on_error,
     deduplicate_list, get_git_commit_id, _get_software_version,
@@ -1369,19 +1369,15 @@ def main() -> None:
         cube_obs = cube_reb
         if uniform_intensity_mode:
             if psf:
-                response = _spectral_response(TEL, DET, slit_width, spectral_psf)
-                psf_key = (*cube_reb_key, spectral_psf, response)
-                if psf_key not in observed_cache:
-                    observed_cache[psf_key] = create_uniform_intensity_cube(
-                        total_intensity=uniform_intensity,
-                        rest_wavelength=uniform_rest_wavelength,
-                        thermal_width=uniform_thermal_width,
-                        det=DET,
-                        sim=SIM,
-                        n_slit_pixels=offchip_bin_slit,
-                        tel=TEL,
-                    )
-                cube_obs = observed_cache[psf_key]
+                cube_obs = create_uniform_intensity_cube(
+                    total_intensity=uniform_intensity,
+                    rest_wavelength=uniform_rest_wavelength,
+                    thermal_width=uniform_thermal_width,
+                    det=DET,
+                    sim=SIM,
+                    n_slit_pixels=offchip_bin_slit,
+                    tel=TEL,
+                )
         else:
             # The observed cube includes the telescope's throughput as well as
             # its PSF, so every telescope and filter setting is in the key,
