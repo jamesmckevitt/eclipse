@@ -655,7 +655,7 @@ def test_replicate_keeps_the_light_the_blur_across_the_slit_takes_past_the_scene
         uniform_synthesis):
     """The scene is 0.8 arcsec across, so a 1 arcsec blur across the slit carries light past its
     edges. With the edges extended a uniform scene gives the slit what it gives without blur,
-    even with the slit half past the edge."""
+    also with the slit half past the edge, where both take light only from its inner half."""
     from eclipse.full_frame import read_slit_scene
 
     sharp = read_slit_scene(uniform_synthesis, 0.3 * u.Mm, 0.2 * u.arcsec).emission_measure
@@ -665,9 +665,14 @@ def test_replicate_keeps_the_light_the_blur_across_the_slit_takes_past_the_scene
     assert sharp.sum() > 0
     assert np.allclose(replicate, sharp, rtol=1e-12, atol=0)
     assert zero.sum() < 0.95 * sharp.sum()
-    edge = read_slit_scene(uniform_synthesis, 0.6 * u.Mm, 0.2 * u.arcsec, 1.0 * u.arcsec,
-                           extend=True).emission_measure
-    assert np.allclose(edge, sharp, rtol=1e-12, atol=0)
+    edge, sharp_edge = (read_slit_scene(uniform_synthesis, 0.6 * u.Mm, 0.2 * u.arcsec, blur,
+                                        extend=True).emission_measure
+                        for blur in (1.0 * u.arcsec, None))
+    assert np.allclose(edge, sharp_edge, rtol=1e-12, atol=0)
+    assert np.allclose(edge, sharp / 2, rtol=1e-6, atol=0)
+    with pytest.raises(ValueError, match="off the image"):
+        read_slit_scene(uniform_synthesis, 0.9 * u.Mm, 0.2 * u.arcsec, 1.0 * u.arcsec,
+                        extend=True)
 
 
 # A slit 4 arcsec long with fiducials 1 arcsec either side of its centre, so the 6 arcsec

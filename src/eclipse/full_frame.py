@@ -83,26 +83,25 @@ def _angle(edges: u.Quantity) -> np.ndarray:
     return distance_to_angle(edges).to_value(u.arcsec)
 
 
-def _along_slit_weights(cell_edges: np.ndarray, column_edges: np.ndarray, sigma: float,
-                        extend: bool = False,
-                        openings: Optional[np.ndarray] = None) -> np.ndarray:
+def _scene_weights(cell_edges: np.ndarray, pixel_edges: np.ndarray, sigma: float,
+                   extend: bool = False, openings: Optional[np.ndarray] = None) -> np.ndarray:
     """
-    Weight of each scene row in each column along the slit, `(n_columns, n_rows)`.
+    Weight of each scene cell in each pixel, `(n_pixels, n_cells)`.
 
-    With `extend` and a blur, the edge rows continue past the scene for the
-    blur to bring in, and each column takes light only over its part inside
-    the scene, as every pixel of a run lies inside it. With `openings`,
-    `(n, 2)` in the unit of the edges, light gets through only there, after
-    the blur.
+    With `extend` and a blur, the edge cells continue past the scene for
+    the blur to bring in, and each pixel takes light only over its part
+    inside the scene, as every pixel of a run lies inside it. With
+    `openings`, `(n, 2)` in the unit of the edges, light gets through only
+    there, after the blur.
     """
-    extend = extend and sigma > 0
-    if extend:
-        low, high = cell_edges[0], cell_edges[-1]
-        openings = np.clip([[low, high]] if openings is None else openings, low, high)
-        openings = openings[openings[:, 1] > openings[:, 0]]
-    if openings is None:
-        return pixel_weights(cell_edges, column_edges, sigma)
-    return pixel_weights_through(cell_edges, column_edges, openings, sigma, extend=extend)
+    if not (extend and sigma > 0):
+        if openings is None:
+            return pixel_weights(cell_edges, pixel_edges, sigma)
+        return pixel_weights_through(cell_edges, pixel_edges, openings, sigma)
+    low, high = cell_edges[0], cell_edges[-1]
+    inside = np.clip([[low, high]] if openings is None else openings, low, high)
+    inside = inside[inside[:, 1] > inside[:, 0]]
+    return pixel_weights_through(cell_edges, pixel_edges, inside, sigma, extend=True)
 
 
 @dataclass
@@ -144,7 +143,8 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         emission from beside the slit. Default None, for no blur.
     extend : bool, optional
         Take the Sun beyond the file's x edges as their edge cells, for the
-        blur to bring in. Default False, for dark.
+        blur to bring in, and the slit's light only from its part inside
+        them. Default False, for dark.
     """
     from .synthesis import _temperature_bins
 
@@ -168,13 +168,11 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         sigma = (0.0 if psf_across_slit is None
                  else _fwhm_to_sigma(u.Quantity(psf_across_slit).to_value(u.arcsec)))
         slit = np.array([centre - width / 2, centre + width / 2])
-        across = pixel_weights(x, slit, sigma)[0]
-        if not np.any(across > 0):
+        across = _scene_weights(x, slit, sigma, extend)[0]
+        columns = np.flatnonzero(across > 0)
+        if columns.size == 0:
             raise ValueError(f"The slit at {slit_position} is off the image, which runs from "
                              f"{x_edges[0]} to {x_edges[-1]}.")
-        if extend:
-            across = pixel_weights(x, slit, sigma, extend=True)[0]
-        columns = np.flatnonzero(across > 0)
         first, last = columns[0], columns[-1] + 1
         em = products["em_tv"][:, first:last, :, :].astype(float)
         dem = products["dem_map"][:, first:last, :].astype(float)
@@ -663,8 +661,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     psf_boundary : str, optional
         What the PSF brings in from beyond the edges of the synthesis, as
         in a run. `"replicate"` (default) takes the Sun there to look like
-        the edge cells. Along the slit, each column then gets light only
-        over its part inside the scene, so a uniform scene gives every
+        the edge cells. Each column, and the slit across, then gets light
+        only over its part inside the scene, so a uniform scene gives every
         column inside it the same light and the columns beyond none.
         `"zero"` takes the Sun there as dark, so the columns at the ends of
         the scene get up to about a third less light, which the blur
@@ -716,7 +714,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     if not (isinstance(psf_boundary, str) and psf_boundary in ("replicate", "zero")):
         raise ValueError(f"psf_boundary must be 'replicate' or 'zero', got {psf_boundary!r}.")
     extend = psf_boundary == "replicate"
-    if not isinstance(slit_mask, (bool, np.bool_)):
+    if slit_mask not in (True, False):
         raise ValueError(f"slit_mask must be True or False, got {slit_mask!r}.")
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
@@ -778,8 +776,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     column_edges = focal_plane.field_angle(columns).to_value(u.arcsec)
     sigma = (_fwhm_to_sigma(spatial_psf_fwhm(telescope, det))
              * focal_plane.plate_scale.to_value(u.arcsec) if psf else 0.0)
-    along = _along_slit_weights(scene.y_edges, column_edges, sigma, extend,
-                                openings)                           # (columns, image rows)
+    along = _scene_weights(scene.y_edges, column_edges, sigma, extend,
+                           openings)                                # (columns, image rows)
 
     blur = spectral_psf if psf else None
     temperatures = [t for t in range(scene.logT_grid.size)
