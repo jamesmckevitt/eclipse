@@ -22,11 +22,13 @@ from scipy.special import erf
 
 from eclipse.config import (Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
                             Telescope_EUVST)
-from eclipse.data_processing import create_uniform_intensity_cube
+import eclipse.data_processing as dp
+from eclipse.data_processing import create_uniform_intensity_cube, rebin_spectra
 from eclipse.fitting import fit_cube_gauss
 from eclipse.monte_carlo import monte_carlo, simulate_once
-from eclipse.radiometric import _spectral_response, apply_focusing_optics_psf
-from eclipse.sampling import points_onto_pixels
+from eclipse.radiometric import apply_focusing_optics_psf
+from eclipse.synthesis_file import RADIANCE_UNIT, SpectralLine, Synthesis
+from eclipse.utils import _bin_edges
 
 # CODATA, and the IAU definition of the astronomical unit.
 HC_ERG_CM = 6.62607015e-27 * 2.99792458e10
@@ -160,10 +162,10 @@ def _narrow_cube(instrument, sim, offset=0.0):
     A line of `NARROW` pixels from `create_uniform_intensity_cube`, moved
     `offset` pixels from the centre of its pixel.
 
-    The cube always has the line on the middle of a pixel, so for other
-    offsets its data are replaced by the line laid on the same pixels the
-    same way: blurred by the spectral response, with `sim.psf` on, and
-    integrated over each pixel. At offset 0 this gives the cube's data.
+    The cube always has the line on the middle of a pixel. For other
+    offsets its data are replaced by the same line laid on the same pixels
+    the same way, from cells moved by `offset`. Without the PSF the line is
+    integrated over the pixels as it is. At offset 0 this gives the cube.
     """
     det, tel, _ = INSTRUMENTS[instrument]
     dispersion = det.wvl_res.to_value(u.Angstrom / u.pixel)
@@ -171,17 +173,26 @@ def _narrow_cube(instrument, sim, offset=0.0):
     cube = create_uniform_intensity_cube(
         total_intensity=INTENSITY, rest_wavelength=REST, thermal_width=width * u.km / u.s,
         det=det, sim=sim, tel=tel)
-    sigma, box = NARROW, 0.0
-    if sim.psf:
-        sigma, box = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
-        sigma = np.hypot(NARROW, sigma)
     n_half = cube.data.shape[-1] // 2
-    edges = np.arange(2 * n_half + 2) - n_half - 0.5
-    share = points_onto_pixels(offset, edges, sigma, box).toarray()[:, 0]
-    data = (INTENSITY * share / (det.wvl_res * u.pix)).to_value(cube.unit)
+    step = (det.wvl_res * u.pix).to_value(u.cm)
+    radiance = INTENSITY.to_value(cube.unit * u.cm)
+    meta = dict(cube.meta)
+    if sim.psf:
+        n_cells = cube.data.shape[-1] * dp._CELLS_PER_PIXEL
+        in_pixels = np.arange(n_cells + 1) / dp._CELLS_PER_PIXEL - n_half - 0.5
+        cells = REST.to_value(u.cm) + (in_pixels + offset) * step
+        mean = (radiance * 0.5 * np.diff(erf(in_pixels / (np.sqrt(2.0) * NARROW)))
+                / np.diff(cells))
+        grid = REST.to_value(u.cm) + (np.arange(2 * n_half + 1) - n_half) * step
+        data, photons = dp._cells_onto_pixels(mean, 0.5 * (cells[1:] + cells[:-1]), cells,
+                                              grid, det, sim, tel)
+        meta.update({key: value[None, None, :] for key, value in photons.items()})
+    else:
+        edges = np.arange(2 * n_half + 2) - n_half - 0.5 - offset
+        data = radiance * 0.5 * np.diff(erf(edges / (np.sqrt(2.0) * NARROW))) / step
     if offset == 0:
         assert np.allclose(data, cube.data[0, 0], rtol=1e-12, atol=0.0)
-    return NDCube(data[None, None, :], wcs=cube.wcs, unit=cube.unit, meta=cube.meta)
+    return NDCube(data[None, None, :], wcs=cube.wcs, unit=cube.unit, meta=meta)
 
 
 def _fitted_offset(instrument, cube, sim):
@@ -245,15 +256,72 @@ def test_a_cube_without_psf_applied_is_blurred_on_its_pixels_and_warns(instrumen
     assert len([w for w in seen if "narrower than a pixel" in str(w.message)]) == 1
 
 
+@pytest.mark.parametrize("width", [3, 30])
 @pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
 @pytest.mark.parametrize("instrument", ["SWC", "EIS"])
-def test_the_response_keeps_the_line_intensity(instrument, spectral_psf):
-    """The pixels add up to the line intensity, as without the PSF."""
-    det = INSTRUMENTS[instrument][0]
-    cube = _narrow_cube(instrument, _sim(instrument, spectral_psf=spectral_psf))
-    dlam = (det.wvl_res * u.pix).to(u.cm)
-    total = (cube.data.sum(axis=-1) * cube.unit * dlam).to_value(INTENSITY.unit)
-    assert np.allclose(total, INTENSITY.value, rtol=1e-12, atol=0.0)
+def test_the_line_is_laid_as_a_synthesis_of_it_is(instrument, spectral_psf, width):
+    """
+    The line, sampled at 64 points per pixel into a synthesis and laid onto
+    the pixels by `rebin_spectra`, gives the same pixels and photon
+    wavelengths, to 1e-10 of the peak and 1e-6 pixel, and the same fitted
+    centre without noise. A
+    line narrower than a pixel is fitted at its rest wavelength. A wider one
+    is fitted 0.02 to 0.04 km/s to the red, as the effective area and the
+    photon energy change across it.
+    """
+    det, tel, slit = INSTRUMENTS[instrument]
+    sim = Simulation(slit_width=slit, instrument=instrument, psf=True,
+                     spectral_psf=spectral_psf, noise=False, ncpu=1)
+    cube = create_uniform_intensity_cube(INTENSITY, REST, width * u.km / u.s, det, sim, tel=tel)
+    n_half = cube.data.shape[-1] // 2
+    step = det.wvl_res.to_value(u.Angstrom / u.pixel)
+    samples = REST.to_value(u.Angstrom) + (np.arange(128 * n_half + 1) / 64 - n_half) * step
+    edges = _bin_edges(samples)
+    sigma = REST.to_value(u.Angstrom) * width / C_KM_S
+    mean = (INTENSITY.to_value(RADIANCE_UNIT * u.Angstrom) / np.diff(edges) * 0.5
+            * np.diff(erf((edges - REST.to_value(u.Angstrom)) / (np.sqrt(2.0) * sigma))))
+    x_edges = y_edges = (np.arange(13) - 6) * 0.2 * u.Mm
+    line = SpectralLine(intensity=np.broadcast_to(mean, (12, 12, mean.size)) * RADIANCE_UNIT,
+                        wavelength=samples * u.Angstrom, rest_wavelength=REST, atom=26, ion=12)
+    rebinned = rebin_spectra(Synthesis(lines={"line": line}, x_edges=x_edges, y_edges=y_edges,
+                                       source="a test"), "line", det, sim, tel=tel)
+    middle = rebinned.data.shape[0] // 2, rebinned.data.shape[1] // 2
+    wavelength = rebinned.axis_world_coords_values(2)[0].to_value(u.Angstrom)
+    at = int(np.argmin(np.abs(wavelength - REST.to_value(u.Angstrom))))
+    window = slice(at - n_half, at + n_half + 1)
+    spectrum = rebinned[middle[0]:middle[0] + 1, middle[1]:middle[1] + 1, window]
+    assert np.allclose(spectrum.data[0, 0] * rebinned.unit.to(cube.unit), cube.data[0, 0],
+                       rtol=0.0, atol=1e-10 * cube.data.max())
+    lit = cube.data[0, 0] > 1e-6 * cube.data.max()
+    assert np.allclose(rebinned.meta["photon_wavelength"][middle][window][lit],
+                       cube.meta["photon_wavelength"][0, 0][lit], rtol=0.0,
+                       atol=1e-6 * det.wvl_res * u.pix)
+
+    def velocity(observed):
+        photons = simulate_once(observed, 10 * u.s, det, tel, sim, uniform_mode=True)[5]
+        values, units = fit_cube_gauss(photons, n_jobs=1)
+        return ((values[0, 0, 1] * units[1] / REST).decompose().value - 1) * C_KM_S
+
+    observed = NDCube(spectrum.data, wcs=cube.wcs, unit=rebinned.unit,
+                      meta={**cube.meta, **{key: rebinned.meta[key][middle][window][None, None]
+                                            for key in ("photon_wavelength",
+                                                        "photon_rms_wavelength")}})
+    expected = velocity(cube)
+    assert velocity(observed) == pytest.approx(expected, abs=1e-4)
+    assert expected == pytest.approx(0.0 if width == 3 else 0.03, abs=0.015)
+
+
+def test_the_line_does_not_depend_on_its_sampling(monkeypatch):
+    """Four times as many cells per pixel change the pixels by under 2e-5 of the peak."""
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, spectral_psf="convolution")
+    cube = _cube(3, sim=sim)
+    monkeypatch.setattr(dp, "_CELLS_PER_PIXEL", 4 * dp._CELLS_PER_PIXEL)
+    finer = _cube(3, sim=sim)
+    assert np.allclose(cube.data, finer.data, rtol=0.0, atol=2e-5 * finer.data.max())
+    pixel = (DET.wvl_res * u.pix).to(u.cm)
+    lit = finer.data > 1e-6 * finer.data.max()
+    assert np.allclose(cube.meta["photon_wavelength"][lit], finer.meta["photon_wavelength"][lit],
+                       rtol=0.0, atol=1e-4 * pixel)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
