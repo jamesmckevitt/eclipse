@@ -321,7 +321,8 @@ def test_a_line_made_for_another_response_is_refused(change):
     cube = _cube(8, sim=sim)
     simulate_once(cube, 1 * u.s, DET, TEL, sim, uniform_mode=True)
     other = dataclasses.replace(sim, **change)
-    with pytest.raises(ValueError, match="another PSF, slit width or spectral_psf"):
+    reason = "psf off" if "psf" in change else "another slit width, spectral_psf"
+    with pytest.raises(ValueError, match=reason):
         simulate_once(cube, 1 * u.s, DET, TEL, other, uniform_mode=True)
-    with pytest.raises(ValueError, match="another PSF, slit width or spectral_psf"):
+    with pytest.raises(ValueError, match=reason):
         monte_carlo(cube, 1 * u.s, DET, TEL, other, n_iter=1, uniform_mode=True)
