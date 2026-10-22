@@ -153,6 +153,7 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_pa
         assert f["left/photon_wavelength"].shape == (rows, det.n_columns)
         assert f["left/photon_rms_wavelength"].shape == (rows, det.n_columns)
         assert f.attrs["cells_per_row"] == 16
+        assert f.attrs["psf_boundary"] == "replicate" and f.attrs["slit_mask"] == np.False_
         assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
                 f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
                                                        det.parallel_overscan_rows)
@@ -416,7 +417,7 @@ def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthe
 def test_a_frame_takes_its_settings_from_a_simulation(uniform_synthesis, blurred_frame):
     """A `Simulation` with the keyword arguments' values gives the same frame."""
     products = read_synthesis_products(uniform_synthesis)
-    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=False)
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=False)
     frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), sim=sim,
                            n_workers=1)
@@ -435,7 +436,8 @@ def _same_frames(a, b):
 
 def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
         uniform_synthesis):
-    """With the same seed, noise, convolution and a 0.4 arcsec slit give the same frame."""
+    """With the same seed, noise, convolution, a dark boundary and a 0.4 arcsec slit give the
+    same frame."""
     products = read_synthesis_products(uniform_synthesis)
     lines = _one_line(products)
     common = dict(telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
@@ -446,9 +448,10 @@ def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
     np.random.seed(170)
     from_keywords = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 10 * u.s,
                                    slit_width=0.4 * u.arcsec, spectral_psf="convolution",
-                                   **common)
+                                   psf_boundary="zero", **common)
     assert from_sim.slit_width == 0.4 * u.arcsec
     assert from_sim.settings["spectral_psf"] == "convolution" and from_sim.settings["noise"]
+    assert from_sim.settings["psf_boundary"] == "zero"
     _same_frames(from_sim, from_keywords)
 
 
@@ -472,12 +475,14 @@ def test_the_signature_keeps_its_plain_defaults():
     assert parameters["noise"].default is True
     assert parameters["n_workers"].default == 0
     assert parameters["sim"].default is None
+    assert parameters["psf_boundary"].default == "replicate"
+    assert parameters["psf_boundary"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["slit_mask"].default is False
+    assert parameters["slit_mask"].kind is inspect.Parameter.KEYWORD_ONLY
     assert parameters["psf"].annotation == "bool"
 
 
 @pytest.mark.parametrize("settings, message", [
-    ({"psf": True}, "psf_boundary 'replicate'"),
-    ({"psf": True, "psf_boundary": "zero", "slit_mask": True}, "slit_mask"),
     ({"enable_pinholes": True, "pinhole_sizes": [5 * u.um], "pinhole_positions": [0.5]},
      "pinholes"),
     ({"vis_sl": 1e3 * u.photon / (u.s * u.cm**2)}, "vis_sl"),
@@ -492,14 +497,15 @@ def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings
 
 # Arguments of `full_ccd_frame` that a `Simulation` sets, at their defaults.
 _DEFAULTS = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
-             "noise": True}
+             "noise": True, "psf_boundary": "replicate", "slit_mask": False}
 
 
 def test_one_error_lists_every_unsupported_setting_and_conflict():
-    sim = Simulation(psf=True, slit_mask=True, vis_sl=1 * u.photon / (u.s * u.cm**2))
+    sim = Simulation(psf=True, vis_sl=1 * u.photon / (u.s * u.cm**2))
     with pytest.raises(ValueError) as error:
         full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim=sim,
-                       noise=False, spectral_psf="convolution")
+                       noise=False, spectral_psf="convolution", psf_boundary="zero",
+                       slit_mask=True)
     for name in ("psf_boundary", "slit_mask", "vis_sl", "noise", "spectral_psf"):
         assert name in str(error.value)
 
@@ -522,17 +528,18 @@ def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
     import dataclasses
 
     @dataclasses.dataclass
-    class Masked(Simulation):
-        slit_mask: bool = dataclasses.field(default=True, kw_only=True)
+    class Lit(Simulation):
+        vis_sl: u.Quantity = 1 * u.photon / (u.s * u.cm**2)
         expos: u.Quantity = 5 * u.s
 
-    with pytest.raises(ValueError, match="slit_mask"):
-        _settings_from_simulation(Masked(), _DEFAULTS, 1 * u.s)
+    dark = 0 * u.photon / (u.s * u.cm**2)
+    with pytest.raises(ValueError, match="vis_sl"):
+        _settings_from_simulation(Lit(), _DEFAULTS, 1 * u.s)
     with pytest.warns(UserWarning, match="sim.expos"):
-        _settings_from_simulation(Masked(slit_mask=False), _DEFAULTS, 1 * u.s)
+        _settings_from_simulation(Lit(vis_sl=dark), _DEFAULTS, 1 * u.s)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        _settings_from_simulation(Masked(slit_mask=False), _DEFAULTS, 5 * u.s)
+        _settings_from_simulation(Lit(vis_sl=dark), _DEFAULTS, 5 * u.s)
 
 
 def test_settings_a_frame_does_not_use_are_accepted():
@@ -547,7 +554,8 @@ def test_a_simulation_gives_the_frame_its_slit_width_psf_and_noise():
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
                      spectral_psf="convolution", noise=False)
     assert _settings_from_simulation(sim, _DEFAULTS, 1 * u.s) == {
-        "slit_width": 0.4 * u.arcsec, "psf": True, "spectral_psf": "convolution", "noise": False}
+        "slit_width": 0.4 * u.arcsec, "psf": True, "spectral_psf": "convolution", "noise": False,
+        "psf_boundary": "zero", "slit_mask": False}
 
 
 def test_an_argument_set_both_ways_must_agree_with_the_simulation():
@@ -556,7 +564,7 @@ def test_an_argument_set_both_ways_must_agree_with_the_simulation():
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=False, spectral_psf="convolution",
                      noise=False)
     expected = {"slit_width": 0.4 * u.arcsec, "psf": False, "spectral_psf": "convolution",
-                "noise": False}
+                "noise": False, "psf_boundary": "replicate", "slit_mask": False}
     assert _settings_from_simulation(sim, _DEFAULTS, 1 * u.s) == expected
     assert _settings_from_simulation(sim, {**_DEFAULTS, "slit_width": 400 * u.mas, "psf": False,
                                            "noise": False}, 1 * u.s) == expected
@@ -589,6 +597,140 @@ def test_the_frame_api_is_exported_from_the_package():
         for name in names:
             assert getattr(eclipse, name) is getattr(module, name)
             assert name in eclipse.__all__
+
+
+def _columns_in_the_scene(focal_plane, openings=None):
+    """Fraction of each column along the slit inside the 4.4 Mm scene, centred on the field,
+    and inside `openings` (arcsec) if given."""
+    from eclipse.utils import distance_to_angle
+
+    half = distance_to_angle(4.4 * u.Mm).to_value(u.arcsec) / 2
+    edges = focal_plane.field_angle(np.arange(focal_plane.n_columns + 1) - 0.5).to_value(u.arcsec)
+    inside = 0.0
+    for low, high in [(-half, half)] if openings is None else openings:
+        low, high = max(low, -half), min(high, half)
+        inside = inside + np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low),
+                                  0.0, None)
+    return inside / np.diff(edges)
+
+
+def test_replicate_gives_the_ends_of_a_uniform_scene_the_middle_rate(blurred_frame):
+    """With the Sun beyond the scene like its edges, the blur along the slit brings in as much
+    light as it takes out, so every column inside the scene gets the middle column's rate and
+    a column part inside gets that share of it."""
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    rate = blurred_frame.rate["left"]
+    fraction = _columns_in_the_scene(focal_plane)
+    middle = rate[:, focal_plane.n_columns // 2]
+    assert middle.sum() > 0 and 0 < fraction[fraction < 1].max()
+    assert np.allclose(rate, middle[:, np.newaxis] * fraction, rtol=1e-9,
+                       atol=1e-12 * middle.max())
+    assert blurred_frame.settings["psf_boundary"] == "replicate"
+
+
+def test_zero_takes_light_out_of_the_ends_of_the_scene(uniform_synthesis, blurred_frame):
+    """With the Sun beyond the scene dark, the end columns lose light to the columns beyond,
+    and the blur keeps the total."""
+    products = read_synthesis_products(uniform_synthesis)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
+                           n_workers=1, psf_boundary="zero")
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    fraction = _columns_in_the_scene(focal_plane)
+    zero, replicate = frame.rate["left"].sum(axis=0), blurred_frame.rate["left"].sum(axis=0)
+    middle = focal_plane.n_columns // 2
+    assert zero[middle] == pytest.approx(replicate[middle], rel=1e-12)
+    ends = np.flatnonzero(fraction == 1)[[0, -1]]
+    assert np.all(zero[ends] < 0.8 * replicate[ends])
+    beyond = np.flatnonzero(fraction > 0)[[0, -1]] + [-1, 1]
+    assert np.all(zero[beyond] > 0) and not replicate[fraction == 0].any()
+    assert zero.sum() == pytest.approx(replicate.sum(), rel=1e-6)
+    assert frame.settings["psf_boundary"] == "zero"
+    with pytest.raises(ValueError, match="psf_boundary must be"):
+        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                       psf_boundary="reflect")
+
+
+def test_replicate_keeps_the_light_the_blur_across_the_slit_takes_past_the_scene(
+        uniform_synthesis):
+    """The scene is 0.8 arcsec across, so a 1 arcsec blur across the slit carries light past its
+    edges. With the edges extended a uniform scene gives the slit what it gives without blur,
+    also with the slit half past the edge, where both take light only from its inner half."""
+    from eclipse.full_frame import read_slit_scene
+
+    sharp = read_slit_scene(uniform_synthesis, 0.3 * u.Mm, 0.2 * u.arcsec).emission_measure
+    zero, replicate = (read_slit_scene(uniform_synthesis, 0.3 * u.Mm, 0.2 * u.arcsec,
+                                       1.0 * u.arcsec, extend=extend).emission_measure
+                       for extend in (False, True))
+    assert sharp.sum() > 0
+    assert np.allclose(replicate, sharp, rtol=1e-12, atol=0)
+    assert zero.sum() < 0.95 * sharp.sum()
+    edge, sharp_edge = (read_slit_scene(uniform_synthesis, 0.6 * u.Mm, 0.2 * u.arcsec, blur,
+                                        extend=True).emission_measure
+                        for blur in (1.0 * u.arcsec, None))
+    assert np.allclose(edge, sharp_edge, rtol=1e-12, atol=0)
+    assert np.allclose(edge, sharp / 2, rtol=1e-6, atol=0)
+    with pytest.raises(ValueError, match="off the image"):
+        read_slit_scene(uniform_synthesis, 0.9 * u.Mm, 0.2 * u.arcsec, 1.0 * u.arcsec,
+                        extend=True)
+
+
+# A slit 4 arcsec long with fiducials 1 arcsec either side of its centre, so the 6 arcsec
+# scene reaches both its ends and both fiducials.
+_SHORT_SLIT = dict(resolution_budget="none", slit_length=4 * u.arcsec,
+                   fiducial_centres=[-1 * u.arcsec, 1 * u.arcsec])
+
+
+def test_the_slit_mask_darkens_the_columns_beyond_the_slit_and_behind_the_fiducials(
+        uniform_synthesis, blurred_frame):
+    """The blur comes before the slit, so in a uniform scene with its edges extended each column
+    gets the middle column's rate times its open part inside the scene."""
+    products = read_synthesis_products(uniform_synthesis)
+    telescope = Telescope_EUVST(**_SHORT_SLIT)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+                           telescope=telescope, noise=False, n_workers=1, slit_mask=True)
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
+    fraction = _columns_in_the_scene(focal_plane, openings)
+    # The blurred frame's middle column is open, as the slit's centre is between the fiducials.
+    middle = blurred_frame.rate["left"][:, focal_plane.n_columns // 2]
+    assert np.allclose(frame.rate["left"], middle[:, np.newaxis] * fraction, rtol=1e-9,
+                       atol=1e-12 * middle.max())
+    scene = _columns_in_the_scene(focal_plane)
+    assert np.count_nonzero((fraction == 0) & (scene == 1)) >= 6
+    assert np.count_nonzero((fraction < 1) & (fraction > 0)) == 6
+    open_columns = fraction == 1
+    assert np.array_equal(frame.rate["left"][:, open_columns],
+                          blurred_frame.rate["left"][:, open_columns])
+    assert frame.settings["slit_mask"] is True
+    with pytest.raises(ValueError, match="known for the 0.2, 0.4, 0.8 and 1.6"):
+        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                       slit_width=0.3 * u.arcsec, slit_mask=True)
+    with pytest.raises(ValueError, match="slit_mask must be True or False"):
+        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+                       slit_mask="yes")
+
+
+def test_a_simulation_with_the_slit_mask_and_a_dark_boundary_gives_the_keyword_frame(
+        uniform_synthesis):
+    products = read_synthesis_products(uniform_synthesis)
+    common = dict(telescope=Telescope_EUVST(**_SHORT_SLIT), n_workers=1)
+    sim = Simulation(psf=True, psf_boundary="zero", slit_mask=True, noise=False)
+    from_sim = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+                              sim=sim, **common)
+    from_keywords = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm,
+                                   1000 * u.s, noise=False, psf_boundary="zero", slit_mask=True,
+                                   **common)
+    assert from_sim.settings["slit_mask"] is True and from_sim.settings["psf_boundary"] == "zero"
+    _same_frames(from_sim, from_keywords)
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    openings = common["telescope"].slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
+    edges = focal_plane.field_angle(np.arange(focal_plane.n_columns + 1) - 0.5).to_value(u.arcsec)
+    middles = (edges[:-1] + edges[1:]) / 2
+    closed = ~np.any((middles[:, None] > openings[:, 0] - 0.08)
+                     & (middles[:, None] < openings[:, 1] + 0.08), axis=1)
+    assert closed.sum() > 6 and not from_sim.rate["left"][:, closed].any()
+    assert from_sim.rate["left"].any()
 
 
 def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):

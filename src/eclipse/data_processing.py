@@ -519,10 +519,15 @@ def _slit_openings(tel, sim) -> dict:
     """
     if not getattr(sim, "slit_mask", False):
         return {}
+    return {"openings": _openings_along_the_slit(tel, sim.slit_width)}
+
+
+def _openings_along_the_slit(tel, slit_width: u.Quantity) -> np.ndarray:
+    """`(n, 2)` stretches of the slit that let light through, in arcsec from its centre."""
     if tel is None or not hasattr(tel, "slit_openings"):
         raise ValueError("slit_mask needs the SWC telescope, which describes the slit's "
                          "ends and fiducials.")
-    return {"openings": tel.slit_openings(sim.slit_width).to_value(u.arcsec)}
+    return tel.slit_openings(slit_width).to_value(u.arcsec)
 
 
 def _spatial_blur(tel, det, sim) -> dict:
