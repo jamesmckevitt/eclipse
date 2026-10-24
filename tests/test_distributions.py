@@ -26,8 +26,8 @@ pytest.importorskip("ensurepip")
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY = ROOT / "legacy" / "solarc-eclipse"
 SHIM = ROOT / "src" / "euvst_response" / "__init__.py"
-VERSION = re.search(r'^__version__ = "([^"]+)"',
-                    (ROOT / "src" / "eclipse" / "__init__.py").read_text(), re.MULTILINE)[1]
+VERSION = re.search(r'^__version__ = ([\'"])(.+?)\1',
+                    (ROOT / "src" / "eclipse" / "__init__.py").read_text(), re.MULTILINE)[2]
 SCRIPTS = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"]
 
 

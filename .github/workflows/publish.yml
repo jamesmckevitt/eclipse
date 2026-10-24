@@ -23,91 +23,14 @@ jobs:
         run: python -m build
 
       # solarc-eclipse, the former name on PyPI, is released with every version
-      # of eclipse and installs the eclipse of the same version.
+      # of eclipse, at the same version, and installs eclipse.
       - name: Build solarc-eclipse
         run: python -m build --outdir dist legacy/solarc-eclipse
 
       # A PyPI version cannot be replaced once it is uploaded, so everything
       # that can be checked is checked before the publish job runs.
-      - name: Check the tag matches the packaged version
-        run: |
-          python - <<'PY'
-          import glob
-          import os
-          import zipfile
-
-          # Read the version out of the wheel rather than by importing the
-          # package, which would need every runtime dependency installed.  This
-          # also checks the artefact that is actually about to be uploaded.
-          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
-          wheels = sorted(glob.glob("dist/*.whl"))
-          if len(wheels) != 2:
-              raise SystemExit(f"::error::expected two wheels, found {wheels}")
-          for wheel in wheels:
-              archive = zipfile.ZipFile(wheel)
-              metadata = next(
-                  name for name in archive.namelist()
-                  if name.endswith(".dist-info/METADATA")
-              )
-              version = next(
-                  line.split(": ", 1)[1].strip()
-                  for line in archive.read(metadata).decode().splitlines()
-                  if line.startswith("Version: ")
-              )
-              print(f"{wheel}: tag={tag} packaged={version}")
-              if tag != version:
-                  raise SystemExit(
-                      f"::error::tag {tag} does not match the packaged version "
-                      f"{version} of {wheel}"
-                  )
-          PY
-
-      - name: Check the package files are in the wheel
-        run: |
-          python - <<'PY'
-          import glob
-          import pathlib
-          import zipfile
-
-          # Compare against the source tree rather than a hardcoded list, so
-          # this keeps working when files are added, and so partial
-          # inclusion fails rather than passing on the strength of one file.
-          source = pathlib.Path("src")
-          data = {path for path in (source / "eclipse/data").rglob("*") if path.is_file()}
-          if not data:
-              raise SystemExit("no src/eclipse/data files in the checkout")
-          modules = set((source / "eclipse").rglob("*.py"))
-          modules |= set((source / "euvst_response").rglob("*.py"))
-          if source / "euvst_response/__init__.py" not in modules:
-              raise SystemExit("no src/euvst_response/__init__.py in the checkout")
-          expected = {path.relative_to(source).as_posix() for path in data | modules}
-
-          wheel = glob.glob("dist/eclipse-*.whl")[0]
-          packaged = set(zipfile.ZipFile(wheel).namelist())
-
-          missing = sorted(expected - packaged)
-          if missing:
-              raise SystemExit(
-                  f"::error::{len(missing)} of {len(expected)} package files are "
-                  f"absent from {wheel}, so the package would install but fail "
-                  f"at runtime: {', '.join(missing)}"
-              )
-          print(f"all {len(expected)} package files are in the wheel")
-          PY
-
-      - name: Check solarc-eclipse holds the former package name
-        run: |
-          python - <<'PY'
-          import glob
-          import pathlib
-          import zipfile
-
-          wheel = glob.glob("dist/solarc_eclipse-*.whl")[0]
-          packaged = zipfile.ZipFile(wheel).read("euvst_response/__init__.py")
-          if packaged != pathlib.Path("src/euvst_response/__init__.py").read_bytes():
-              raise SystemExit(f"::error::{wheel} holds a different euvst_response")
-          print(f"{wheel} holds euvst_response")
-          PY
+      - name: Check the wheels hold the tagged version and every package file
+        run: python tools/check_packages.py --tag "$GITHUB_REF_NAME"
 
       - name: Check the metadata renders
         run: twine check dist/*
