@@ -1,10 +1,18 @@
 # Older versions
 
-Some things from older versions of ECLIPSE still work, with a warning, until a future release stops them. These include the package's former name, the pickles that ECLIPSE 0.11.0 and earlier wrote, and reading MURaM's own files directly. This page says how to move over.
+Some things from older versions of ECLIPSE still work, with a warning, until a future release stops them. These include the package's former names, the pickles that ECLIPSE 0.11.0 and earlier wrote, and reading MURaM's own files directly. This page says how to move over.
+
+## The name on PyPI
+
+ECLIPSE was on PyPI as `solarc-eclipse` until 0.12, and is now `eclipse`. Install it with `pip install eclipse`. `pip install solarc-eclipse` still works and installs `eclipse`, but `solarc-eclipse` will get no further releases.
+
+To move an installation over, run `pip uninstall solarc-eclipse`, then `pip install eclipse`. Uninstall first: uninstalling `solarc-eclipse` afterwards also removes the commands, such as `eclipse`, and `import euvst_response`. If that has happened, `pip install --force-reinstall --no-deps eclipse` puts them back.
+
+The same goes for a clone installed with `pip install -e .`: run `pip uninstall solarc-eclipse` before installing it again. An install from git that names the package, such as `pip install "solarc-eclipse @ git+https://github.com/jamesmckevitt/eclipse@<commit>"`, still works for commits from before the change of name. For later commits, write `eclipse @ git+...` instead.
 
 ## The package's name
 
-ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it. Its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name. The package is still installed with `pip install solarc-eclipse`.
+ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it. Its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name.
 
 The package's code is now in the `src` folder of the repository. If you installed ECLIPSE from a clone with `pip install -e .`, run that command in the clone again after updating it. If you use a clone without installing it, by putting the clone on `PYTHONPATH`, put `<clone>/src` on `PYTHONPATH` instead.
 

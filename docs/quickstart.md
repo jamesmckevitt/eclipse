@@ -7,8 +7,10 @@ ECLIPSE needs Python 3.11 or later.
 ### From PyPI (recommended)
 
 ```bash
-pip install solarc-eclipse
+pip install eclipse
 ```
+
+ECLIPSE was on PyPI as `solarc-eclipse` until 0.12. [Older versions](older-versions.md#the-name-on-pypi) says how to move an installation over.
 
 ### From source
 

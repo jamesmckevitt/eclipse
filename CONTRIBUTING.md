@@ -42,8 +42,10 @@ Whatever the size of the bump, if output changes for identical input, say so pro
 2. Tag `vX.Y.Z` on the merged bump, and push the tag.
 3. `gh release create vX.Y.Z` with notes covering what merged, leading with any change to numerical output.
 
-Publishing the release runs `.github/workflows/publish.yml`, which builds the sdist and wheel and uploads them to PyPI. Nothing is published by hand. The workflow refuses to upload if the tag disagrees with `__version__`, or if the wheel is missing the `eclipse/data` files, because a PyPI version cannot be replaced once it exists.
+Publishing the release runs `.github/workflows/publish.yml`, which builds the sdist and wheel of `eclipse` and uploads them to PyPI. Nothing is published by hand. The workflow refuses to upload if the tag disagrees with `__version__`, or if the wheel is missing the `eclipse/data` files, because a PyPI version cannot be replaced once it exists.
+
+`legacy/solarc-eclipse` is `solarc-eclipse`, ECLIPSE's former name on PyPI. It installs `eclipse`, and holds the former package name `euvst_response` and the commands, so that upgrading an older installation keeps them. The workflow publishes it only when the tag matches the version in its own `pyproject.toml`, so it is released once, with 0.13.0, and not with later versions. If its commands or `euvst_response` change, keep them the same as those of `eclipse`: `tests/test_distributions.py` checks this.
 
 Read the Docs builds its `stable` version from the latest tag, so a release is also what moves the published documentation forward.
 
-PyPI authenticates the workflow by trusted publishing rather than an API token, configured against the repository, the `publish.yml` workflow and the `pypi` environment.
+PyPI authenticates the workflow by trusted publishing rather than an API token, configured against the repository, the `publish.yml` workflow and the `pypi` environment, on both the `eclipse` and `solarc-eclipse` projects.

@@ -8,8 +8,10 @@ The instrument model will be updated as EUVST is built, tested and commissioned.
 
 [![Tests](https://github.com/jamesmckevitt/eclipse/actions/workflows/tests.yml/badge.svg)](https://github.com/jamesmckevitt/eclipse/actions/workflows/tests.yml)
 [![Documentation Status](https://app.readthedocs.org/projects/solarc-eclipse/badge/?version=stable)](https://solarc-eclipse.readthedocs.io/)
-[![PyPI](https://img.shields.io/pypi/v/solarc-eclipse.svg)](https://pypi.org/project/solarc-eclipse/)
+[![PyPI](https://img.shields.io/pypi/v/eclipse.svg)](https://pypi.org/project/eclipse/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.17543844-blue.svg)](https://doi.org/10.5281/zenodo.17543844)
+
+ECLIPSE is installed with `pip install eclipse`. It was on PyPI as `solarc-eclipse` until 0.12.
 
 The documentation, with installation and a first run, guides to synthesising spectra, simulating the instrument and analysing the results, and a worked example, is at **[solarc-eclipse.readthedocs.io](https://solarc-eclipse.readthedocs.io)**.
 
