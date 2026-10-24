@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# The name ECLIPSE had on PyPI up to 0.12. It is released with each version of
+# `eclipse`, and installs that version or later. It holds the former package name
+# `euvst_response` and the commands as well, so that upgrading an older
+# installation in place keeps both. setup.py reads the version.
+[project]
+name = "solarc-eclipse"
+dynamic = ["version", "dependencies"]
+authors = [
+    {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
+]
+description = "Former name of eclipse on PyPI; install eclipse instead"
+readme = "README.md"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Programming Language :: Python :: 3",
+]
+[project.scripts]
+eclipse = "eclipse.cli:main"
+solarc-eclipse = "eclipse.cli:main"
+synthesise-spectra = "eclipse.synthesis_cli:main"
+synthesise_spectra = "eclipse.synthesis_cli:main"
+eclipse-science-cases = "eclipse.science_cases:main"
+eclipse-atmosphere = "eclipse.atmosphere:main"
+
+[project.urls]
+Homepage = "https://github.com/jamesmckevitt/eclipse"
+Repository = "https://github.com/jamesmckevitt/eclipse"
+Documentation = "https://solarc-eclipse.readthedocs.io"
+
+[tool.setuptools]
+packages = ["euvst_response"]
