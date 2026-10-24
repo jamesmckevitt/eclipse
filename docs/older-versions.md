@@ -4,7 +4,7 @@ Some things from older versions of ECLIPSE still work, with a warning, until a f
 
 ## The name on PyPI
 
-ECLIPSE was on PyPI as `solarc-eclipse` until 0.12, and is now `eclipse`. Install it with `pip install eclipse`. `pip install solarc-eclipse` still works and installs `eclipse`, but `solarc-eclipse` will get no further releases.
+ECLIPSE 0.12 and earlier were on PyPI as `solarc-eclipse`. It is now `eclipse`: install it with `pip install eclipse`. `pip install solarc-eclipse` still works, and installs `eclipse` of the same version.
 
 To move an installation over, run `pip uninstall solarc-eclipse`, then `pip install eclipse`. Uninstall first: uninstalling `solarc-eclipse` afterwards also removes the commands, such as `eclipse`, and `import euvst_response`. If that has happened, `pip install --force-reinstall --no-deps eclipse` puts them back.
 

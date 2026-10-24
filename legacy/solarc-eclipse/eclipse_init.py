@@ -1,0 +1,1 @@
+../../src/eclipse/__init__.py

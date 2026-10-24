@@ -2,12 +2,13 @@
 requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# The name ECLIPSE had on PyPI until 0.13.0. Installing it installs `eclipse`.
-# It carries the former package name `euvst_response` and the commands as well,
-# so that upgrading an older installation in place keeps both.
+# The name ECLIPSE had on PyPI up to 0.12. Each release installs the release
+# of `eclipse` of the same version. It holds the former package name
+# `euvst_response` and the commands as well, so that upgrading an older
+# installation in place keeps both. setup.py reads the version.
 [project]
 name = "solarc-eclipse"
-version = "0.13.0"
+dynamic = ["version", "dependencies"]
 authors = [
     {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
 ]
@@ -21,10 +22,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
     "Programming Language :: Python :: 3",
 ]
-dependencies = [
-    "eclipse>=0.13.0",
-]
-
 [project.scripts]
 eclipse = "eclipse.cli:main"
 solarc-eclipse = "eclipse.cli:main"
