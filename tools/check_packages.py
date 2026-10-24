@@ -9,7 +9,6 @@ runs this before uploading anything.
 """
 
 import argparse
-import glob
 import re
 import sys
 import zipfile
@@ -30,19 +29,18 @@ def _version(archive):
 def check(dist, tag=None):
     """Errors found in the wheels in `dist`, as a list of messages."""
     errors = []
-    wheels = {name: glob.glob(str(dist / f"{name}-*.whl"))
-              for name in ("eclipse", "solarc_eclipse")}
-    for name, found in wheels.items():
-        if len(found) != 1:
-            errors.append(f"expected one {name} wheel in {dist}, found {len(found)}")
-    if errors:
-        return errors
+    # Everything in dist/ is uploaded, so nothing else may be there.
+    present = sorted(path.name for path in dist.iterdir())
+    wheels = {name: sorted(dist.glob(f"{name}-*.whl")) for name in ("eclipse", "solarc_eclipse")}
+    sdists = sorted(dist.glob("*.tar.gz"))
+    if [len(w) for w in wheels.values()] != [1, 1] or len(sdists) != 2 or len(present) != 4:
+        return [f"expected one sdist and one wheel of each package in {dist}, found {present}"]
     eclipse = zipfile.ZipFile(wheels["eclipse"][0])
     legacy = zipfile.ZipFile(wheels["solarc_eclipse"][0])
 
     source = re.search(r'^__version__ = ([\'"])(.+?)\1',
                        (SOURCE / "eclipse" / "__init__.py").read_text(), re.MULTILINE)[2]
-    expected = tag.removeprefix("v") if tag else source
+    expected = source if tag is None else tag.removeprefix("v")
     for archive in (eclipse, legacy):
         version = _version(archive)
         print(f"{archive.filename}: {version}")
@@ -63,11 +61,12 @@ def check(dist, tag=None):
     else:
         print(f"all {len(files)} package files are in {eclipse.filename}")
 
-    shim = (SOURCE / "euvst_response" / "__init__.py").read_bytes()
-    if "euvst_response/__init__.py" not in legacy.namelist():
-        errors.append(f"{legacy.filename} has no euvst_response")
-    elif legacy.read("euvst_response/__init__.py") != shim:
-        errors.append(f"{legacy.filename} holds a different euvst_response")
+    for path in sorted((SOURCE / "euvst_response").rglob("*.py")):
+        name = path.relative_to(SOURCE).as_posix()
+        if name not in legacy.namelist():
+            errors.append(f"{legacy.filename} has no {name}")
+        elif legacy.read(name) != path.read_bytes():
+            errors.append(f"{legacy.filename} holds a different {name}")
     return errors
 
 
