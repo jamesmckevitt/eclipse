@@ -73,7 +73,7 @@ def wheels(tmp_path_factory):
 @pytest.fixture
 def old_install(tmp_path):
     """A virtual environment holding an older `solarc-eclipse`."""
-    old = _wheel(tmp_path, "solarc-eclipse", "0.1.0",
+    old = _wheel(tmp_path, "solarc-eclipse", "0.12.0",
                  {"euvst_response/__init__.py": "OLD = True\n",
                   "euvst_response/frame.py": "OLD = True\n"})
     venv.create(tmp_path / "venv", with_pip=True)
@@ -111,7 +111,7 @@ def test_solarc_eclipse_installs_eclipse_with_the_same_commands_and_old_name(whe
     info = f"solarc_eclipse-{VERSION}.dist-info"
     metadata = archive.read(f"{info}/METADATA").decode().splitlines()
     assert f"Version: {VERSION}" in metadata
-    assert f"Requires-Dist: eclipse=={VERSION}" in metadata
+    assert f"Requires-Dist: eclipse>={VERSION}" in metadata
     assert archive.read("euvst_response/__init__.py").decode() == SHIM.read_text()
     commands = archive.read(f"{info}/entry_points.txt").decode()
     assert dict(re.findall(r"^(\S+) = (\S+)$", commands, re.MULTILINE)) == SCRIPTS

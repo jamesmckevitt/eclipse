@@ -135,5 +135,8 @@ jobs:
       # is no API token to store or rotate.  Pinned to a commit SHA rather than a
       # moving tag, because this step can publish and a retagged upstream would
       # otherwise change what runs here without review.  Dependabot keeps the
-      # pins current.
+      # pins current.  Files already on PyPI are skipped, so that if one of the
+      # two packages fails to upload, rerunning the job uploads the other.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          skip-existing: true
