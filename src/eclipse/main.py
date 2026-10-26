@@ -20,8 +20,9 @@ from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .atmosphere import _is_pickle
-from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
-                             synthesis_line_names)
+from .readout import FocalPlane_SWC
+from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_layout,
+                             read_synthesis_products, synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
@@ -131,7 +132,8 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "slit_mask", "noise", "enable_pinholes",
+                    "spectral_psf", "slit_mask", "focal_plane_dispersion", "noise",
+                    "enable_pinholes",
                     "pinhole_visible_wavelength"}
 
 _FITTING_KEYS = {"components", "primary_component",
@@ -894,6 +896,7 @@ def main() -> None:
         "psf_boundary": "replicate",
         "spectral_psf": "quadrature",
         "slit_mask": False,
+        "focal_plane_dispersion": False,
         "noise": True,
         "enable_pinholes": False,
     }
@@ -1183,6 +1186,7 @@ def main() -> None:
             psf_boundary=all_sim.get("psf_boundary", "replicate"),
             spectral_psf=all_sim.get("spectral_psf", "quadrature"),
             slit_mask=all_sim.get("slit_mask", False),
+            focal_plane_dispersion=all_sim.get("focal_plane_dispersion", False),
             noise=all_sim.get("noise", True),
             enable_pinholes=enable,
             pinhole_sizes=pinhole_sizes if enable else [],
@@ -1195,9 +1199,48 @@ def main() -> None:
         # together. Work it out here, not only once the scene is laid onto
         # the detector. It is needed when psf_params is for a given slit, and
         # always for the PSF convolved with the slit.
+        if sim.focal_plane_dispersion:
+            det = _with_focal_plane_width(det, all_det)
         if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
             spectral_optics_fwhm(tel, det)
         return combo, offchip, repeat, fil, tel, det, sim
+
+    def _with_focal_plane_width(det, all_det):
+        """`det` with the focal plane's pixel width where the observed line lands."""
+        if instrument != "SWC":
+            raise ValueError("simulation.focal_plane_dispersion describes the SW focal plane, "
+                             "so it is for SWC only.")
+        if "wvl_res" in all_det:
+            raise ValueError("simulation.focal_plane_dispersion takes the pixels' width from "
+                             "the focal plane, so detector.wvl_res would be ignored; give one "
+                             "or the other.")
+        wavelength = _observed_wavelength()
+        try:
+            width = FocalPlane_SWC.from_detector(det).pixel_width(wavelength)
+        except ValueError as error:
+            raise ValueError(f"simulation.focal_plane_dispersion needs the observed line on the "
+                             f"focal plane: {error}") from None
+        return dataclasses.replace(det, wvl_res=width.to(det.wvl_res.unit))
+
+    observed_wavelength = []
+
+    def _observed_wavelength():
+        """Rest wavelength of the line the run observes, read once."""
+        if not observed_wavelength:
+            if uniform_intensity_mode:
+                found = uniform_rest_wavelength
+            elif synthesis_series_mode or (not raster_mode and synthesis_is_hdf5):
+                path = series_paths[0] if synthesis_series_mode else synthesis_file
+                layout = read_synthesis_layout(path, reference_line)
+                found = layout["lines"][reference_line]["rest_wavelength"]
+            else:
+                raise ValueError(
+                    "simulation.focal_plane_dispersion needs the observed line's rest "
+                    "wavelength, which ECLIPSE reads from a synthesis file or the "
+                    "uniform-intensity settings, not yet from an atmosphere series or a "
+                    "synthesis pickle.")
+            observed_wavelength.append(u.Quantity(found).to(u.AA))
+        return observed_wavelength[0]
 
     # Check every combination before running any, so a bad value does not
     # stop the sweep part-way and lose the earlier results, which are saved

@@ -1567,6 +1567,11 @@ class Simulation:
     slit_mask : bool
         Whether the slit's ends and fiducials block the light (SWC only).
         Default False. Keyword only.
+    focal_plane_dispersion : bool
+        Whether the width in wavelength of the pixels is that of the SW
+        focal plane where the observed line lands, from
+        :meth:`eclipse.readout.FocalPlane_SWC.pixel_width`, rather than the
+        detector's `wvl_res` (SWC only). Default False. Keyword only.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
@@ -1612,6 +1617,9 @@ class Simulation:
     # of the scene along the slit. The blur along the slit comes before the
     # slit, so a fiducial's edges are as sharp as the pixels sampling them.
     slit_mask: bool = field(default=False, kw_only=True)
+    # The focal plane's width is used for every pixel of the window, though
+    # it changes by about 1 part in 10,000 across 60 pixels.
+    focal_plane_dispersion: bool = field(default=False, kw_only=True)
     # With noise False, every random draw in the detector chain is replaced by
     # its mean, so the run gives the signal the instrument would measure on
     # average. Quantisation stays: DN are still rounded and still clipped at

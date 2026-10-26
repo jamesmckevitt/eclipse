@@ -39,6 +39,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `psf_boundary` | What the PSF brings in from beyond the edges of the atmosphere: `replicate` or `zero` | `replicate` |
 | `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
 | `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-response.md#the-slits-fiducials) | `False` |
+| `focal_plane_dispersion` | Whether the pixels' width in wavelength is the SW focal plane's where the line lands, rather than `detector.wvl_res` (SWC only); see [The pixels' width in wavelength](instrument-response.md#the-pixels-width-in-wavelength) | `False` |
 | `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](instrument-response.md#turning-the-noise-off) | `True` |
 | `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
 | `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
