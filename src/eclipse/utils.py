@@ -774,16 +774,21 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
 
 
 def _to_canonical_scalar(val):
-    """Convert a parameter value to a canonical scalar for comparison."""
-    if hasattr(val, "unit"):
+    """
+    Value as a plain scalar, for comparing parameters.
+
+    Quantities become their SI value, so `40 * u.s` and `40000 * u.ms` both
+    give 40.0. Offset units such as Celsius are converted to Kelvin first.
+    """
+    if not hasattr(val, "unit"):
+        return val
+    try:
+        return float(val.si.value)
+    except Exception:
         try:
-            return float(val.si.value)
+            return float(val.to(u.K, equivalencies=u.temperature()).value)
         except Exception:
-            try:
-                return float(val.to(u.K, equivalencies=u.temperature()).value)
-            except Exception:
-                return float(val.value)
-    return val
+            return float(val.value)
 
 
 def _params_to_key(params: dict) -> tuple:
