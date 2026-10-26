@@ -840,8 +840,9 @@ class Detector_SWC:
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
     takes its wavelengths from `wvl_res`, not from the focal plane. It uses
     the focal plane only to find the row recording each wavelength, for the
-    dark current, so it refuses values other than the defaults, which would
-    make the two disagree.
+    dark current, and, with `Simulation.focal_plane_dispersion`, the width
+    of its pixels. It refuses values other than the defaults, which would
+    make these disagree with its wavelengths.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -1569,6 +1570,13 @@ class Simulation:
     slit_mask : bool
         Whether the slit's ends and fiducials block the light (SWC only).
         Default False. Keyword only.
+    focal_plane_dispersion : bool
+        Whether the width in wavelength of the pixels is that of the SW
+        focal plane where the observed line lands, from
+        :meth:`eclipse.readout.FocalPlane_SWC.pixel_width`, rather than the
+        detector's `wvl_res` (SWC only). An instrument run sets the
+        detector's `wvl_res` to it; a `Simulation` given to the functions
+        directly leaves `wvl_res` as it is. Default False. Keyword only.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
@@ -1620,6 +1628,9 @@ class Simulation:
     # of the scene along the slit. The blur along the slit comes before the
     # slit, so a fiducial's edges are as sharp as the pixels sampling them.
     slit_mask: bool = field(default=False, kw_only=True)
+    # The focal plane's width is used for every pixel of the window, though
+    # it changes by about 2 parts in 10,000 across 60 pixels.
+    focal_plane_dispersion: bool = field(default=False, kw_only=True)
     # With noise False, every random draw in the detector chain is replaced by
     # its mean, so the run gives the signal the instrument would measure on
     # average. Quantisation stays: DN are still rounded and still clipped at
@@ -1683,6 +1694,9 @@ class Simulation:
         if self.slit_mask and inst == "EIS":
             raise ValueError("slit_mask is for SWC, whose slits' fiducials ECLIPSE knows; "
                              "EIS's slits are taken to be open along their length.")
+        if self.focal_plane_dispersion and inst == "EIS":
+            raise ValueError("focal_plane_dispersion describes the SW focal plane, so it is "
+                             "for SWC only.")
 
         # Both pipelines zip the paired pinhole lists, and zip stops at the
         # shortest, so a mismatch would silently drop pinholes. main() runs

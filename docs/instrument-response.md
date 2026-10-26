@@ -178,6 +178,17 @@ simulation:
 
 With `readout_dark_current: False`, dark current is counted over the exposure only, as in ECLIPSE 0.12 and earlier. EIS runs count it over the exposure only.
 
+## The pixels' width in wavelength
+
+The grating does not spread the wavelengths quite evenly over the CCD, so the width in wavelength of a pixel changes slowly along it. It is 16.98 mA at 171 Angstrom, 16.91 mA at 195 Angstrom and 16.86 mA at 211 Angstrom. By default a run gives every pixel the same width, `detector.wvl_res`, 16.9 mA.
+
+```yaml
+simulation:
+  focal_plane_dispersion: True   # the focal plane's pixel width where the line lands
+```
+
+With `focal_plane_dispersion: True`, a run takes the width of the pixel the observed line lands on, from the SW focal plane, and gives it to every pixel of its window. The pixels then collect as much of the spectrum, and span as many km/s, as on the CCD. Across a window of 60 pixels the true width changes by about 2 parts in 10,000, which a run leaves out. A run does not place its pixels on the CCD's rows either, so a line sits at the same place within its pixel as without the setting. It cannot be combined with `detector.wvl_res`, and works for SWC, with synthesis files or a uniform intensity, for a line that reaches the CCDs within the lit band.
+
 ## Off-chip slit binning
 
 `offchip_bin_slit` adds together neighbouring pixels along the slit after read-out, so the binning is done on the ground rather than on the detector. Adding `n` pixels multiplies the signal by `n`, while the noise only grows as `sqrt(n)`. The signal to noise therefore goes up as `sqrt(n)`, at the cost of resolution along the slit.

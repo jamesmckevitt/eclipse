@@ -724,11 +724,11 @@ def apply_focusing_optics_psf(
     """
     Blur a cube on the detector pixels with the PSF, along the slit and in wavelength.
 
-    For a synthesis file, `eclipse` blurs the spectra before laying them
-    onto the pixels, so a line narrower than a pixel keeps its place within
-    it. This function instead blurs a cube already on the pixels.
-    `simulate_once` uses it for a cube not yet blurred, such as a single
-    line of known intensity.
+    `eclipse` blurs the spectra before laying them onto the pixels, so a
+    line narrower than a pixel keeps its place within it. This function
+    instead blurs a cube already on the pixels, which pulls such a line
+    toward the pixel's centre. `simulate_once` uses it for a cube without
+    `meta["psf_applied"]`.
 
     Along the slit the PSF is a Gaussian of FWHM `spatial_psf_fwhm`. In
     wavelength it depends on `sim.spectral_psf`: a Gaussian of
