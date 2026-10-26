@@ -99,7 +99,8 @@ def electrons_per_photon(rest_wavelength: u.Quantity, det) -> np.ndarray:
 
 def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
                 visible_electrons: np.ndarray | float = 0.0, n_binned: int = 1, *,
-                rms_wavelength: u.Quantity | None = None) -> np.ndarray:
+                rms_wavelength: u.Quantity | None = None,
+                dark_time: u.Quantity | None = None) -> np.ndarray:
     """
     Variance of each pixel's DN estimated from the DN.
 
@@ -127,7 +128,7 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
         summed pixels, that of all their photons, from
         `binned_photon_wavelengths`. Sets the electrons per photon.
     t_exp : u.Quantity
-        Exposure time, for the dark current.
+        Exposure time, for the dark current unless `dark_time` is given.
     det : Detector_SWC or Detector_EIS
         Detector.
     visible_electrons : np.ndarray or float, optional
@@ -141,6 +142,9 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
         the same form as `wavelength`. Sets how far the electrons of photons
         of different energies spread. Default `wavelength` (photons all of
         one energy).
+    dark_time : u.Quantity, optional
+        Time each pixel collects dark current, one value or an array that
+        broadcasts against `dn`. Default `t_exp`.
 
     Returns
     -------
@@ -148,7 +152,8 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
         Variance in DN^2, same shape as `dn`.
     """
     gain = det.gain_e_per_dn.to_value(u.electron / u.DN)
-    dark = n_binned * (det.dark_current * t_exp).to_value(u.electron / u.pixel)
+    dark_time = t_exp if dark_time is None else dark_time
+    dark = n_binned * (det.dark_current * dark_time).to_value(u.electron / u.pixel)
     read = n_binned * det.read_noise_rms.to_value(u.electron / u.pixel) ** 2
     visible = np.asarray(visible_electrons, dtype=float)
     electrons = np.asarray(dn, dtype=float) * gain
@@ -903,6 +908,7 @@ def to_electrons(
     dark_current_inverse_transform: bool = False,
     noise: bool = True,
     photon_shot_inverse_transform: bool = False,
+    dark_time: u.Quantity | None = None,
 ) -> NDCube:
     """
     Convert the photons arriving in each pixel to the electrons read out.
@@ -924,7 +930,7 @@ def to_electrons(
         energy, sets how far the electrons of photons of different energies
         spread. Without them, `meta["rest_wav"]` sets both.
     t_exp : u.Quantity
-        Exposure time, for the dark current.
+        Exposure time, for the dark current unless `dark_time` is given.
     det : Detector_SWC or Detector_EIS
         Detector.
     dark_current_inverse_transform : bool, optional
@@ -937,6 +943,10 @@ def to_electrons(
         Draw the detected photons by inverse-transform sampling, and the Fano
         spread for every pixel, for common random numbers between runs that
         differ in photon flux. Default False.
+    dark_time : u.Quantity, optional
+        Time each pixel collects dark current, one value or an array that
+        broadcasts against the pixels, such as one per wavelength pixel from
+        the read-out. Default `t_exp`.
 
     Returns
     -------
@@ -967,7 +977,8 @@ def to_electrons(
     e = electron_counts * (u.electron / u.pixel)
 
     # Add dark current with Poisson shot noise (per pixel)
-    dark_current_mean = (det.dark_current * t_exp).to(u.electron / u.pixel).value
+    dark_time = t_exp if dark_time is None else dark_time
+    dark_current_mean = (det.dark_current * dark_time).to(u.electron / u.pixel).value
     dark_current_counts = _dark_electrons(dark_current_mean, photon_counts.data.shape,
                                           noise=noise,
                                           inverse_transform=dark_current_inverse_transform)

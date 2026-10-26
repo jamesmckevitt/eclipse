@@ -165,6 +165,19 @@ simulation:
 
 - With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
 
+## Dark current
+
+The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](full-ccd-frame.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength.
+
+The wait depends on which rows are read. A row that is read takes about 0.56 ms, and one that is not read is dumped in 15 us. A run takes only the rows of its own wavelengths to be read, as one window. With the default timing, a window of 32 rows adds 0.03 to 0.05 s to the exposure, wherever it is. The clear takes longest for the rows far from the gap between the CCDs, and the wait to be read takes longest for the rows near it. A real observation reads a window around each of its lines, so its rows wait longer than a run gives. A full-CCD frame reads every row, and its last row waits 1.15 s. A run also leaves out charge transfer, as the rest of a run does.
+
+```yaml
+simulation:
+  readout_dark_current: False   # dark current over the exposure only
+```
+
+With `readout_dark_current: False`, dark current is counted over the exposure only, as in ECLIPSE 0.12 and earlier. EIS runs count it over the exposure only.
+
 ## The pixels' width in wavelength
 
 The grating does not spread the wavelengths quite evenly over the CCD, so the width in wavelength of a pixel changes slowly along it. It is 16.98 mA at 171 Angstrom, 16.91 mA at 195 Angstrom and 16.86 mA at 211 Angstrom. By default a run gives every pixel the same width, `detector.wvl_res`, 16.9 mA.

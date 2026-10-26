@@ -838,10 +838,11 @@ class Detector_SWC:
 
     The last four describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
-    takes its wavelengths from `wvl_res`, not from the focal plane, and
-    refuses values other than the defaults. With
-    `Simulation.focal_plane_dispersion` it takes the width of its pixels
-    from the default focal plane.
+    takes its wavelengths from `wvl_res`, not from the focal plane. It uses
+    the focal plane only to find the row recording each wavelength, for the
+    dark current, and, with `Simulation.focal_plane_dispersion`, the width
+    of its pixels. It refuses values other than the defaults, which would
+    make these disagree with its wavelengths.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -897,8 +898,8 @@ class Detector_SWC:
     filter_distance: u.Quantity = field(default=250 * u.mm,
                                         metadata={"source": _NOT_RECORDED, "unit": "mm"})
     # Settings of the camera's CCDs and their read-out, which
-    # eclipse.readout models. An instrument run only checks and
-    # records them.
+    # eclipse.readout models. An instrument run uses only their timing, for
+    # the dark current collected during the clear and the read-out.
     shutter: bool = field(
         default=True, kw_only=True,
         metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a "
@@ -1579,6 +1580,12 @@ class Simulation:
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
+    readout_dark_current : bool
+        Whether each pixel also collects dark current while the CCD is
+        cleared before the exposure and while it waits to be read out
+        afterwards, as in a full-CCD frame (SWC only). Without it, dark
+        current is collected over the exposure only. Default True. Keyword
+        only.
     enable_pinholes : bool
         Whether to model pinholes in the filter (SWC only). Default False.
     pinhole_sizes : list of u.Quantity
@@ -1629,6 +1636,10 @@ class Simulation:
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
+    # A run takes only the rows of its own wavelengths to be read. The clear
+    # and the read-out then add 0.03 to 0.05 s for 32 rows with the default
+    # timing.
+    readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)

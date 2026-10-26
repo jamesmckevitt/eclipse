@@ -15,6 +15,9 @@ from .radiometric import (
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light, dn_variance, _digitise, _spectral_response
 )
+from .config import Detector_SWC
+from .readout import (FocalPlane_SWC, ReadoutSequence, dark_current_time,
+                      windows_from_wavelengths)
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
                                   apply_euv_pinhole_diffraction)
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
@@ -130,7 +133,7 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
     mean, rms = binned_photon_wavelengths(steps[5], offchip_bin_slit)
     return np.sqrt(dn_variance(dn, mean, t_exp, det, visible, offchip_bin_slit,
-                               rms_wavelength=rms))
+                               rms_wavelength=rms, dark_time=_dark_time(I_cube, t_exp, det, sim)))
 
 
 def _check_blur(I_cube: NDCube, det, tel, sim, stacklevel: int) -> None:
@@ -239,6 +242,58 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
             photons_euv_pinholes)
 
 
+def _rows_of(focal_plane: FocalPlane_SWC, wavelength: np.ndarray) -> np.ndarray:
+    """
+    Row of the focal plane recording each wavelength, in Angstrom, at the
+    centre of the slit. A wavelength in the gap between the CCDs, or beyond
+    their outer ends, takes the nearest row of the nearer CCD.
+    """
+    positions = np.arange(focal_plane.n_rows + 1) - 0.5
+    rows, distances = [], []
+    for ccd in ("left", "right"):
+        edges = focal_plane.row_edges(ccd).to_value(u.Angstrom)
+        order = np.argsort(edges)
+        rows.append(np.interp(wavelength, edges[order], positions[order]))
+        distances.append(np.maximum(edges.min() - wavelength, wavelength - edges.max()))
+    return np.where(distances[0] <= distances[1], rows[0], rows[1])
+
+
+def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
+    """
+    Time each wavelength pixel of `I_cube` collects dark current.
+
+    With `sim.readout_dark_current` on and the SWC detector, this is the
+    time :func:`~eclipse.readout.dark_current_time` gives the row that
+    records the pixel's wavelength: the clear before the exposure, the
+    exposure, and the wait to be read out. The rows of the cube's
+    wavelengths are taken to be the only ones read, and the rest are
+    dumped. Otherwise it is `t_exp`.
+    """
+    if not sim.readout_dark_current or not isinstance(det, Detector_SWC):
+        return u.Quantity(t_exp)
+    focal_plane = FocalPlane_SWC.from_detector(det)
+    n_rows = focal_plane.n_rows
+    wavelength = I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom)
+    rows = _rows_of(focal_plane, wavelength)
+    # The window holds every row a pixel of the cube reaches, half a pixel
+    # either side of its centre. Wavelengths all in the gap reach no row, and
+    # take the last, at the gap's edge.
+    half = 0.5 * np.abs(np.diff(wavelength)).mean() if wavelength.size > 1 else 0.0
+    try:
+        windows = windows_from_wavelengths(
+            focal_plane, [((wavelength.min() - half) * u.AA, (wavelength.max() + half) * u.AA)])
+    except ValueError:
+        windows = [(n_rows - 1, n_rows - 1)]
+    sequence = ReadoutSequence.from_detector(det, windows=windows)
+    if sequence.cte_parallel != 1 or sequence.cte_serial != 1:
+        warnings.warn("A run does not model charge transfer, so the detector's cte_parallel "
+                      "and cte_serial are taken as 1 here. Charge left behind as a frame is "
+                      "read is modelled by eclipse.readout.", UserWarning, stacklevel=3)
+        sequence = dataclasses.replace(sequence, cte_parallel=1.0, cte_serial=1.0)
+    per_row = dark_current_time(t_exp, sequence, n_rows)[:n_rows]
+    return np.interp(rows, np.arange(n_rows), per_row.to_value(u.s)) * u.s
+
+
 def simulate_once(
     I_cube: NDCube,
     t_exp: u.Quantity,
@@ -330,6 +385,7 @@ def _simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, *,
         dark_current_inverse_transform=dark_current_inverse_transform,
         noise=noise,
         photon_shot_inverse_transform=photon_shot_inverse_transform,
+        dark_time=_dark_time(I_cube, t_exp, det, sim),
     )
 
     # Add visible stray light (with filter throughput)
@@ -447,13 +503,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # vary with the mean and root mean square energies of its photons.
     photon_wavelengths = (None if visible is None else _photon_wavelengths(
         I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
+    dark_time = _dark_time(I_cube, t_exp, det, sim)
 
     def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
         if visible is None:
             return None
         mean, rms = photon_wavelengths
         return np.sqrt(dn_variance(dn_data, mean, t_exp, det, visible, offchip_bin_slit,
-                                   rms_wavelength=rms))
+                                   rms_wavelength=rms, dark_time=dark_time))
 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()

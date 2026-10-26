@@ -146,7 +146,7 @@ Every electron is taken to be left behind independently, with the same chance at
 
 `expose` gives the mean. A frame drawn from it with `np.random.poisson` has the right mean, but its noise leaves out how the charge left behind varies from frame to frame. `expose_variance` gives each pixel's variance with it included: a pixel that receives a fraction `P` of a charge `Q` gets `P**2` of its variance and `P * (1 - P)` of its mean.
 
-An instrument run does not model the read-out, so a configuration file with either efficiency below 1 is refused.
+An instrument run does not model charge transfer, so a configuration file with either efficiency below 1 is refused.
 
 ## What is not modelled
 
