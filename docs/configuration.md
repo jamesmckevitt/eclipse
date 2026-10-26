@@ -1,6 +1,6 @@
 # Configuration reference
 
-This page lists every setting of `eclipse`'s configuration file, with its default. [Running a simulation](instrument-response.md#configuration-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
+This page lists every setting of `eclipse`'s configuration file, with its default. [Running a simulation](instrument-response.md#the-configuration-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
 
 [Where the settings come from](instrument-sources.md) gives the source of each instrument default, where one is known.
 
@@ -10,7 +10,7 @@ A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `instrument` | The instrument, `SWC` or `EIS`; see [Instruments](instruments.md) | `SWC` |
+| `instrument` | The instrument, `SWC` or `EIS`; see [Instruments](instrument-model.md#the-instruments) | `SWC` |
 | `synthesis_file` | The synthesis file to observe | `./run/input/synthesised_spectra.h5` |
 | `reference_line` | The line whose spectral window is observed, named as in [Naming spectral lines](line-names.md). Every line in the file that falls in that window is added in, so blends are included. To observe several windows, run once for each. | The file's only line. A file with several must hold `Fe12_195.1190`, or say which to observe. |
 | `n_iter` | How many Monte Carlo iterations to run | `25` |
@@ -35,13 +35,13 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `slit_width` | The slit: 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec`, so EIS needs one |
 | `expos` | The exposure time | `1 s` |
 | `vis_sl` | Visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS | `0 photon / (s cm2)` |
-| `psf` | Whether to blur the spectra with the PSF; see [The point spread function](instrument-response.md#the-point-spread-function) | `False` |
+| `psf` | Whether to blur the spectra with the PSF; see [The point spread function](instrument-model.md#the-point-spread-function) | `False` |
 | `psf_boundary` | What the PSF brings in from beyond the edges of the atmosphere: `replicate` or `zero` | `replicate` |
 | `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
-| `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-response.md#the-slits-fiducials) | `False` |
-| `focal_plane_dispersion` | Whether the pixels' width in wavelength is the SW focal plane's where the line lands, rather than `detector.wvl_res` (SWC only); see [The pixels' width in wavelength](instrument-response.md#the-pixels-width-in-wavelength) | `False` |
+| `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-model.md#the-slits-fiducials) | `False` |
+| `focal_plane_dispersion` | Whether the pixels' width in wavelength is the SW focal plane's where the line lands, rather than `detector.wvl_res` (SWC only); see [The pixels' width in wavelength](instrument-model.md#the-pixels-width-in-wavelength) | `False` |
 | `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](instrument-response.md#turning-the-noise-off) | `True` |
-| `readout_dark_current` | Whether dark current is also collected while the CCD is cleared and read out, not only over the exposure (SWC only); see [Dark current](instrument-response.md#dark-current) | `True` |
+| `readout_dark_current` | Whether dark current is also collected while the CCD is cleared and read out, not only over the exposure (SWC only); see [Dark current](instrument-model.md#dark-current) | `True` |
 | `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
 | `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
 
@@ -81,7 +81,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `lit_band` | The wavelengths between which light reaches the CCDs; a baffle blocks the light outside them. | `[170.0 Angstrom, 212.3 Angstrom]` | - |
 | `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. Measured from the ray-traced spots in the SW footprint figure of the optical design summary, RSC-2022021C, it is about `[0.991, 0.605]`; no document gives it. | `[0, 0]`, a line on the same row all along the slit | - |
 
-The last four settings describe the SW focal plane. A run takes each pixel's wavelength from `wvl_res`, not from the focal plane. It uses the focal plane only to find the row that records each wavelength, for the [dark current](instrument-response.md#dark-current), and, with `simulation.focal_plane_dispersion`, the width of its pixels. It refuses values other than the defaults, which would make these disagree with its wavelengths. [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
+The last four settings describe the SW focal plane. A run takes each pixel's wavelength from `wvl_res`, not from the focal plane. It uses the focal plane only to find the row that records each wavelength, for the [dark current](instrument-model.md#dark-current), and, with `simulation.focal_plane_dispersion`, the width of its pixels. It refuses values other than the defaults, which would make these disagree with its wavelengths. [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
 
 ## telescope
 
@@ -91,7 +91,7 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 | `microroughness_sigma` | The RMS roughness of the primary mirror | `0.3 nm` | - |
 | `psf_type` | The shape of the PSF; only `gaussian` is modelled | `gaussian` | `gaussian` |
 | `psf_params` | The FWHMs in pixels of the optical design's PSF, along the slit and in wavelength. This is one value, not a sweep. | from `field_of_view` | `[3 pix, 3 pix]` |
-| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [what the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of). | `280x280` | - |
+| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [what the SW PSF is made of](instrument-model.md#what-the-sw-psf-is-made-of). | `280x280` | - |
 | `resolution_budget` | The blur added to the optical design's from the resolution budget: `current_estimate`, `allocation` or `none` | `current_estimate` | - |
 | `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
 | `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
@@ -101,12 +101,12 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 | `fiducial_lengths` | The length of the fiducials of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that order. This is one value, not a sweep. | `[0.8 arcsec, 0.8 arcsec, 0.8 arcsec, 1.6 arcsec]` | - |
 | `pm_table` | A table of the primary mirror's reflectance | packaged | - |
 | `grating_table` | A table of the grating's efficiency | packaged | - |
-| `calibration` | The EIS effective area: `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](instruments.md#eis-effective-area) | - | `ground` |
+| `calibration` | The EIS effective area: `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](instrument-model.md#eis-effective-area) | - | `ground` |
 | `date` | The date of the observation, for the in-flight EIS calibrations, such as `"2012-06-03"` | - | none |
 
 A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. Lines starting with `#`, and any lines before the data, are skipped.
 
-The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-response.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
+The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-model.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
 
 ## filter
 

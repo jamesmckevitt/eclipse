@@ -4,7 +4,7 @@ This is the second stage of a run. `eclipse` takes the spectra you made when you
 
 This page covers a run on a synthesis file. The same settings apply to [a single line of known intensity](uniform-intensity.md) and to a [time series](time-series.md).
 
-## Running simulations
+## The command
 
 Run the simulation with:
 
@@ -19,17 +19,11 @@ eclipse --config ./run/input/config.yaml
 
 The results are written to `run/result/<config name>.h5`, named after the configuration file. [Analysing the results](analysis.md) shows how to read them.
 
-## Configuration file
+## The configuration file
 
-The configuration file is YAML. Most settings go in four sections, `simulation`, `detector`, `telescope` and `filter`, and any field of the matching class in `config.py` can be set there. **In these four sections, a setting given as a list of more than one value is swept**: ECLIPSE runs every combination of the swept values. A list of one value is just that value.
+The configuration file is YAML. Its top level says which instrument to simulate, what to observe and how many Monte Carlo iterations to run. The instrument's settings go in four sections, `simulation`, `detector`, `telescope` and `filter`, and the fits' in `fitting`. The [configuration reference](configuration.md) lists every setting with its default, and [The instrument model](instrument-model.md) describes what they model.
 
-There are two exceptions: `telescope.psf_params`, which is a list itself, and `telescope.psf_slit_width`, the slit it was measured with. Each always takes one value, never a sweep. `telescope.field_of_view` and `telescope.resolution_budget` can be swept.
-
-At the top level, only `offchip_bin_slit` is swept this way. The other lists there, such as the pinhole lists and a time series' files, are lists of things rather than sweeps, as are the fitting components.
-
-The top level of the file holds the settings that are not about the instrument's hardware: which instrument to simulate (see [Instruments](instruments.md)), what to observe, and how many Monte Carlo iterations to run. The [configuration reference](configuration.md) lists every setting, with its default.
-
-Here's a complete example configuration file:
+A complete example:
 
 ```yaml
 # Input
@@ -67,6 +61,8 @@ filter:
   mesh_throughput: 0.8
 ```
 
+**A setting given as a list of more than one value is swept**: ECLIPSE runs every combination of the swept values, as for `offchip_bin_slit`, `slit_width` and `expos` above. A list of one value is just that value. At the top level, only `offchip_bin_slit` is swept. The other lists there, such as the pinhole lists and a time series' files, are lists of things rather than sweeps, as are the fitting components. A few settings are lists themselves, and take one value: `telescope.psf_params`, `telescope.fiducial_centres` and `telescope.fiducial_lengths`. So does `telescope.psf_slit_width`, the slit `psf_params` was measured with.
+
 Any setting in the [configuration reference](configuration.md) can be added to its section in the same way. For example, to sweep over the detector's quantum efficiency:
 
 ```yaml
@@ -80,114 +76,6 @@ For recommended values, see [McKevitt et al. (2026), PASJ 78, 1524](https://acad
 !!! warning "Parameters must go inside their section"
 
     A setting written at the top level instead, such as `expos:` or `ccd_temperature:` directly under the document root, stops the run with an error naming the section it belongs in. Any other key ECLIPSE does not read, such as a misspelt name, stops the run in the same way.
-
-## The point spread function
-
-With `simulation.psf: True`, ECLIPSE blurs the spectra with the instrument's point spread function (PSF), along the slit and in wavelength, before they reach the detector's pixels. It is off by default.
-
-### What the SW PSF is made of
-
-The SW PSF is a Gaussian. Its width is two parts added in quadrature:
-
-- The optical design, from RSC-2022021C (March 2025). This is the worst case over a field of view, chosen with `telescope.field_of_view`: `280x280` (default, the full scan), `100x100` or `70x70` arcsec. Along the slit it is 0.423, 0.195 or 0.161 arcsec. In wavelength it is 43.00 mA with the 0.2 arcsec slit, which the design gives for the 70 x 70 arcsec field only and which is used for all three.
-- Everything else, from the resolution budget RSC-2022033B rev. B (October 2025): the primary mirror, the scan mirror, focusing, alignment, wavefront measurement, pointing jitter, the spectrograph's optics and vibration of the grating. `telescope.resolution_budget` chooses `current_estimate` (default), the current best estimate, or `allocation`, what the budget allows each part. `none` leaves them out.
-
-The budget is written for the 70 x 70 and 100 x 100 arcsec fields, and apart from the optical design it is the same for both. The full field has no budget yet, so these terms are used for every field. In wavelength the budget gives only the allocation. Each of its rows there is a row of the spatial budget, or a fraction of one, so the current best estimate in wavelength is worked out from the spatial estimate in the same way. The slit width error in the budget is a tolerance on the slit, not a blur, and is left out.
-
-The telescope's terms, which come before the slit, also blur the scene across the slit, so some light from beside the slit falls into it. These are everything but the spectrograph's optics. The optical design's own blur across the slit is not known, so `telescope.psf_across_slit` adds it only if given.
-
-| FWHM, 280 x 280 field | Optical design | With current estimate | With allocation |
-| --- | --- | --- | --- |
-| Along the slit | 0.423 arcsec | 0.516 arcsec | 0.564 arcsec |
-| Across the slit | none | 0.278 arcsec | 0.336 arcsec |
-| In wavelength, 0.2 arcsec slit | 43.0 mA | 45.0 mA | 47.7 mA |
-
-```yaml
-telescope:
-  field_of_view: 70x70
-  resolution_budget: allocation
-simulation:
-  psf: True
-```
-
-Setting `telescope.psf_params` gives the optical design's widths directly, in place of `field_of_view`.
-
-The budget's pointing jitter is 0.110 arcsec FWHM. `telescope.pointing_jitter` replaces it with another FWHM, which can be swept. The jitter blurs the scene along and across the slit. The budget takes the grating's vibration as two thirds of the jitter, so that changes with it too. A jitter given as a 3-sigma amplitude is converted with FWHM = 2.3548 sigma.
-
-```yaml
-telescope:
-  pointing_jitter: [0 arcsec, 0.110 arcsec, 0.2 arcsec]
-```
-
-### The spectral PSF and the slit
-
-With `psf: True`, each line is blurred in wavelength by the optics and by the image of the slit, so the blur depends on the slit width. `telescope.psf_params` gives the optical design's FWHM in pixels, along the slit and in wavelength. For SWC, the one in wavelength is for the 0.2 arcsec slit.
-
-`simulation.spectral_psf` sets how the slit is added to the optics' blur:
-
-- `quadrature` (default): a Gaussian, whose FWHM is the optics' and the slit image's widths added in quadrature.
-- `convolution`: the optics' Gaussian convolved with the slit's rectangular image.
-
-```yaml
-simulation:
-  slit_width: [0.2 arcsec, 1.6 arcsec]
-  psf: True
-  spectral_psf: convolution
-```
-
-The EIS PSF is not tied to a slit, so its width in wavelength is the same for every slit, and `convolution` is refused for it. Setting `telescope.psf_slit_width`, the slit that `psf_params` was measured with, changes both.
-
-### The edges of the atmosphere
-
-With `psf: True`, the blur brings in light from beyond the edges of the atmosphere. `simulation.psf_boundary` sets what is there:
-
-- `replicate` (default): the Sun beyond each edge is taken to be like the cells at the edge, so the pixels there are as bright as they would be in the middle of a larger atmosphere.
-- `zero`: nothing is beyond the edges, so the light the blur carries out of the atmosphere is lost, and the pixels within a PSF width of an edge come out darker.
-
-```yaml
-simulation:
-  psf: True
-  psf_boundary: zero
-```
-
-## The slit's fiducials
-
-Each SWC slit is 300 arcsec long and is interrupted in two places. These gaps, the fiducials, block the light over a short length of the slit, so they show as dark rows along the slit in every slit's data. They are there to line up observations made with different slits.
-
-With `simulation.slit_mask: True`, no light reaches the pixels behind the fiducials or beyond the ends of the slit. A pixel partly behind one gets the part of the light that falls on its open part. It is off by default, which leaves the slit open along the whole atmosphere.
-
-```yaml
-simulation:
-  slit_width: 0.4 arcsec
-  psf: True
-  slit_mask: True
-```
-
-- With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
-
-## Dark current
-
-The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](full-ccd-frame.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength.
-
-The wait depends on which rows are read. A row that is read takes about 0.56 ms, and one that is not read is dumped in 15 us. A run takes only the rows of its own wavelengths to be read, as one window. With the default timing, a window of 32 rows adds 0.03 to 0.05 s to the exposure, wherever it is. The clear takes longest for the rows far from the gap between the CCDs, and the wait to be read takes longest for the rows near it. A real observation reads a window around each of its lines, so its rows wait longer than a run gives. A full-CCD frame reads every row, and its last row waits 1.15 s. A run also leaves out charge transfer, as the rest of a run does.
-
-```yaml
-simulation:
-  readout_dark_current: False   # dark current over the exposure only
-```
-
-With `readout_dark_current: False`, dark current is counted over the exposure only, as in ECLIPSE 0.12 and earlier. EIS runs count it over the exposure only.
-
-## The pixels' width in wavelength
-
-The grating does not spread the wavelengths quite evenly over the CCD, so the width in wavelength of a pixel changes slowly along it. It is 16.98 mA at 171 Angstrom, 16.91 mA at 195 Angstrom and 16.86 mA at 211 Angstrom. By default a run gives every pixel the same width, `detector.wvl_res`, 16.9 mA.
-
-```yaml
-simulation:
-  focal_plane_dispersion: True   # the focal plane's pixel width where the line lands
-```
-
-With `focal_plane_dispersion: True`, a run takes the width of the pixel the observed line lands on, from the SW focal plane, and gives it to every pixel of its window. The pixels then collect as much of the spectrum, and span as many km/s, as on the CCD. Across a window of 60 pixels the true width changes by about 2 parts in 10,000, which a run leaves out. A run does not place its pixels on the CCD's rows either, so a line sits at the same place within its pixel as without the setting. It cannot be combined with `detector.wvl_res`, and works for SWC, with synthesis files or a uniform intensity, for a line that reaches the CCDs within the lit band.
 
 ## Off-chip slit binning
 

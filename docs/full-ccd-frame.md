@@ -54,7 +54,7 @@ write_full_frame(frame, "frame.h5")
 
 With the PSF on, the blur along the slit carries light out of the columns at the ends of the scene. `psf_boundary` sets what the blur brings in from beyond the scene, as in a run. With `"replicate"`, the default, the Sun beyond the scene is taken to look like the scene's edges, and the columns beyond the scene get no light. With `"zero"`, the Sun beyond the scene is dark, so the columns at the ends of the scene lose up to about a third of their light to the columns just beyond. `psf_boundary` sets the same across the slit, for a slit near the synthesis's x edges. With `"replicate"`, a slit partly beyond those edges gets light only over its part inside them.
 
-With `slit_mask=True`, no light reaches the columns beyond the ends of the 300 arcsec slit or behind its fiducials, as in a run (see [The slit's fiducials](instrument-response.md#the-slits-fiducials)). The CCD's 2048 columns cover 326 arcsec along the slit, so about 80 columns at each end are beyond the slit. It is off by default.
+With `slit_mask=True`, no light reaches the columns beyond the ends of the 300 arcsec slit or behind its fiducials, as in a run (see [The slit's fiducials](instrument-model.md#the-slits-fiducials)). The CCD's 2048 columns cover 326 arcsec along the slit, so about 80 columns at each end are beyond the slit. It is off by default.
 
 The slit width, PSF and noise can instead be taken from a `Simulation`, as in an instrument-response run:
 
