@@ -4,6 +4,7 @@ Monte Carlo simulation functions for instrument response analysis.
 
 from __future__ import annotations
 import dataclasses
+import warnings
 from typing import Tuple
 import numpy as np
 import astropy.units as u
@@ -240,11 +241,14 @@ def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
     """
     if not sim.readout_dark_current or not isinstance(det, Detector_SWC):
         return u.Quantity(t_exp)
+    sequence = ReadoutSequence.from_detector(det)
+    if sequence.cte_parallel != 1 or sequence.cte_serial != 1:
+        warnings.warn("A run does not model charge transfer, so the detector's cte_parallel "
+                      "and cte_serial are taken as 1 here. Charge left behind as a frame is "
+                      "read is modelled by eclipse.readout.", UserWarning, stacklevel=3)
+        sequence = dataclasses.replace(sequence, cte_parallel=1.0, cte_serial=1.0)
     focal_plane = FocalPlane_SWC.from_detector(det)
     n_rows = focal_plane.n_rows
-    # Every row is read, and a run does not model charge transfer.
-    sequence = dataclasses.replace(ReadoutSequence.from_detector(det), cte_parallel=1.0,
-                                   cte_serial=1.0)
     per_row = dark_current_time(t_exp, sequence, n_rows)[:n_rows]
     rows = _rows_of(focal_plane, I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom))
     return np.interp(rows, np.arange(n_rows), per_row.to_value(u.s)) * u.s

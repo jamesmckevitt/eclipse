@@ -761,8 +761,9 @@ def main() -> None:
                 f"detector.{name} must be 1 for an instrument run, which does not model "
                 f"charge transfer. Charge left behind as a frame is read is modelled by "
                 f"eclipse.readout, which takes the detector's settings.")
-    # Nor does it take its wavelengths from the SW focal plane, so other values would
-    # be ignored.
+    # Nor does it take its wavelengths from the SW focal plane. It uses the focal
+    # plane only to find the row recording each wavelength, for the dark current,
+    # and other values would make those rows disagree with its wavelengths.
     if instrument == "SWC":
         focal_plane = {name: det_fixed[name] for name in _FOCAL_PLANE_SETTINGS
                        if name in det_fixed}
@@ -773,7 +774,7 @@ def main() -> None:
                 raise ValueError(
                     f"detector.{name} must be left at its default for an instrument run, "
                     f"which takes its wavelengths from detector.wvl_res, not from the SW focal "
-                    f"plane. Full-CCD frames, made by "
+                    f"plane, and needs the two to agree. Full-CCD frames, made by "
                     f"eclipse.full_frame, do.")
 
     # The wavelength grids are cached by slit width and detector sampling, and

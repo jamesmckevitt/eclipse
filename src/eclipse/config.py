@@ -838,9 +838,10 @@ class Detector_SWC:
 
     The last four describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
-    takes its wavelengths from `wvl_res`, not from the focal plane, and
-    refuses values other than the defaults. It uses the focal plane only to
-    find the row recording each wavelength, for the dark current.
+    takes its wavelengths from `wvl_res`, not from the focal plane. It uses
+    the focal plane only to find the row recording each wavelength, for the
+    dark current, so it refuses values other than the defaults, which would
+    make the two disagree.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -1624,8 +1625,8 @@ class Simulation:
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
-    # With every row read, the clear and the read-out add up to 1.15 s to the
-    # time a pixel collects dark current, for the last row read.
+    # With every row read and the default timing, the wait to be read adds up
+    # to 1.15 s to the time a pixel collects dark current, for the last row.
     readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)

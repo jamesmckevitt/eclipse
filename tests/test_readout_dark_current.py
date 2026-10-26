@@ -98,3 +98,12 @@ def test_dn_variance_takes_a_dark_time_per_pixel():
     each = [dn_variance(dn[:1], 195.119 * u.AA, t, DET)[0] for t in times]
     together = dn_variance(dn, 195.119 * u.AA, EXPOSURE, DET, dark_time=times)
     assert np.allclose(together, each, rtol=1e-12, atol=0.0)
+
+
+def test_charge_transfer_is_left_out_with_a_warning():
+    leaky = Detector_SWC(cte_parallel=0.99999)
+    sim = Simulation(noise=False)
+    cube = _cube(195.119 * u.AA)
+    with pytest.warns(UserWarning, match="does not model charge transfer"):
+        time = _dark_time(cube, EXPOSURE, leaky, sim)
+    assert np.array_equal(time, _dark_time(cube, EXPOSURE, DET, sim))

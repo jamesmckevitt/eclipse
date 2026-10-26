@@ -80,7 +80,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `lit_band` | The wavelengths between which light reaches the CCDs; a baffle blocks the light outside them. | `[170.0 Angstrom, 212.3 Angstrom]` | - |
 | `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. Measured from the ray-traced spots in the SW footprint figure of the optical design summary, RSC-2022021C, it is about `[0.991, 0.605]`; no document gives it. | `[0, 0]`, a line on the same row all along the slit | - |
 
-The last four settings describe the SW focal plane. A run takes each pixel's wavelength from `wvl_res`, not from the focal plane, so it refuses values other than the defaults. It uses the focal plane only to find the row that records each wavelength, for the [dark current](instrument-response.md#dark-current). [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
+The last four settings describe the SW focal plane. A run takes each pixel's wavelength from `wvl_res`, not from the focal plane. It uses the focal plane only to find the row that records each wavelength, for the [dark current](instrument-response.md#dark-current), so it refuses values other than the defaults, which would make the two disagree. [Full-CCD frames](full-ccd-frame.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
 
 ## telescope
 
