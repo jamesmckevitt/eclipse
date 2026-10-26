@@ -34,18 +34,18 @@ nav:
       - Spectra from another code: other-codes.md
   - 2. Simulating the instrument:
       - Running a simulation: instrument-response.md
-      - Configuration reference: configuration.md
+      - The instrument model: instrument-model.md
       - Fitting blended lines: fitting.md
       - A single line of known intensity: uniform-intensity.md
       - Time series: time-series.md
       - A full-CCD frame: full-ccd-frame.md
-      - Instruments: instruments.md
-      - Where the settings come from: instrument-sources.md
   - 3. Analysing the results: analysis.md
   - Python:
       - Using ECLIPSE from Python: python.md
       - API reference: api.md
   - Reference:
+      - Configuration reference: configuration.md
+      - Where the settings come from: instrument-sources.md
       - Files: files.md
       - Naming spectral lines: line-names.md
       - Older versions: older-versions.md
@@ -89,6 +89,7 @@ plugins:
   - redirects:
       redirect_maps:
         vdem-synthesis.md: dem-synthesis.md#with-velocities-a-vdem
+        instruments.md: instrument-model.md#the-instruments
   - mkdocstrings:
       handlers:
         python:

@@ -836,6 +836,8 @@ class Detector_SWC:
         :data:`MEASURED_SLIT_IMAGE_TILT` is measured from the ray-traced
         spots in the SW footprint figure of RSC-2022021C.
 
+    Notes
+    -----
     The last four describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
     takes its wavelengths from `wvl_res`, not from the focal plane. It uses

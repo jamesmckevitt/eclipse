@@ -74,11 +74,7 @@ To install ECLIPSE and make a first run, see [Getting started](quickstart.md). T
 
 ## Instruments
 
-- `SWC` - SOLAR-C/EUVST-SW, the short wavelength channel. This is the default.
-- `EIS` - Hinode/EIS.
-- The EUVST long wavelength channel (LW) is coming soon, and will complete EUVST.
-
-The instrument is chosen with the `instrument:` key at the top level of the configuration file. [Instruments](instruments.md) describes what differs between them.
+ECLIPSE models EUVST-SW, the short wavelength channel of SOLAR-C/EUVST, and Hinode/EIS. The EUVST long wavelength channel (LW) is coming soon. [The instrument model](instrument-model.md) describes what ECLIPSE models of each.
 
 ## Citing ECLIPSE
 
