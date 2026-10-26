@@ -30,8 +30,10 @@ from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _so
                     expose_with_wavelengths, pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
 from .config import _FOCAL_PLANE_SETTINGS, _same_setting
+from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
-from .sampling import light_onto_pixels, pixel_weights, points_onto_pixels
+from .sampling import (light_onto_pixels, pixel_weights, pixel_weights_through,
+                       points_onto_pixels)
 from .utils import _fwhm_to_sigma, distance_to_angle
 
 CCDS = ("left", "right")
@@ -81,6 +83,27 @@ def _angle(edges: u.Quantity) -> np.ndarray:
     return distance_to_angle(edges).to_value(u.arcsec)
 
 
+def _scene_weights(cell_edges: np.ndarray, pixel_edges: np.ndarray, sigma: float,
+                   extend: bool = False, openings: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Weight of each scene cell in each pixel, `(n_pixels, n_cells)`.
+
+    With `extend` and a blur, the edge cells continue past the scene for
+    the blur to bring in, and each pixel takes light only over its part
+    inside the scene, as every pixel of a run lies inside it. With
+    `openings`, `(n, 2)` in the unit of the edges, light gets through only
+    there, after the blur.
+    """
+    if not (extend and sigma > 0):
+        if openings is None:
+            return pixel_weights(cell_edges, pixel_edges, sigma)
+        return pixel_weights_through(cell_edges, pixel_edges, openings, sigma)
+    low, high = cell_edges[0], cell_edges[-1]
+    inside = np.clip([[low, high]] if openings is None else openings, low, high)
+    inside = inside[inside[:, 1] > inside[:, 0]]
+    return pixel_weights_through(cell_edges, pixel_edges, inside, sigma, extend=True)
+
+
 @dataclass
 class _Scene:
     """Scene under the slit, read from a synthesis file."""
@@ -94,7 +117,8 @@ class _Scene:
 
 
 def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Quantity,
-                    psf_across_slit: Optional[u.Quantity] = None) -> _Scene:
+                    psf_across_slit: Optional[u.Quantity] = None,
+                    extend: bool = False) -> _Scene:
     """
     Emission measure under the slit from a synthesis file, by temperature, density and velocity.
 
@@ -117,6 +141,10 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
     psf_across_slit : u.Quantity, optional
         FWHM of the telescope's blur across the slit, which brings in
         emission from beside the slit. Default None, for no blur.
+    extend : bool, optional
+        Take the Sun beyond the file's x edges as their edge cells, for the
+        blur to bring in, and the slit's light only from its part inside
+        them. Default False, for dark.
     """
     from .synthesis import _temperature_bins
 
@@ -139,7 +167,8 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         width = u.Quantity(slit_width).to_value(u.arcsec)
         sigma = (0.0 if psf_across_slit is None
                  else _fwhm_to_sigma(u.Quantity(psf_across_slit).to_value(u.arcsec)))
-        across = pixel_weights(x, np.array([centre - width / 2, centre + width / 2]), sigma)[0]
+        slit = np.array([centre - width / 2, centre + width / 2])
+        across = _scene_weights(x, slit, sigma, extend)[0]
         columns = np.flatnonzero(across > 0)
         if columns.size == 0:
             raise ValueError(f"The slit at {slit_position} is off the image, which runs from "
@@ -492,7 +521,8 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
 
 
 # Arguments of `full_ccd_frame` that a `Simulation` sets.
-_FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
+_FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise", "psf_boundary",
+                    "slit_mask")
 
 # `Simulation` fields a frame does not use, as they do not change it. `expos`
 # is replaced by the `exposure` argument.
@@ -525,7 +555,7 @@ def _field_default(f: dataclasses.Field):
 def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
                               exposure: u.Quantity) -> dict:
     """
-    Slit width, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
+    Slit, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
 
     An argument in `given` equal to its default takes the value in `sim`.
     Raises TypeError if `sim` is not a `Simulation`. Raises one ValueError
@@ -555,10 +585,6 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
         elif name == "instrument":
             if str(value).upper() != "SWC":
                 problems.append(f"instrument {value!r}: a frame is of SWC")
-        elif name == "psf_boundary":
-            if sim.psf and value != "zero":
-                problems.append(f"psf_boundary {value!r}: the frame takes the Sun beyond the "
-                                f"synthesis's edges as dark, psf_boundary 'zero'")
         elif name == "enable_pinholes":
             if _pinholes_on(sim):
                 problems.append("enable_pinholes: the frame does not model pinholes in the "
@@ -580,7 +606,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                    psf: bool = True, spectral_psf: str = "quadrature",
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
                    noise: bool = True, n_workers: int = 0,
-                   sim: Optional[Simulation] = None) -> FullFrame:
+                   sim: Optional[Simulation] = None,
+                   psf_boundary: str = "replicate", slit_mask: bool = False) -> FullFrame:
     """
     Full-CCD frame of the SW camera from a synthesis and every line in the band.
 
@@ -608,8 +635,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         detector's.
     psf : bool, optional
         Blur with the telescope's PSF along the slit and in wavelength, and
-        across the slit if the telescope gives that. Beyond the synthesis's
-        edges the Sun is taken as dark. Default True.
+        across the slit if the telescope gives that. Default True.
     spectral_psf : str, optional
         `"quadrature"` (default) or `"convolution"`, as in the configuration.
     continuum : tuple, optional
@@ -626,12 +652,28 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         every CPU this process may use. Where processes cannot be forked, as
         on Windows, one process is used.
     sim : Simulation, optional
-        Settings to take `slit_width`, `psf`, `spectral_psf` and `noise`
-        from. Where one of these arguments equals its default, given or not,
-        the `Simulation`'s value is used; any other value must agree with
-        it. A `Simulation` has the PSF off unless made with `psf=True`. Its
-        `expos`, `n_iter` and `ncpu` are not used, nor `psf_boundary` with
-        the PSF off, nor the pinhole settings with pinholes off. Default None.
+        Settings to take `slit_width`, `psf`, `spectral_psf`, `noise`,
+        `psf_boundary` and `slit_mask` from. Where one of these arguments
+        equals its default, given or not, the `Simulation`'s value is used;
+        any other value must agree with it. A `Simulation` has the PSF off unless made
+        with `psf=True`. Its `expos`, `n_iter` and `ncpu` are not used, nor
+        the pinhole settings with pinholes off. Default None.
+    psf_boundary : str, optional
+        What the PSF brings in from beyond the edges of the synthesis, as
+        in a run. `"replicate"` (default) takes the Sun there to look like
+        the edge cells. Each column, and the slit across, then gets light
+        only over its part inside the scene, so a uniform scene gives every
+        column inside it the same light and the columns beyond none.
+        `"zero"` takes the Sun there as dark, so the columns at the ends of
+        the scene get up to about a third less light, which the blur
+        carries to the columns just beyond. Keyword only.
+    slit_mask : bool, optional
+        Block the light beyond the ends of the slit and behind its
+        fiducials, from `telescope.slit_openings`, as in a run. The slit's
+        centre is the middle column and the middle of the scene. The blur
+        along the slit comes before the slit, so a column partly behind a
+        fiducial gets the light falling on its open part. Default False.
+        Keyword only.
 
     Returns
     -------
@@ -642,15 +684,16 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     TypeError
         If `sim` is not a `Simulation`.
     ValueError
-        Among others: if `exposure` or `slit_width` is not above zero, the
-        slit is off the synthesis, `lines` or `continuum` are not on the
-        synthesis's grids, or `focal_plane` does not match `det` or has a
-        tilted slit image. With `sim`, if an argument differs from both its
-        default and the `Simulation`, or the `Simulation` asks for something
-        the frame does not model: an instrument other than SWC,
-        `psf_boundary` `"replicate"` with the PSF on, `slit_mask`, pinholes,
-        visible stray light, or a field a subclass adds. One error lists
-        every such setting.
+        Among others: if `exposure` or `slit_width` is not above zero,
+        `psf_boundary` is not `"replicate"` or `"zero"`, `slit_mask` is on
+        and the telescope does not give the slit's openings for this slit
+        width, the slit is off the synthesis, `lines` or `continuum` are
+        not on the synthesis's grids, or `focal_plane` does not match `det`
+        or has a tilted slit image. With `sim`, if an argument differs from
+        both its default and the `Simulation`, or the `Simulation` asks for
+        something the frame does not model: an instrument other than SWC,
+        pinholes, visible stray light, or a field a subclass adds. One
+        error lists every such setting.
 
     Warns
     -----
@@ -663,10 +706,16 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
     if sim is not None:
         given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
-                 "noise": noise}
+                 "noise": noise, "psf_boundary": psf_boundary, "slit_mask": slit_mask}
         settings = _settings_from_simulation(sim, given, exposure)
         slit_width, psf = settings["slit_width"], settings["psf"]
         spectral_psf, noise = settings["spectral_psf"], settings["noise"]
+        psf_boundary, slit_mask = settings["psf_boundary"], settings["slit_mask"]
+    if not (isinstance(psf_boundary, str) and psf_boundary in ("replicate", "zero")):
+        raise ValueError(f"psf_boundary must be 'replicate' or 'zero', got {psf_boundary!r}.")
+    extend = psf_boundary == "replicate"
+    if slit_mask not in (True, False):
+        raise ValueError(f"slit_mask must be True or False, got {slit_mask!r}.")
     det = Detector_SWC() if det is None else det
     telescope = Telescope_EUVST() if telescope is None else telescope
     focal_plane = FocalPlane_SWC.from_detector(det) if focal_plane is None else focal_plane
@@ -676,6 +725,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                 and value.value > 0):
             raise ValueError(f"{name} must be a finite {unit.physical_type} above zero, got "
                              f"{value}.")
+    openings = _openings_along_the_slit(telescope, slit_width) if slit_mask else None
     if (focal_plane.n_rows, focal_plane.n_columns) != (det.n_rows, det.n_columns):
         raise ValueError(
             f"The focal plane has {focal_plane.n_rows} rows and {focal_plane.n_columns} "
@@ -691,7 +741,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
             f"the detector, Detector_SWC, and leave out focal_plane, or make it with "
             f"FocalPlane_SWC.from_detector(det).")
     across = across_slit_fwhm(telescope) if psf else None
-    scene = read_slit_scene(synthesis_path, slit_position, slit_width, across)
+    scene = read_slit_scene(synthesis_path, slit_position, slit_width, across, extend)
     if not np.array_equal(scene.logT_grid, lines.logT_grid):
         raise ValueError("The band's lines are on another grid of temperature than the "
                          "synthesis; work them out on the synthesis's own.")
@@ -720,12 +770,14 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
             raise ValueError("The continuum's wavelengths must be finite and increase.")
 
-    # Along the slit: weight of each image row in each detector column.
+    # Along the slit: weight of each image row in each detector column. The
+    # middle column, the middle of the scene and the slit's centre are at 0.
     columns = np.arange(focal_plane.n_columns + 1) - 0.5
     column_edges = focal_plane.field_angle(columns).to_value(u.arcsec)
     sigma = (_fwhm_to_sigma(spatial_psf_fwhm(telescope, det))
              * focal_plane.plate_scale.to_value(u.arcsec) if psf else 0.0)
-    along = pixel_weights(scene.y_edges, column_edges, sigma)        # (columns, image rows)
+    along = _scene_weights(scene.y_edges, column_edges, sigma, extend,
+                           openings)                                # (columns, image rows)
 
     blur = spectral_psf if psf else None
     temperatures = [t for t in range(scene.logT_grid.size)
@@ -823,6 +875,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
+                               "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
                                "continuum": continuum is not None,
                                "cells_per_row": frame_module.CELLS_PER_ROW,
                                "serial_prescan": det.serial_prescan,
