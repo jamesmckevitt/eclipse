@@ -22,14 +22,15 @@ jobs:
       - name: Build the sdist and wheel
         run: python -m build
 
-      # solarc-eclipse, the former name on PyPI, is released with every version
-      # of eclipse, at the same version, and installs eclipse.
+      # solarc-eclipse, the former name on PyPI, is an sdist whose install stops
+      # and says to install eclipse. It has a fixed version, so it is uploaded
+      # once and skipped by later releases.
       - name: Build solarc-eclipse
-        run: python -m build --outdir dist legacy/solarc-eclipse
+        run: SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse
 
       # A PyPI version cannot be replaced once it is uploaded, so everything
       # that can be checked is checked before the publish job runs.
-      - name: Check the wheels hold the tagged version and every package file
+      - name: Check the packages, their version and the package files
         run: python tools/check_packages.py --tag "$GITHUB_REF_NAME"
 
       - name: Check the metadata renders
@@ -58,8 +59,9 @@ jobs:
       # is no API token to store or rotate.  Pinned to a commit SHA rather than a
       # moving tag, because this step can publish and a retagged upstream would
       # otherwise change what runs here without review.  Dependabot keeps the
-      # pins current.  Files already on PyPI are skipped, so that if one of the
-      # two packages fails to upload, rerunning the job uploads the other.
+      # pins current.  Files already on PyPI are skipped: the solarc-eclipse sdist
+      # after its first upload, and the files of a partly failed upload when the
+      # job is rerun.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           skip-existing: true

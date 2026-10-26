@@ -67,9 +67,9 @@ jobs:
       - name: Build eclipse and solarc-eclipse
         run: |
           python -m build --outdir dist .
-          python -m build --outdir dist legacy/solarc-eclipse
+          SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse
 
-      - name: Check the wheels hold every package file
+      - name: Check the packages and the package files
         run: python tools/check_packages.py
 
       - name: Check the metadata renders
