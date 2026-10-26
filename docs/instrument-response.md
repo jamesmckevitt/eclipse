@@ -165,6 +165,17 @@ simulation:
 
 - With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
 
+## Dark current
+
+The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](full-ccd-frame.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength. Rows are read from the outer end of each CCD toward the gap between them, so wavelengths near the gap, around 198 to 199.5 Angstrom, wait longest: about 1.1 s more than the exposure, with every row read.
+
+```yaml
+simulation:
+  readout_dark_current: False   # dark current over the exposure only
+```
+
+With `readout_dark_current: False`, dark current is counted over the exposure only, as in ECLIPSE 0.12 and earlier. EIS runs count it over the exposure only.
+
 ## Off-chip slit binning
 
 `offchip_bin_slit` adds together neighbouring pixels along the slit after read-out, so the binning is done on the ground rather than on the detector. Adding `n` pixels multiplies the signal by `n`, while the noise only grows as `sqrt(n)`. The signal to noise therefore goes up as `sqrt(n)`, at the cost of resolution along the slit.

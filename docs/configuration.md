@@ -40,6 +40,7 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
 | `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](instrument-response.md#the-slits-fiducials) | `False` |
 | `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](instrument-response.md#turning-the-noise-off) | `True` |
+| `readout_dark_current` | Whether dark current is also collected while the CCD is cleared and read out, not only over the exposure (SWC only); see [Dark current](instrument-response.md#dark-current) | `True` |
 | `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
 | `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
 

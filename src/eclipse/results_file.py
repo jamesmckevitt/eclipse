@@ -362,7 +362,7 @@ _EARLIER_VALUES = {
                      "slit_image_tilt": (0.0, 0.0)},
     "Detector_EIS": dict(_MATERIAL),
     "AluminiumFilter": {"visible_decade_thickness": 170.0 * u.angstrom},
-    "Simulation": {"pinhole_visible_wavelength": 600.0 * u.nm},
+    "Simulation": {"pinhole_visible_wavelength": 600.0 * u.nm, "readout_dark_current": False},
 }
 
 

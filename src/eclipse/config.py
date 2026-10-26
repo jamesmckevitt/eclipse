@@ -1570,6 +1570,12 @@ class Simulation:
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
+    readout_dark_current : bool
+        Whether each pixel also collects dark current while the CCD is
+        cleared before the exposure and while it waits to be read out
+        afterwards, as in a full-CCD frame (SWC only). Without it, dark
+        current is collected over the exposure only. Default True. Keyword
+        only.
     enable_pinholes : bool
         Whether to model pinholes in the filter (SWC only). Default False.
     pinhole_sizes : list of u.Quantity
@@ -1617,6 +1623,9 @@ class Simulation:
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
+    # The clear and the read-out add up to about 1.2 s to the time a pixel
+    # collects dark current, more for rows read later.
+    readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)

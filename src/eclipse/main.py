@@ -131,8 +131,8 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "slit_mask", "noise", "enable_pinholes",
-                    "pinhole_visible_wavelength"}
+                    "spectral_psf", "slit_mask", "noise", "readout_dark_current",
+                    "enable_pinholes", "pinhole_visible_wavelength"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -895,6 +895,7 @@ def main() -> None:
         "spectral_psf": "quadrature",
         "slit_mask": False,
         "noise": True,
+        "readout_dark_current": True,
         "enable_pinholes": False,
     }
     _det_defaults = {
@@ -1184,6 +1185,7 @@ def main() -> None:
             spectral_psf=all_sim.get("spectral_psf", "quadrature"),
             slit_mask=all_sim.get("slit_mask", False),
             noise=all_sim.get("noise", True),
+            readout_dark_current=all_sim.get("readout_dark_current", True),
             enable_pinholes=enable,
             pinhole_sizes=pinhole_sizes if enable else [],
             pinhole_positions=pinhole_positions if enable else [],
