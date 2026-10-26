@@ -62,7 +62,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST-SW focal plane
 
-These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run uses them only with `simulation.focal_plane_dispersion`, at their defaults, and the frame does not yet take the slit image tilt.
+These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run uses them, at their defaults, only to find the row recording each wavelength, for the dark current, and with `simulation.focal_plane_dispersion` for the width of its pixels, and the frame does not yet take the slit image tilt.
 
 <!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 
