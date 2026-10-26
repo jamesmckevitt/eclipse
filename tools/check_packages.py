@@ -3,52 +3,73 @@ Check the packages built into dist/ before they are uploaded to PyPI.
 
 Run it as `python tools/check_packages.py` after building them, or with
 `--tag vX.Y.Z` to check `eclipse` has the version of that tag too. dist/ must
-hold the sdist and wheel of `eclipse` and the sdist of `solarc-eclipse`, the
-former name. The wheel is read rather than the package imported, so this needs
-no runtime dependency. A PyPI version cannot be replaced once it is uploaded,
-so the release workflow runs this before uploading anything.
+hold the sdist and wheel of `eclipse`, and may hold the sdist of
+`solarc-eclipse`, the former name, whose install must stop with a message. The
+wheel is read rather than the package imported, so this needs no runtime
+dependency. A PyPI version cannot be replaced once it is uploaded, so the
+release workflow runs this before uploading anything.
 """
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src"
+LEGACY = ROOT / "legacy" / "solarc-eclipse"
+
+
+def _search(pattern, path):
+    match = re.search(pattern, path.read_text(), re.MULTILINE)
+    if match is None:
+        raise SystemExit(f"::error::no version found in {path}")
+    return match
 
 
 def check(dist, tag=None):
     """Errors found in the packages in `dist`, as a list of messages."""
-    source = re.search(r'^__version__ = ([\'"])(.+?)\1',
-                       (SOURCE / "eclipse" / "__init__.py").read_text(), re.MULTILINE)[2]
+    if not dist.is_dir():
+        return [f"no folder {dist}"]
+    source = _search(r'^__version__ = ([\'"])(.+?)\1', SOURCE / "eclipse" / "__init__.py")[2]
     version = source if tag is None else tag.removeprefix("v")
-    legacy = re.search(r'^version = "(.+?)"',
-                       (ROOT / "legacy" / "solarc-eclipse" / "pyproject.toml").read_text(),
-                       re.MULTILINE)[1]
+    legacy = _search(r'^version = "(.+?)"', LEGACY / "pyproject.toml")[1]
 
     # Everything in dist/ is uploaded, so nothing else may be there.
-    expected = sorted([f"eclipse-{version}-py3-none-any.whl", f"eclipse-{version}.tar.gz",
-                       f"solarc_eclipse-{legacy}.tar.gz"])
+    wheel = f"eclipse-{version}-py3-none-any.whl"
+    stub = f"solarc_eclipse-{legacy}.tar.gz"
+    expected = sorted([wheel, f"eclipse-{version}.tar.gz"])
     present = sorted(path.name for path in dist.iterdir())
-    if present != expected:
-        return [f"expected {expected} in {dist}, found {present}"]
+    if sorted(set(present) - {stub}) != expected:
+        return [f"expected {expected} and perhaps {stub} in {dist}, found {present}"]
 
     # Compared against the source tree rather than a list, so that this keeps
     # working when files are added, and a partial package fails.
-    wheel = dist / f"eclipse-{version}-py3-none-any.whl"
     data = {path for path in (SOURCE / "eclipse" / "data").rglob("*") if path.is_file()}
     if not data:
         return ["no src/eclipse/data files in the checkout"]
+    if not (SOURCE / "euvst_response" / "__init__.py").is_file():
+        return ["no src/euvst_response/__init__.py in the checkout"]
     modules = set((SOURCE / "eclipse").rglob("*.py")) | set((SOURCE / "euvst_response").rglob("*.py"))
     files = {path.relative_to(SOURCE).as_posix() for path in data | modules}
-    missing = sorted(files - set(zipfile.ZipFile(wheel).namelist()))
+    missing = sorted(files - set(zipfile.ZipFile(dist / wheel).namelist()))
     if missing:
         return [f"{len(missing)} of {len(files)} package files are absent from "
-                f"{wheel.name}: {', '.join(missing)}"]
-    print(f"{', '.join(expected)} are in {dist}, with all {len(files)} package files "
-          f"in {wheel.name}")
+                f"{wheel}: {', '.join(missing)}"]
+    print(f"all {len(files)} package files are in {wheel}")
+
+    if stub in present:
+        env = {key: value for key, value in os.environ.items() if key != "SOLARC_ECLIPSE_BUILD"}
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--no-deps",
+             "--disable-pip-version-check", str(dist / stub)],
+            capture_output=True, text=True, env=env)
+        if result.returncode == 0 or "pip install eclipse" not in result.stdout + result.stderr:
+            return [f"installing {stub} does not stop with the message to install eclipse"]
+        print(f"installing {stub} stops with the message to install eclipse")
     return []
 
 

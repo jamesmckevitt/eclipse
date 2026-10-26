@@ -23,10 +23,17 @@ jobs:
         run: python -m build
 
       # solarc-eclipse, the former name on PyPI, is an sdist whose install stops
-      # and says to install eclipse. It has a fixed version, so it is uploaded
-      # once and skipped by later releases.
-      - name: Build solarc-eclipse
-        run: SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse
+      # and says to install eclipse. It has a fixed version, so it is built and
+      # uploaded only by the first release after it changes.
+      - name: Build solarc-eclipse if PyPI does not have this version
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('legacy/solarc-eclipse/pyproject.toml', 'rb'))['project']['version'])")
+          status=$(curl --silent --output /dev/null --write-out "%{http_code}" "https://pypi.org/pypi/solarc-eclipse/$version/json")
+          case "$status" in
+            200) echo "solarc-eclipse $version is already on PyPI" ;;
+            404) SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse ;;
+            *) echo "::error::PyPI answered $status for solarc-eclipse $version"; exit 1 ;;
+          esac
 
       # A PyPI version cannot be replaced once it is uploaded, so everything
       # that can be checked is checked before the publish job runs.
@@ -59,9 +66,5 @@ jobs:
       # is no API token to store or rotate.  Pinned to a commit SHA rather than a
       # moving tag, because this step can publish and a retagged upstream would
       # otherwise change what runs here without review.  Dependabot keeps the
-      # pins current.  Files already on PyPI are skipped: the solarc-eclipse sdist
-      # after its first upload, and the files of a partly failed upload when the
-      # job is rerun.
+      # pins current.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
-        with:
-          skip-existing: true
