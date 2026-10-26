@@ -838,7 +838,8 @@ class Detector_SWC:
 
     Notes
     -----
-    The last four describe the SW focal plane, which
+    `dispersion`, `wavelength_offset`, `lit_band` and `slit_image_tilt`
+    describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
     takes its wavelengths from `wvl_res`, not from the focal plane. It uses
     the focal plane only to find the row recording each wavelength, for the

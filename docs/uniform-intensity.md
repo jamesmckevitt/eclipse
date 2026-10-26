@@ -36,7 +36,7 @@ offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 
 ## The point spread function
 
-With `psf: True`, the line is blurred by the instrument's spectral response before it is laid onto the wavelength pixels, as a synthesised spectrum is; see [The point spread function](instrument-model.md#the-point-spread-function). The line is the same all along the slit, so it is not blurred along the slit. Each pixel holds the radiance that gives its photons at the pixel's wavelength. The effective area and the photon energy change slowly across the line, so the pixels add up to the line's intensity closely but not exactly. For the same reason, a line several pixels wide is fitted a few hundredths of a km/s from its rest wavelength without noise.
+With `psf: True`, the line is blurred by the instrument's spectral response before it is laid onto the wavelength pixels, as a synthesised spectrum is; see [The point spread function](instrument-model.md#the-point-spread-function). The line is the same all along the slit, so it is not blurred along the slit. Its photons are counted at their own wavelengths, then blurred and summed over each pixel, so each pixel holds the radiance that gives its photons at the pixel's wavelength. The effective area and the photon energy change slowly across the line, so the pixels add up to the line's intensity closely but not exactly. For the same reason, a line several pixels wide is fitted a few hundredths of a km/s from its rest wavelength without noise, to the red for Fe XII 195.119.
 
 ## Why use it
 

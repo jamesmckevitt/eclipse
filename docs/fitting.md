@@ -30,11 +30,11 @@ Each entry in `components` is one Gaussian, and needs a `wavelength`, its rest w
 
 Without `components`, a single Gaussian is fitted. A `components` list needs at least two entries, since one on its own is not a blend.
 
-The results hold the intensity, velocity and width of every component, by its name. `primary_component` is the one the analysis functions give unless asked for another, and the one the fit is started from. [Every component of a blend](analysis.md#every-component-of-a-blend) shows how to get each.
+The results hold the intensity, velocity and width of every component, by its name. `primary_component` is the one the analysis functions give unless asked for another. Results files from older versions of ECLIPSE may hold the primary component alone, and `list_fit_components` then says so. [Every component of a blend](analysis.md#every-component-of-a-blend) shows how to get each.
 
 !!! warning "The primary component must be present in the data"
 
-    The fit starts with all of the components moved together, to where they best match the profile, starting from `primary_component`. So if that line is not in your data, the fit can settle a whole component spacing away: 92 km/s for Fe XII 195.119 and 195.179. A few per cent of the blend is enough to place it correctly.
+    The analysis reports `primary_component` unless asked for another. The fit starts with all of the components moved together, to where they best match the profile. So if that line is not in your data, the fit can settle a whole component spacing away: 92 km/s for Fe XII 195.119 and 195.179. A few per cent of the blend is enough to place it correctly.
 
     Also, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two. The dip between them never falls below half the peak, so the fit starts with a width that covers the whole blend. `constrain_positive_intensity` does not help here, and can make it worse.
 

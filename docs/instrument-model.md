@@ -1,6 +1,6 @@
 # The instrument model
 
-ECLIPSE follows the light from the Sun to the detector. The telescope collects it, with the throughput of the primary mirror, its roughness, the filter and the grating. The point spread function (PSF) blurs it, and the slit selects a strip of the Sun. The detector turns the photons into electrons, with their noise, adds dark current and read noise, and digitises the result. This page describes the parts of that model that have settings of their own. The [configuration reference](configuration.md) lists every setting, and [Where the settings come from](instrument-sources.md) gives the source of each default.
+ECLIPSE follows the light from the Sun to the detector. For SWC, the telescope collects it with the throughput of the primary mirror, its roughness, the filter and the grating. For EIS, its calibration tables give the effective area. The point spread function (PSF) blurs it, and the slit selects a strip of the Sun. The detector turns the photons into electrons, with their noise, adds dark current and read noise, and digitises the result. This page describes the parts of that model that have settings of their own. The [configuration reference](configuration.md) lists every setting, and [Where the settings come from](instrument-sources.md) gives the source of each default.
 
 ## The instruments
 
@@ -141,9 +141,9 @@ simulation:
 
 ## Visible light
 
-Visible light also reaches the CCD, which counts it like any other light. `simulation.vis_sl` adds visible stray light, in photons per second per cm2. For SWC it is the light before the filter, which blocks most of it, and for EIS the light that reaches the CCD.
+Visible light also reaches the CCD. `simulation.vis_sl` adds visible stray light, in photons per second per cm2, the same in every pixel. For SWC it is the light before the filter, which passes only a small part of it, and for EIS the light that reaches the CCD. Each visible photon is detected with the probability `detector.qe_vis` and frees one electron.
 
-Pinholes in SWC's filter let visible light and unattenuated EUV through, spread out by diffraction. `simulation.enable_pinholes` switches them on, and the `pinhole_*` lists at the top level of the configuration file give their sizes and positions; see [Pinholes](configuration.md#pinholes). They are for filter engineering rather than for science runs.
+Pinholes in SWC's filter let light past it, spread out by diffraction. `simulation.enable_pinholes` switches them on, and [Pinholes](configuration.md#pinholes) describes their settings.
 
 ## Dark current
 
