@@ -1299,76 +1299,54 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
             yield (signal_cube.data[i], None if uncertainty is None else uncertainty[i],
                    kept[i])
 
-    # --- single-component fast path ---
     if fit_config is None or fit_config.is_single:
+        # One Gaussian on a background, with its own fast fit.
         use_mpfit = fit_config is not None and fit_config.backend == "mpfit"
         fit_one = _fit_one_mpfit if use_mpfit else _fit_one
 
         def _fit(wave, prof, sigma):
             return fit_one(wave, prof, max_iter, pixel, sigma, poisson)
 
-        def _fit_block(spec_block, unc_block, kept_block):
-            results = np.empty((spec_block.shape[0], 4))
-            succeeded = np.empty(spec_block.shape[0], dtype=bool)
-            for i in range(spec_block.shape[0]):
-                results[i], succeeded[i] = _fit_finite(
-                    _fit, wv.value, spec_block[i],
-                    None if unc_block is None else unc_block[i], kept_block[i], min_pixels,
-                    _guess_params)
-            return results, succeeded
-
-        with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks", leave=False)):
-            results = Parallel(n_jobs=n_jobs)(
-                delayed(_fit_block)(*row) for row in _rows()
-            )
-
-        data_array = np.stack([r[0] for r in results], axis=0)
-        failed = ~np.stack([r[1] for r in results], axis=0)
-        failed |= _unmeasurable(data_array, signal_cube.data, wv.value, 1, kept)
-        units_list = [signal_cube.unit, wv.unit, wv.unit, signal_cube.unit]
-        if return_failed:
-            return data_array, units_list, failed
-        return data_array, units_list
-
-    # --- multi-component path ---
-    n_params = fit_config.n_full_params
-
-    # Use scipy (default, fast) unless mpfit is asked for. scipy supports all
-    # constraints (positive intensity, amplitude ratio) through TRF bounds.
-    use_mpfit = (fit_config.backend == "mpfit")
-
-    if not use_mpfit:
-        # scipy curve_fit -- LM when unconstrained, TRF when bounds active.
-        (model_func, free_to_full, n_free,
-         free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
-            fit_config, None if pixel is None else pixel * 1e8)
-
-        def _fit(wave, prof, sigma):
-            return _fit_one_scipy_multi(wave, prof, fit_config, model_func, free_to_full,
-                                        free_indices, ratio_spec, bounds, has_bounds,
-                                        sigma, poisson)
-
+        _start = _guess_params
+        n_components, n_params = 1, 4
+        description = "Fit chunks"
     else:
-        # mpfit with full parinfo (slower, supports hard bounds)
-        # Build ratio_params for amplitude ordering constraint
-        ratio_params: dict[int, int] = {}
-        for i, comp in enumerate(fit_config.components):
-            if comp.amplitude_greater_than is not None:
-                j = comp.amplitude_greater_than
-                ratio_params[3 * j] = 3 * i
-        ratio_params = ratio_params or None
+        n_components, n_params = fit_config.n_components, fit_config.n_full_params
+        description = "Fit chunks (multi)"
+        if fit_config.backend != "mpfit":
+            # scipy (default, fast) supports all constraints, positive
+            # intensity and amplitude ratio, through TRF bounds: LM when
+            # unconstrained, TRF when bounds are active.
+            (model_func, free_to_full, n_free,
+             free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
+                fit_config, None if pixel is None else pixel * 1e8)
 
-        p0_template = _guess_multi_params(wv.value, signal_cube.data[0, 0], fit_config)
-        parinfo_template = _build_parinfo(fit_config, p0_template, ratio_params)
+            def _fit(wave, prof, sigma):
+                return _fit_one_scipy_multi(wave, prof, fit_config, model_func, free_to_full,
+                                            free_indices, ratio_spec, bounds, has_bounds,
+                                            sigma, poisson)
 
-        def _fit(wave, prof, sigma):
-            return _fit_one_multi(wave, prof, fit_config, parinfo_template, ratio_params,
-                                  pixel, sigma, poisson)
+        else:
+            # mpfit with full parinfo (slower, supports hard bounds)
+            # Build ratio_params for amplitude ordering constraint
+            ratio_params: dict[int, int] = {}
+            for i, comp in enumerate(fit_config.components):
+                if comp.amplitude_greater_than is not None:
+                    j = comp.amplitude_greater_than
+                    ratio_params[3 * j] = 3 * i
+            ratio_params = ratio_params or None
 
-    def _start(wave, prof):
-        return _guess_multi_params(wave, prof, fit_config)
+            p0_template = _guess_multi_params(wv.value, signal_cube.data[0, 0], fit_config)
+            parinfo_template = _build_parinfo(fit_config, p0_template, ratio_params)
 
-    def _fit_block_multi(spec_block, unc_block, kept_block):
+            def _fit(wave, prof, sigma):
+                return _fit_one_multi(wave, prof, fit_config, parinfo_template, ratio_params,
+                                      pixel, sigma, poisson)
+
+        def _start(wave, prof):
+            return _guess_multi_params(wave, prof, fit_config)
+
+    def _fit_block(spec_block, unc_block, kept_block):
         results = np.empty((spec_block.shape[0], n_params))
         succeeded = np.empty(spec_block.shape[0], dtype=bool)
         for i in range(spec_block.shape[0]):
@@ -1378,21 +1356,17 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 _start)
         return results, succeeded
 
-    with tqdm_joblib(tqdm(total=n_slit, desc="Fit chunks (multi)", leave=False)):
+    with tqdm_joblib(tqdm(total=n_slit, desc=description, leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block_multi)(*row) for row in _rows()
+            delayed(_fit_block)(*row) for row in _rows()
         )
 
     data_array = np.stack([r[0] for r in results], axis=0)
     failed = ~np.stack([r[1] for r in results], axis=0)
-    failed |= _unmeasurable(data_array, signal_cube.data, wv.value, fit_config.n_components,
-                            kept)
+    failed |= _unmeasurable(data_array, signal_cube.data, wv.value, n_components, kept)
 
-    # Build units list: [signal, wl, wl, signal, wl, wl, ..., signal]
-    units_list = []
-    for _ in range(fit_config.n_components):
-        units_list.extend([signal_cube.unit, wv.unit, wv.unit])
-    units_list.append(signal_cube.unit)  # background
+    # Amplitude, centre and width of each component, then the background.
+    units_list = [signal_cube.unit, wv.unit, wv.unit] * n_components + [signal_cube.unit]
 
     if return_failed:
         return data_array, units_list, failed

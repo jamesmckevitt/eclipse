@@ -36,7 +36,9 @@ WITHOUT_SOURCE = {
     Telescope_EIS: {"psf_type", "psf_slit_width", "psf_across_slit", "date"},
     # Choices of a run, not facts about the instrument.
     Simulation: {"expos", "n_iter", "ncpu", "instrument", "vis_sl", "psf", "psf_boundary",
-                 "spectral_psf", "slit_mask", "noise", "enable_pinholes", "pinhole_sizes",
+                 "spectral_psf", "slit_mask", "focal_plane_dispersion", "noise",
+                 "readout_dark_current",
+                 "enable_pinholes", "pinhole_sizes",
                  "pinhole_positions", "pinhole_positions_spectral"},
 }
 

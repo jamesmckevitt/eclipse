@@ -4,6 +4,7 @@ Monte Carlo simulation functions for instrument response analysis.
 
 from __future__ import annotations
 import dataclasses
+import warnings
 from typing import Tuple
 import numpy as np
 import astropy.units as u
@@ -12,8 +13,11 @@ from tqdm import tqdm
 from .radiometric import (
     apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput,
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
-    add_pinhole_visible_light, dn_variance, _digitise
+    add_pinhole_visible_light, dn_variance, _digitise, _spectral_response
 )
+from .config import Detector_SWC
+from .readout import (FocalPlane_SWC, ReadoutSequence, dark_current_time,
+                      windows_from_wavelengths)
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
                                   apply_euv_pinhole_diffraction)
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
@@ -117,8 +121,9 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     np.ndarray
         Uncertainty in DN, same shape as the binned DN.
     """
+    _check_blur(I_cube, det, tel, sim, stacklevel=2)
     quiet = dataclasses.replace(sim, noise=False)
-    steps = simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
+    steps = _simulate_once(I_cube, t_exp, det, tel, quiet, uniform_mode=uniform_mode)
     electrons = steps[8]
     # Clip each pixel at the digitiser's maximum before binning, as to_dn
     # does, but do not round, as the mean DN is not rounded.
@@ -128,7 +133,35 @@ def expected_dn_uncertainty(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     visible = _visible_electrons(I_cube, t_exp, det, tel, sim, offchip_bin_slit)
     mean, rms = binned_photon_wavelengths(steps[5], offchip_bin_slit)
     return np.sqrt(dn_variance(dn, mean, t_exp, det, visible, offchip_bin_slit,
-                               rms_wavelength=rms))
+                               rms_wavelength=rms, dark_time=_dark_time(I_cube, t_exp, det, sim)))
+
+
+def _check_blur(I_cube: NDCube, det, tel, sim, stacklevel: int) -> None:
+    """
+    Refuse a line made through another spectral response than `sim` gives,
+    and warn, on one rank, if `simulate_once` will blur `I_cube` on its pixels.
+    """
+    meta = I_cube.meta or {}
+    made = meta.get("spectral_response")
+    if made is not None:
+        if not sim.psf:
+            raise ValueError(
+                "This cube was made with the PSF on, but the simulation has psf off. Make it "
+                "again with create_uniform_intensity_cube for this simulation.")
+        observed = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+        if not np.allclose(made, observed, rtol=1e-12, atol=0.0):
+            raise ValueError(
+                "This cube was made through the spectral response for another slit width, "
+                "spectral_psf or telescope than this simulation's. Make it again with "
+                "create_uniform_intensity_cube for this simulation and telescope.")
+    if sim.psf and not meta.get("psf_applied", False) and _get_mpi_info()[1] == 0:
+        warnings.warn(
+            "The PSF blurs this cube on the detector's pixels, which pulls a line narrower than "
+            "a pixel toward the pixel's centre. To avoid this, blur the scene by the PSF, in "
+            "wavelength and along the slit, before averaging it onto the pixels, and set "
+            "meta['psf_applied'] = True, as rebin_atmosphere, rebin_spectra and "
+            "create_uniform_intensity_cube do given the telescope.",
+            UserWarning, stacklevel=stacklevel + 1)
 
 
 def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
@@ -190,8 +223,8 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         photons_pixels = _with_filter_transmission(photons_pixels, tel)
 
     # Apply focusing optics PSF (primary mirror + diffraction grating),
-    # unless the cube was laid onto the pixels through it (rebin_atmosphere
-    # with a telescope). That is exact; blurring the pixels is not.
+    # unless the cube was laid onto the pixels through it. That is exact;
+    # blurring the pixels is not.
     if sim.psf and not (I_cube.meta or {}).get("psf_applied", False):
         photons_focused = apply_focusing_optics_psf(
             photons_pixels, tel, det, sim, convolve_spatial=not uniform_mode,
@@ -207,6 +240,42 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
         photons_euv_pinholes = photons_focused
     return (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
             photons_euv_pinholes)
+
+
+def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
+    """
+    Time each wavelength pixel of `I_cube` collects dark current.
+
+    With `sim.readout_dark_current` on and the SWC detector, this is the
+    time :func:`~eclipse.readout.dark_current_time` gives the row that
+    records the pixel's wavelength: the clear before the exposure, the
+    exposure, and the wait to be read out. The rows of the cube's
+    wavelengths are taken to be the only ones read, and the rest are
+    dumped. Otherwise it is `t_exp`.
+    """
+    if not sim.readout_dark_current or not isinstance(det, Detector_SWC):
+        return u.Quantity(t_exp)
+    focal_plane = FocalPlane_SWC.from_detector(det)
+    n_rows = focal_plane.n_rows
+    wavelength = I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom)
+    rows = focal_plane._nearest_rows(wavelength)
+    # The window holds every row a pixel of the cube reaches, half a pixel
+    # either side of its centre. Wavelengths all in the gap reach no row, and
+    # take the last, at the gap's edge.
+    half = 0.5 * np.abs(np.diff(wavelength)).mean() if wavelength.size > 1 else 0.0
+    try:
+        windows = windows_from_wavelengths(
+            focal_plane, [((wavelength.min() - half) * u.AA, (wavelength.max() + half) * u.AA)])
+    except ValueError:
+        windows = [(n_rows - 1, n_rows - 1)]
+    sequence = ReadoutSequence.from_detector(det, windows=windows)
+    if sequence.cte_parallel != 1 or sequence.cte_serial != 1:
+        warnings.warn("A run does not model charge transfer, so the detector's cte_parallel "
+                      "and cte_serial are taken as 1 here. Charge left behind as a frame is "
+                      "read is modelled by eclipse.readout.", UserWarning, stacklevel=3)
+        sequence = dataclasses.replace(sequence, cte_parallel=1.0, cte_serial=1.0)
+    per_row = dark_current_time(t_exp, sequence, n_rows)[:n_rows]
+    return np.interp(rows, np.arange(n_rows), per_row.to_value(u.s)) * u.s
 
 
 def simulate_once(
@@ -225,6 +294,17 @@ def simulate_once(
 
     The steps, in order, are the exposure, telescope, pixels, PSF, pinholes,
     photon arrivals, detector, stray light and digitiser.
+
+    With `sim.psf` on, a cube whose `meta["psf_applied"]` is True is not
+    blurred again. This is set by :func:`~eclipse.data_processing.rebin_atmosphere`
+    and :func:`~eclipse.data_processing.rebin_spectra` given the telescope,
+    and by :func:`~eclipse.data_processing.create_uniform_intensity_cube`
+    given the telescope and `sim.psf` on, which blur the spectrum before
+    laying it onto the pixels. Any other cube is blurred on its pixels.
+    This pulls a line narrower than a pixel toward the pixel's centre, and
+    a UserWarning says so. A cube from `create_uniform_intensity_cube` made
+    through another spectral response than `sim` gives is refused with a
+    ValueError.
 
     Parameters
     ----------
@@ -258,6 +338,16 @@ def simulate_once(
         photons arriving, electrons, electrons with stray light, electrons
         with the pinholes' visible light, and DN.
     """
+    _check_blur(I_cube, det, tel, sim, stacklevel=2)
+    return _simulate_once(I_cube, t_exp, det, tel, sim, uniform_mode=uniform_mode,
+                          photon_shot_inverse_transform=photon_shot_inverse_transform,
+                          dark_current_inverse_transform=dark_current_inverse_transform)
+
+
+def _simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, *,
+                   uniform_mode: bool = False, photon_shot_inverse_transform: bool = False,
+                   dark_current_inverse_transform: bool = False) -> Tuple[NDCube, ...]:
+    """:func:`simulate_once` without the warning."""
     (intensity_exp, photons_total, photons_throughput, photons_pixels, photons_focused,
      photons_euv_pinholes) = _photons_on_the_detector(I_cube, t_exp, det, tel, sim,
                                                       uniform_mode)
@@ -279,6 +369,7 @@ def simulate_once(
         dark_current_inverse_transform=dark_current_inverse_transform,
         noise=noise,
         photon_shot_inverse_transform=photon_shot_inverse_transform,
+        dark_time=_dark_time(I_cube, t_exp, det, sim),
     )
 
     # Add visible stray light (with filter throughput)
@@ -381,6 +472,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     if fit_signals not in ("both", "dn", "photon"):
         raise ValueError(f"fit_signals must be 'both', 'dn', or 'photon', got '{fit_signals}'")
 
+    _check_blur(I_cube, det, tel, sim, stacklevel=2)
     do_dn = fit_signals in ("both", "dn")
     do_photon = fit_signals in ("both", "photon")
     rest_wavelength = I_cube.meta["rest_wav"]
@@ -395,13 +487,14 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
     # vary with the mean and root mean square energies of its photons.
     photon_wavelengths = (None if visible is None else _photon_wavelengths(
         I_cube, t_exp, det, tel, sim, offchip_bin_slit, uniform_mode))
+    dark_time = _dark_time(I_cube, t_exp, det, sim)
 
     def _dn_uncertainty(dn_data: np.ndarray) -> np.ndarray | None:
         if visible is None:
             return None
         mean, rms = photon_wavelengths
         return np.sqrt(dn_variance(dn_data, mean, t_exp, det, visible, offchip_bin_slit,
-                                   rms_wavelength=rms))
+                                   rms_wavelength=rms, dark_time=dark_time))
 
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
@@ -427,7 +520,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                       disable=not show_progress):
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(
+             electrons_pinholes, dn) = _simulate_once(
                 I_cube, t_exp, det, tel, sim,
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
@@ -508,7 +601,7 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
             # Simulate one run
             (intensity_exp, photons_total, photons_throughput, photons_pixels,
              photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = simulate_once(
+             electrons_pinholes, dn) = _simulate_once(
                 I_cube, t_exp, det, tel, sim,
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,

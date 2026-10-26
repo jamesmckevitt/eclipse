@@ -194,6 +194,19 @@ class FocalPlane_SWC:
         lam = np.polynomial.polynomial.polyval(s, self.dispersion) * u.Angstrom
         return lam + self.wavelength_offset
 
+    def pixel_width(self, wavelength: u.Quantity) -> u.Quantity:
+        """
+        Width in wavelength of a row centred where `wavelength` lands, at the
+        centre of the slit, per pixel.
+
+        The dispersion is a polynomial in position, so the width changes
+        slowly along the CCD. Raises ValueError if the wavelength falls in
+        the gap or off the focal plane.
+        """
+        ccd, row = self.row_of_wavelength(wavelength)
+        width = abs(self.wavelength(row + 0.5, ccd) - self.wavelength(row - 0.5, ccd))
+        return width / u.pixel
+
     def row_of_wavelength(self, wavelength: u.Quantity, column=None) -> Tuple[str, float]:
         """
         Which CCD records a wavelength, and at which row.
@@ -215,6 +228,22 @@ class FocalPlane_SWC:
             f"{ends['right'][1]:.4f} to {ends['right'][0]:.4f}, and the gap "
             f"between them is not recorded."
         )
+
+    def _nearest_rows(self, wavelength: np.ndarray) -> np.ndarray:
+        """
+        Row recording each wavelength, in Angstrom, at the centre of the
+        slit, counted as in :meth:`row_of_wavelength`. A wavelength in the
+        gap between the CCDs, or beyond their outer ends, takes the nearest
+        row of the nearer CCD.
+        """
+        positions = np.arange(self.n_rows + 1) - 0.5
+        rows, distances = [], []
+        for ccd in ("left", "right"):
+            edges = self.row_edges(ccd).to_value(u.Angstrom)
+            order = np.argsort(edges)
+            rows.append(np.interp(wavelength, edges[order], positions[order]))
+            distances.append(np.maximum(edges.min() - wavelength, wavelength - edges.max()))
+        return np.where(distances[0] <= distances[1], rows[0], rows[1])
 
     def _row_on(self, ccd: str, target: float, column=None) -> float:
         """

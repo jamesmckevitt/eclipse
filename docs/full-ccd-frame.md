@@ -50,19 +50,23 @@ frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
 write_full_frame(frame, "frame.h5")
 ```
 
-`slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit.
+`slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit, which is the middle column of the CCDs.
+
+With the PSF on, the blur along the slit carries light out of the columns at the ends of the scene. `psf_boundary` sets what the blur brings in from beyond the scene, as in a run. With `"replicate"`, the default, the Sun beyond the scene is taken to look like the scene's edges, and the columns beyond the scene get no light. With `"zero"`, the Sun beyond the scene is dark, so the columns at the ends of the scene lose up to about a third of their light to the columns just beyond. `psf_boundary` sets the same across the slit, for a slit near the synthesis's x edges. With `"replicate"`, a slit partly beyond those edges gets light only over its part inside them.
+
+With `slit_mask=True`, no light reaches the columns beyond the ends of the 300 arcsec slit or behind its fiducials, as in a run (see [The slit's fiducials](instrument-model.md#the-slits-fiducials)). The CCD's 2048 columns cover 326 arcsec along the slit, so about 80 columns at each end are beyond the slit. It is off by default.
 
 The slit width, PSF and noise can instead be taken from a `Simulation`, as in an instrument-response run:
 
 ```python
 from eclipse import Simulation
 
-sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, psf_boundary="zero", noise=True)
+sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=True)
 frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
                        exposure=10 * u.s, sim=sim, continuum=(wavelength, free, two_photon))
 ```
 
-The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf` and `noise`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these four arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame takes the Sun beyond the edges of the synthesis as dark. With the PSF on, `psf_boundary` must therefore be `"zero"`. A frame does not model the slit's fiducials, pinholes or visible stray light. `slit_mask` and `vis_sl` must be left off, and no pinholes enabled. `instrument` must be `"SWC"`.
+The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf`, `noise`, `psf_boundary` and `slit_mask`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these six arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame does not model pinholes or visible stray light. `vis_sl` must be left at zero and no pinholes enabled. `instrument` must be `"SWC"`.
 
 For the MURaM flare in these docs, with 36 densities and 201 velocity bins, a frame takes about 20 minutes and 55 GB of memory on 16 cores. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
@@ -89,12 +93,10 @@ A frame and an `eclipse` run share the instrument's throughput, PSF and detector
 
 | Effect | `eclipse` run | Full-CCD frame |
 | --- | --- | --- |
-| The slit's ends and fiducials | with `simulation.slit_mask` | not modelled: every column along the slit gets light |
 | Pinholes in the filter | with `simulation.enable_pinholes` | not modelled |
 | Visible stray light | with `simulation.vis_sl` | not modelled |
-| The Sun beyond the scene along the slit | set by `simulation.psf_boundary` | dark |
-| Dark current | over the exposure | over the clear, the exposure and the read-out |
-| Wavelength of each pixel | a fixed step, `detector.wvl_res` | the focal plane's dispersion, from 17.0 to 16.8 mA per row |
+| Dark current | over the clear, the exposure and the read-out of its own rows alone, unless `simulation.readout_dark_current` is `False` | over the clear, the exposure and the read-out of every row |
+| Wavelength of each pixel | a fixed step, `detector.wvl_res`, or with `simulation.focal_plane_dispersion` the focal plane's step where the line lands | the focal plane's dispersion, from 17.0 to 16.8 mA per row |
 | The 1 mm gap between the CCDs | not modelled: a window sees an unbroken spectrum | no rows from 198.26 to 199.51 Angstrom |
 | Rows outside the 170.0 to 212.3 Angstrom band | lit | dark |
 | Smear without a shutter, and charge transfer | refused | modelled |

@@ -51,7 +51,21 @@ print(stats["v_std"])
 
 The width is the Gaussian's sigma, and the intensity is the fitted line's counts. Failed fits are left out of the means and standard deviations.
 
-By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](fitting.md#which-signals-are-fitted)). For a [blend](fitting.md), `component=` chooses the component, by a name from `list_fit_components(combination)`, and defaults to the primary component.
+By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](fitting.md#which-signals-are-fitted)).
+
+### Every component of a blend
+
+When a [blend](fitting.md) is fitted, the results hold every component. `list_fit_components` names them, and `component=` picks one; without it, `analyse_fit_statistics` gives the primary component:
+
+```python
+from eclipse import list_fit_components
+
+for name in list_fit_components(combination):
+    stats = analyse_fit_statistics(combination, component=name)
+    print(name, stats["v_std"])
+```
+
+For each component, the statistics also hold its name as `component`, its rest wavelength as `rest_wavelength`, and what it is tied to as `tied`.
 
 ## The truth
 

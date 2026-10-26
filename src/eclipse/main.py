@@ -20,8 +20,9 @@ from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .atmosphere import _is_pickle
-from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_products,
-                             synthesis_line_names)
+from .readout import FocalPlane_SWC
+from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_layout,
+                             read_synthesis_products, synthesis_line_names)
 from .fitting import FitConfig, FitComponent, ground_truth_summary
 from .results_file import _to_json, save_results
 from .monte_carlo import expected_dn_uncertainty, monte_carlo
@@ -131,8 +132,8 @@ def _rank_cpus(environ, allowed: list) -> list:
 # ncpu and the pinhole lists) are top-level keys; one written here would be
 # parsed and then dropped.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
-                    "spectral_psf", "slit_mask", "noise", "enable_pinholes",
-                    "pinhole_visible_wavelength"}
+                    "spectral_psf", "slit_mask", "focal_plane_dispersion", "noise",
+                    "readout_dark_current", "enable_pinholes", "pinhole_visible_wavelength"}
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
@@ -744,6 +745,17 @@ def main() -> None:
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
+    # The width of the pixels is taken where the observed line lands, which a
+    # run reads from a synthesis file or the uniform-intensity settings.
+    focal_plane_dispersion = (sim_fixed.get("focal_plane_dispersion")
+                              or True in sim_sweep.get("focal_plane_dispersion", []))
+    if focal_plane_dispersion and instrument == "SWC" and (atmosphere_series_mode or not (
+            uniform_intensity_mode or synthesis_series_mode or synthesis_is_hdf5)):
+        raise ValueError(
+            "simulation.focal_plane_dispersion needs the observed line's rest wavelength, which "
+            "ECLIPSE reads from a synthesis file or the uniform-intensity settings, not yet from "
+            "an atmosphere series or a synthesis pickle.")
+
     # A run models frames taken with the shutter closed outside the exposure.
     # Without a shutter, light falls on the CCDs while a frame is cleared and
     # read, and every line in the band smears into the window. The run
@@ -754,14 +766,17 @@ def main() -> None:
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
             "modelled by eclipse.readout, which takes the detector's settings.")
-    # A run does not model the read-out either, so a CTE below 1 would be ignored.
+    # A run does not model charge transfer either, so a CTE below 1 would be ignored.
     for name in ("cte_parallel", "cte_serial"):
         if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
             raise ValueError(
-                f"detector.{name} must be 1 for an instrument run, which does not model the "
-                f"read-out. Charge left behind as a frame is read is modelled by "
+                f"detector.{name} must be 1 for an instrument run, which does not model "
+                f"charge transfer. Charge left behind as a frame is read is modelled by "
                 f"eclipse.readout, which takes the detector's settings.")
-    # Nor does it use the SW focal plane, so other values would be ignored.
+    # Nor does it take its wavelengths from the SW focal plane. It uses the focal
+    # plane only to find the row recording each wavelength, for the dark current,
+    # and, with focal_plane_dispersion, the width of its pixels. Other values
+    # would make these disagree with its wavelengths.
     if instrument == "SWC":
         focal_plane = {name: det_fixed[name] for name in _FOCAL_PLANE_SETTINGS
                        if name in det_fixed}
@@ -771,7 +786,8 @@ def main() -> None:
             if name in det_sweep or not same:
                 raise ValueError(
                     f"detector.{name} must be left at its default for an instrument run, "
-                    f"which does not use the SW focal plane yet. Full-CCD frames, made by "
+                    f"which takes its wavelengths from detector.wvl_res, not from the SW focal "
+                    f"plane, and needs the two to agree. Full-CCD frames, made by "
                     f"eclipse.full_frame, do.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
@@ -894,7 +910,9 @@ def main() -> None:
         "psf_boundary": "replicate",
         "spectral_psf": "quadrature",
         "slit_mask": False,
+        "focal_plane_dispersion": False,
         "noise": True,
+        "readout_dark_current": True,
         "enable_pinholes": False,
     }
     _det_defaults = {
@@ -1183,7 +1201,9 @@ def main() -> None:
             psf_boundary=all_sim.get("psf_boundary", "replicate"),
             spectral_psf=all_sim.get("spectral_psf", "quadrature"),
             slit_mask=all_sim.get("slit_mask", False),
+            focal_plane_dispersion=all_sim.get("focal_plane_dispersion", False),
             noise=all_sim.get("noise", True),
+            readout_dark_current=all_sim.get("readout_dark_current", True),
             enable_pinholes=enable,
             pinhole_sizes=pinhole_sizes if enable else [],
             pinhole_positions=pinhole_positions if enable else [],
@@ -1195,9 +1215,47 @@ def main() -> None:
         # together. Work it out here, not only once the scene is laid onto
         # the detector. It is needed when psf_params is for a given slit, and
         # always for the PSF convolved with the slit.
+        if sim.focal_plane_dispersion:
+            det = _with_focal_plane_width(det, all_det)
         if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
             spectral_optics_fwhm(tel, det)
         return combo, offchip, repeat, fil, tel, det, sim
+
+    def _with_focal_plane_width(det, all_det):
+        """`det` with the focal plane's pixel width where the observed line lands."""
+        if "wvl_res" in all_det:
+            raise ValueError("simulation.focal_plane_dispersion takes the pixels' width from "
+                             "the focal plane, so detector.wvl_res would be ignored; give one "
+                             "or the other.")
+        wavelength = _observed_wavelength()
+        low, high = det.lit_band
+        if not low <= wavelength <= high:
+            raise ValueError(f"simulation.focal_plane_dispersion needs the observed line on the "
+                             f"focal plane, but {wavelength} is outside the lit band, "
+                             f"{low} to {high}.")
+        try:
+            width = FocalPlane_SWC.from_detector(det).pixel_width(wavelength)
+        except ValueError as error:
+            raise ValueError(f"simulation.focal_plane_dispersion needs the observed line on the "
+                             f"focal plane: {error}") from None
+        return dataclasses.replace(det, wvl_res=width.to(det.wvl_res.unit))
+
+    observed_wavelength = []
+
+    def _observed_wavelength():
+        """Rest wavelength of the line the run observes, read once."""
+        if not observed_wavelength:
+            if uniform_intensity_mode:
+                found = uniform_rest_wavelength
+            elif synthesis_series_mode or (not raster_mode and synthesis_is_hdf5):
+                path = series_paths[0] if synthesis_series_mode else synthesis_file
+                layout = read_synthesis_layout(path, reference_line)
+                found = layout["lines"][reference_line]["rest_wavelength"]
+            else:
+                raise ValueError("simulation.focal_plane_dispersion needs a synthesis file or a "
+                                 "uniform intensity.")
+            observed_wavelength.append(u.Quantity(found).to(u.AA))
+        return observed_wavelength[0]
 
     # Check every combination before running any, so a bad value does not
     # stop the sweep part-way and lose the earlier results, which are saved
@@ -1364,21 +1422,34 @@ def main() -> None:
         # the pixels afterwards moves a narrow line within its pixel. With
         # slit_mask on, the slit's ends and fiducials are cut out in the same
         # step. The ground truth is the scene without any of these. A uniform
-        # intensity is centred on a pixel and uniform along the slit, and the
-        # Monte Carlo blurs it.
+        # intensity is made again through the spectral response, which
+        # depends on the slit, the telescope and spectral_psf.
         cube_obs = cube_reb
-        if not uniform_intensity_mode:
-            # The observed cube includes the telescope's throughput as well as
-            # its PSF, so every telescope and filter setting is in the key,
-            # except the one for visible light, which the Monte Carlo adds.
-            filter_params = (_extract_config_params(filter_obj, "filter")
-                             if filter_obj is not None else {})
-            filter_params.pop("filter.visible_decade_thickness", None)
-            telescope_key = _params_to_key({**_extract_config_params(TEL, "telescope"),
-                                            **filter_params})
-            # With the pinholes on, it also includes the light they let past
-            # the filter.
-            pinholes = _pinholes_on(SIM)
+        # The observed cube includes the telescope's throughput as well as its
+        # PSF, so every telescope and filter setting is in the key, except the
+        # one for visible light, which the Monte Carlo adds. With the pinholes
+        # on, it also includes the light they let past the filter.
+        filter_params = (_extract_config_params(filter_obj, "filter")
+                         if filter_obj is not None else {})
+        filter_params.pop("filter.visible_decade_thickness", None)
+        telescope_key = _params_to_key({**_extract_config_params(TEL, "telescope"),
+                                        **filter_params})
+        pinholes = _pinholes_on(SIM)
+        if uniform_intensity_mode:
+            if psf:
+                psf_key = (*cube_reb_key, spectral_psf, telescope_key, pinholes)
+                if psf_key not in observed_cache:
+                    observed_cache[psf_key] = create_uniform_intensity_cube(
+                        total_intensity=uniform_intensity,
+                        rest_wavelength=uniform_rest_wavelength,
+                        thermal_width=uniform_thermal_width,
+                        det=DET,
+                        sim=SIM,
+                        n_slit_pixels=offchip_bin_slit,
+                        tel=TEL,
+                    )
+                cube_obs = observed_cache[psf_key]
+        else:
             psf_key = (*cube_reb_key, psf, slit_mask, spectral_psf, psf_boundary, telescope_key,
                        pinholes)
             if psf_key not in observed_cache:

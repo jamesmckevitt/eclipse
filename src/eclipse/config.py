@@ -836,10 +836,16 @@ class Detector_SWC:
         :data:`MEASURED_SLIT_IMAGE_TILT` is measured from the ray-traced
         spots in the SW footprint figure of RSC-2022021C.
 
-    The last four describe the SW focal plane, which
+    Notes
+    -----
+    `dispersion`, `wavelength_offset`, `lit_band` and `slit_image_tilt`
+    describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
-    does not use the focal plane yet, and refuses values other than the
-    defaults.
+    takes its wavelengths from `wvl_res`, not from the focal plane. It uses
+    the focal plane only to find the row recording each wavelength, for the
+    dark current, and, with `Simulation.focal_plane_dispersion`, the width
+    of its pixels. It refuses values other than the defaults, which would
+    make these disagree with its wavelengths.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -895,8 +901,8 @@ class Detector_SWC:
     filter_distance: u.Quantity = field(default=250 * u.mm,
                                         metadata={"source": _NOT_RECORDED, "unit": "mm"})
     # Settings of the camera's CCDs and their read-out, which
-    # eclipse.readout models. An instrument run only checks and
-    # records them.
+    # eclipse.readout models. An instrument run uses only their timing, for
+    # the dark current collected during the clear and the read-out.
     shutter: bool = field(
         default=True, kw_only=True,
         metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a "
@@ -1567,9 +1573,22 @@ class Simulation:
     slit_mask : bool
         Whether the slit's ends and fiducials block the light (SWC only).
         Default False. Keyword only.
+    focal_plane_dispersion : bool
+        Whether the width in wavelength of the pixels is that of the SW
+        focal plane where the observed line lands, from
+        :meth:`eclipse.readout.FocalPlane_SWC.pixel_width`, rather than the
+        detector's `wvl_res` (SWC only). An instrument run sets the
+        detector's `wvl_res` to it; a `Simulation` given to the functions
+        directly leaves `wvl_res` as it is. Default False. Keyword only.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
+    readout_dark_current : bool
+        Whether each pixel also collects dark current while the CCD is
+        cleared before the exposure and while it waits to be read out
+        afterwards, as in a full-CCD frame (SWC only). Without it, dark
+        current is collected over the exposure only. Default True. Keyword
+        only.
     enable_pinholes : bool
         Whether to model pinholes in the filter (SWC only). Default False.
     pinhole_sizes : list of u.Quantity
@@ -1612,11 +1631,18 @@ class Simulation:
     # of the scene along the slit. The blur along the slit comes before the
     # slit, so a fiducial's edges are as sharp as the pixels sampling them.
     slit_mask: bool = field(default=False, kw_only=True)
+    # The focal plane's width is used for every pixel of the window, though
+    # it changes by about 2 parts in 10,000 across 60 pixels.
+    focal_plane_dispersion: bool = field(default=False, kw_only=True)
     # With noise False, every random draw in the detector chain is replaced by
     # its mean, so the run gives the signal the instrument would measure on
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
+    # A run takes only the rows of its own wavelengths to be read. The clear
+    # and the read-out then add 0.03 to 0.05 s for 32 rows with the default
+    # timing.
+    readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)
@@ -1671,6 +1697,9 @@ class Simulation:
         if self.slit_mask and inst == "EIS":
             raise ValueError("slit_mask is for SWC, whose slits' fiducials ECLIPSE knows; "
                              "EIS's slits are taken to be open along their length.")
+        if self.focal_plane_dispersion and inst == "EIS":
+            raise ValueError("focal_plane_dispersion describes the SW focal plane, so it is "
+                             "for SWC only.")
 
         # Both pipelines zip the paired pinhole lists, and zip stops at the
         # shortest, so a mismatch would silently drop pinholes. main() runs

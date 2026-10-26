@@ -20,26 +20,7 @@ from tqdm import tqdm
 from .config import Detector_SWC, _old_names_used
 from .deprecated import get_dem_data_from_results  # noqa: F401  (deprecated)
 from .results_file import load_results
-from .utils import has_wrong_velocity_sign
-
-
-
-def _to_canonical_scalar(val):
-    """
-    Value as a plain scalar, for comparing parameters.
-
-    Quantities become their SI value, so `40 * u.s` and `40000 * u.ms` both
-    give 40.0. Offset units such as Celsius are converted to Kelvin first.
-    """
-    if not hasattr(val, "unit"):
-        return val
-    try:
-        return float(val.si.value)
-    except Exception:
-        try:
-            return float(val.to(u.K, equivalencies=u.temperature()).value)
-        except Exception:
-            return float(val.value)
+from .utils import _to_canonical_scalar, has_wrong_velocity_sign
 
 
 def load_instrument_response_results(filepath: str | Path,

@@ -12,7 +12,7 @@ from ndcube import NDCube
 
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.data_processing import rebin_atmosphere
-from eclipse.monte_carlo import simulate_once
+from eclipse.monte_carlo import _dark_time, simulate_once
 from eclipse.pinhole_diffraction import apply_euv_pinhole_diffraction
 from eclipse.radiometric import (_vectorized_fano_noise, electrons_per_photon,
                                  photons_per_energy, to_electrons)
@@ -162,7 +162,8 @@ def test_every_photon_reaches_the_detector_and_frees_its_own_electrons(psf):
     steps = simulate_once(through, 1 * u.s, det, tel, sim)
     photons, electrons = steps[5], steps[6]
     row, column = photons.data.shape[0] // 2, photons.data.shape[1] // 2
-    dark = (det.dark_current * 1 * u.s).to_value(u.electron / u.pix)
+    dark = (det.dark_current * _dark_time(through, 1 * u.s, det, sim)).to_value(
+        u.electron / u.pix)
     # The scene's photons at each wavelength, and their electrons.
     emitted = scene.data[4, 12] * photons_per_energy(tel, wavelength).value
     per_photon = (emitted * electrons_per_photon(wavelength, det)).sum() / emitted.sum()
@@ -188,7 +189,7 @@ def test_a_cube_with_no_photon_wavelength_counts_each_pixels_photons_at_its_own(
     assert "photon_wavelength" not in cube.meta
     steps = simulate_once(cube, 1 * u.s, det, tel, sim)
     photons, electrons = steps[5], steps[6]
-    dark = (det.dark_current * 1 * u.s).to_value(u.electron / u.pix)
+    dark = (det.dark_current * _dark_time(cube, 1 * u.s, det, sim)).to_value(u.electron / u.pix)
     own = electrons_per_photon(cube.axis_world_coords_values(2)[0], det)
     assert electrons.data - dark == pytest.approx(det.qe_euv * photons.data * own, rel=1e-12)
 

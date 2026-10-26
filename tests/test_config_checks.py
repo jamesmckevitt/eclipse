@@ -197,7 +197,7 @@ def test_a_run_without_the_shutter_is_refused_rather_than_taken_as_with_it(
 @pytest.mark.parametrize("name", ["cte_parallel", "cte_serial"])
 def test_a_run_with_charge_left_behind_is_refused_rather_than_taken_as_without(
         tmp_path, monkeypatch, name):
-    """A CTE below 1 is refused, as a run does not model the read-out."""
+    """A CTE below 1 is refused, as a run does not model charge transfer."""
     with pytest.raises(ValueError, match=f"detector.{name} must be 1 for an instrument run"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 0.99999}})
     _run(tmp_path, monkeypatch, {**UNIFORM, "detector": {name: 1.0}})

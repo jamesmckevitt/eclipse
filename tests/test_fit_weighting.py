@@ -12,7 +12,7 @@ from ndcube import NDCube
 from eclipse.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.data_processing import create_uniform_intensity_cube
 from eclipse.fitting import FitComponent, FitConfig, _poisson_residuals, fit_cube_gauss
-from eclipse.monte_carlo import expected_dn_uncertainty
+from eclipse.monte_carlo import _dark_time, expected_dn_uncertainty
 from eclipse.radiometric import dn_variance, to_dn, to_electrons
 
 REST = 195.119 * u.AA
@@ -114,9 +114,12 @@ def test_the_ground_truths_weights_are_those_of_the_dn_with_no_noise():
     expected = expected_dn_uncertainty(cube, sim.expos, det, tel, sim, offchip_bin_slit=2,
                                        uniform_mode=True)
     assert expected.shape == (1,) + cube.data.shape[1:]
-    # With no line, two pixels' dark current, read noise and rounding.
-    floor = np.sqrt(dn_variance(0.0, REST, sim.expos, det, n_binned=2))
-    assert expected.min() == pytest.approx(floor, rel=1e-6)
+    # With no line, two pixels' dark current, read noise and rounding, in the
+    # first wavelength pixel, which collects its dark current for the time
+    # its row takes to be read.
+    floor = np.sqrt(dn_variance(0.0, REST, sim.expos, det, n_binned=2,
+                                dark_time=_dark_time(cube, sim.expos, det, sim)[0]))
+    assert expected[0, 0, 0] == pytest.approx(floor, rel=1e-6)
     assert np.argmax(expected[0, 0]) == np.argmax(cube.data[0, 0])
 
 
