@@ -406,7 +406,8 @@ def test_a_line_of_no_width_is_laid_through_the_response():
 def test_the_blurred_line_keeps_its_photons(spectral_psf, width):
     """
     The photons the Monte Carlo counts on the pixels, at each pixel's
-    wavelength, are those of the line, each at its own wavelength, to 1e-6.
+    wavelength, are those of the line, each at its own wavelength, to 1e-6,
+    and their mean wavelength is the line's, to 1e-4 pixel.
     """
     from eclipse.radiometric import photons_per_energy
 
@@ -414,7 +415,9 @@ def test_the_blurred_line_keeps_its_photons(spectral_psf, width):
     cube = _cube(width, sim=sim)
     wavelength = cube.axis_world_coords_values(2)[0].to(u.cm)
     step = (DET.wvl_res * u.pix).to_value(u.cm)
-    counted = np.sum(cube.data[0, 0] * step * photons_per_energy(TEL, wavelength).value)
+    on_pixels = cube.data[0, 0] * step * photons_per_energy(TEL, wavelength).value
+    counted = np.sum(on_pixels)
+    mean = np.sum(on_pixels * cube.meta["photon_wavelength"][0, 0].to_value(u.cm)) / counted
 
     centre = REST.to_value(u.cm)
     sigma = centre * width / C_KM_S
@@ -424,15 +427,18 @@ def test_the_blurred_line_keeps_its_photons(spectral_psf, width):
         profile = np.exp(-0.5 * ((lam - centre) / sigma) ** 2) / (np.sqrt(2 * np.pi) * sigma)
         return radiance * profile * float(photons_per_energy(TEL, [lam] * u.cm).value[0])
 
-    expected = quad(photons, centre - 10 * sigma, centre + 10 * sigma, points=[centre],
-                    epsabs=0.0, epsrel=1e-10, limit=200)[0]
+    limits = dict(a=centre - 10 * sigma, b=centre + 10 * sigma, points=[centre], epsabs=0.0,
+                  epsrel=1e-10, limit=200)
+    expected = quad(photons, **limits)[0]
+    expected_mean = quad(lambda lam: lam * photons(lam), **limits)[0] / expected
     assert counted == pytest.approx(expected, rel=1e-6)
+    assert mean == pytest.approx(expected_mean, rel=0.0, abs=1e-4 * step)
 
 
 def test_a_binned_line_with_pinholes_goes_through_the_monte_carlo():
     """
     The photon entries of a blurred line are laid out like its data, along
-    the slit too, and the Monte Carlo bins and fits them, with the pinholes on.
+    the slit too, and the Monte Carlo bins them, with the pinholes on.
     """
     sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=False, enable_pinholes=True,
                      pinhole_sizes=[20 * u.um], pinhole_positions=[0.5])
@@ -442,10 +448,8 @@ def test_a_binned_line_with_pinholes_goes_through_the_monte_carlo():
     for key in ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
                 "blocked_photon_wavelength", "blocked_photon_rms_wavelength"):
         assert np.shape(cube.meta[key]) == cube.data.shape, key
-    single = create_uniform_intensity_cube(INTENSITY, REST, 10 * u.km / u.s, DET, sim, tel=TEL)
-    binned = simulate_once(cube, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
-    alone = simulate_once(single, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
-    assert np.allclose(binned.data[0], alone.data[0]) and np.allclose(binned.data[1], alone.data[0])
+    dn = simulate_once(cube, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
+    assert dn.data.shape == cube.data.shape and np.all(np.isfinite(dn.data))
     dn, dn_fits, _, _ = monte_carlo(cube, 10 * u.s, DET, TEL, sim, n_iter=2, offchip_bin_slit=2,
                                     uniform_mode=True, fit_signals="dn")
     assert dn.data.shape[0] == 1

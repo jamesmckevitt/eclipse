@@ -760,8 +760,8 @@ def create_uniform_intensity_cube(
     (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
     `sim.spectral_psf`) and integrated over the pixels. The pixels then hold
     the radiance that gives each pixel's photons at the pixel's wavelength,
-    so they add up to `total_intensity` only where the effective area and
-    photon energy do not change across the line. `meta` holds the photon
+    so they add up to `total_intensity` closely but not exactly, as the
+    effective area and photon energy change across the line. `meta` holds the photon
     entries this gives, such as `photon_wavelength`, records the blur in
     `psf_applied`, so the Monte Carlo does not blur it again, and records
     the response in `spectral_response`. The line is uniform along the

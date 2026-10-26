@@ -36,7 +36,7 @@ offchip_bin_slit: [1, 2, 4]   # 1, 2 and 4 slit pixels binned on the ground
 
 ## The point spread function
 
-With `psf: True`, ECLIPSE blurs the line by the instrument's spectral response, set by the slit width and `spectral_psf`, before it lays the line onto the wavelength pixels, as it does for a synthesised spectrum. The line's photons are counted at their own wavelengths, then blurred and summed over each pixel. Each pixel then holds the radiance that gives its photons at the pixel's wavelength. The pixels therefore add up to the line's intensity only where the effective area and the photon energy do not change across the line. They change slowly with wavelength, so a line as wide as several pixels is fitted a few hundredths of a km/s to the red without noise. The line is the same all along the slit, so it is not blurred along the slit, where it would make no difference.
+With `psf: True`, ECLIPSE blurs the line by the instrument's spectral response, set by the slit width and `spectral_psf`, before it lays the line onto the wavelength pixels, as it does for a synthesised spectrum. The line's photons are counted at their own wavelengths, then blurred and summed over each pixel. Each pixel then holds the radiance that gives its photons at the pixel's wavelength. The effective area and the photon energy change slowly across the line, so the pixels add up to the line's intensity only closely, not exactly. For the same reason, a line as wide as several pixels is fitted a few hundredths of a km/s from its rest wavelength without noise, to the red for Fe XII 195.119. The line is the same all along the slit, so it is not blurred along the slit, where it would make no difference.
 
 ## Why use it
 
