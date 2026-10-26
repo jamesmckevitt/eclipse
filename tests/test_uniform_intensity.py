@@ -303,8 +303,10 @@ def test_the_line_matches_the_same_line_through_rebin_spectra(instrument, spectr
                       meta={**cube.meta, **{key: rebinned.meta[key][middle][window][None, None]
                                             for key in ("photon_wavelength",
                                                         "photon_rms_wavelength")}})
+    # The pixels agree to 1e-10, but the fit converges only to about 1e-3 km/s,
+    # which differs between versions of NumPy and SciPy.
     expected = velocity(cube)
-    assert velocity(observed) == pytest.approx(expected, abs=1e-4)
+    assert velocity(observed) == pytest.approx(expected, abs=1e-3)
     assert expected == pytest.approx(0.0 if width == 3 else 0.03, abs=0.015)
 
 
