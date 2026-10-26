@@ -45,7 +45,7 @@ nav:
       - API reference: api.md
   - Reference:
       - Configuration reference: configuration.md
-      - Where the settings come from: instrument-sources.md
+      - Instrument sources: instrument-sources.md
       - Files: files.md
       - Naming spectral lines: line-names.md
       - Older versions: older-versions.md
