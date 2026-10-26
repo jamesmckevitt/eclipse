@@ -341,7 +341,7 @@ def test_a_run_records_the_settings_it_is_given(tmp_path, monkeypatch):
 def test_a_run_refuses_focal_plane_settings_it_does_not_use(tmp_path, monkeypatch, detector):
     name = next(iter(detector))
     with pytest.raises(ValueError, match=f"detector.{name} must be left at its default for an "
-                                         f"instrument run, which does not use the SW focal"):
+                                         f"instrument run, which takes its wavelengths from "):
         _run(tmp_path, monkeypatch, {**UNIFORM, "detector": detector})
 
 
