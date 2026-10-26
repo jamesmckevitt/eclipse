@@ -242,7 +242,10 @@ def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
         return u.Quantity(t_exp)
     focal_plane = FocalPlane_SWC.from_detector(det)
     n_rows = focal_plane.n_rows
-    per_row = dark_current_time(t_exp, ReadoutSequence.from_detector(det), n_rows)[:n_rows]
+    # Every row is read, and a run does not model charge transfer.
+    sequence = dataclasses.replace(ReadoutSequence.from_detector(det), cte_parallel=1.0,
+                                   cte_serial=1.0)
+    per_row = dark_current_time(t_exp, sequence, n_rows)[:n_rows]
     rows = _rows_of(focal_plane, I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom))
     return np.interp(rows, np.arange(n_rows), per_row.to_value(u.s)) * u.s
 

@@ -838,8 +838,9 @@ class Detector_SWC:
 
     The last four describe the SW focal plane, which
     :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
-    does not use the focal plane yet, and refuses values other than the
-    defaults.
+    takes its wavelengths from `wvl_res`, not from the focal plane, and
+    refuses values other than the defaults. It uses the focal plane only to
+    find the row recording each wavelength, for the dark current.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -895,8 +896,8 @@ class Detector_SWC:
     filter_distance: u.Quantity = field(default=250 * u.mm,
                                         metadata={"source": _NOT_RECORDED, "unit": "mm"})
     # Settings of the camera's CCDs and their read-out, which
-    # eclipse.readout models. An instrument run only checks and
-    # records them.
+    # eclipse.readout models. An instrument run uses only their timing, for
+    # the dark current collected during the clear and the read-out.
     shutter: bool = field(
         default=True, kw_only=True,
         metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a "
@@ -1623,8 +1624,8 @@ class Simulation:
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
-    # The clear and the read-out add up to about 1.2 s to the time a pixel
-    # collects dark current, more for rows read later.
+    # With every row read, the clear and the read-out add up to 1.15 s to the
+    # time a pixel collects dark current, for the last row read.
     readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)

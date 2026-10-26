@@ -754,14 +754,15 @@ def main() -> None:
             "detector.shutter must be true for an instrument run, which models frames taken "
             "with the shutter closed outside the exposure. Frames taken without it are "
             "modelled by eclipse.readout, which takes the detector's settings.")
-    # A run does not model the read-out either, so a CTE below 1 would be ignored.
+    # A run does not model charge transfer either, so a CTE below 1 would be ignored.
     for name in ("cte_parallel", "cte_serial"):
         if name in det_sweep or det_fixed.get(name, 1.0) != 1.0:
             raise ValueError(
-                f"detector.{name} must be 1 for an instrument run, which does not model the "
-                f"read-out. Charge left behind as a frame is read is modelled by "
+                f"detector.{name} must be 1 for an instrument run, which does not model "
+                f"charge transfer. Charge left behind as a frame is read is modelled by "
                 f"eclipse.readout, which takes the detector's settings.")
-    # Nor does it use the SW focal plane, so other values would be ignored.
+    # Nor does it take its wavelengths from the SW focal plane, so other values would
+    # be ignored.
     if instrument == "SWC":
         focal_plane = {name: det_fixed[name] for name in _FOCAL_PLANE_SETTINGS
                        if name in det_fixed}
@@ -771,7 +772,8 @@ def main() -> None:
             if name in det_sweep or not same:
                 raise ValueError(
                     f"detector.{name} must be left at its default for an instrument run, "
-                    f"which does not use the SW focal plane yet. Full-CCD frames, made by "
+                    f"which takes its wavelengths from detector.wvl_res, not from the SW focal "
+                    f"plane. Full-CCD frames, made by "
                     f"eclipse.full_frame, do.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
