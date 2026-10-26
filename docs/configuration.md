@@ -2,7 +2,7 @@
 
 This page lists every setting of `eclipse`'s configuration file, with its default. [Running a simulation](instrument-response.md#the-configuration-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
 
-[Where the settings come from](instrument-sources.md) gives the source of each instrument default, where one is known.
+[Instrument sources](instrument-sources.md) gives the source of each instrument default, where one is known.
 
 A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60 Celsius` or `5000 erg / (s cm2 sr)`. Any unit of the right kind will do.
 

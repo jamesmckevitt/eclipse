@@ -1,4 +1,4 @@
-# Where the instrument settings come from
+# Instrument sources
 
 ECLIPSE's default instrument settings come from SOLAR-C design documents and EIS calibrations. This page lists each setting with its default and the document it comes from, so a result can be traced to the design it reflects. The settings themselves are described in the [configuration reference](configuration.md).
 
