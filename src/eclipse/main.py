@@ -746,21 +746,22 @@ def main() -> None:
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
-    # A run models frames taken with the shutter closed outside the exposure.
-    # Without a shutter, light falls on the CCDs while a frame is cleared and
-    # read, and every line in the band smears into the window. The run
-    # synthesises only the window, so it cannot model this, and refuses the
-    # setting rather than ignoring it.
     # The width of the pixels is taken where the observed line lands, which a
     # run reads from a synthesis file or the uniform-intensity settings.
     focal_plane_dispersion = (sim_fixed.get("focal_plane_dispersion")
                               or True in sim_sweep.get("focal_plane_dispersion", []))
-    if focal_plane_dispersion and (atmosphere_series_mode or not (
+    if focal_plane_dispersion and instrument == "SWC" and (atmosphere_series_mode or not (
             uniform_intensity_mode or synthesis_series_mode or synthesis_is_hdf5)):
         raise ValueError(
             "simulation.focal_plane_dispersion needs the observed line's rest wavelength, which "
             "ECLIPSE reads from a synthesis file or the uniform-intensity settings, not yet from "
             "an atmosphere series or a synthesis pickle.")
+
+    # A run models frames taken with the shutter closed outside the exposure.
+    # Without a shutter, light falls on the CCDs while a frame is cleared and
+    # read, and every line in the band smears into the window. The run
+    # synthesises only the window, so it cannot model this, and refuses the
+    # setting rather than ignoring it.
     if "shutter" in det_sweep or det_fixed.get("shutter", True) is False:
         raise ValueError(
             "detector.shutter must be true for an instrument run, which models frames taken "
@@ -1243,10 +1244,13 @@ def main() -> None:
         if not observed_wavelength:
             if uniform_intensity_mode:
                 found = uniform_rest_wavelength
-            else:
+            elif synthesis_series_mode or (not raster_mode and synthesis_is_hdf5):
                 path = series_paths[0] if synthesis_series_mode else synthesis_file
                 layout = read_synthesis_layout(path, reference_line)
                 found = layout["lines"][reference_line]["rest_wavelength"]
+            else:
+                raise ValueError("simulation.focal_plane_dispersion needs a synthesis file or a "
+                                 "uniform intensity.")
             observed_wavelength.append(u.Quantity(found).to(u.AA))
         return observed_wavelength[0]
 

@@ -98,3 +98,18 @@ def test_a_run_refuses_what_it_cannot_take_the_width_for(tmp_path, monkeypatch, 
     config = {**UNIFORM, "simulation": {"focal_plane_dispersion": True}, **extra}
     with pytest.raises(ValueError, match=message):
         _run(tmp_path, monkeypatch, config)
+
+
+def test_a_run_of_a_synthesis_pickle_refuses_it_before_reading_the_pickle(tmp_path, monkeypatch):
+    import pickle
+
+    (tmp_path / "old.pkl").write_bytes(pickle.dumps({"not": "read"}))
+    config = {"instrument": "SWC", "n_iter": 1, "synthesis_file": str(tmp_path / "old.pkl"),
+              "simulation": {"focal_plane_dispersion": True}}
+    with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not yet from"):
+        _run(tmp_path, monkeypatch, config)
+
+
+def test_a_setting_that_is_not_true_or_false_is_refused():
+    with pytest.raises(ValueError, match="must be true or false"):
+        Simulation(focal_plane_dispersion="false")
