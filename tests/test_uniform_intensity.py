@@ -399,3 +399,54 @@ def test_a_line_of_no_width_is_laid_through_the_response():
     cube = _cube(0, sim=sim)
     assert np.all(np.isfinite(cube.data)) and cube.data.max() > 0
     assert np.isclose(np.argmax(cube.data[0, 0]), cube.data.shape[-1] // 2)
+
+
+@pytest.mark.parametrize("width", [3, 30])
+@pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
+def test_the_blurred_line_keeps_its_photons(spectral_psf, width):
+    """
+    The photons the Monte Carlo counts on the pixels, at each pixel's
+    wavelength, are those of the line, each at its own wavelength, to 1e-6.
+    """
+    from eclipse.radiometric import photons_per_energy
+
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, spectral_psf=spectral_psf)
+    cube = _cube(width, sim=sim)
+    wavelength = cube.axis_world_coords_values(2)[0].to(u.cm)
+    step = (DET.wvl_res * u.pix).to_value(u.cm)
+    counted = np.sum(cube.data[0, 0] * step * photons_per_energy(TEL, wavelength).value)
+
+    centre = REST.to_value(u.cm)
+    sigma = centre * width / C_KM_S
+    radiance = INTENSITY.to_value(cube.unit * u.cm)
+
+    def photons(lam):
+        profile = np.exp(-0.5 * ((lam - centre) / sigma) ** 2) / (np.sqrt(2 * np.pi) * sigma)
+        return radiance * profile * float(photons_per_energy(TEL, [lam] * u.cm).value[0])
+
+    expected = quad(photons, centre - 10 * sigma, centre + 10 * sigma, points=[centre],
+                    epsabs=0.0, epsrel=1e-10, limit=200)[0]
+    assert counted == pytest.approx(expected, rel=1e-6)
+
+
+def test_a_binned_line_with_pinholes_goes_through_the_monte_carlo():
+    """
+    The photon entries of a blurred line are laid out like its data, along
+    the slit too, and the Monte Carlo bins and fits them, with the pinholes on.
+    """
+    sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=False, enable_pinholes=True,
+                     pinhole_sizes=[20 * u.um], pinhole_positions=[0.5])
+    cube = create_uniform_intensity_cube(INTENSITY, REST, 10 * u.km / u.s, DET, sim,
+                                         n_slit_pixels=2, tel=TEL)
+    assert cube.meta["psf_applied"] is True
+    for key in ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
+                "blocked_photon_wavelength", "blocked_photon_rms_wavelength"):
+        assert np.shape(cube.meta[key]) == cube.data.shape, key
+    single = create_uniform_intensity_cube(INTENSITY, REST, 10 * u.km / u.s, DET, sim, tel=TEL)
+    binned = simulate_once(cube, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
+    alone = simulate_once(single, 10 * u.s, DET, TEL, sim, uniform_mode=True)[-1]
+    assert np.allclose(binned.data[0], alone.data[0]) and np.allclose(binned.data[1], alone.data[0])
+    dn, dn_fits, _, _ = monte_carlo(cube, 10 * u.s, DET, TEL, sim, n_iter=2, offchip_bin_slit=2,
+                                    uniform_mode=True, fit_signals="dn")
+    assert dn.data.shape[0] == 1
+    assert np.all(np.isfinite(dn.data))

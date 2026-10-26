@@ -722,7 +722,8 @@ def _line_in_cells(centre: float, sigma: float, n_pix_half: int, step: float,
     Gaussian line of `sigma` pixels in each.
 
     The line is `offset` pixels above `centre`. A `sigma` of 0 puts the
-    line in the cell holding its centre.
+    line in the cell holding its centre, or half in each cell if it sits on
+    the edge between two.
     """
     in_pixels = (np.arange((2 * n_pix_half + 1) * _CELLS_PER_PIXEL + 1) / _CELLS_PER_PIXEL
                  - n_pix_half - 0.5)
@@ -748,21 +749,24 @@ def create_uniform_intensity_cube(
     Make a cube of one Gaussian line of known total intensity on the detector pixels.
 
     This is the cube `eclipse` observes for a single line of known intensity,
-    ready for `monte_carlo` or `simulate_once`. Each wavelength pixel holds
-    the line integrated over that pixel, so the cube holds all of the line
-    within its wavelengths, however narrow the line. The tails beyond
-    `n_sigma_extent` are left out.
+    ready for `monte_carlo` or `simulate_once`. Without the PSF, each
+    wavelength pixel holds the line integrated over that pixel, so the cube
+    holds all of the line within its wavelengths, however narrow the line.
+    The tails beyond `n_sigma_extent` are left out.
 
     With `tel` given and `sim.psf` on, the line is laid onto the pixels as
     a synthesis is by :func:`rebin_spectra`: its photons are counted at
     their own wavelengths, then blurred by the spectral response
     (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
-    `sim.spectral_psf`) and integrated over the pixels. `meta` then holds
-    the photon entries this gives, such as `photon_wavelength`, and records
-    the blur in `psf_applied`, so the Monte Carlo does not blur it again,
-    and the response in `spectral_response`. The line is uniform
-    along the slit, so it needs no blur there. Observe the cube with the
-    same telescope, slit and `spectral_psf`.
+    `sim.spectral_psf`) and integrated over the pixels. The pixels then hold
+    the radiance that gives each pixel's photons at the pixel's wavelength,
+    so they add up to `total_intensity` only where the effective area and
+    photon energy do not change across the line. `meta` holds the photon
+    entries this gives, such as `photon_wavelength`, records the blur in
+    `psf_applied`, so the Monte Carlo does not blur it again, and records
+    the response in `spectral_response`. The line is uniform along the
+    slit, so it needs no blur there. Observe the cube with the same
+    telescope, slit and `spectral_psf`.
 
     Parameters
     ----------
@@ -824,10 +828,10 @@ def create_uniform_intensity_cube(
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
     # --- Gaussian profile -----------------------------------------------
-    # Each pixel holds the line integrated between its edges and divided by
-    # its width, as resample_spectra gives a synthesised spectrum, so the
-    # pixels sum to total_intensity less the tails beyond n_sigma_extent,
-    # whatever the line width. Sampling the Gaussian at pixel centres only
+    # Without the PSF, each pixel holds the line integrated between its edges
+    # and divided by its width, as resample_spectra gives a synthesised
+    # spectrum, so the pixels sum to total_intensity less the tails beyond
+    # n_sigma_extent, whatever the line width. Sampling the Gaussian at pixel centres only
     # does that for a sigma above about half a pixel: a line of 0.3 pixels
     # centred on a pixel, such as Fe VIII 185.21 at its formation
     # temperature, would come out 35 per cent too bright. Edges are counted
