@@ -9,7 +9,8 @@ from eclipse.config import Detector_EIS, Detector_SWC, Simulation, Telescope_EIS
 from eclipse.data_processing import create_uniform_intensity_cube
 from eclipse.monte_carlo import _dark_time, expected_dn_uncertainty, simulate_once
 from eclipse.radiometric import dn_variance
-from eclipse.readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
+from eclipse.readout import (FocalPlane_SWC, ReadoutSequence, dark_current_time,
+                             windows_from_wavelengths)
 
 DET = Detector_SWC()
 TEL = Telescope_EUVST()
@@ -22,39 +23,51 @@ def _cube(rest, det=DET, tel=TEL, sim=None):
     return create_uniform_intensity_cube(INTENSITY, rest, 20 * u.km / u.s, det, sim, tel=tel)
 
 
-def _per_row():
-    focal_plane = FocalPlane_SWC.from_detector(DET)
-    n_rows = focal_plane.n_rows
-    return focal_plane, dark_current_time(EXPOSURE, ReadoutSequence.from_detector(DET),
-                                          n_rows)[:n_rows]
+FOCAL_PLANE = FocalPlane_SWC.from_detector(DET)
+
+
+def _per_row(windows):
+    """Dark time of each image row, with `windows` read and the other rows dumped."""
+    n_rows = FOCAL_PLANE.n_rows
+    sequence = ReadoutSequence.from_detector(DET, windows=windows)
+    return dark_current_time(EXPOSURE, sequence, n_rows)[:n_rows]
+
+
+def _window(cube):
+    """Rows the cube's wavelengths reach, as a read-out window."""
+    wavelength = cube.axis_world_coords_values(2)[0]
+    half = 0.5 * (wavelength[1] - wavelength[0])
+    return windows_from_wavelengths(FOCAL_PLANE, [(wavelength[0] - half, wavelength[-1] + half)])
 
 
 @pytest.mark.parametrize("ccd, row", [("left", 0), ("left", 1500), ("left", 2047),
                                       ("right", 0), ("right", 900)])
 def test_a_pixel_takes_the_dark_time_of_the_row_recording_its_wavelength(ccd, row):
-    focal_plane, per_row = _per_row()
-    rest = focal_plane.wavelength(row, ccd)
-    cube = _cube(rest)
-    sim = Simulation(slit_width=0.2 * u.arcsec, noise=False)
-    time = _dark_time(cube, EXPOSURE, DET, sim)
+    """Only the rows of the cube's own wavelengths are read."""
+    cube = _cube(FOCAL_PLANE.wavelength(row, ccd))
+    time = _dark_time(cube, EXPOSURE, DET, Simulation(slit_width=0.2 * u.arcsec, noise=False))
     middle = cube.data.shape[-1] // 2
-    assert time[middle].to_value(u.s) == pytest.approx(per_row[row].to_value(u.s), rel=1e-7)
+    expected = _per_row(_window(cube))[row]
+    assert time[middle].to_value(u.s) == pytest.approx(expected.to_value(u.s), rel=1e-7)
     assert np.all(time > EXPOSURE)
 
 
-def test_rows_near_the_gap_wait_longest():
-    focal_plane, per_row = _per_row()
-    assert (per_row[-1] - EXPOSURE).to_value(u.s) == pytest.approx(1.15, abs=0.05)
-    outer, inner = (_dark_time(_cube(w), EXPOSURE, DET, Simulation(noise=False))
-                    for w in (172 * u.AA, 197 * u.AA))
-    assert outer.max() < inner.min()
+def test_reading_only_the_window_waits_far_less_than_reading_every_row():
+    """
+    Read alone, a window adds 0.03 to 0.05 s with the default timing,
+    wherever it is. With every row read, the last row would wait 1.15 s.
+    """
+    assert (_per_row([])[-1] - EXPOSURE).to_value(u.s) == pytest.approx(1.15, abs=0.01)
+    for wavelength in (172 * u.AA, 197 * u.AA, 205 * u.AA):
+        extra = (_dark_time(_cube(wavelength), EXPOSURE, DET, Simulation(noise=False))
+                 - EXPOSURE).to_value(u.s)
+        assert np.all((extra > 0.03) & (extra < 0.05)), wavelength
 
 
 def test_a_wavelength_in_the_gap_takes_the_last_row():
-    _, per_row = _per_row()
     time = _dark_time(_cube(198.9 * u.AA), EXPOSURE, DET, Simulation(noise=False))
-    middle = len(time) // 2
-    assert time[middle].to_value(u.s) == pytest.approx(per_row[-1].to_value(u.s), rel=1e-12)
+    expected = _per_row([(FOCAL_PLANE.n_rows - 1, FOCAL_PLANE.n_rows - 1)])[-1]
+    assert np.allclose(time.to_value(u.s), expected.to_value(u.s), rtol=1e-12, atol=0.0)
 
 
 def test_without_readout_dark_current_or_for_eis_it_is_the_exposure():

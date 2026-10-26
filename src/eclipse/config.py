@@ -1625,8 +1625,9 @@ class Simulation:
     # average. Quantisation stays: DN are still rounded and still clipped at
     # the digitiser maximum, max_dn.
     noise: bool = True
-    # With every row read and the default timing, the wait to be read adds up
-    # to 1.15 s to the time a pixel collects dark current, for the last row.
+    # A run takes only the rows of its own wavelengths to be read. The clear
+    # and the read-out then add 0.03 to 0.05 s for 32 rows with the default
+    # timing.
     readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)

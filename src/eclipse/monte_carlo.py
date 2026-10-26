@@ -233,24 +233,31 @@ def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
     Time each wavelength pixel of `I_cube` collects dark current.
 
     With `sim.readout_dark_current` on and the SWC detector, this is the
-    time a full-CCD frame gives the row that records the pixel's
-    wavelength, from :func:`~eclipse.readout.dark_current_time`: the clear
-    before the exposure, the exposure, and the wait to be read out. Rows
-    are read in order from the outer end of each CCD, so the wavelengths
-    near the gap between the CCDs wait longest. Otherwise it is `t_exp`.
+    time :func:`~eclipse.readout.dark_current_time` gives the row that
+    records the pixel's wavelength: the clear before the exposure, the
+    exposure, and the wait to be read out. The rows of the cube's
+    wavelengths are taken to be the only ones read, and the rest are
+    dumped. Otherwise it is `t_exp`.
     """
     if not sim.readout_dark_current or not isinstance(det, Detector_SWC):
         return u.Quantity(t_exp)
-    sequence = ReadoutSequence.from_detector(det)
+    focal_plane = FocalPlane_SWC.from_detector(det)
+    n_rows = focal_plane.n_rows
+    wavelength = I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom)
+    rows = _rows_of(focal_plane, wavelength)
+    # The window holds every row a pixel of the cube reaches, half a pixel
+    # either side of its centre.
+    half = 0.5 * np.abs(np.diff(wavelength)).mean() if wavelength.size > 1 else 0.0
+    reach = _rows_of(focal_plane, np.concatenate([wavelength - half, wavelength + half]))
+    first = int(np.clip(np.floor(reach.min() + 0.5), 0, n_rows - 1))
+    last = int(np.clip(np.ceil(reach.max() - 0.5), first, n_rows - 1))
+    sequence = ReadoutSequence.from_detector(det, windows=[(first, last)])
     if sequence.cte_parallel != 1 or sequence.cte_serial != 1:
         warnings.warn("A run does not model charge transfer, so the detector's cte_parallel "
                       "and cte_serial are taken as 1 here. Charge left behind as a frame is "
                       "read is modelled by eclipse.readout.", UserWarning, stacklevel=3)
         sequence = dataclasses.replace(sequence, cte_parallel=1.0, cte_serial=1.0)
-    focal_plane = FocalPlane_SWC.from_detector(det)
-    n_rows = focal_plane.n_rows
     per_row = dark_current_time(t_exp, sequence, n_rows)[:n_rows]
-    rows = _rows_of(focal_plane, I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom))
     return np.interp(rows, np.arange(n_rows), per_row.to_value(u.s)) * u.s
 
 

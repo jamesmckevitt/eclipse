@@ -167,7 +167,9 @@ simulation:
 
 ## Dark current
 
-The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](full-ccd-frame.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength. Rows are read from the outer end of each CCD toward the gap between them, so wavelengths near the gap, around 198 to 199.5 Angstrom, wait longest: up to 1.15 s more than the exposure, with the default read-out timing. A run takes every row to be read, the slowest read-out, as a full-CCD frame does. It does not model reading only some rows, in windows, which is quicker. It also leaves out charge transfer, as the rest of a run does.
+The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](full-ccd-frame.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength.
+
+The wait depends on which rows are read. A row that is read takes about 0.56 ms, and one that is not read is dumped in 15 us. A run takes only the rows of its own wavelengths to be read, as one window. With the default timing, a window of 32 rows adds 0.03 to 0.05 s to the exposure, wherever it is. The clear takes longest for the rows far from the gap between the CCDs, and the wait to be read takes longest for the rows near it. A real observation reads a window around each of its lines, so its rows wait longer than a run gives. A full-CCD frame reads every row, and its last row waits 1.15 s. A run also leaves out charge transfer, as the rest of a run does.
 
 ```yaml
 simulation:
