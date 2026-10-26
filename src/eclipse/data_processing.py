@@ -471,12 +471,26 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     step = (det.wvl_res * u.pix).to_value(u.cm)
     centres = spectral_world.to_value(u.cm)
     grid = _spectral_grid(centres, step, spectral_psf_margin(tel, det, sim.slit_width))
+    spectra, meta = _cells_onto_pixels(data, centres, _bin_edges(centres), grid, det, sim, tel)
+    return spectra, grid * u.cm, meta
+
+
+def _cells_onto_pixels(data, centres: np.ndarray, cells: np.ndarray, grid: np.ndarray, det,
+                       sim, tel) -> tuple:
+    """
+    Radiance in wavelength cells laid onto the pixels centred on `grid`.
+
+    The steps of :func:`_spectra_on_the_detector`, with the cells and the
+    pixels given. `data` is the mean radiance in each cell, with the cells
+    on its last axis, `centres` the cells' wavelengths and `cells` their
+    edges, all in cm. Returns `(spectra, meta)`.
+    """
+    step = (det.wvl_res * u.pix).to_value(u.cm)
     sigma = width = 0.0
     if sim.psf:
         sigma, width = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
         sigma, width = sigma * step, width * step
     pixel_edges = np.concatenate([grid - step / 2, [grid[-1] + step / 2]])
-    cells = _bin_edges(centres)
     share = light_onto_pixels(cells[:-1], cells[1:], pixel_edges, sigma, width)
     # Photons from each cell's light at its own wavelength, zero where the
     # telescope's tables do not reach.
@@ -508,7 +522,7 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
                                                     where=before > 0),
             "blocked_photon_wavelength": with_own(blocked_wavelength),
             "blocked_photon_rms_wavelength": with_own(blocked_rms)})
-    return spectra, grid * u.cm, meta
+    return spectra, meta
 
 
 def _slit_openings(tel, sim) -> dict:
@@ -699,6 +713,33 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
     return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
 
 
+# Cells per detector pixel a uniform-intensity line is laid on, with the PSF.
+# With 64 the pixels change by under 2e-5 of the peak, and the photon
+# wavelengths by under 1e-4 pixel, against 256.
+_CELLS_PER_PIXEL = 64
+
+
+def _line_in_cells(centre: float, sigma: float, n_pix_half: int, step: float,
+                   offset: float = 0.0) -> tuple:
+    """
+    Cell edges over `2 * n_pix_half + 1` pixels of width `step` centred on
+    `centre`, `_CELLS_PER_PIXEL` cells to a pixel, and the share of a
+    Gaussian line of `sigma` pixels in each.
+
+    The line is `offset` pixels above `centre`. A `sigma` of 0 puts the
+    line in the cell holding its centre, or half in each cell if it sits on
+    the edge between two.
+    """
+    in_pixels = (np.arange((2 * n_pix_half + 1) * _CELLS_PER_PIXEL + 1) / _CELLS_PER_PIXEL
+                 - n_pix_half - 0.5)
+    from_line = in_pixels - offset
+    if sigma > 0:
+        below = 0.5 * erf(from_line / (np.sqrt(2.0) * sigma))
+    else:
+        below = 0.5 * np.sign(from_line)
+    return centre + in_pixels * step, np.diff(below)
+
+
 def create_uniform_intensity_cube(
     total_intensity: u.Quantity,
     rest_wavelength: u.Quantity,
@@ -713,10 +754,24 @@ def create_uniform_intensity_cube(
     Make a cube of one Gaussian line of known total intensity on the detector pixels.
 
     This is the cube `eclipse` observes for a single line of known intensity,
-    ready for `monte_carlo` or `simulate_once`. Each wavelength pixel holds
-    the line integrated over that pixel, so the cube holds all of the line
-    within its wavelengths, however narrow the line. The tails beyond
-    `n_sigma_extent` are left out.
+    ready for `monte_carlo` or `simulate_once`. Without the PSF, each
+    wavelength pixel holds the line integrated over that pixel, so the cube
+    holds all of the line within its wavelengths, however narrow the line.
+    The tails beyond `n_sigma_extent` are left out.
+
+    With `tel` given and `sim.psf` on, the line is laid onto the pixels as
+    a synthesis is by :func:`rebin_spectra`: its photons are counted at
+    their own wavelengths, then blurred by the spectral response
+    (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
+    `sim.spectral_psf`) and integrated over the pixels. The pixels then hold
+    the radiance that gives each pixel's photons at the pixel's wavelength,
+    so they add up to `total_intensity` closely but not exactly, as the
+    effective area and photon energy change across the line. `meta` holds the photon
+    entries this gives, such as `photon_wavelength`, records the blur in
+    `psf_applied`, so the Monte Carlo does not blur it again, and records
+    the response in `spectral_response`. The line is uniform along the
+    slit, so it needs no blur there. Observe the cube with the same
+    telescope, slit and `spectral_psf`.
 
     Parameters
     ----------
@@ -729,7 +784,7 @@ def create_uniform_intensity_cube(
     det : Detector_SWC or Detector_EIS
         Detector whose pixels the cube is on.
     sim : Simulation
-        Simulation, which sets the slit.
+        Simulation, which sets the slit, `psf` and `spectral_psf`.
     n_sigma_extent : float, optional
         Number of sigma of the line to hold either side of its centre.
         Default 8.
@@ -739,8 +794,8 @@ def create_uniform_intensity_cube(
         noise. Default 1.
     tel : Telescope_EUVST or Telescope_EIS, optional
         Telescope. If given, the wavelength range is wide enough to hold the
-        line after the spectral PSF blurs it. Give it if the PSF will be on.
-        Default None.
+        line after the spectral PSF blurs it, and with `sim.psf` on the line
+        is blurred by it. Give it if the PSF will be on. Default None.
 
     Returns
     -------
@@ -763,12 +818,11 @@ def create_uniform_intensity_cube(
     # The grid must hold the line as measured, not as emitted, so add the
     # spectral PSF to the thermal width in quadrature, as Gaussian widths
     # add. The PSF is often the broader: at the default 20 km/s the line is
-    # 0.77 pixels against a PSF of 1.08. The grid is always widened, not only
-    # when psf is set, because psf may be swept and is not known when the
-    # cube is built and cached. The PSF is the one for this slit, with the
-    # slit added in quadrature, which is at least as broad as the slit
-    # convolved with the optics, so the grid holds the line under either
-    # spectral_psf.
+    # 0.77 pixels against a PSF of 1.08. The grid is widened with psf on or
+    # off, so the line with and without the PSF is on the same pixels. The
+    # PSF is the one for this slit, with the slit added in quadrature, which
+    # is at least as broad as the slit convolved with the optics, so the
+    # grid holds the line under either spectral_psf.
     sigma_total = sigma_lam
     if tel is not None:
         sigma_psf = _spectral_response(tel, det, sim.slit_width, "quadrature")[0] * dlam
@@ -779,25 +833,47 @@ def create_uniform_intensity_cube(
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
     # --- Gaussian profile -----------------------------------------------
-    # Each pixel holds the line integrated between its edges and divided by
-    # its width, as resample_spectra gives a synthesised spectrum, so the
-    # pixels sum to total_intensity less the tails beyond n_sigma_extent,
-    # whatever the line width. Sampling the Gaussian at pixel centres only
+    # Without the PSF, each pixel holds the line integrated between its edges
+    # and divided by its width, as resample_spectra gives a synthesised
+    # spectrum, so the pixels sum to total_intensity less the tails beyond
+    # n_sigma_extent, whatever the line width. Sampling the Gaussian at pixel centres only
     # does that for a sigma above about half a pixel: a line of 0.3 pixels
     # centred on a pixel, such as Fe VIII 185.21 at its formation
     # temperature, would come out 35 per cent too bright. Edges are counted
     # in pixels from the line centre, since absolute wavelengths would lose
     # a part in 1e12 of a pixel to rounding. Each pixel's upper edge is the
     # next one's lower edge, so nothing is counted twice or missed.
-    edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
-             / (np.sqrt(2.0) * sigma_lam)).decompose().value
-    profile = (total_intensity * 0.5 * np.diff(erf(edges)) / dlam).to(
-        u.erg / (u.s * u.cm**2 * u.sr * u.cm)
-    )
+    unit = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
+    blurred = _through_the_optics(tel, sim)
+    photon_meta = {}
+    if blurred:
+        # The line goes onto the pixels as a synthesis does: the photons of
+        # each cell at its own wavelength, then the spectral response. Each
+        # cell holds the line integrated over it, and the cells are fine
+        # enough that the result does not depend on them. The pixels then
+        # hold the radiance that gives their photons at their own
+        # wavelengths, so they add up to the intensity only where the
+        # effective area and photon energy do not change across the line.
+        response = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
+        step = dlam.to_value(u.cm)
+        cells, share = _line_in_cells(lam0.value, (sigma_lam / dlam).decompose().value,
+                                      n_pix_half, step)
+        radiance = total_intensity.to_value(unit * u.cm) * share / np.diff(cells)
+        grid = lam0.value + (np.arange(n_lam) - n_pix_half) * step
+        profile, photon_meta = _cells_onto_pixels(radiance, 0.5 * (cells[:-1] + cells[1:]),
+                                                  cells, grid, det, sim, tel)
+        profile = profile * unit
+    else:
+        edges = ((np.arange(n_lam + 1) - n_pix_half - 0.5) * dlam
+                 / (np.sqrt(2.0) * sigma_lam)).decompose().value
+        share = 0.5 * np.diff(erf(edges))
+        profile = (total_intensity * share / dlam).to(unit)
     # Tile the profile along the slit axis. Every slit pixel holds the same
     # intensity but gets its own noise downstream, which rebin_slit_offchip
     # needs to sum them.
     data = np.tile(profile.value, (n_slit_pixels, 1, 1))  # shape (n_slit_pixels, 1, n_lam)
+    photon_meta = {key: np.tile(value, (n_slit_pixels, 1, 1))
+                   for key, value in photon_meta.items()}
 
     # --- WCS (matches reproject_ndcube output format) --------------------
     # Axes: WAVE (cm), HPLN-TAN (arcsec), HPLT-TAN (arcsec)
@@ -812,8 +888,6 @@ def create_uniform_intensity_cube(
         (det.plate_scale_angle * u.pix).to_value(u.arcsec),
     ]
 
-    unit = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
-
     return NDCube(
         data=data,
         wcs=wcs,
@@ -824,5 +898,7 @@ def create_uniform_intensity_cube(
             "thermal_width": thermal_width,
             "line_name": "uniform",
             "uniform_mode": True,
+            **photon_meta,
+            **({"psf_applied": True, "spectral_response": response} if blurred else {}),
         },
     )

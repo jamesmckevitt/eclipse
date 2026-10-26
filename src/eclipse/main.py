@@ -1364,21 +1364,34 @@ def main() -> None:
         # the pixels afterwards moves a narrow line within its pixel. With
         # slit_mask on, the slit's ends and fiducials are cut out in the same
         # step. The ground truth is the scene without any of these. A uniform
-        # intensity is centred on a pixel and uniform along the slit, and the
-        # Monte Carlo blurs it.
+        # intensity is made again through the spectral response, which
+        # depends on the slit, the telescope and spectral_psf.
         cube_obs = cube_reb
-        if not uniform_intensity_mode:
-            # The observed cube includes the telescope's throughput as well as
-            # its PSF, so every telescope and filter setting is in the key,
-            # except the one for visible light, which the Monte Carlo adds.
-            filter_params = (_extract_config_params(filter_obj, "filter")
-                             if filter_obj is not None else {})
-            filter_params.pop("filter.visible_decade_thickness", None)
-            telescope_key = _params_to_key({**_extract_config_params(TEL, "telescope"),
-                                            **filter_params})
-            # With the pinholes on, it also includes the light they let past
-            # the filter.
-            pinholes = _pinholes_on(SIM)
+        # The observed cube includes the telescope's throughput as well as its
+        # PSF, so every telescope and filter setting is in the key, except the
+        # one for visible light, which the Monte Carlo adds. With the pinholes
+        # on, it also includes the light they let past the filter.
+        filter_params = (_extract_config_params(filter_obj, "filter")
+                         if filter_obj is not None else {})
+        filter_params.pop("filter.visible_decade_thickness", None)
+        telescope_key = _params_to_key({**_extract_config_params(TEL, "telescope"),
+                                        **filter_params})
+        pinholes = _pinholes_on(SIM)
+        if uniform_intensity_mode:
+            if psf:
+                psf_key = (*cube_reb_key, spectral_psf, telescope_key, pinholes)
+                if psf_key not in observed_cache:
+                    observed_cache[psf_key] = create_uniform_intensity_cube(
+                        total_intensity=uniform_intensity,
+                        rest_wavelength=uniform_rest_wavelength,
+                        thermal_width=uniform_thermal_width,
+                        det=DET,
+                        sim=SIM,
+                        n_slit_pixels=offchip_bin_slit,
+                        tel=TEL,
+                    )
+                cube_obs = observed_cache[psf_key]
+        else:
             psf_key = (*cube_reb_key, psf, slit_mask, spectral_psf, psf_boundary, telescope_key,
                        pinholes)
             if psf_key not in observed_cache:
