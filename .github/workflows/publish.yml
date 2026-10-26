@@ -28,7 +28,7 @@ jobs:
       - name: Build solarc-eclipse if PyPI does not have this version
         run: |
           version=$(python -c "import tomllib; print(tomllib.load(open('legacy/solarc-eclipse/pyproject.toml', 'rb'))['project']['version'])")
-          status=$(curl --silent --retry 3 --output /dev/null --write-out "%{http_code}" "https://pypi.org/pypi/solarc-eclipse/$version/json" || true)
+          status=$(curl --silent --retry 3 --max-time 30 --output /dev/null --write-out "%{http_code}" "https://pypi.org/pypi/solarc-eclipse/$version/json" || true)
           case "$status" in
             200) echo "solarc-eclipse $version is already on PyPI" ;;
             404) SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse ;;

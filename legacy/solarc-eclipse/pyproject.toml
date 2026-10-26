@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 # The name ECLIPSE had on PyPI up to 0.12. This last release is only an sdist,
@@ -12,7 +12,6 @@ authors = [
 ]
 description = "Former name of eclipse on PyPI; install eclipse instead"
 readme = "README.md"
-license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 7 - Inactive",
     "Intended Audience :: Science/Research",

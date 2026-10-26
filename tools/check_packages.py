@@ -34,8 +34,10 @@ def check(dist, tag=None):
         return [f"no folder {dist}"]
     source = _version(r'^__version__ = ([\'"])(?P<version>.+?)\1', SOURCE / "eclipse" / "__init__.py")
     legacy = _version(r'^version = "(?P<version>.+?)"', LEGACY / "pyproject.toml")
-    if source is None or legacy is None:
-        return ["no version found in src/eclipse/__init__.py or the solarc-eclipse pyproject.toml"]
+    if source is None:
+        return ["no __version__ found in src/eclipse/__init__.py"]
+    if legacy is None:
+        return [f"no version found in {LEGACY / 'pyproject.toml'}"]
     version = source if tag is None else tag.removeprefix("v")
 
     # Everything in dist/ is uploaded, so nothing else may be there.
@@ -68,8 +70,9 @@ def check(dist, tag=None):
              "--disable-pip-version-check", str(dist / stub)],
             capture_output=True, text=True, env=env)
         if result.returncode == 0 or "pip install eclipse" not in result.stdout + result.stderr:
+            print(result.stdout + result.stderr)
             return [f"installing {stub} does not stop with the message to install eclipse; "
-                    f"pip gave:\n{result.stdout}{result.stderr}"]
+                    "pip's output is above"]
         print(f"installing {stub} stops with the message to install eclipse")
     return []
 
