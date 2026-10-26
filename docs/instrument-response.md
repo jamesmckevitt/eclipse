@@ -174,7 +174,7 @@ simulation:
   focal_plane_dispersion: True   # the focal plane's pixel width where the line lands
 ```
 
-With `focal_plane_dispersion: True`, a run takes the width of the pixel the observed line lands on, from the SW focal plane, and gives it to every pixel of its window. The pixels then collect as much of the spectrum, and span as many km/s, as on the CCD. Across a window of 60 pixels the true width changes by about 1 part in 10,000, which a run leaves out. A run does not place its pixels on the CCD's rows either, so a line sits at the same place within its pixel as without the setting. It cannot be combined with `detector.wvl_res`, and works for SWC, with synthesis files or a uniform intensity.
+With `focal_plane_dispersion: True`, a run takes the width of the pixel the observed line lands on, from the SW focal plane, and gives it to every pixel of its window. The pixels then collect as much of the spectrum, and span as many km/s, as on the CCD. Across a window of 60 pixels the true width changes by about 2 parts in 10,000, which a run leaves out. A run does not place its pixels on the CCD's rows either, so a line sits at the same place within its pixel as without the setting. It cannot be combined with `detector.wvl_res`, and works for SWC, with synthesis files or a uniform intensity, for a line that reaches the CCDs within the lit band.
 
 ## Off-chip slit binning
 

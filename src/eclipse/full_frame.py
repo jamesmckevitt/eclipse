@@ -495,8 +495,9 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
 _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise")
 
 # `Simulation` fields a frame does not use, as they do not change it. `expos`
-# is replaced by the `exposure` argument.
-_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu")
+# is replaced by the `exposure` argument, and a frame always takes its
+# wavelengths from the focal plane.
+_IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu", "focal_plane_dispersion")
 
 # Fields not checked one by one. The pinhole settings are checked through
 # `enable_pinholes`.

@@ -751,6 +751,16 @@ def main() -> None:
     # read, and every line in the band smears into the window. The run
     # synthesises only the window, so it cannot model this, and refuses the
     # setting rather than ignoring it.
+    # The width of the pixels is taken where the observed line lands, which a
+    # run reads from a synthesis file or the uniform-intensity settings.
+    focal_plane_dispersion = (sim_fixed.get("focal_plane_dispersion")
+                              or True in sim_sweep.get("focal_plane_dispersion", []))
+    if focal_plane_dispersion and (atmosphere_series_mode or not (
+            uniform_intensity_mode or synthesis_series_mode or synthesis_is_hdf5)):
+        raise ValueError(
+            "simulation.focal_plane_dispersion needs the observed line's rest wavelength, which "
+            "ECLIPSE reads from a synthesis file or the uniform-intensity settings, not yet from "
+            "an atmosphere series or a synthesis pickle.")
     if "shutter" in det_sweep or det_fixed.get("shutter", True) is False:
         raise ValueError(
             "detector.shutter must be true for an instrument run, which models frames taken "
@@ -773,7 +783,9 @@ def main() -> None:
             if name in det_sweep or not same:
                 raise ValueError(
                     f"detector.{name} must be left at its default for an instrument run, "
-                    f"which does not use the SW focal plane yet. Full-CCD frames, made by "
+                    f"which takes its wavelengths from detector.wvl_res, or with "
+                    f"simulation.focal_plane_dispersion the width of its pixels from the "
+                    f"default SW focal plane. Full-CCD frames, made by "
                     f"eclipse.full_frame, do.")
 
     # The wavelength grids are cached by slit width and detector sampling, and
@@ -1207,14 +1219,16 @@ def main() -> None:
 
     def _with_focal_plane_width(det, all_det):
         """`det` with the focal plane's pixel width where the observed line lands."""
-        if instrument != "SWC":
-            raise ValueError("simulation.focal_plane_dispersion describes the SW focal plane, "
-                             "so it is for SWC only.")
         if "wvl_res" in all_det:
             raise ValueError("simulation.focal_plane_dispersion takes the pixels' width from "
                              "the focal plane, so detector.wvl_res would be ignored; give one "
                              "or the other.")
         wavelength = _observed_wavelength()
+        low, high = det.lit_band
+        if not low <= wavelength <= high:
+            raise ValueError(f"simulation.focal_plane_dispersion needs the observed line on the "
+                             f"focal plane, but {wavelength} is outside the lit band, "
+                             f"{low} to {high}.")
         try:
             width = FocalPlane_SWC.from_detector(det).pixel_width(wavelength)
         except ValueError as error:
@@ -1229,16 +1243,10 @@ def main() -> None:
         if not observed_wavelength:
             if uniform_intensity_mode:
                 found = uniform_rest_wavelength
-            elif synthesis_series_mode or (not raster_mode and synthesis_is_hdf5):
+            else:
                 path = series_paths[0] if synthesis_series_mode else synthesis_file
                 layout = read_synthesis_layout(path, reference_line)
                 found = layout["lines"][reference_line]["rest_wavelength"]
-            else:
-                raise ValueError(
-                    "simulation.focal_plane_dispersion needs the observed line's rest "
-                    "wavelength, which ECLIPSE reads from a synthesis file or the "
-                    "uniform-intensity settings, not yet from an atmosphere series or a "
-                    "synthesis pickle.")
             observed_wavelength.append(u.Quantity(found).to(u.AA))
         return observed_wavelength[0]
 

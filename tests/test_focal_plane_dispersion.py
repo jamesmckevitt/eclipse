@@ -2,10 +2,11 @@
 import sys
 
 import astropy.units as u
+import numpy as np
 import pytest
 import yaml
 
-from eclipse.config import Detector_SWC
+from eclipse.config import Detector_SWC, Simulation
 from eclipse.main import main
 from eclipse.readout import FocalPlane_SWC
 
@@ -61,9 +62,35 @@ def test_a_run_takes_the_width_where_its_line_lands(tmp_path, monkeypatch):
     assert combination["config_objects"]["simulation"].focal_plane_dispersion is True
 
 
+def test_a_run_of_a_synthesis_file_takes_the_width_where_its_reference_line_lands(
+        tmp_path, monkeypatch):
+    from eclipse.synthesis_file import SpectralLine, Synthesis, write_synthesis
+
+    rest = 185.213 * u.AA
+    edges = np.arange(3) * 0.1 * u.Mm
+    wavelength = rest + np.arange(-30, 31) * 0.003 * u.AA
+    line = SpectralLine(intensity=np.ones((2, 2, 61)) * 1e13 * u.erg / (u.s * u.cm**2 * u.sr * u.cm),
+                        wavelength=wavelength, rest_wavelength=rest)
+    write_synthesis(Synthesis(lines={"Fe8_185.2130": line}, x_edges=edges, y_edges=edges),
+                    tmp_path / "file.h5")
+    payload = _run(tmp_path, monkeypatch, {
+        "instrument": "SWC", "n_iter": 1, "synthesis_file": str(tmp_path / "file.h5"),
+        "simulation": {"focal_plane_dispersion": True, "noise": False}})
+    (combination,) = payload["results"]["all_combinations"].values()
+    expected = FOCAL_PLANE.pixel_width(rest)
+    assert combination["config_objects"]["detector"].wvl_res.to_value(u.AA / u.pix) == (
+        pytest.approx(expected.to_value(u.AA / u.pix), rel=1e-12))
+
+
+def test_a_simulation_for_eis_refuses_it():
+    with pytest.raises(ValueError, match="for SWC only"):
+        Simulation(instrument="EIS", slit_width=1 * u.arcsec, focal_plane_dispersion=True)
+
+
 @pytest.mark.parametrize("extra, message", [
     ({"detector": {"wvl_res": "16.9 mAA / pix"}}, "give one or the other"),
     ({"rest_wavelength": "198.9 AA"}, "needs the observed line on the focal plane"),
+    ({"rest_wavelength": "165 AA"}, "outside the lit band"),
     ({"instrument": "EIS", "simulation": {"focal_plane_dispersion": True,
                                           "slit_width": "1 arcsec"}}, "for SWC only"),
 ])
