@@ -23,20 +23,20 @@ SOURCE = ROOT / "src"
 LEGACY = ROOT / "legacy" / "solarc-eclipse"
 
 
-def _search(pattern, path):
+def _version(pattern, path):
     match = re.search(pattern, path.read_text(), re.MULTILINE)
-    if match is None:
-        raise SystemExit(f"::error::no version found in {path}")
-    return match
+    return None if match is None else match["version"]
 
 
 def check(dist, tag=None):
     """Errors found in the packages in `dist`, as a list of messages."""
     if not dist.is_dir():
         return [f"no folder {dist}"]
-    source = _search(r'^__version__ = ([\'"])(.+?)\1', SOURCE / "eclipse" / "__init__.py")[2]
+    source = _version(r'^__version__ = ([\'"])(?P<version>.+?)\1', SOURCE / "eclipse" / "__init__.py")
+    legacy = _version(r'^version = "(?P<version>.+?)"', LEGACY / "pyproject.toml")
+    if source is None or legacy is None:
+        return ["no version found in src/eclipse/__init__.py or the solarc-eclipse pyproject.toml"]
     version = source if tag is None else tag.removeprefix("v")
-    legacy = _search(r'^version = "(.+?)"', LEGACY / "pyproject.toml")[1]
 
     # Everything in dist/ is uploaded, so nothing else may be there.
     wheel = f"eclipse-{version}-py3-none-any.whl"
@@ -68,7 +68,8 @@ def check(dist, tag=None):
              "--disable-pip-version-check", str(dist / stub)],
             capture_output=True, text=True, env=env)
         if result.returncode == 0 or "pip install eclipse" not in result.stdout + result.stderr:
-            return [f"installing {stub} does not stop with the message to install eclipse"]
+            return [f"installing {stub} does not stop with the message to install eclipse; "
+                    f"pip gave:\n{result.stdout}{result.stderr}"]
         print(f"installing {stub} stops with the message to install eclipse")
     return []
 
