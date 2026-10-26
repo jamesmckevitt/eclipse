@@ -229,6 +229,22 @@ class FocalPlane_SWC:
             f"between them is not recorded."
         )
 
+    def _nearest_rows(self, wavelength: np.ndarray) -> np.ndarray:
+        """
+        Row recording each wavelength, in Angstrom, at the centre of the
+        slit, counted as in :meth:`row_of_wavelength`. A wavelength in the
+        gap between the CCDs, or beyond their outer ends, takes the nearest
+        row of the nearer CCD.
+        """
+        positions = np.arange(self.n_rows + 1) - 0.5
+        rows, distances = [], []
+        for ccd in ("left", "right"):
+            edges = self.row_edges(ccd).to_value(u.Angstrom)
+            order = np.argsort(edges)
+            rows.append(np.interp(wavelength, edges[order], positions[order]))
+            distances.append(np.maximum(edges.min() - wavelength, wavelength - edges.max()))
+        return np.where(distances[0] <= distances[1], rows[0], rows[1])
+
     def _row_on(self, ccd: str, target: float, column=None) -> float:
         """
         Row of `ccd` where `target`, in Angstrom, lands, counted as in

@@ -242,22 +242,6 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
             photons_euv_pinholes)
 
 
-def _rows_of(focal_plane: FocalPlane_SWC, wavelength: np.ndarray) -> np.ndarray:
-    """
-    Row of the focal plane recording each wavelength, in Angstrom, at the
-    centre of the slit. A wavelength in the gap between the CCDs, or beyond
-    their outer ends, takes the nearest row of the nearer CCD.
-    """
-    positions = np.arange(focal_plane.n_rows + 1) - 0.5
-    rows, distances = [], []
-    for ccd in ("left", "right"):
-        edges = focal_plane.row_edges(ccd).to_value(u.Angstrom)
-        order = np.argsort(edges)
-        rows.append(np.interp(wavelength, edges[order], positions[order]))
-        distances.append(np.maximum(edges.min() - wavelength, wavelength - edges.max()))
-    return np.where(distances[0] <= distances[1], rows[0], rows[1])
-
-
 def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
     """
     Time each wavelength pixel of `I_cube` collects dark current.
@@ -274,7 +258,7 @@ def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
     focal_plane = FocalPlane_SWC.from_detector(det)
     n_rows = focal_plane.n_rows
     wavelength = I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom)
-    rows = _rows_of(focal_plane, wavelength)
+    rows = focal_plane._nearest_rows(wavelength)
     # The window holds every row a pixel of the cube reaches, half a pixel
     # either side of its centre. Wavelengths all in the gap reach no row, and
     # take the last, at the gap's edge.
