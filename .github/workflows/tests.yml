@@ -50,6 +50,31 @@ jobs:
       - name: Run the tests
         run: python -m pytest tests/ -v
 
+  # Builds both packages the way publish.yml does, sdist first and then the
+  # wheel from it, so a packaging fault shows up before a release is tagged.
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install the build tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build eclipse and solarc-eclipse
+        run: |
+          python -m build --outdir dist .
+          SOLARC_ECLIPSE_BUILD=1 python -m build --sdist --outdir dist legacy/solarc-eclipse
+
+      - name: Check the packages and the package files
+        run: python tools/check_packages.py
+
+      - name: Check the metadata renders
+        run: twine check dist/*
+
   # The tests that check ECLIPSE against CHIANTI itself need fiasco's database,
   # which the job above does not build, so they are skipped there. Here it is
   # built, once per fiasco version, and kept in the cache; building it downloads

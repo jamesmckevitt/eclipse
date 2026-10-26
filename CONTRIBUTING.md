@@ -44,6 +44,8 @@ Whatever the size of the bump, if output changes for identical input, say so pro
 
 Publishing the release runs `.github/workflows/publish.yml`, which builds the sdist and wheel and uploads them to PyPI. Nothing is published by hand. The workflow refuses to upload if the tag disagrees with `__version__`, or if the wheel is missing the `eclipse/data` files, because a PyPI version cannot be replaced once it exists.
 
+`legacy/solarc-eclipse` is `solarc-eclipse`, ECLIPSE's former name on PyPI. It is an sdist whose install stops with a message saying to install `eclipse`. It has a fixed version, so the workflow builds and uploads it only when PyPI does not have that version yet.
+
 Read the Docs builds its `stable` version from the latest tag, so a release is also what moves the published documentation forward.
 
-PyPI authenticates the workflow by trusted publishing rather than an API token, configured against the repository, the `publish.yml` workflow and the `pypi` environment.
+PyPI authenticates the workflow by trusted publishing rather than an API token, configured against the repository, the `publish.yml` workflow and the `pypi` environment, on both the `eclipse` and `solarc-eclipse` projects.

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+# The name ECLIPSE had on PyPI up to 0.12. This last release is only an sdist,
+# whose setup.py stops the install and says to install `eclipse` instead.
+[project]
+name = "solarc-eclipse"
+version = "0.13.0"
+authors = [
+    {name = "James McKevitt", email = "jm2@mssl.ucl.ac.uk"},
+]
+description = "Former name of eclipse on PyPI; install eclipse instead"
+readme = "README.md"
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/jamesmckevitt/eclipse"
+Repository = "https://github.com/jamesmckevitt/eclipse"
+Documentation = "https://solarc-eclipse.readthedocs.io"
+
+[tool.setuptools]
+packages = []

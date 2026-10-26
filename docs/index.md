@@ -8,7 +8,7 @@ Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See [LICENSE](https://github.com/j
 
 The instrument model will be updated as EUVST is built, tested and commissioned.
 
-[![PyPI](https://img.shields.io/pypi/v/solarc-eclipse.svg)](https://pypi.org/project/solarc-eclipse/)
+[![PyPI](https://img.shields.io/pypi/v/eclipse.svg)](https://pypi.org/project/eclipse/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.17543844-blue.svg)](https://doi.org/10.5281/zenodo.17543844)
 
 ## How ECLIPSE works

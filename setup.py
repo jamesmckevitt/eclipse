@@ -21,7 +21,7 @@ def get_version():
     raise RuntimeError("Unable to find version string.")
 
 setup(
-    name="solarc-eclipse",
+    name="eclipse",
     version=get_version(),
     author="James McKevitt",
     author_email="jm2@mssl.ucl.ac.uk",
