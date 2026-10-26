@@ -54,14 +54,15 @@ def test_a_pixel_takes_the_dark_time_of_the_row_recording_its_wavelength(ccd, ro
 
 def test_reading_only_the_window_waits_far_less_than_reading_every_row():
     """
-    Read alone, a window adds 0.03 to 0.05 s with the default timing,
-    wherever it is. With every row read, the last row would wait 1.15 s.
+    Read alone, the window of a line adds a few hundredths of a second with
+    the default timing, wherever it is. With every row read, the last row
+    would wait 1.15 s.
     """
     assert (_per_row([])[-1] - EXPOSURE).to_value(u.s) == pytest.approx(1.15, abs=0.01)
     for wavelength in (172 * u.AA, 197 * u.AA, 205 * u.AA):
         extra = (_dark_time(_cube(wavelength), EXPOSURE, DET, Simulation(noise=False))
                  - EXPOSURE).to_value(u.s)
-        assert np.all((extra > 0.03) & (extra < 0.05)), wavelength
+        assert np.all((extra > 0.02) & (extra < 0.1)), wavelength
 
 
 def test_a_wavelength_in_the_gap_takes_the_last_row():

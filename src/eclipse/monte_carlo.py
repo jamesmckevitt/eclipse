@@ -16,7 +16,8 @@ from .radiometric import (
     add_pinhole_visible_light, dn_variance, _digitise
 )
 from .config import Detector_SWC
-from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time
+from .readout import (FocalPlane_SWC, ReadoutSequence, dark_current_time,
+                      windows_from_wavelengths)
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
                                   apply_euv_pinhole_diffraction)
 from .fitting import fit_cube_gauss, spectral_pixel_width, summarise_fits
@@ -246,12 +247,15 @@ def _dark_time(I_cube: NDCube, t_exp: u.Quantity, det, sim) -> u.Quantity:
     wavelength = I_cube.axis_world_coords_values(2)[0].to_value(u.Angstrom)
     rows = _rows_of(focal_plane, wavelength)
     # The window holds every row a pixel of the cube reaches, half a pixel
-    # either side of its centre.
+    # either side of its centre. Wavelengths all in the gap reach no row, and
+    # take the last, at the gap's edge.
     half = 0.5 * np.abs(np.diff(wavelength)).mean() if wavelength.size > 1 else 0.0
-    reach = _rows_of(focal_plane, np.concatenate([wavelength - half, wavelength + half]))
-    first = int(np.clip(np.floor(reach.min() + 0.5), 0, n_rows - 1))
-    last = int(np.clip(np.ceil(reach.max() - 0.5), first, n_rows - 1))
-    sequence = ReadoutSequence.from_detector(det, windows=[(first, last)])
+    try:
+        windows = windows_from_wavelengths(
+            focal_plane, [((wavelength.min() - half) * u.AA, (wavelength.max() + half) * u.AA)])
+    except ValueError:
+        windows = [(n_rows - 1, n_rows - 1)]
+    sequence = ReadoutSequence.from_detector(det, windows=windows)
     if sequence.cte_parallel != 1 or sequence.cte_serial != 1:
         warnings.warn("A run does not model charge transfer, so the detector's cte_parallel "
                       "and cte_serial are taken as 1 here. Charge left behind as a frame is "
