@@ -137,9 +137,10 @@ _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
 
 _FITTING_KEYS = {"components", "primary_component",
                  "constrain_positive_intensity", "backend", "max_iter",
-                 "bessel_correction", "save_iterations", "weighted"}
+                 "bessel_correction", "save_iterations", "weighted", "start"}
 _FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
-                           "amplitude_greater_than", "name"}
+                           "amplitude_greater_than", "name", "velocity_limits",
+                           "width_limits"}
 
 
 def _dataclass_keys(cls) -> set:
@@ -472,6 +473,8 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
             tie_width=comp_dict.get("tie_width", None),
             amplitude_greater_than=comp_dict.get("amplitude_greater_than", None),
             name=comp_dict.get("name", None),
+            velocity_limits=comp_dict.get("velocity_limits"),
+            width_limits=comp_dict.get("width_limits"),
         ))
 
     return FitConfig(
@@ -484,6 +487,7 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
         bessel_correction=fitting_cfg.get("bessel_correction", False),
         save_iterations=fitting_cfg.get("save_iterations", False),
         weighted=fitting_cfg.get("weighted", True),
+        start=fitting_cfg.get("start", "search"),
     )
 
 

@@ -353,7 +353,8 @@ def _jsonable(value):
 # FitConfig.weighted, and None is the detector material's value.
 _MATERIAL = {"fano_factor": None, "pair_energy_300k": None, "pair_energy_slope": None}
 _EARLIER_VALUES = {
-    "FitConfig": {"weighted": False},
+    "FitConfig": {"weighted": False, "start": "search"},
+    "FitComponent": {"velocity_limits": None, "width_limits": None},
     "Telescope_EUVST": {"resolution_budget": "none"},
     "Detector_SWC": {**_MATERIAL,
                      "dispersion": (198.885944, 1.2516577, -1.361114e-4),
