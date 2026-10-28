@@ -174,15 +174,12 @@ def test_a_choice_that_matches_nothing_is_refused(kwargs, message):
 # --- base settings ------------------------------------------------------------
 
 def test_base_settings_go_into_every_config():
-    base = {"n_iter": 100, "fit_signals": "dn",
-            "telescope": {"microroughness_sigma": "0.6 nm"},
-            "simulation": {"expos": ["1 s", "5 s"]}}
+    base = {"n_iter": 100, "fit_signals": "dn", "simulation": {"expos": ["1 s", "5 s"]}}
     configs, _ = sc.science_case_configs(cases=["I-4-1"], base=base)
     assert len(configs) == 13
     for item in configs:
         config = item.config
         assert (config["n_iter"], config["fit_signals"]) == (100, "dn")
-        assert config["telescope"] == {"microroughness_sigma": "0.6 nm"}
         assert config["simulation"] == {"psf": True, "expos": ["1 s", "5 s"],
                                         "slit_width": "0.8 arcsec"}
 
@@ -275,10 +272,32 @@ def test_an_lw_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("base", [{"detector": {"ccd_temperature": "-50 Celsius"}},
+                                  {"detector": {"read_noise_rms": "5 electron / pix"}},
                                   {"simulation": {"vis_sl": "5 photon / (s cm2)"}},
+                                  {"simulation": {"slit_mask": True}},
                                   {"filter": {"al_thickness": "1500 angstrom"}}])
-def test_base_settings_only_sw_has_skip_the_lw_lines_with_a_warning(base):
-    with pytest.warns(UserWarning, match="do not apply to the LW channel"):
+def test_a_base_for_the_sw_hardware_skips_the_lw_lines_of_both_channels(base):
+    """Settings both detectors have, such as the read noise, are SW's too, as the base was written for both."""
+    with pytest.warns(UserWarning, match="applied to the SW lines only"):
         configs, skipped = sc.science_case_configs(cases=["I-1-1"], base=base)
     assert {item.config["instrument"] for item in configs} == {"SWC"}
     assert "I-1-1 Si XII 499.41" in skipped
+
+
+def test_the_lw_lines_alone_take_their_own_base_and_its_mistakes_are_errors():
+    base = {"detector": {"read_noise_rms": "30 electron / pix"}}
+    configs, _ = sc.science_case_configs(lines=["Si XII 499.41"], base=base)
+    assert configs and all(item.config["detector"]["read_noise_rms"] == "30 electron / pix"
+                           for item in configs)
+    with pytest.raises(ValueError, match="read_nosie_rms"):
+        sc.science_case_configs(lines=["Si XII 499.41"],
+                                base={"detector": {"read_nosie_rms": "30 electron / pix"}})
+    with pytest.raises(ValueError, match="vis_sl must be 0"):
+        sc.science_case_configs(lines=["Si XII 499.41"],
+                                base={"simulation": {"vis_sl": "5 photon / (s cm2)"}})
+
+
+def test_a_mistake_in_a_base_for_both_channels_is_still_an_error():
+    with pytest.raises(ValueError, match="read_nosie_rms"):
+        sc.science_case_configs(cases=["I-1-1"],
+                                base={"detector": {"read_nosie_rms": "5 electron / pix"}})

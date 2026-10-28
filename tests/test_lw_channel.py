@@ -341,10 +341,16 @@ class TestConfiguration:
     (Detector_LW, {"wvl_res": 30 * u.arcsec / u.pix}, "wvl_res must be a finite quantity"),
     (Detector_LW, {"dark_current": 2.0}, "dark_current must be a finite quantity"),
     (Detector_LW, {"aps_temperature": -40}, "aps_temperature needs a unit"),
+    (Detector_LW, {"aps_temperature": -40 * u.K, "dark_current": 1 * u.electron / (u.pix * u.s)},
+     "above absolute zero"),
 ])
 def test_settings_of_the_wrong_kind_or_range_are_refused(cls, settings, message):
     with pytest.raises(ValueError, match=message):
         cls(**settings)
+
+
+def test_a_numpy_number_is_a_fraction_too():
+    assert Detector_LW(qe_euv=np.float32(0.3)).qe_euv == np.float32(0.3)
 
 
 def test_a_detector_and_telescope_on_different_bands_are_refused():

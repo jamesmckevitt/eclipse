@@ -178,6 +178,10 @@ def _check_lw_config(det_fixed: dict, det_sweep: dict, tel_fixed: dict, tel_swee
             tel_fixed[key] = det_fixed[key]
         elif key in tel_fixed:
             det_fixed[key] = tel_fixed[key]
+    vis_sl = sim_sweep.get("vis_sl", [sim_fixed.get("vis_sl", 0)])
+    if any(np.any(u.Quantity(value).value != 0) for value in vis_sl):
+        raise ValueError("The LW detector does not respond to visible light, so vis_sl must be 0 "
+                         "for LW.")
     for key in ("slit_mask", "focal_plane_dispersion"):
         if sim_fixed.get(key) or True in sim_sweep.get(key, []):
             raise ValueError(
@@ -192,6 +196,16 @@ def _check_lw_config(det_fixed: dict, det_sweep: dict, tel_fixed: dict, tel_swee
             "filter. Remove enable_pinholes, pinhole_sizes, pinhole_positions, "
             "pinhole_positions_spectral and pinhole_visible_wavelength, or run this "
             "config against SWC.")
+
+
+def _check_lw_sections(config: dict) -> None:
+    """Check an LW configuration's settings, as a run does before it loads anything."""
+    pinholes = _parse_pinhole_config(config)
+    sim_fixed, sim_sweep = _parse_section(config.get("simulation", {}), "simulation")
+    det_fixed, det_sweep = _parse_section(config.get("detector", {}), "detector")
+    tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
+    _check_lw_config(det_fixed, det_sweep, tel_fixed, tel_sweep, sim_fixed, sim_sweep,
+                     any(pinholes))
 
 
 def _dataclass_keys(cls) -> set:
@@ -1343,8 +1357,10 @@ def main() -> None:
                       tel.filter.oxide_table, tel.filter.c_table):
             _load_throughput_table(table)
     elif instrument == "LW":
-        for table in (tel.pm_table, tel.grating_table_1st, tel.grating_table_2nd,
-                      tel.contamination_table, det.qe_table):
+        tables = [tel.pm_table, tel.grating_table_1st, tel.grating_table_2nd]
+        tables += [tel.contamination_table] if tel.contamination_factor is None else []
+        tables += [det.qe_table] if det.qe_euv is None else []
+        for table in tables:
             _load_throughput_table(table)
 
     def _check_offchip_bins(fov_along_slit):

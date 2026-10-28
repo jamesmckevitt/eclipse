@@ -14,7 +14,7 @@ from typing import ClassVar, List
 import numpy as np
 import astropy.units as u
 import scipy.interpolate
-import scipy.stats
+import scipy.special
 from . import eis_calibration
 from .utils import _warn_outside, angle_to_distance
 from importlib.resources import files
@@ -405,6 +405,16 @@ def _check_quantity(value, unit: u.Unit, name: str, non_negative: bool = False) 
     if not np.all(value.value >= 0 if non_negative else value.value > 0):
         raise ValueError(f"{name} must be {'zero or more' if non_negative else 'more than zero'}"
                          f", got {value}.")
+
+
+def _check_optional_fraction(value, name: str, otherwise: str) -> None:
+    """Refuse `value` unless it is None or a number from 0 to 1; `otherwise` says what None gives."""
+    if value is None:
+        return
+    if (isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.number))
+            or not 0 <= value <= 1):
+        raise ValueError(f"{name} is a fraction, from 0 to 1, or left out for {otherwise}; "
+                         f"got {value!r}.")
 
 
 def _check_detector(det, section: str = "detector") -> None:
@@ -1836,11 +1846,10 @@ class Detector_LW:
                         optional=("qe_euv", "dark_current"))
         _check_quantity(self.wvl_res, u.cm / u.pixel, "detector.wvl_res")
         _check_quantity(self.plate_scale_angle, u.arcsec / u.pixel, "detector.plate_scale_angle")
-        if self.qe_euv is not None and (isinstance(self.qe_euv, bool)
-                                        or not isinstance(self.qe_euv, (int, float))
-                                        or not 0 <= self.qe_euv <= 1):
-            raise ValueError(f"detector.qe_euv is a fraction, from 0 to 1, or left out for the "
-                             f"qe_table; got {self.qe_euv!r}.")
+        _check_optional_fraction(self.qe_euv, "detector.qe_euv", "the qe_table")
+        if self.aps_temperature.to_value(u.K, equivalencies=u.temperature()) <= 0:
+            raise ValueError(f"detector.aps_temperature must be above absolute zero, got "
+                             f"{self.aps_temperature}; -40 K was perhaps meant as -40 C.")
         _check_tables(self, ("qe_table",), "detector")
         if self.dark_current is None:
             specified = -40 * u.deg_C
@@ -1924,7 +1933,7 @@ class Detector_LW:
             np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
             charge = np.zeros_like(detected)
             lit = detected > 0
-            charge[lit] = scipy.stats.gamma.ppf(u_draw[lit], detected[lit], scale=self.gain_mcp)
+            charge[lit] = self.gain_mcp * scipy.special.gammaincinv(detected[lit], u_draw[lit])
             return self.post_mcp_efficiency * charge
         # A gamma of shape 0 is 0, so a pixel with no photons needs no care.
         return self.post_mcp_efficiency * np.random.gamma(detected, self.gain_mcp)
@@ -2001,12 +2010,8 @@ class Telescope_EUVST_LW:
                                spectral_fwhm / spectral_maa * u.pixel]
         _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
                         non_negative=("microroughness_sigma",))
-        if self.contamination_factor is not None and (
-                isinstance(self.contamination_factor, bool)
-                or not isinstance(self.contamination_factor, (int, float))
-                or not 0 <= self.contamination_factor <= 1):
-            raise ValueError(f"telescope.contamination_factor is a fraction, from 0 to 1, or left "
-                             f"out for the contamination_table; got {self.contamination_factor!r}.")
+        _check_optional_fraction(self.contamination_factor, "telescope.contamination_factor",
+                                 "the contamination_table")
         _check_psf_params(self)
         _check_tables(self, ("pm_table", "grating_table_1st", "grating_table_2nd",
                              "contamination_table"), "telescope")

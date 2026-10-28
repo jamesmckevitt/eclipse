@@ -952,8 +952,10 @@ def to_electrons(
         spread. Without them, `meta["rest_wav"]` sets both.
     t_exp : u.Quantity
         Exposure time, for the dark current unless `dark_time` is given.
-    det : Detector_SWC or Detector_EIS
-        Detector.
+    det : Detector_SWC, Detector_EIS or Detector_LW
+        Detector. For `Detector_LW` the detection efficiency is taken at
+        each pixel's wavelength, and each detected photon gives the MCP's
+        gain instead of a Fano spread.
     dark_current_inverse_transform : bool, optional
         Draw the dark current by inverse-transform sampling, for common
         random numbers between runs that differ in dark current. Default
@@ -962,8 +964,8 @@ def to_electrons(
         If False, every random draw is replaced by its mean. Default True.
     photon_shot_inverse_transform : bool, optional
         Draw the detected photons by inverse-transform sampling, and the Fano
-        spread for every pixel, for common random numbers between runs that
-        differ in photon flux. Default False.
+        spread or the MCP gain for every pixel, for common random numbers
+        between runs that differ in photon flux. Default False.
     dark_time : u.Quantity, optional
         Time each pixel collects dark current, one value or an array that
         broadcasts against the pixels, such as one per wavelength pixel from
