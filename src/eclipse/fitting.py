@@ -71,6 +71,15 @@ class FitComponent:
     name : str, optional
         Name in the results. Default the rest wavelength, e.g.
         `"195.1190 Angstrom"`.
+    velocity_limits : tuple of u.Quantity, optional
+        Lowest and highest velocity the fit may give this line, measured
+        from its rest wavelength, such as `(-60 * u.km / u.s, 60 * u.km / u.s)`.
+        Not for a line whose centre is tied to another's. Default None, for
+        no limits.
+    width_limits : tuple of u.Quantity, optional
+        Smallest and largest Gaussian sigma the fit may give this line, such
+        as `(0.019 * u.AA, 0.051 * u.AA)`. Not for a line whose width is tied
+        to another's. Default None, for no limits.
     """
     wavelength: u.Quantity
     tie_center: Optional[int] = None   # index of component whose centre this is tied to
@@ -79,6 +88,8 @@ class FitComponent:
     # Label for this component in the results. Defaults to its rest
     # wavelength, e.g. "195.1190 Angstrom".
     name: Optional[str] = None
+    velocity_limits: Optional[tuple] = None
+    width_limits: Optional[tuple] = None
 
     def __post_init__(self):
         # Catch a wavelength with no unit here rather than in the fit.
@@ -87,6 +98,38 @@ class FitComponent:
                 and np.isfinite(self.wavelength.value) and self.wavelength.value > 0):
             raise ValueError(f"A fitting component's wavelength must be the wavelength of a "
                              f"line, such as '195.119 AA'; got {self.wavelength!r}.")
+        for key, kind, example in (("velocity_limits", u.km / u.s, "[-60 km/s, 60 km/s]"),
+                                   ("width_limits", u.AA, "[0.019 AA, 0.051 AA]")):
+            value = getattr(self, key)
+            if value is None:
+                continue
+            try:
+                low, high = (u.Quantity(v) for v in value)
+            except (TypeError, ValueError):
+                low = high = None
+            if (low is None or not low.unit.is_equivalent(kind)
+                    or not high.unit.is_equivalent(kind)
+                    or not (np.isfinite(low.value) and np.isfinite(high.value))
+                    or not low < high or (key == "width_limits" and low <= 0)):
+                raise ValueError(
+                    f"A fitting component's {key} must be two {kind.physical_type}s, the "
+                    f"lower first{', both above zero' if key == 'width_limits' else ''}, "
+                    f"such as {example}; got {value!r}.")
+            setattr(self, key, (low.to(kind), high.to(kind)))
+
+    def centre_limits(self) -> Optional[tuple]:
+        """Lowest and highest centre in cm that `velocity_limits` allow, or None."""
+        if self.velocity_limits is None:
+            return None
+        rest = self.wavelength.to_value(u.cm)
+        c = const.c.to_value(u.km / u.s)
+        return tuple(rest * (1 + v.to_value(u.km / u.s) / c) for v in self.velocity_limits)
+
+    def sigma_limits(self) -> Optional[tuple]:
+        """Smallest and largest sigma in cm that `width_limits` allow, or None."""
+        if self.width_limits is None:
+            return None
+        return tuple(w.to_value(u.cm) for w in self.width_limits)
 
 
 def default_component_name(wavelength: u.Quantity) -> str:
@@ -123,6 +166,11 @@ class FitConfig:
         Weight each pixel of the DN spectra by one over its uncertainty
         squared, estimated from its own signal as eispac does, and fit the
         photon spectra by their Poisson likelihood. Default True.
+    start : str
+        Where each fit of a blend starts: `"search"` (default) slides the
+        components together along the spectrum to where they best match it;
+        `"rest"` starts every component at its rest wavelength, as eispac's
+        templates do.
     """
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
@@ -146,6 +194,10 @@ class FitConfig:
     # its position count no more than its noisier peak. Results files from
     # before this setting are unweighted.
     weighted: bool = True
+    # Where a blend's fit starts. A search can start a faint blend a whole
+    # component spacing from the truth; starting at rest, as eispac does,
+    # keeps it on the line that is there.
+    start: str = "search"
 
     def __post_init__(self):
         if len(self.components) == 1:
@@ -154,6 +206,8 @@ class FitConfig:
                 "needs at least two; for a single Gaussian leave components "
                 "out, and the other fitting settings still apply."
             )
+        if self.start not in ("search", "rest"):
+            raise ValueError(f"fitting.start must be 'search' or 'rest', got {self.start!r}.")
         if self.backend not in (None, "scipy", "mpfit"):
             raise ValueError(
                 f"Unknown fitting backend '{self.backend}'. "
@@ -194,6 +248,12 @@ class FitConfig:
                             f"has to be the index of another component, from "
                             f"0 to {n - 1}."
                         )
+                for key, tie in (("velocity_limits", "tie_center"), ("width_limits", "tie_width")):
+                    if getattr(comp, key) is not None and getattr(comp, tie) is not None:
+                        raise ValueError(
+                            f"fitting.components[{idx}] has {key} and {tie}. A tied "
+                            f"component follows the one it is tied to, so give the limits "
+                            f"to that one.")
                 if comp.name is not None and (
                         not isinstance(comp.name, str) or not comp.name.strip()):
                     raise ValueError(
@@ -240,6 +300,11 @@ class FitConfig:
                 raise ValueError(
                     "fitting.constrain_positive_intensity is only applied to "
                     "multi-component fits, and there are no components."
+                )
+            if self.start != "search":
+                raise ValueError(
+                    "fitting.start is only applied to multi-component fits, and there are "
+                    "no components."
                 )
 
     @property
@@ -678,7 +743,17 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
         for pos, fi in enumerate(free_indices):
             if fi % 3 == 0 and fi < 3 * nc and pos not in ratio_spec:
                 lower[pos] = 0.0
-    has_bounds = ratio_spec or fit_config.constrain_positive_intensity
+    # Each component's limits on its centre and width, in Angstrom as the
+    # model takes them.
+    limited = False
+    for pos, fi in enumerate(free_indices):
+        if fi < 3 * nc and fi % 3 in (1, 2):
+            comp = fit_config.components[fi // 3]
+            limits = comp.centre_limits() if fi % 3 == 1 else comp.sigma_limits()
+            if limits is not None:
+                lower[pos], upper[pos] = (value * 1e8 for value in limits)
+                limited = True
+    has_bounds = ratio_spec or fit_config.constrain_positive_intensity or limited
     bounds = (lower, upper) if has_bounds else (-np.inf, np.inf)
 
     # Order the ratios so parents come before their children.
@@ -881,6 +956,9 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
                            / fit_config.components[src].wavelength.to(u.cm).value)
             # mpfit tie expression references the parameter array p
             centre_info["tied"] = f"p[{3 * src + 1}] * {factor!r}"
+        elif comp.centre_limits() is not None:
+            centre_info["limited"] = [1, 1]
+            centre_info["limits"] = list(comp.centre_limits())
         parinfo.append(centre_info)
 
         # --- sigma (width) ---
@@ -888,6 +966,9 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         # Width must be strictly positive (avoid divide-by-zero in Gaussian)
         sigma_info["limited"] = [1, 0]
         sigma_info["limits"] = [1e-30, 0.0]
+        if comp.sigma_limits() is not None:
+            sigma_info["limited"] = [1, 1]
+            sigma_info["limits"] = list(comp.sigma_limits())
         if comp.tie_width is not None:
             src = _tie_root(fit_config, "tie_width", i)
             sigma_info["tied"] = f"p[{3 * src + 2}]"
@@ -982,7 +1063,12 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
     ref_wl = float(rest_wl[fit_config.primary_component])
-    if peak > 0:
+    if fit_config.start == "rest":
+        # Every component at its rest wavelength, as eispac's templates start.
+        peak_for_search = 0.0
+    else:
+        peak_for_search = peak
+    if peak_for_search > 0:
         # A trial shift moves the primary centre to ref_wl + shift and every
         # other component to its rest wavelength times the same factor. The
         # range keeps the whole comb inside the observed window; with all
@@ -1022,6 +1108,12 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
         full_guess[base + 1] = rest_wl[i] * doppler
         full_guess[base + 2] = sigma
+    # A start outside a component's limits is moved to the nearest limit, as
+    # the optimisers need one inside them.
+    for i, comp in enumerate(fit_config.components):
+        for offset, limits in ((1, comp.centre_limits()), (2, comp.sigma_limits())):
+            if limits is not None:
+                full_guess[3 * i + offset] = np.clip(full_guess[3 * i + offset], *limits)
     full_guess[-1] = back
     return full_guess
 
