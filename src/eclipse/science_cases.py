@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
@@ -42,6 +43,11 @@ _LINE_KEYS = ("instrument", "uniform_intensity", "rest_wavelength",
 # Time-series keys, not allowed in a configuration observing one line's
 # intensity.
 _SERIES_KEYS = ("atmosphere_series", "synthesis_series", "raster", "synthesis")
+
+# Settings of the SW channel that an LW configuration cannot take.
+_SW_ONLY_KEYS = ("pinhole_sizes", "pinhole_positions", "pinhole_positions_spectral")
+_SW_ONLY_SIMULATION_KEYS = ("vis_sl", "slit_mask", "focal_plane_dispersion", "enable_pinholes",
+                            "pinhole_visible_wavelength")
 
 # Two table entries for the same line can be written to different precision,
 # e.g. 195.119 and 195.12, so a wavelength matches lines within this.
@@ -262,7 +268,9 @@ def science_case_configs(cases: list[str] | None = None,
         Settings for every configuration, as in a configuration file. These
         override the defaults (512 iterations on every CPU, PSF on, off-chip
         binning of 1 and 2) and, where given, the case's exposure time and
-        slit width. They cannot set the instrument or the line.
+        slit width. They cannot set the instrument or the line. If they hold
+        a setting the LW channel does not have, such as
+        `detector.ccd_temperature`, the LW lines are skipped, with a warning.
     table : list of dict, optional
         Science cases to use instead of the table included with ECLIPSE.
 
@@ -295,18 +303,47 @@ def science_case_configs(cases: list[str] | None = None,
     if "simulation" in base:
         _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 
-    configs, skipped = [], []
+    configs, skipped, not_lw = [], [], None
     for case, line in _chosen_lines(table, cases, lines):
         instrument = instrument_for(line)
         if instrument is None:
             skipped.append(f"{case['task']} {line_label(line)}")
             continue
         config = _config(case, line, instrument, base)
-        _validate_config_keys(config, instrument)
+        if instrument == "LW":
+            try:
+                _validate_config_keys(config, instrument)
+                _refuse_sw_only(config)
+            except ValueError as error:
+                not_lw = not_lw or str(error)
+                skipped.append(f"{case['task']} {line_label(line)}")
+                continue
+        else:
+            _validate_config_keys(config, instrument)
         configs.append(ScienceCaseConfig(
             name=f"{case['name']}_{line_id(line)}",
             case=case, line=line, config=config))
+    if not_lw:
+        warnings.warn(f"The base settings do not apply to the LW channel, so its lines are "
+                      f"skipped. Give the LW lines base settings of their own. {not_lw}",
+                      UserWarning, stacklevel=2)
     return configs, skipped
+
+
+def _refuse_sw_only(config: dict) -> None:
+    """Raise ValueError if an LW configuration holds a setting only the SW channel has."""
+    simulation = config.get("simulation", {})
+    given = [key for key in _SW_ONLY_KEYS if config.get(key)]
+    for key in _SW_ONLY_SIMULATION_KEYS:
+        values = simulation.get(key)
+        values = values if isinstance(values, list) else [values]
+        if any(u.Quantity(v).value != 0 if key == "vis_sl" else v for v in values
+               if v is not None):
+            given.append(f"simulation.{key}")
+    if config.get("filter"):
+        given.append("filter")
+    if given:
+        raise ValueError(f"{', '.join(given)} only apply to the SW channel.")
 
 
 def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path], list[str]]:

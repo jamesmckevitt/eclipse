@@ -14,6 +14,7 @@ from typing import ClassVar, List
 import numpy as np
 import astropy.units as u
 import scipy.interpolate
+import scipy.stats
 from . import eis_calibration
 from .utils import _warn_outside, angle_to_distance
 from importlib.resources import files
@@ -315,7 +316,7 @@ def _check_psf_params(tel, section: str = "telescope") -> None:
                        and np.isfinite(q.value) and q.value > 0 for q in value)):
         raise ValueError(f"{section}.psf_params must be two FWHMs in pixels, along the slit "
                          f"and along the dispersion, such as [2.66 pix, 2.54 pix]; got {value!r}.")
-    across = tel.psf_across_slit
+    across = getattr(tel, "psf_across_slit", None)
     if across is not None and not (isinstance(across, u.Quantity) and across.isscalar
                                    and across.unit.is_equivalent(u.arcsec)
                                    and np.isfinite(across.value) and across.value > 0):
@@ -393,6 +394,17 @@ def _check_tables(obj, names: tuple, section: str) -> None:
             setattr(obj, name, value)
         if not hasattr(value, "is_file"):
             raise ValueError(f"{section}.{name} must be the path of a table, got {value!r}.")
+
+
+def _check_quantity(value, unit: u.Unit, name: str, non_negative: bool = False) -> None:
+    """Refuse `value` unless it is a finite quantity like `unit`, above zero or at least zero."""
+    if not (isinstance(value, u.Quantity) and value.unit.is_equivalent(unit)
+            and np.all(np.isfinite(value.value))):
+        raise ValueError(f"{name} must be a finite quantity in a unit of "
+                         f"{unit.physical_type}, such as {unit}; got {value!r}.")
+    if not np.all(value.value >= 0 if non_negative else value.value > 0):
+        raise ValueError(f"{name} must be {'zero or more' if non_negative else 'more than zero'}"
+                         f", got {value}.")
 
 
 def _check_detector(det, section: str = "detector") -> None:
@@ -554,20 +566,6 @@ def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float |
                                  end, wavelength_nm)
     out = f(wavelength_nm)
     return float(out) if np.ndim(out) == 0 else out
-
-
-def _interp_tr_clamped(wavelength_nm, wl_tab, tr_tab) -> float | np.ndarray:
-    """
-    Linear interpolation with the query clamped to the table's ends.
-
-    For the LW tables, whose callers have already checked every wavelength
-    against LW_BAND_TABLE_RANGE. A wavelength that passes lies inside the
-    table, so a NaN from interp1d could only come from rounding at an end:
-    609 A is 60.900000000000006 nm, just past the last sample at 60.9 nm.
-    """
-    wl_values = np.asarray(getattr(wl_tab, "value", wl_tab), dtype=float)
-    clamped = np.clip(wavelength_nm, wl_values[0], wl_values[-1])
-    return _interp_tr(clamped, wl_tab, tr_tab)
 
 
 def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[list, list]:
@@ -1675,6 +1673,26 @@ def check_lw_wavelength(wavelength: u.Quantity, band: str, order: int) -> None:
             f"and ECLIPSE will not guess it.")
 
 
+def check_lw_pair(det, tel) -> None:
+    """
+    Refuse an LW detector and telescope that are not set to the same band and order.
+
+    The telescope gives the throughput and PSF, and the detector the
+    sampling and detection efficiency, so both must describe the one band
+    the line lands on. Anything other than an LW pair is let through.
+    """
+    lw = [isinstance(det, Detector_LW), isinstance(tel, Telescope_EUVST_LW)]
+    if not any(lw):
+        return
+    if not all(lw):
+        raise ValueError("The LW channel needs Detector_LW with Telescope_EUVST_LW; got "
+                         f"{type(det).__name__} with {type(tel).__name__}.")
+    if (det.band, det.order) != (tel.band, tel.order):
+        raise ValueError(f"The detector is set to {det.band} in order {det.order} but the "
+                         f"telescope to {tel.band} in order {tel.order}. Give both the band "
+                         f"and order the line lands on.")
+
+
 def lw_band_of(wavelength: u.Quantity) -> tuple | None:
     """The (band, order) whose LW detector records `wavelength`, or None if none does."""
     wl = u.Quantity(wavelength).to_value(u.AA)
@@ -1809,6 +1827,21 @@ class Detector_LW:
             self.wvl_res = (spectral_maa * u.mAA).cgs / u.pixel
         if self.plate_scale_angle is None:
             self.plate_scale_angle = spatial_arcsec * u.arcsec / u.pixel
+        _check_settings(self, "detector",
+                        positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size",
+                                  "gain_mcp", "gain_phosphor"),
+                        non_negative=("read_noise_rms", "read_noise_pedestal", "mux_noise_dn"),
+                        fractions=("efficiency_fiber_optic", "transmission_bonding",
+                                   "attenuation", "qe_aps"),
+                        optional=("qe_euv", "dark_current"))
+        _check_quantity(self.wvl_res, u.cm / u.pixel, "detector.wvl_res")
+        _check_quantity(self.plate_scale_angle, u.arcsec / u.pixel, "detector.plate_scale_angle")
+        if self.qe_euv is not None and (isinstance(self.qe_euv, bool)
+                                        or not isinstance(self.qe_euv, (int, float))
+                                        or not 0 <= self.qe_euv <= 1):
+            raise ValueError(f"detector.qe_euv is a fraction, from 0 to 1, or left out for the "
+                             f"qe_table; got {self.qe_euv!r}.")
+        _check_tables(self, ("qe_table",), "detector")
         if self.dark_current is None:
             specified = -40 * u.deg_C
             temperature = u.Quantity(self.aps_temperature).to(
@@ -1819,6 +1852,8 @@ class Detector_LW:
                     f"(SSD-SPC-ET004 Table 2 item 2-07), and no law gives it at "
                     f"{temperature}. Set dark_current for that temperature.")
             self.dark_current = 2.0 * u.electron / (u.pixel * u.s)
+        _check_quantity(self.dark_current, u.electron / (u.pixel * u.s), "detector.dark_current",
+                        non_negative=True)
 
     def qe_euv_at(self, wavelength: u.Quantity) -> float | np.ndarray:
         """
@@ -1832,7 +1867,7 @@ class Detector_LW:
         if self.qe_euv is not None:
             return self.qe_euv
         wl_tab, tr_tab = _load_throughput_table(self.qe_table)
-        return _interp_tr_clamped(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
+        return _interp_tr(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
 
     @property
     def post_mcp_efficiency(self) -> float:
@@ -1852,7 +1887,8 @@ class Detector_LW:
         """Mean APS electrons per detected photon, at every wavelength."""
         return self.gain_mcp * self.post_mcp_efficiency
 
-    def photons_to_electrons(self, detected, *, noise: bool = True) -> np.ndarray:
+    def photons_to_electrons(self, detected, *, noise: bool = True,
+                             inverse_transform: bool = False) -> np.ndarray:
         """
         APS electrons from the photons the photocathode detected, per pixel.
 
@@ -1875,10 +1911,21 @@ class Detector_LW:
         noise : bool, optional
             When False, return the mean, `detected` times
             :attr:`electrons_per_photon`. Default True.
+        inverse_transform : bool, optional
+            Draw by inverse-transform sampling, one uniform per pixel, so
+            that runs differing only in photon flux use the same random
+            numbers. Default False.
         """
         detected = np.asarray(detected, dtype=float)
         if not noise:
             return detected * self.electrons_per_photon
+        if inverse_transform:
+            u_draw = np.random.random(size=detected.shape)
+            np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
+            charge = np.zeros_like(detected)
+            lit = detected > 0
+            charge[lit] = scipy.stats.gamma.ppf(u_draw[lit], detected[lit], scale=self.gain_mcp)
+            return self.post_mcp_efficiency * charge
         # A gamma of shape 0 is 0, so a pixel with no photons needs no care.
         return self.post_mcp_efficiency * np.random.gamma(detected, self.gain_mcp)
 
@@ -1952,6 +1999,17 @@ class Telescope_EUVST_LW:
             spatial_fwhm, spectral_fwhm = LW_BAND_RESOLUTION[key]
             self.psf_params = [spatial_fwhm / spatial_arcsec * u.pixel,
                                spectral_fwhm / spectral_maa * u.pixel]
+        _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
+                        non_negative=("microroughness_sigma",))
+        if self.contamination_factor is not None and (
+                isinstance(self.contamination_factor, bool)
+                or not isinstance(self.contamination_factor, (int, float))
+                or not 0 <= self.contamination_factor <= 1):
+            raise ValueError(f"telescope.contamination_factor is a fraction, from 0 to 1, or left "
+                             f"out for the contamination_table; got {self.contamination_factor!r}.")
+        _check_psf_params(self)
+        _check_tables(self, ("pm_table", "grating_table_1st", "grating_table_2nd",
+                             "contamination_table"), "telescope")
 
     @property
     def collecting_area(self) -> u.Quantity:
@@ -1960,7 +2018,7 @@ class Telescope_EUVST_LW:
 
     def _table(self, path, wavelength: u.Quantity) -> float | np.ndarray:
         wl_tab, tr_tab = _load_throughput_table(path)
-        return _interp_tr_clamped(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
+        return _interp_tr(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
 
     def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """Reflectance of the primary mirror's LW coating."""

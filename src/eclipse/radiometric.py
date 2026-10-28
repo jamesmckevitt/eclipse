@@ -997,7 +997,8 @@ def to_electrons(
     if hasattr(det, "photons_to_electrons"):
         # An intensified detector: the electrons come from the MCP's gain,
         # not from the photon's energy in silicon.
-        electron_counts = det.photons_to_electrons(photons_detected, noise=noise)
+        electron_counts = det.photons_to_electrons(
+            photons_detected, noise=noise, inverse_transform=photon_shot_inverse_transform)
     else:
         # Apply Fano noise per pixel, vectorized
         electron_counts = _vectorized_fano_noise(photons_detected,

@@ -272,3 +272,13 @@ def test_an_lw_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
     detector = combinations[0]["config_objects"]["detector"]
     assert (type(detector).__name__, detector.band, detector.order) == ("Detector_LW", "LW2", 2)
     assert combinations[0]["config_objects"]["telescope"].order == 2
+
+
+@pytest.mark.parametrize("base", [{"detector": {"ccd_temperature": "-50 Celsius"}},
+                                  {"simulation": {"vis_sl": "5 photon / (s cm2)"}},
+                                  {"filter": {"al_thickness": "1500 angstrom"}}])
+def test_base_settings_only_sw_has_skip_the_lw_lines_with_a_warning(base):
+    with pytest.warns(UserWarning, match="do not apply to the LW channel"):
+        configs, skipped = sc.science_case_configs(cases=["I-1-1"], base=base)
+    assert {item.config["instrument"] for item in configs} == {"SWC"}
+    assert "I-1-1 Si XII 499.41" in skipped

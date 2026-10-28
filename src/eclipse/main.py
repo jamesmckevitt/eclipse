@@ -178,22 +178,20 @@ def _check_lw_config(det_fixed: dict, det_sweep: dict, tel_fixed: dict, tel_swee
             tel_fixed[key] = det_fixed[key]
         elif key in tel_fixed:
             det_fixed[key] = tel_fixed[key]
-    vis_sl = list(sim_sweep.get("vis_sl", [sim_fixed.get("vis_sl", 0)]))
-    if any(u.Quantity(value).value != 0 for value in vis_sl):
-        raise ValueError(
-            "The LW detector does not respond to visible light, so vis_sl must be 0 "
-            "for LW. Remove it from the 'simulation:' section.")
     for key in ("slit_mask", "focal_plane_dispersion"):
         if sim_fixed.get(key) or True in sim_sweep.get(key, []):
             raise ValueError(
                 f"simulation.{key} describes the SW slit and focal plane, so it is "
                 f"not supported for LW.")
     if (any_pinhole_key or sim_fixed.get("enable_pinholes")
-            or any(sim_sweep.get("enable_pinholes", []))):
+            or any(sim_sweep.get("enable_pinholes", []))
+            or "pinhole_visible_wavelength" in sim_fixed
+            or "pinhole_visible_wavelength" in sim_sweep):
         raise ValueError(
             "Pinhole effects are not supported for LW: the pinholes are holes in the SW "
-            "filter. Remove enable_pinholes, pinhole_sizes, pinhole_positions and "
-            "pinhole_positions_spectral, or run this config against SWC.")
+            "filter. Remove enable_pinholes, pinhole_sizes, pinhole_positions, "
+            "pinhole_positions_spectral and pinhole_visible_wavelength, or run this "
+            "config against SWC.")
 
 
 def _dataclass_keys(cls) -> set:
@@ -639,7 +637,7 @@ def main() -> None:
         )
     instrument = config.get("instrument", "SWC")
     if not isinstance(instrument, str):
-        raise ValueError(f"'instrument' must be SWC or EIS, got {instrument!r}.")
+        raise ValueError(f"'instrument' must be SWC, LW or EIS, got {instrument!r}.")
     instrument = instrument.upper()
 
     # Before anything is loaded, so a config written for an older layout fails
@@ -1336,13 +1334,17 @@ def main() -> None:
     # stop the sweep part-way and lose the earlier results, which are saved
     # only at the end.
     for combo_values in _combinations():
-        _, _, _, _, tel, _, _ = _combination(combo_values)
+        _, _, _, _, tel, det, _ = _combination(combo_values)
     # Read the throughput tables now too, so a missing or faulty table is
     # found before the first photons are counted. They cannot be swept, so
     # the last combination's tables are every combination's.
     if instrument == "SWC":
         for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
                       tel.filter.oxide_table, tel.filter.c_table):
+            _load_throughput_table(table)
+    elif instrument == "LW":
+        for table in (tel.pm_table, tel.grating_table_1st, tel.grating_table_2nd,
+                      tel.contamination_table, det.qe_table):
             _load_throughput_table(table)
 
     def _check_offchip_bins(fov_along_slit):

@@ -15,11 +15,12 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from eclipse.config import (LW_BAND_COVERAGE, LW_BAND_TABLE_RANGE, Detector_LW,
-                                   Simulation, Telescope_EUVST_LW, check_lw_wavelength)
+                            Simulation, Telescope_EUVST_LW, check_lw_pair,
+                            check_lw_wavelength)
 from eclipse.main import _check_lw_config, _validate_config_keys
 from eclipse.monte_carlo import simulate_once
 from eclipse.radiometric import (add_visible_stray_light, spectral_optics_fwhm,
-                                        spectral_psf_fwhm, to_dn, to_electrons)
+                                 spectral_psf_fwhm, to_dn, to_electrons)
 
 # The budget's geometric area against ECLIPSE's, pi * 14 cm squared.
 GEO_AREA_RATIO = (np.pi * 14.0 ** 2) / 615.44
@@ -319,8 +320,51 @@ class TestConfiguration:
         with pytest.raises(ValueError, match="cannot be swept"):
             _check_lw_config({}, {"band": ["LW1", "LW2"]}, {}, {}, {}, {}, False)
 
-    def test_stray_light_and_pinholes_are_refused_before_a_run(self):
-        with pytest.raises(ValueError, match="visible"):
-            _check_lw_config({}, {}, {}, {}, {"vis_sl": 5 * u.photon / (u.s * u.cm ** 2)}, {}, False)
+    def test_pinholes_and_the_sw_slit_settings_are_refused_before_a_run(self):
         with pytest.raises(ValueError, match="Pinhole"):
             _check_lw_config({}, {}, {}, {}, {}, {}, [1 * u.um])
+        with pytest.raises(ValueError, match="Pinhole"):
+            _check_lw_config({}, {}, {}, {}, {"pinhole_visible_wavelength": 500 * u.nm}, {},
+                             False)
+        for key in ("slit_mask", "focal_plane_dispersion"):
+            with pytest.raises(ValueError, match=f"simulation.{key}"):
+                _check_lw_config({}, {}, {}, {}, {key: True}, {}, False)
+
+
+@pytest.mark.parametrize("cls, settings, message", [
+    (Telescope_EUVST_LW, {"D_ap": 0.28}, "telescope.D_ap needs a unit"),
+    (Telescope_EUVST_LW, {"microroughness_sigma": 0.6}, "microroughness_sigma needs a unit"),
+    (Telescope_EUVST_LW, {"contamination_factor": 2.0}, "contamination_factor is a fraction"),
+    (Detector_LW, {"attenuation": 5.0}, "attenuation is a fraction"),
+    (Detector_LW, {"gain_mcp": -1.0}, "gain_mcp must be more than zero"),
+    (Detector_LW, {"qe_euv": 1.5}, "qe_euv is a fraction"),
+    (Detector_LW, {"wvl_res": 30 * u.arcsec / u.pix}, "wvl_res must be a finite quantity"),
+    (Detector_LW, {"dark_current": 2.0}, "dark_current must be a finite quantity"),
+    (Detector_LW, {"aps_temperature": -40}, "aps_temperature needs a unit"),
+])
+def test_settings_of_the_wrong_kind_or_range_are_refused(cls, settings, message):
+    with pytest.raises(ValueError, match=message):
+        cls(**settings)
+
+
+def test_a_detector_and_telescope_on_different_bands_are_refused():
+    check_lw_pair(Detector_LW(band="LW2"), Telescope_EUVST_LW(band="LW2"))
+    with pytest.raises(ValueError, match="LW3 in order 1 but the telescope to LW3 in order 2"):
+        check_lw_pair(Detector_LW(), Telescope_EUVST_LW(order=2))
+    with pytest.raises(ValueError, match="Detector_LW with Telescope_EUVST_LW"):
+        check_lw_pair(Detector_LW(), object())
+
+
+def test_the_mcp_gain_drawn_by_inverse_transform_uses_one_number_per_pixel():
+    """Runs that differ only in photon flux then keep their later draws in step."""
+    det = Detector_LW()
+    after = []
+    for photons in (np.full(5000, 3.0), np.full(5000, 300.0)):
+        np.random.seed(2)
+        electrons = det.photons_to_electrons(photons, inverse_transform=True)
+        after.append(np.random.random())
+        assert electrons.mean() == pytest.approx(photons[0] * det.electrons_per_photon, rel=0.03)
+        assert electrons.var() == pytest.approx(
+            photons[0] * det.electrons_per_photon ** 2, rel=0.1)
+    assert after[0] == after[1]
+    assert np.all(det.photons_to_electrons(np.zeros(3), inverse_transform=True) == 0)
