@@ -232,3 +232,12 @@ def test_a_mistyped_limit_in_a_configuration_file_says_what_it_should_be(value):
     with pytest.raises(ValueError, match="velocity_limits must be two"):
         _parse_fitting_config({"fitting": fitting})
 
+
+
+def test_limits_set_after_a_component_is_made_are_read():
+    component = FitComponent(STRONG)
+    component.velocity_limits = (-10 * u.km / u.s, 10 * u.km / u.s)
+    component.width_limits = (0.02 * u.AA, 0.03 * u.AA)
+    assert component.centre_limits()[1] == pytest.approx(
+        STRONG.to_value(u.cm) * (1 + 10 / C_KM_S), rel=1e-12)
+    assert component.sigma_limits() == pytest.approx((0.02e-8, 0.03e-8), rel=1e-12)

@@ -955,9 +955,9 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
                            / fit_config.components[src].wavelength.to(u.cm).value)
             # mpfit tie expression references the parameter array p
             centre_info["tied"] = f"p[{3 * src + 1}] * {factor!r}"
-        elif comp.centre_limits() is not None:
+        elif (centre_limits := comp.centre_limits()) is not None:
             centre_info["limited"] = [1, 1]
-            centre_info["limits"] = list(comp.centre_limits())
+            centre_info["limits"] = list(centre_limits)
         parinfo.append(centre_info)
 
         # --- sigma (width) ---
@@ -965,9 +965,9 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
         # Width must be strictly positive (avoid divide-by-zero in Gaussian)
         sigma_info["limited"] = [1, 0]
         sigma_info["limits"] = [1e-30, 0.0]
-        if comp.sigma_limits() is not None:
+        if (sigma_limits := comp.sigma_limits()) is not None:
             sigma_info["limited"] = [1, 1]
-            sigma_info["limits"] = list(comp.sigma_limits())
+            sigma_info["limits"] = list(sigma_limits)
         if comp.tie_width is not None:
             src = _tie_root(fit_config, "tie_width", i)
             sigma_info["tied"] = f"p[{3 * src + 2}]"
