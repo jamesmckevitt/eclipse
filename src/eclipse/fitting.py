@@ -1066,8 +1066,9 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     # limits.
     allowed = [-np.inf, np.inf]
     for comp, rest in zip(fit_config.components, rest_wl):
-        if comp.centre_limits() is not None:
-            low_centre, high_centre = comp.centre_limits()
+        limits = comp.centre_limits()
+        if limits is not None:
+            low_centre, high_centre = limits
             allowed[0] = max(allowed[0], ref_wl * low_centre / rest - ref_wl)
             allowed[1] = min(allowed[1], ref_wl * high_centre / rest - ref_wl)
     # With start "rest", every component starts at its rest wavelength, as
