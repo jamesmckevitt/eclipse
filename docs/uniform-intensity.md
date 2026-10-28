@@ -42,4 +42,6 @@ With `psf: True`, the line is blurred by the instrument's spectral response befo
 
 The input intensity is known exactly and is the same everywhere, so all of the scatter in the fitted results comes from the instrument. That makes it useful for building an uncertainty budget, such as carrying a line's intensity precision through to the uncertainty on a FIP bias.
 
-It is also much faster than the other routes, because there is no contribution function to compute. You can sweep quickly over many instrument settings and exposure times.
+It is also much faster than the other routes, because there is no contribution function to compute. You can sweep quickly over many instrument settings and exposure times. This sweep took about three minutes for each intensity: Fe XII 195.119 with a width of 20 km/s, at the median intensity over the [worked example](worked-example.ipynb)'s simulation, 200 erg / (s cm2 sr), and ten times that, with the 0.4 arcsec slit and the PSF.
+
+![Velocity precision against exposure time for the two intensities](images/example-uniform.png)

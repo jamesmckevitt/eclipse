@@ -247,3 +247,7 @@ synthesise-spectra --help
 ## The output
 
 `synthesise-spectra` writes a synthesis file. It holds each line's spectra over the image, which is what [`eclipse`](instrument-response.md) observes, and what the synthesis worked out on the way. [Files](files.md#synthesis-files) describes it, and how to read it in Python.
+
+These are four lines synthesised from the MURaM active region of the [worked example](worked-example.ipynb), seen from above, each summed over wavelength. Fe IX and Fe X, which form near 0.8 and 1.1 MK, show fine threads, and Fe XIV, near 2 MK, smoother emission.
+
+![The intensity of Fe IX 171.07, Fe X 184.54, Fe XII 195.12 and Fe XIV 211.32 over the simulated active region](images/example-lines.png)

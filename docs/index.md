@@ -59,6 +59,10 @@ flowchart LR
 
 **3. Analyse the results.** Find how precisely the instrument measured each line, compare the measurements with the truth, compare the settings the run swept through, and make maps. See [Analysing the results](analysis.md).
 
+![On the left, a map of Fe XII 195.12 over a simulated active region with one slit position marked; on the right, the frame both CCDs read out there, with every line in the band](images/example-slit-and-frame.png)
+
+On the left is Fe XII 195.12 as EUVST-SW would record it over a MURaM simulation of an active region, 300 arcsec across, in 60 s exposures. On the right is the frame both of its CCDs read out at the slit position marked in red, with every line in the band. The [worked example](worked-example.ipynb) makes the map, and [A full-CCD frame](full-ccd-frame.md) the frame.
+
 ## Where to start
 
 To install ECLIPSE and make a first run, see [Getting started](quickstart.md). Then start from what you have:

@@ -1,0 +1,26 @@
+instrument: SWC
+synthesis_file: synth/fe12.h5
+reference_line: Fe12_195.1190
+n_iter: 10
+ncpu: -1
+fit_signals: dn
+offchip_bin_slit: 2
+
+simulation:
+  slit_width: 0.4 arcsec
+  expos: 60 s
+  psf: True
+  slit_mask: True
+
+fitting:
+  start: rest
+  constrain_positive_intensity: true
+  components:
+    - wavelength: 195.119 angstrom
+      name: Fe XII 195.119
+      velocity_limits: [-61.5 km/s, 61.5 km/s]
+      width_limits: [0.0191 angstrom, 0.0510 angstrom]
+    - wavelength: 195.179 angstrom
+      name: Fe XII 195.179
+      tie_center: 0
+      tie_width: 0
