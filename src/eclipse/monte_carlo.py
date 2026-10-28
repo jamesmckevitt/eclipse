@@ -384,7 +384,7 @@ def _simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, *,
         electrons_pinholes = electrons_stray
     
     # Convert to digital numbers
-    dn = to_dn(electrons_pinholes, det)
+    dn = to_dn(electrons_pinholes, det, noise=noise)
 
     return (intensity_exp, photons_total, photons_throughput, photons_pixels, 
             photons_focused, photon_arrivals, electrons, electrons_stray, 

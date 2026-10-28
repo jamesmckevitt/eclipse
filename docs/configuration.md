@@ -10,7 +10,7 @@ A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `instrument` | The instrument, `SWC` or `EIS`; see [Instruments](instrument-model.md#the-instruments) | `SWC` |
+| `instrument` | The instrument, `SWC`, `LW` or `EIS`; see [Instruments](instrument-model.md#the-instruments) | `SWC` |
 | `synthesis_file` | The synthesis file to observe | `./run/input/synthesised_spectra.h5` |
 | `reference_line` | The line whose spectral window is observed, named as in [Naming spectral lines](line-names.md). Every line in the file that falls in that window is added in, so blends are included. To observe several windows, run once for each. | The file's only line. A file with several must hold `Fe12_195.1190`, or say which to observe. |
 | `n_iter` | How many Monte Carlo iterations to run | `25` |
@@ -32,9 +32,9 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `slit_width` | The slit: 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec`, so EIS needs one |
+| `slit_width` | The slit: 0.2, 0.4, 0.8 or 1.6 arcsec for SWC and LW, 1 or 2 arcsec for EIS | `0.2 arcsec`, so EIS needs one |
 | `expos` | The exposure time | `1 s` |
-| `vis_sl` | Visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS | `0 photon / (s cm2)` |
+| `vis_sl` | Visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS. LW does not see visible light, so it must be 0 for LW. | `0 photon / (s cm2)` |
 | `psf` | Whether to blur the spectra with the PSF; see [The point spread function](instrument-model.md#the-point-spread-function) | `False` |
 | `psf_boundary` | What the PSF brings in from beyond the edges of the atmosphere: `replicate` or `zero` | `replicate` |
 | `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
@@ -46,6 +46,8 @@ The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are d
 | `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
 
 ## detector
+
+LW's detector settings are in [LW settings](#lw-settings).
 
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
@@ -85,6 +87,8 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 
 ## telescope
 
+LW's telescope settings are in [LW settings](#lw-settings).
+
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
 | `D_ap` | The aperture's diameter. Half of its area feeds the SW channel. | `0.28 m` | - |
@@ -108,9 +112,39 @@ A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. 
 
 The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-model.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
 
+## LW settings
+
+LW has detector and telescope settings of its own. Those not listed here, such as `slit_length`, do not apply to it.
+
+| Section and key | What it sets | Default |
+| --- | --- | --- |
+| `detector.band`, `telescope.band` | The band, `LW1`, `LW2` or `LW3`. Give it in either section. | `LW3` |
+| `detector.order`, `telescope.order` | The diffraction order, 1, or 2 for LW2 and LW3. Give it in either section. | `1` |
+| `detector.aps_temperature` | The APS's temperature | `-40 Celsius` |
+| `detector.dark_current` | The dark current | `2 electron / (pix s)` at -40 Celsius; it must be given at any other temperature |
+| `detector.read_noise_rms` | The read noise | `40 electron / pix` |
+| `detector.read_noise_pedestal` | A constant added to every pixel's electrons | `0 electron / pix` |
+| `detector.gain_e_per_dn` | Electrons per DN | `6 electron / DN` |
+| `detector.max_dn` | The digitiser's maximum, where DN are clipped | `65535 DN / pix` |
+| `detector.mux_noise_dn` | The noise added after the electrons are converted to DN | `1.891 DN / pix` |
+| `detector.full_well` | The APS's full well. Nothing is clipped at it. | `86000 electron / pix` |
+| `detector.gain_mcp` | The MCP's mean gain, in electrons per detected photon | `1000` |
+| `detector.gain_phosphor`, `detector.efficiency_fiber_optic`, `detector.transmission_bonding`, `detector.attenuation`, `detector.qe_aps` | The phosphor's gain, the transmissions of the fibre optics, the bonds and the attenuating layer, and the APS's QE, which together give the APS electrons per electron from the MCP | `7.25`, `0.66`, `0.81`, `0.01`, `0.34` |
+| `detector.qe_euv` | One probability of detecting a photon, at every wavelength, in place of `qe_table` | none |
+| `detector.qe_table` | A table of the probability of detecting a photon | packaged |
+| `detector.pix_size` | The size of a pixel at the MCP | `16.7 um / pix` |
+| `detector.wvl_res`, `detector.plate_scale_angle` | The wavelength step from one pixel to the next, and the angle on the sky of one pixel along the slit | the band's |
+| `telescope.D_ap` | The aperture's diameter. Half of its area feeds the LW channel. | `0.28 m` |
+| `telescope.microroughness_sigma` | The RMS roughness of the primary mirror | `0.6 nm` |
+| `telescope.contamination_factor` | One throughput for contamination, at every wavelength, in place of `contamination_table` | none |
+| `telescope.psf_type`, `telescope.psf_params`, `telescope.psf_slit_width` | The PSF, as for SWC | `gaussian`, the band's, `0.2 arcsec` |
+| `telescope.pm_table`, `telescope.grating_table_1st`, `telescope.grating_table_2nd`, `telescope.contamination_table` | Tables of the primary mirror's reflectance, the grating's efficiency in each order, and the throughput after contamination, in the format above | packaged |
+
+The band and order cannot be swept: a line lands on one band, in one order.
+
 ## filter
 
-The filter is SWC's; for EIS the section is ignored, with a warning.
+The filter is SWC's; for LW and EIS the section is ignored, with a warning.
 
 | Key | What it sets | Default |
 | --- | --- | --- |

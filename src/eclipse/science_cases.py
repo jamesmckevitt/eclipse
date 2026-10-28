@@ -2,8 +2,9 @@
 Science cases from the Concept Study Report, and ECLIPSE configurations for them.
 
 `data/science_cases.yaml` holds every case with all its lines. The functions
-here turn the lines ECLIPSE can currently simulate into uniform-intensity
-configurations, and the `eclipse-science-cases` command writes them to files.
+here turn the lines ECLIPSE can currently simulate, in the short and long
+wavelength channels, into uniform-intensity configurations, and the
+`eclipse-science-cases` command writes them to files.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import astropy.units as u
 import numpy as np
 import yaml
 
-from .config import Telescope_EUVST, _load_throughput_table
+from .config import Telescope_EUVST, _load_throughput_table, check_lw_wavelength, lw_band_of
 from .utils import element_data, load_yaml_config
 
 # Defaults for every configuration unless the base settings override them:
@@ -129,9 +130,24 @@ def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
 
 
 def instrument_for(line: dict) -> str | None:
-    """ECLIPSE instrument that can simulate `line`, or None if there is none yet."""
+    """
+    ECLIPSE instrument that can simulate `line`, or None if there is none yet.
+
+    An LW line that lands on a detector beyond the sensitivity budget's
+    tables, where its throughput is not yet known, has none.
+    """
+    wavelength = u.Quantity(line["wavelength"])
     low, high = short_wavelength_range()
-    return "SWC" if low <= u.Quantity(line["wavelength"]) <= high else None
+    if low <= wavelength <= high:
+        return "SWC"
+    band = lw_band_of(wavelength)
+    if band is None:
+        return None
+    try:
+        check_lw_wavelength(wavelength, *band)
+    except ValueError:
+        return None
+    return "LW"
 
 
 def _line_matches(line: dict, selector: str) -> bool:
@@ -204,6 +220,18 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     }
     config.update({k: v for k, v in settings.items()
                    if isinstance(v, dict) and k != "simulation"})
+    if instrument == "LW":
+        # The line decides the band and order, as it decides the wavelength.
+        for section in ("detector", "telescope"):
+            for key in ("band", "order"):
+                if isinstance(config.get(section), dict) and key in config[section]:
+                    raise ValueError(
+                        f"The base settings cannot set {section}.{key}: every LW "
+                        f"configuration takes it from its line.")
+        band, order = lw_band_of(u.Quantity(line["wavelength"]))
+        detector = config.get("detector")
+        config["detector"] = {**(detector if isinstance(detector, dict) else {}),
+                              "band": band, "order": order}
     # Deep copy, so no list or section is shared with the defaults or the
     # other configurations.
     return copy.deepcopy(config)
@@ -355,10 +383,8 @@ def main(argv: list[str] | None = None) -> None:
 
     paths, skipped = write_science_case_configs(
         args.out, cases=args.cases, lines=args.lines, base=base)
-    low, high = short_wavelength_range()
     print(f"Wrote {len(paths)} configuration{'' if len(paths) == 1 else 's'} "
           f"to {args.out}")
     if skipped:
         print(f"Skipped {len(skipped)} line{'' if len(skipped) == 1 else 's'} "
-              f"outside the {low.value:g} to {high.value:g} Angstrom ECLIPSE can "
-              f"simulate yet; --list shows which")
+              f"ECLIPSE cannot simulate yet; --list shows which")

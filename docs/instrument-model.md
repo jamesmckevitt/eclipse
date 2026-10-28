@@ -1,21 +1,49 @@
 # The instrument model
 
-ECLIPSE follows the light from the Sun to the detector. For SWC, the telescope collects it with the throughput of the primary mirror, its roughness, the filter and the grating. For EIS, its calibration tables give the effective area. The point spread function (PSF) blurs it, and the slit selects a strip of the Sun. The detector turns the photons into electrons, with their noise, adds dark current and read noise, and digitises the result. This page describes the parts of that model that have settings of their own. The [configuration reference](configuration.md) lists every setting, and [Instrument sources](instrument-sources.md) gives the source of each default.
+ECLIPSE follows the light from the Sun to the detector. For SWC, the telescope collects it with the throughput of the primary mirror, its roughness, the filter and the grating. LW has no filter, and its throughput includes the loss to contamination. For EIS, its calibration tables give the effective area. The point spread function (PSF) blurs it, and the slit selects a strip of the Sun. The detector turns the photons into electrons, with their noise, adds dark current and read noise, and digitises the result. This page describes the parts of that model that have settings of their own. The [configuration reference](configuration.md) lists every setting, and [Instrument sources](instrument-sources.md) gives the source of each default.
 
 ## The instruments
 
-ECLIPSE models two instruments, chosen with the `instrument:` key at the top level of the configuration file:
+ECLIPSE models three instruments, chosen with the `instrument:` key at the top level of the configuration file:
 
 - `SWC` - SOLAR-C/EUVST-SW, the short wavelength channel. This is the default.
+- `LW` - SOLAR-C/EUVST-LW, the long wavelength channel.
 - `EIS` - Hinode/EIS.
-
-The EUVST long wavelength channel (LW) is coming soon, and will complete EUVST.
 
 ### EUVST-SW
 
 ECLIPSE's default settings describe EUVST-SW. [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000) describes the instrument model. It will be updated as EUVST is built, tested and commissioned.
 
 Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide. Its PSF is modelled, from simulations and some measurements of the mirror's roughness, and will be measured before launch; ECLIPSE prints a warning saying so whenever `psf: True` is set.
+
+### EUVST-LW
+
+The LW channel records three bands, and LW2 and LW3 in second order as well:
+
+| Band | First order (Angstrom) | Second order (Angstrom) |
+| --- | --- | --- |
+| `LW1` | 709.5 - 851.4 | |
+| `LW2` | 919.1 - 1049.0 | 459.5 - 524.5 |
+| `LW3` | 1108.3 - 1225.4 | 554.1 - 612.7 |
+
+These are the ranges each detector is expected to record (SSD-SPC-ET004). Give the band and order of the line you observe in the `detector:` or the `telescope:` section. The default is `LW3` in first order. A line in second order is given at its own wavelength. For example, for Si XII 499.41 in second order on LW2:
+
+```yaml
+instrument: LW
+detector:
+  band: LW2
+  order: 2
+```
+
+The throughput comes from the sensitivity budget, RSC-2022035, which does not reach the edges of every detector. A run stops with an error if a wavelength of its window lies off the band, or on it beyond the budget's tables: above 845 Angstrom in LW1, above 1039 Angstrom in LW2, and above 520 and 609 Angstrom in second order. Mg X 609.79 is one such line.
+
+Each band is recorded by an intensified APS. A microchannel plate (MCP) turns each detected photon into a burst of about 1000 electrons, a phosphor turns the burst into light, and an APS records the light, about 13 electrons per detected photon on average. The size of a burst varies by as much as its mean, so the noise is that of half as many photons. The read noise, dark current, temperature and full well are the values the detector specification, SSD-SPC-ET004, requires. [Instrument sources](instrument-sources.md#euvst-lw) gives the source of each setting.
+
+The probability of detecting a photon depends on its wavelength, and is taken at each pixel's own wavelength. In LW3 it falls from 0.30 at 1208 Angstrom to 0.01 from 1212 Angstrom, where the MCP has no photocathode so that Lyman-alpha can be observed.
+
+LW looks through the same slits as SW, 0.2, 0.4, 0.8 and 1.6 arcsec wide. Its MCP does not see visible light, so it has no filter. A `filter:` section is ignored, with a warning. A `vis_sl` other than 0, any pinhole setting, `slit_mask` and `focal_plane_dispersion` stop the run with an error.
+
+Its PSF is a Gaussian with the band's worst resolution in the optical design, RSC-2022021C, and ECLIPSE prints a warning saying so whenever `psf: True` is set.
 
 ### Hinode/EIS
 

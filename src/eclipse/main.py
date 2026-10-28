@@ -14,7 +14,9 @@ import astropy.units as u
 import gzip
 import h5py
 
-from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
+from .config import (AluminiumFilter, Detector_SWC, Detector_EIS, Detector_LW,
+                     Telescope_EUVST, Telescope_EIS, Telescope_EUVST_LW, Simulation,
+                     check_pinhole_lists, _load_throughput_table)
 from .config import _FOCAL_PLANE_SETTINGS, _old_names_used, _same_setting
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
@@ -142,6 +144,58 @@ _FITTING_COMPONENT_KEYS = {"wavelength", "tie_center", "tie_width",
                            "amplitude_greater_than", "name"}
 
 
+# The detector and telescope each instrument is observed with.
+_INSTRUMENT_CLASSES = {
+    "SWC": (Detector_SWC, Telescope_EUVST),
+    "LW": (Detector_LW, Telescope_EUVST_LW),
+    "EIS": (Detector_EIS, Telescope_EIS),
+}
+
+
+def _check_lw_config(det_fixed: dict, det_sweep: dict, tel_fixed: dict, tel_sweep: dict,
+                     sim_fixed: dict, sim_sweep: dict, any_pinhole_key) -> None:
+    """
+    Check what only an LW config can get wrong, and give the detector and telescope one band.
+
+    The band and diffraction order are fields of both Detector_LW and
+    Telescope_EUVST_LW, since each needs them, but they describe one
+    observation. Written in either section they are copied to the other, and
+    written differently in both they are refused. They cannot be swept: a
+    line lands on one band in one order.
+    """
+    for key in ("band", "order"):
+        if key in det_sweep or key in tel_sweep:
+            raise ValueError(
+                f"The LW {key} cannot be swept: a line lands on one band, in one order. "
+                f"Run one config per band.")
+        if key in det_fixed and key in tel_fixed:
+            if str(det_fixed[key]).upper() != str(tel_fixed[key]).upper():
+                raise ValueError(
+                    f"detector.{key} is {det_fixed[key]!r} but telescope.{key} is "
+                    f"{tel_fixed[key]!r}. They describe the same observation, so give "
+                    f"it once, in either section.")
+        elif key in det_fixed:
+            tel_fixed[key] = det_fixed[key]
+        elif key in tel_fixed:
+            det_fixed[key] = tel_fixed[key]
+    vis_sl = list(sim_sweep.get("vis_sl", [sim_fixed.get("vis_sl", 0)]))
+    if any(u.Quantity(value).value != 0 for value in vis_sl):
+        raise ValueError(
+            "The LW detector does not respond to visible light, so vis_sl must be 0 "
+            "for LW. Remove it from the 'simulation:' section.")
+    for key in ("slit_mask", "focal_plane_dispersion"):
+        if sim_fixed.get(key) or True in sim_sweep.get(key, []):
+            raise ValueError(
+                f"simulation.{key} describes the SW slit and focal plane, so it is "
+                f"not supported for LW.")
+    if (any_pinhole_key or sim_fixed.get("enable_pinholes")
+            or any(sim_sweep.get("enable_pinholes", []))):
+        raise ValueError(
+            "Pinhole effects are not supported for LW: the pinholes are holes in the SW "
+            "filter. Remove enable_pinholes, pinhole_sizes, pinhole_positions and "
+            "pinhole_positions_spectral, or run this config against SWC.")
+
+
 def _dataclass_keys(cls) -> set:
     """Constructor argument names of a config dataclass."""
     return {f.name for f in dataclasses.fields(cls) if f.init}
@@ -173,7 +227,7 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
     config : dict
         Whole parsed YAML config.
     instrument : str
-        `"SWC"` or `"EIS"`, which have different detector and telescope
+        `"SWC"`, `"LW"` or `"EIS"`, each with its own detector and telescope
         parameters.
 
     Raises
@@ -182,18 +236,16 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
         If the instrument is not supported, a key is not read, or a section
         that is present is not a mapping.
     """
-    # Checked first because the valid keys depend on it, and main() treats
-    # anything other than SWC as EIS.
-    if instrument not in ("SWC", "EIS"):
+    # Checked first because the valid keys depend on it.
+    if instrument not in _INSTRUMENT_CLASSES:
         raise ValueError(
-            f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'EIS'."
+            f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'LW', 'EIS'."
         )
 
-    det_class = Detector_EIS if instrument == "EIS" else Detector_SWC
+    det_class, tel_class = _INSTRUMENT_CLASSES[instrument]
     # Old names, such as _dark_current_293k, still work, with a FutureWarning.
     det_keys = _dataclass_keys(det_class) | set(det_class._OLD_NAMES)
-    tel_keys = _dataclass_keys(Telescope_EIS if instrument == "EIS"
-                               else Telescope_EUVST)
+    tel_keys = _dataclass_keys(tel_class)
     fil_keys = _dataclass_keys(AluminiumFilter)
 
     # 'filter' is a Telescope_EUVST field, but main() builds the filter from
@@ -740,7 +792,7 @@ def main() -> None:
     det_fixed, det_sweep = _parse_section(config.get("detector", {}), "detector")
     # An old name, such as _dark_current_293k, is recorded as the config gives
     # it and passed to the detector under its new one.
-    det_renamed = _old_names_used(Detector_EIS if instrument == "EIS" else Detector_SWC,
+    det_renamed = _old_names_used(_INSTRUMENT_CLASSES[instrument][0],
                                   {**det_fixed, **det_sweep}, "detector.", error=ValueError)
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
@@ -800,6 +852,16 @@ def main() -> None:
             "so like psf_params it takes a single value and cannot be swept.")
 
     # Instrument-specific validation
+    if instrument == "LW" and config.get("filter"):
+        warnings.warn(
+            "The 'filter:' section describes SWC's filter and is ignored for LW, which has "
+            "no filter.",
+            UserWarning,
+        )
+        fil_fixed, fil_sweep = {}, {}
+    if instrument == "LW":
+        _check_lw_config(det_fixed, det_sweep, tel_fixed, tel_sweep, sim_fixed, sim_sweep,
+                         pinhole_sizes or pinhole_positions or pinhole_positions_spectral)
     if instrument == "EIS":
         if config.get("filter"):
             warnings.warn(
@@ -915,7 +977,9 @@ def main() -> None:
         "readout_dark_current": True,
         "enable_pinholes": False,
     }
-    _det_defaults = {
+    # The LW detector's temperature has its own default, the one its dark
+    # current is specified at.
+    _det_defaults = {} if instrument == "LW" else {
         "ccd_temperature": -60 * u.Celsius,
     }
     for attr, default in _sim_defaults.items():
@@ -943,6 +1007,13 @@ def main() -> None:
             warnings.warn(
                 "The EIS PSF is not well understood. We use a symmetrical Gaussian kernel with "
                 "a FWHM of 3 pixels from Ugarte-Urra (2016) EIS Software Note 2.",
+                UserWarning,
+            )
+        elif instrument == "LW":
+            warnings.warn(
+                "The LW PSF is a Gaussian with the band's worst-case spatial and spectral "
+                "resolution from the optical design, RSC-2022021C. Final PSF will be measured "
+                "before launch.",
                 UserWarning,
             )
 
@@ -989,7 +1060,7 @@ def main() -> None:
     for attr, vals in tel_sweep.items():
         sweep_dims[f"telescope.{attr}"] = vals
     for attr, vals in fil_sweep.items():
-        if instrument != "EIS":
+        if instrument == "SWC":
             sweep_dims[f"filter.{attr}"] = vals
 
     dim_names = list(sweep_dims.keys())
@@ -1183,6 +1254,10 @@ def main() -> None:
             tel_kwargs["filter"] = fil
             tel = Telescope_EUVST(**tel_kwargs)
             det = Detector_SWC(**all_det) if all_det else Detector_SWC()
+        elif instrument == "LW":
+            fil = None
+            tel = Telescope_EUVST_LW(**all_tel)
+            det = Detector_LW(**all_det)
         else:
             fil = None
             tel_kwargs = {k: v for k, v in all_tel.items() if k != "filter"}
@@ -1498,7 +1573,7 @@ def main() -> None:
         if not combo and offchip_bin_slit == 1 and not (raster_mode and raster_plan.repeats > 1):
             print("  (single combination - all parameters fixed)")
         print(f"  Calculated dark current: {DET.dark_current:.2e}")
-        if instrument == "SWC":
+        if instrument in ("SWC", "LW"):
             print(f"  Microroughness sigma: {TEL.microroughness_sigma}")
         if enable_pinholes and pinhole_sizes:
             print(f"  Pinhole sizes: {pinhole_sizes}")

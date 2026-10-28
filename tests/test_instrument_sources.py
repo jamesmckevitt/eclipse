@@ -10,8 +10,8 @@ import pytest
 
 from eclipse import resolution_budget
 from eclipse.config import (MEASURED_SLIT_IMAGE_TILT, TILT_REFERENCE_ANGLE,
-                            AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-                            Telescope_EIS, Telescope_EUVST)
+                            AluminiumFilter, Detector_EIS, Detector_LW, Detector_SWC,
+                            Simulation, Telescope_EIS, Telescope_EUVST, Telescope_EUVST_LW)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +34,11 @@ WITHOUT_SOURCE = {
     # The PSF shape is a modelling choice, the slit width the PSF is for and the
     # blur across the slit are off by default, and the date is an observation's.
     Telescope_EIS: {"psf_type", "psf_slit_width", "psf_across_slit", "date"},
+    # The band and order are the observation's, the QE and contamination
+    # factors replace the budget's tables only when set, and the pedestal is
+    # an offset no document gives.
+    Detector_LW: {"band", "order", "qe_euv", "read_noise_pedestal"},
+    Telescope_EUVST_LW: {"band", "order", "contamination_factor", "psf_type"},
     # Choices of a run, not facts about the instrument.
     Simulation: {"expos", "n_iter", "ncpu", "instrument", "vis_sl", "psf", "psf_boundary",
                  "spectral_psf", "slit_mask", "focal_plane_dispersion", "noise",

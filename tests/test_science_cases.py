@@ -7,7 +7,7 @@ import yaml
 
 from eclipse import science_cases as sc
 from eclipse.analysis import load_instrument_response_results
-from eclipse.config import Simulation
+from eclipse.config import Simulation, check_lw_wavelength
 from eclipse.utils import parse_yaml_input
 
 TABLE = sc.load_science_cases()
@@ -62,15 +62,21 @@ def test_the_short_wavelength_range_comes_from_the_efficiency_tables():
 
 def test_every_line_eclipse_can_simulate_gets_a_valid_config():
     configs, skipped = sc.science_case_configs()
-    assert len(configs) == 34
-    assert len(skipped) == 121 - 34
-    assert len({item.name for item in configs}) == 34
+    assert len(configs) == 119
+    assert sum(item.config["instrument"] == "LW" for item in configs) == 85
+    assert len({item.name for item in configs}) == 119
+    # Fe XXII 845.57 lands on LW1 beyond the sensitivity budget's tables.
+    assert sorted(skipped) == ["II-1-1 Fe XXII 845.57", "II-1-2 Fe XXII 845.57"]
 
     low, high = sc.short_wavelength_range()
     for item in configs:
         config = item.config
         rest = parse_yaml_input(config["rest_wavelength"])
-        assert low <= rest <= high
+        if config["instrument"] == "SWC":
+            assert low <= rest <= high
+            assert "detector" not in config
+        else:
+            check_lw_wavelength(rest, config["detector"]["band"], config["detector"]["order"])
         assert item.name.endswith(sc.line_id(item.line))
         Simulation(instrument=config["instrument"],
                    slit_width=parse_yaml_input(config["simulation"]["slit_width"]),
@@ -115,10 +121,15 @@ def test_cases_are_chosen_by_task_or_name():
     by_task, skipped = sc.science_case_configs(cases=["I-1-1"])
     by_name, _ = sc.science_case_configs(cases=["1.1.1-nanoflares_events"])
     assert [item.name for item in by_task] == [item.name for item in by_name]
-    assert sorted(sc.line_label(item.line) for item in by_task) == [
-        "Ca XIV 193.874", "Fe IX 171.073", "Fe XII 195.119", "Fe XIV 211.317"]
-    assert sorted(skipped) == ["I-1-1 Fe XIX 1118.076", "I-1-1 Fe XVIII 974.860",
-                               "I-1-1 Ne VIII 770.428", "I-1-1 Si XII 499.41"]
+    assert sorted((sc.line_label(item.line), item.config["instrument"],
+                   item.config.get("detector")) for item in by_task) == [
+        ("Ca XIV 193.874", "SWC", None), ("Fe IX 171.073", "SWC", None),
+        ("Fe XII 195.119", "SWC", None), ("Fe XIV 211.317", "SWC", None),
+        ("Fe XIX 1118.076", "LW", {"band": "LW3", "order": 1}),
+        ("Fe XVIII 974.860", "LW", {"band": "LW2", "order": 1}),
+        ("Ne VIII 770.428", "LW", {"band": "LW1", "order": 1}),
+        ("Si XII 499.41", "LW", {"band": "LW2", "order": 2})]
+    assert skipped == []
 
 
 @pytest.mark.parametrize("selector", ["Fe XII", "Fe XII 195.119", "Fe XII 195.12"])
@@ -130,13 +141,23 @@ def test_a_line_is_chosen_by_ion_or_wavelength_across_cases(selector):
 
 
 def test_a_line_eclipse_cannot_simulate_yet_is_skipped_not_refused():
-    configs, skipped = sc.science_case_configs(lines=["O VI 1031.91"])
+    configs, skipped = sc.science_case_configs(lines=["Fe XXII 845.57"])
     assert configs == []
-    assert sorted(skipped) == [
-        "I-1-2 O VI 1031.914", "I-2-1 O VI 1031.91", "I-2-2 O VI 1031.914",
-        "I-3-1 O VI 1031.914", "I-4-1 O VI 1031.914", "I-4-2 O VI 1031.91",
-        "II-1-2 O VI 1031.91", "II-1-3 O VI 1031.914", "II-2-1 O VI 1031.914",
-        "II-2-2 O VI 1031.914"]
+    assert sorted(skipped) == ["II-1-1 Fe XXII 845.57", "II-1-2 Fe XXII 845.57"]
+
+
+def test_the_line_sets_the_lw_band_and_the_base_cannot():
+    configs, _ = sc.science_case_configs(lines=["O VI 1031.91"],
+                                         base={"detector": {"read_noise_rms": "30 electron / pix"}})
+    assert sorted(item.case["task"] for item in configs) == [
+        "I-1-2", "I-2-1", "I-2-2", "I-3-1", "I-4-1", "I-4-2", "II-1-2", "II-1-3", "II-2-1",
+        "II-2-2"]
+    for item in configs:
+        assert item.config["detector"] == {"read_noise_rms": "30 electron / pix",
+                                           "band": "LW2", "order": 1}
+    for section in ("detector", "telescope"):
+        with pytest.raises(ValueError, match=f"cannot set {section}.band"):
+            sc.science_case_configs(lines=["O VI 1031.91"], base={section: {"band": "LW3"}})
 
 
 @pytest.mark.parametrize("kwargs, message", [
@@ -157,7 +178,7 @@ def test_base_settings_go_into_every_config():
             "telescope": {"microroughness_sigma": "0.6 nm"},
             "simulation": {"expos": ["1 s", "5 s"]}}
     configs, _ = sc.science_case_configs(cases=["I-4-1"], base=base)
-    assert len(configs) == 4
+    assert len(configs) == 13
     for item in configs:
         config = item.config
         assert (config["n_iter"], config["fit_signals"]) == (100, "dn")
@@ -189,12 +210,14 @@ def test_the_command_writes_the_chosen_configs(tmp_path, capsys):
              "--base", str(base)])
 
     written = sorted(p.name for p in (tmp_path / "out").iterdir())
-    assert written == ["2.1.1-flare_reconnection_fe24_192030.yaml"]
-    config = yaml.safe_load((tmp_path / "out" / written[0]).read_text())
-    assert config["n_iter"] == 50
+    assert written == ["2.1.1-flare_reconnection_fe19_1118060.yaml",
+                       "2.1.1-flare_reconnection_fe20_721560.yaml",
+                       "2.1.1-flare_reconnection_fe24_192030.yaml"]
+    for name in written:
+        assert yaml.safe_load((tmp_path / "out" / name).read_text())["n_iter"] == 50
     out = capsys.readouterr().out
-    assert "Wrote 1 configuration to" in out
-    assert "Skipped 3 lines outside the 170 to 214 Angstrom" in out
+    assert "Wrote 3 configurations to" in out
+    assert "Skipped 1 line ECLIPSE cannot simulate yet" in out
 
 
 def test_the_command_lists_cases_and_what_can_be_simulated(capsys):
@@ -202,7 +225,7 @@ def test_the_command_lists_cases_and_what_can_be_simulated(capsys):
     out = capsys.readouterr().out
     assert out.startswith("I-1-1  1.1.1-nanoflares_events: Observe small scale heating events")
     assert "Fe XII 195.119         SWC" in out
-    assert "Ne VIII 770.428        not simulated yet" in out
+    assert "Ne VIII 770.428        LW" in out
 
 
 def test_the_list_refuses_a_line_choice_that_matches_nothing(capsys):
@@ -228,3 +251,24 @@ def test_a_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
         tmp_path / "run" / "result" / f"{config.stem}.h5")
     combinations = results["results"]["all_combinations"].values()
     assert sorted(c["parameters"]["offchip_bin_slit"] for c in combinations) == [1, 2]
+
+
+def test_an_lw_science_case_runs_from_start_to_finish(tmp_path, monkeypatch):
+    """An LW line in second order, with the iterations cut down so that it is quick."""
+    from eclipse.main import main
+
+    paths, _ = sc.write_science_case_configs(
+        tmp_path, cases=["I-1-1"], lines=["Si XII"], base={"n_iter": 2, "ncpu": 1})
+    (config,) = paths
+
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.chdir(tmp_path)
+    main()
+
+    results = load_instrument_response_results(
+        tmp_path / "run" / "result" / f"{config.stem}.h5")
+    combinations = list(results["results"]["all_combinations"].values())
+    assert sorted(c["parameters"]["offchip_bin_slit"] for c in combinations) == [1, 2]
+    detector = combinations[0]["config_objects"]["detector"]
+    assert (type(detector).__name__, detector.band, detector.order) == ("Detector_LW", "LW2", 2)
+    assert combinations[0]["config_objects"]["telescope"].order == 2
