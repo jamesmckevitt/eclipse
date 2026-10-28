@@ -4,9 +4,10 @@ Make the figures in the docs from the MURaM active region.
 README.md in this folder says how to make the runs they come from. Run it
 in the folder holding them, as
 
-    python tools/docs_examples/make_figures.py . docs/images
+    python $REPO/tools/docs_examples/make_figures.py . $REPO/docs/images
 """
 import sys
+from functools import cache
 from pathlib import Path
 
 import astropy.units as u
@@ -28,10 +29,16 @@ LINES = [("fe9", "Fe IX 171.07"), ("fe10", "Fe X 184.54"), ("fe12", "Fe XII 195.
          ("fe14", "Fe XIV 211.32")]
 
 
-def combination(name, **settings):
-    results = load_instrument_response_results(RUN / "run" / "result" / f"{name}.h5")
-    return get_results_for_combination(results, **settings) if settings else \
-        next(iter(results["results"]["all_combinations"].values()))
+@cache
+def results(name):
+    return load_instrument_response_results(RUN / "run" / "result" / f"{name}.h5")
+
+
+@cache
+def docs_maps():
+    """The maps of the docs run's one combination."""
+    return create_sunpy_maps_from_combo(get_results_for_combination(results("docs")),
+                                        date_obs=DATE)
 
 
 def lines():
@@ -54,25 +61,28 @@ def lines():
 def slit_and_frame():
     """The Fe XII raster with the frame's slit, beside the full-CCD frame of both CCDs."""
     det = Detector_SWC()
-    combo = combination("docs")
+    combo = get_results_for_combination(results("docs"))
     image = combo["first_dn_signal_data"].sum(axis=-1)
     ny, nx = image.shape
     pitch = det.plate_scale_angle.to_value(u.arcsec / u.pix)
-    row = 2 * pitch      # two pixels binned along the slit
+    step = docs_maps()["total_dn"].scale
+    column = step.axis1.to_value(u.arcsec / u.pix)
+    row = step.axis2.to_value(u.arcsec / u.pix)
     with h5py.File(RUN / "frame" / "frame.h5") as f:
         pre, over = f.attrs["serial_prescan"], f.attrs["serial_overscan"]
         slit_x = f.attrs["slit_position"]
         frame = {ccd: (f[ccd]["dn"][()], f[ccd]["wavelength"][()]) for ccd in ("left", "right")}
-    n_rows, n_cols = frame["left"][1].size, 2048
-    span = [-n_cols * pitch / 2, n_cols * pitch / 2]
+    n_rows = frame["left"][1].size
+    span = [-det.n_columns * pitch / 2, det.n_columns * pitch / 2]
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.4), sharey=True, layout="constrained",
-                             gridspec_kw=dict(width_ratios=[nx * 0.4, n_rows * pitch,
+                             gridspec_kw=dict(width_ratios=[nx * column, n_rows * pitch,
                                                             n_rows * pitch]))
     ax = axes[0]
     ax.imshow(image, origin="lower", cmap="gray",
               norm=PowerNorm(0.5, *np.percentile(image, [1, 99.9])),
-              extent=[-nx * 0.4 / 2, nx * 0.4 / 2, -ny * row / 2, ny * row / 2])
-    openings = Telescope_EUVST().slit_openings(0.4 * u.arcsec).to_value(u.arcsec)
+              extent=[-nx * column / 2, nx * column / 2, -ny * row / 2, ny * row / 2])
+    slit_width = combo["config_objects"]["simulation"].slit_width
+    openings = Telescope_EUVST().slit_openings(slit_width).to_value(u.arcsec)
     for i, (low, high) in enumerate(openings):
         ax.plot([slit_x, slit_x], [low, high], color="tab:red", label="slit" if i == 0 else None)
     ax.set_ylim(span)
@@ -102,7 +112,7 @@ def slit_and_frame():
 
 def doppler():
     """The true Doppler velocity and the first iteration's measurement."""
-    maps = create_sunpy_maps_from_combo(combination("docs"), date_obs=DATE)
+    maps = docs_maps()
     fig = plt.figure(figsize=(10, 4.4), layout="constrained")
     for i, (key, title) in enumerate((("velocity_true", "True"),
                                       ("velocity_from_fit", "Measured, 60 s"))):
@@ -115,7 +125,7 @@ def doppler():
 
 def precision():
     """The intensity in DN and the velocity's standard deviation over the iterations."""
-    maps = create_sunpy_maps_from_combo(combination("docs"), date_obs=DATE)
+    maps = docs_maps()
     intensity = LogNorm(*np.nanpercentile(maps["total_dn"].data, [1, 99.9]))
     fig = plt.figure(figsize=(10, 4.4), layout="constrained")
     for i, (key, title, kw, label, extend) in enumerate([
@@ -132,17 +142,18 @@ def precision():
 def psf():
     """A zoom on the core without and with the PSF, without noise."""
     fig = plt.figure(figsize=(10, 4.4), layout="constrained")
-    results = load_instrument_response_results(RUN / "run" / "result" / "psf.h5")
     for i, flag in enumerate((False, True)):
-        combo = get_results_for_combination(results, **{"simulation.psf": flag})
+        combo = get_results_for_combination(results("psf"), **{"simulation.psf": flag})
         m = create_sunpy_maps_from_combo(combo, date_obs=DATE)["total_dn"]
         ax = fig.add_subplot(1, 2, i + 1, projection=m)
         im = m.plot(axes=ax, title="PSF on" if flag else "PSF off", cmap="gray",
                     norm=PowerNorm(0.5, *np.nanpercentile(m.data, [1, 99.9])))
         # 20 by 20 arcsec of loops in the core.
         centre = m.wcs.world_to_pixel(m.center)
-        for set_lim, axis, step in ((ax.set_xlim, 0, 0.4), (ax.set_ylim, 1, 0.159)):
-            set_lim(centre[axis] - 10 / step, centre[axis] + 10 / step)
+        for set_lim, axis, step in ((ax.set_xlim, 0, m.scale.axis1),
+                                    (ax.set_ylim, 1, m.scale.axis2)):
+            half = 10 / step.to_value(u.arcsec / u.pix)
+            set_lim(centre[axis] - half, centre[axis] + half)
         fig.colorbar(im, ax=ax, shrink=0.8, label="DN")
     fig.savefig(OUT / "example-psf.png", dpi=110)
 
@@ -152,9 +163,8 @@ def uniform():
     fig, ax = plt.subplots(figsize=(5, 3.6), layout="constrained")
     for name, label in (("uniform_qs", "200 erg / (s cm2 sr)"),
                         ("uniform_ar", "2000 erg / (s cm2 sr)")):
-        results = load_instrument_response_results(RUN / "run" / "result" / f"{name}.h5")
         points = []
-        for combo in results["results"]["all_combinations"].values():
+        for combo in results(name)["results"]["all_combinations"].values():
             expos = combo["config_objects"]["simulation"].expos.to_value(u.s)
             stats = combo["dn_fit_stats"]
             comp = stats["components"][stats["primary_component"]]

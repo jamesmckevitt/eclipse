@@ -61,7 +61,7 @@ fitting:
 
 A component tied to another follows that one's limits, so give the limits to the free one. A fit that would start outside the limits starts at the nearest limit. A line moving faster than the limits is fitted at a limit, and such fits count in the mean and standard deviation, as in eispac. Set the limits wider than the flows you expect.
 
-Here is the Doppler velocity of Fe XII 195.12 over the [worked example](worked-example.ipynb)'s active region, as it is and as measured with these settings in a 60 s exposure, with two pixels binned along the slit. Away from the faintest parts of the field, the measurement follows the flows. In a quiet part of the field, observed for 60 s without binning, 16% of fits were more than 30 km/s from the truth with the default start and `amplitude_greater_than`, and 0.6% with these settings.
+Here is the Doppler velocity of Fe XII 195.12 over the [worked example](worked-example.ipynb)'s active region, as it is and as measured with these settings in a 60 s exposure, with two pixels binned along the slit. Away from the faintest parts of the field, the measurement follows the flows.
 
 ![The true Doppler velocity of Fe XII 195.12 over the active region, and the velocity measured in 60 s](images/example-doppler.png)
 

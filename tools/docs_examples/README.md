@@ -1,6 +1,6 @@
 # The docs' examples
 
-The figures in `docs/images` whose names start with `example-` come from the MURaM active region of the [worked example](../../docs/worked-example.ipynb). To make them again, work in a folder holding the atmosphere file the worked example writes, `muram_ar_1160000.h5`.
+The figures in `docs/images` whose names start with `example-` come from the MURaM active region of the [worked example](../../docs/worked-example.ipynb). To make them again, work in a folder holding the atmosphere file the worked example writes, `muram_ar_1160000.h5`, with `REPO` set to your copy of this repository. The configurations and scripts read and write `synth`, `run` and `frame` in that folder.
 
 1. Synthesise four lines:
 
@@ -15,20 +15,20 @@ The figures in `docs/images` whose names start with `example-` come from the MUR
 2. Run the instrument with each configuration in this folder:
 
     ```bash
-    for config in docs psf uniform_qs uniform_ar; do eclipse --config tools/docs_examples/$config.yaml; done
+    for config in docs psf uniform_qs uniform_ar; do eclipse --config $REPO/tools/docs_examples/$config.yaml; done
     ```
 
 3. Work out every line in the band and make the full-CCD frame:
 
     ```bash
-    python tools/docs_examples/band.py
-    python tools/docs_examples/frame.py
+    python $REPO/tools/docs_examples/band.py
+    python $REPO/tools/docs_examples/frame.py
     ```
 
 4. Make the figures:
 
     ```bash
-    python tools/docs_examples/make_figures.py . docs/images
+    python $REPO/tools/docs_examples/make_figures.py . $REPO/docs/images
     ```
 
 Each synthesis takes about 15 minutes and 330 GB of memory on 128 cores, `band.py` about two hours, and each of the rest a few minutes.

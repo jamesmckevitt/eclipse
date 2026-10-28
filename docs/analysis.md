@@ -96,11 +96,11 @@ A synthesised scene has no date of its own, so the maps need one from you, as `d
 
 Each map also holds its unit, as `maps["velocity_std"].unit`.
 
+It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures, in seconds, at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
+
 These are `total_dn` and `velocity_std` from the run of the [worked example](worked-example.ipynb): Fe XII 195.12 in 60 s exposures, with two pixels binned along the slit. The velocity is measured to 1 to 2 km/s in the active region's core, and more coarsely where the line is faint.
 
 ![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](images/example-precision.png)
-
-It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures, in seconds, at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
 
 The [worked example](worked-example.ipynb) plots several of these maps.
 

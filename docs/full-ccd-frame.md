@@ -50,7 +50,7 @@ frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
 write_full_frame(frame, "frame.h5")
 ```
 
-Here is the frame of the [worked example](worked-example.ipynb)'s active region with the slit through its core, in a 60 s exposure with the 0.4 arcsec slit, beside the raster it is part of. The core shows as bright rows across every line, and the two fiducials as dark rows.
+Here is the frame of the [worked example](worked-example.ipynb)'s active region with the slit through its core, in a 60 s exposure with the 0.4 arcsec slit, beside the raster it is part of. Along the slit, the core shows as a bright band across every line, and the two fiducials as dark bands.
 
 ![On the left, Fe XII 195.12 over the active region with the slit marked; on the right, the frame both CCDs read out there](images/example-slit-and-frame.png)
 
