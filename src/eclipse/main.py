@@ -473,8 +473,8 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
             tie_width=comp_dict.get("tie_width", None),
             amplitude_greater_than=comp_dict.get("amplitude_greater_than", None),
             name=comp_dict.get("name", None),
-            velocity_limits=_limits(comp_dict.get("velocity_limits")),
-            width_limits=_limits(comp_dict.get("width_limits")),
+            velocity_limits=comp_dict.get("velocity_limits"),
+            width_limits=comp_dict.get("width_limits"),
         ))
 
     return FitConfig(
@@ -489,13 +489,6 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
         weighted=fitting_cfg.get("weighted", True),
         start=fitting_cfg.get("start", "search"),
     )
-
-
-def _limits(value):
-    """A component's limits from the configuration file, each read with its unit."""
-    if value is None or isinstance(value, str):
-        return value
-    return tuple(parse_yaml_input(v) for v in value)
 
 
 @debug_on_error

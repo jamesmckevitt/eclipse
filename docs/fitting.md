@@ -34,13 +34,13 @@ The results hold the intensity, velocity and width of every component, by its na
 
 !!! warning "The primary component must be present in the data"
 
-    The analysis reports `primary_component` unless asked for another. The fit starts with all of the components moved together, to where they best match the profile. So if that line is not in your data, the fit can settle a whole component spacing away: 92 km/s for Fe XII 195.119 and 195.179. In a noisy spectrum this can also happen when the line is there but the others are faint; see [A faint blend](#a-faint-blend).
+    The analysis reports `primary_component` unless asked for another. By default, the fit starts with all of the components moved together, to where they best match the profile. So if that line is not in your data, the fit can settle a whole component spacing away: 92 km/s for Fe XII 195.119 and 195.179. In a noisy spectrum this can also happen when the line is there but the others are faint; see [A faint blend](#a-faint-blend).
 
     Also, two lines of similar brightness closer than about three line widths are often fitted as one broad component instead of two. The dip between them never falls below half the peak, so the fit starts with a width that covers the whole blend. `constrain_positive_intensity` does not help here, and can make it worse.
 
 ## A faint blend
 
-In a noisy spectrum, a faint line of a blend says little about where the blend is. Fe XII 195.179, for example, can be a twentieth as bright as 195.119 beside it. Some fits then put 195.119 on nothing and 195.179 on the bright line, a whole line spacing from the truth, or put the two either side of it. eispac's templates avoid this by starting every fit at the lines' rest wavelengths, and by holding each line's centre and width within limits. `start: rest` and each component's `velocity_limits` and `width_limits` do the same. These are the settings of eispac's `fe_12_195_119.2c` template:
+In a noisy spectrum, a faint line of a blend says little about where the blend is. Fe XII 195.179, for example, can be a twentieth as bright as 195.119 beside it. Some fits then put 195.179 on the bright line and 195.119 on nothing, a whole line spacing from the truth. Others put two lines of equal height either side of the bright line. eispac's templates avoid this by starting every fit at the lines' rest wavelengths, and by holding each line's centre and width within limits. `start: rest` and each component's `velocity_limits` and `width_limits` do the same. These are the settings of eispac's `fe_12_195_119.2c` template:
 
 ```yaml
 fitting:
@@ -59,7 +59,7 @@ fitting:
 - `velocity_limits`: keep the component's velocity, measured from its own rest wavelength, between the two values.
 - `width_limits`: keep the component's Gaussian sigma between the two values.
 
-A component tied to another follows that one's limits, so give the limits to the free one. A fit that would start outside the limits starts at the nearest limit. A line moving faster than the limits is fitted at a limit, so set them wider than the flows you expect.
+A component tied to another follows that one's limits, so give the limits to the free one. A fit that would start outside the limits starts at the nearest limit. A line moving faster than the limits is fitted at a limit, and such fits count in the mean and standard deviation, as in eispac. Set the limits wider than the flows you expect.
 
 ## The fit
 

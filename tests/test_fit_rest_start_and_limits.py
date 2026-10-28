@@ -1,10 +1,6 @@
 """A blend started at its rest wavelengths, and limits on each component's velocity and width.
 
-A faint second line of a blend, such as Fe XII 195.179 beside 195.119, is
-too weak in a noisy spectrum to tell the fit where the blend is. Searched
-for, the blend can start, and end, a whole line spacing away. Started at
-rest, as eispac's templates start, and held within limits, it stays on the
-line that is there.
+Started this way, as eispac's templates are, a faint blend stays on its line.
 """
 import astropy.constants as const
 import astropy.units as u
@@ -90,8 +86,8 @@ def test_a_noisy_faint_blend_started_at_rest_and_limited_stays_on_its_line(backe
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 def test_a_line_beyond_its_velocity_limit_is_fitted_at_the_limit(backend):
     """
-    Blueward, as redward the faint component, 92 km/s to the red of the
-    other, could reach the line from inside the limits.
+    The line is to the blue. To the red, the faint component, 92 km/s to the
+    red of the other, could reach it from inside the limits.
     """
     config = FitConfig(components=_components(**EISPAC), start="rest", backend=backend)
     data, _, failed = fit_cube_gauss(_cube([_blend(velocity=-80.0)]), n_jobs=1,
@@ -191,7 +187,6 @@ def test_the_settings_are_kept_in_a_results_file(tmp_path):
     assert restored.components[0].width_limits == EISPAC["width_limits"]
 
 
-
 def test_a_results_file_from_before_the_settings_loads_as_it_was_run(tmp_path):
     """Earlier runs searched and had no limits, which is what the settings give, without a warning."""
     import json
@@ -215,3 +210,24 @@ def test_a_results_file_from_before_the_settings_loads_as_it_was_run(tmp_path):
         restored = load_results(path)["fit"]
     assert not seen, [str(w.message) for w in seen]
     assert repr(restored) == repr(config)
+
+
+def test_a_search_within_limits_stays_within_them():
+    """The comb search tries only shifts that keep a limited component within its limits."""
+    spectrum = _blend(velocity=-40.0, ratio=0.06, strong=1.0) + _blend(velocity=52.0, ratio=0.0,
+                                                                       strong=1.2, background=0)
+    config = FitConfig(components=_components(velocity_limits=(-60 * u.km / u.s,
+                                                                 0 * u.km / u.s)))
+    guess = _guess_multi_params(_wave().to_value(u.cm), spectrum, config)
+    assert -60.0 <= _velocity(guess) <= 0.0
+    assert _velocity(guess) == pytest.approx(-40.0, abs=10.0)
+
+
+@pytest.mark.parametrize("value", ["60 km/s", 60, ["-60 km/s", "60 kms"]])
+def test_a_mistyped_limit_in_a_configuration_file_says_what_it_should_be(value):
+    from eclipse.main import _parse_fitting_config
+
+    fitting = {"components": [{"wavelength": "195.119 angstrom", "velocity_limits": value},
+                              {"wavelength": "195.179 angstrom", "tie_center": 0}]}
+    with pytest.raises(ValueError, match="velocity_limits must be two"):
+        _parse_fitting_config({"fitting": fitting})

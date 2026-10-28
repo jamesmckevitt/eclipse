@@ -116,20 +116,21 @@ class FitComponent:
                     f"lower first{', both above zero' if key == 'width_limits' else ''}, "
                     f"such as {example}; got {value!r}.")
             setattr(self, key, (low.to(kind), high.to(kind)))
+        rest = self.wavelength.to_value(u.cm)
+        c = const.c.to_value(u.km / u.s)
+        self._centre_limits = (None if self.velocity_limits is None else
+                               tuple(rest * (1 + v.to_value(u.km / u.s) / c)
+                                     for v in self.velocity_limits))
+        self._sigma_limits = (None if self.width_limits is None else
+                              tuple(w.to_value(u.cm) for w in self.width_limits))
 
     def centre_limits(self) -> Optional[tuple]:
         """Lowest and highest centre in cm that `velocity_limits` allow, or None."""
-        if self.velocity_limits is None:
-            return None
-        rest = self.wavelength.to_value(u.cm)
-        c = const.c.to_value(u.km / u.s)
-        return tuple(rest * (1 + v.to_value(u.km / u.s) / c) for v in self.velocity_limits)
+        return self._centre_limits
 
     def sigma_limits(self) -> Optional[tuple]:
         """Smallest and largest sigma in cm that `width_limits` allow, or None."""
-        if self.width_limits is None:
-            return None
-        return tuple(w.to_value(u.cm) for w in self.width_limits)
+        return self._sigma_limits
 
 
 def default_component_name(wavelength: u.Quantity) -> str:
@@ -289,7 +290,7 @@ class FitConfig:
                     f"the components a 'name'."
                 )
         else:
-            # Both settings need components; without them they would
+            # These settings need components; without them they would
             # silently do nothing.
             if self.primary_component != 0:
                 raise ValueError(
@@ -743,8 +744,7 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
         for pos, fi in enumerate(free_indices):
             if fi % 3 == 0 and fi < 3 * nc and pos not in ratio_spec:
                 lower[pos] = 0.0
-    # Each component's limits on its centre and width, in Angstrom as the
-    # model takes them.
+    # Limits on each component's centre and width, in Angstrom.
     limited = False
     for pos, fi in enumerate(free_indices):
         if fi < 3 * nc and fi % 3 in (1, 2):
@@ -1063,18 +1063,21 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
     ref_wl = float(rest_wl[fit_config.primary_component])
-    if fit_config.start == "rest":
-        # Every component at its rest wavelength, as eispac's templates start.
-        peak_for_search = 0.0
-    else:
-        peak_for_search = peak
-    if peak_for_search > 0:
+    # With start "rest", every component starts at its rest wavelength, as
+    # eispac's templates do.
+    if fit_config.start == "search" and peak > 0:
         # A trial shift moves the primary centre to ref_wl + shift and every
         # other component to its rest wavelength times the same factor. The
         # range keeps the whole comb inside the observed window; with all
         # components at one wavelength it reduces to shifting the comb bodily.
         lo = float(wv.min()) * ref_wl / float(rest_wl.min()) - ref_wl
         hi = float(wv.max()) * ref_wl / float(rest_wl.max()) - ref_wl
+        # Only shifts that keep each component within its velocity limits.
+        for comp, rest in zip(fit_config.components, rest_wl):
+            if comp.centre_limits() is not None:
+                low_centre, high_centre = comp.centre_limits()
+                lo = max(lo, ref_wl * low_centre / rest - ref_wl)
+                hi = min(hi, ref_wl * high_centre / rest - ref_wl)
         step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
         if hi > lo and step > 0:
             trial = np.arange(lo, hi + 0.5 * step, step)
