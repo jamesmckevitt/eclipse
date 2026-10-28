@@ -59,6 +59,10 @@ telescope:
 
 With `simulation.psf: True`, ECLIPSE blurs the spectra with the instrument's point spread function (PSF), along the slit and in wavelength, before they reach the detector's pixels. It is off by default.
 
+Here is Fe XII 195.12 from the core of the [worked example](worked-example.ipynb)'s active region, 20 arcsec across, observed without noise in 60 s. With the PSF, the thinnest loops are smoothed out.
+
+![Fe XII 195.12 over 20 by 20 arcsec of the active region's core, without and with the PSF](images/example-psf.png)
+
 ### What the SW PSF is made of
 
 The SW PSF is a Gaussian. Its width is two parts added in quadrature:

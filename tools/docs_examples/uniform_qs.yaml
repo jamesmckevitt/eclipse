@@ -1,0 +1,12 @@
+instrument: SWC
+uniform_intensity: 200 erg / (s cm2 sr)
+rest_wavelength: 195.119 AA
+thermal_width: 20 km/s
+n_iter: 500
+ncpu: -1
+fit_signals: dn
+
+simulation:
+  slit_width: 0.4 arcsec
+  expos: [5 s, 10 s, 20 s, 40 s, 80 s]
+  psf: True

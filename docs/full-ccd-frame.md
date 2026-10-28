@@ -50,6 +50,10 @@ frame = full_ccd_frame("synthesis.h5", lines, slit_position=0 * u.arcsec,
 write_full_frame(frame, "frame.h5")
 ```
 
+Here is the frame of the [worked example](worked-example.ipynb)'s active region with the slit through its core, in a 60 s exposure with the 0.4 arcsec slit, beside the raster it is part of. Along the slit, the core shows as a bright band across every line, and the two fiducials as dark bands.
+
+![On the left, Fe XII 195.12 over the active region with the slit marked; on the right, the frame both CCDs read out there](images/example-slit-and-frame.png)
+
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit, which is the middle column of the CCDs.
 
 With the PSF on, the blur along the slit carries light out of the columns at the ends of the scene. `psf_boundary` sets what the blur brings in from beyond the scene, as in a run. With `"replicate"`, the default, the Sun beyond the scene is taken to look like the scene's edges, and the columns beyond the scene get no light. With `"zero"`, the Sun beyond the scene is dark, so the columns at the ends of the scene lose up to about a third of their light to the columns just beyond. `psf_boundary` sets the same across the slit, for a slit near the synthesis's x edges. With `"replicate"`, a slit partly beyond those edges gets light only over its part inside them.
