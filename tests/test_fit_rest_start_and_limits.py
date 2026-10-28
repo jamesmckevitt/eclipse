@@ -231,3 +231,10 @@ def test_a_mistyped_limit_in_a_configuration_file_says_what_it_should_be(value):
                               {"wavelength": "195.179 angstrom", "tie_center": 0}]}
     with pytest.raises(ValueError, match="velocity_limits must be two"):
         _parse_fitting_config({"fitting": fitting})
+
+
+def test_a_component_given_limits_after_it_is_made_is_fitted_within_them():
+    component = FitComponent(STRONG)
+    component.velocity_limits = (-10 * u.km / u.s, 10 * u.km / u.s)
+    assert component.centre_limits()[1] == pytest.approx(
+        STRONG.to_value(u.cm) * (1 + 10 / C_KM_S), rel=1e-12)

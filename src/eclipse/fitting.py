@@ -116,21 +116,20 @@ class FitComponent:
                     f"lower first{', both above zero' if key == 'width_limits' else ''}, "
                     f"such as {example}; got {value!r}.")
             setattr(self, key, (low.to(kind), high.to(kind)))
-        rest = self.wavelength.to_value(u.cm)
-        c = const.c.to_value(u.km / u.s)
-        self._centre_limits = (None if self.velocity_limits is None else
-                               tuple(rest * (1 + v.to_value(u.km / u.s) / c)
-                                     for v in self.velocity_limits))
-        self._sigma_limits = (None if self.width_limits is None else
-                              tuple(w.to_value(u.cm) for w in self.width_limits))
 
     def centre_limits(self) -> Optional[tuple]:
         """Lowest and highest centre in cm that `velocity_limits` allow, or None."""
-        return self._centre_limits
+        if self.velocity_limits is None:
+            return None
+        rest = self.wavelength.to_value(u.cm)
+        c = const.c.to_value(u.km / u.s)
+        return tuple(rest * (1 + v.to_value(u.km / u.s) / c) for v in self.velocity_limits)
 
     def sigma_limits(self) -> Optional[tuple]:
         """Smallest and largest sigma in cm that `width_limits` allow, or None."""
-        return self._sigma_limits
+        if self.width_limits is None:
+            return None
+        return tuple(w.to_value(u.cm) for w in self.width_limits)
 
 
 def default_component_name(wavelength: u.Quantity) -> str:
@@ -1063,6 +1062,14 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
     ref_wl = float(rest_wl[fit_config.primary_component])
+    # Shifts of the whole comb that keep each component within its velocity
+    # limits.
+    allowed = [-np.inf, np.inf]
+    for comp, rest in zip(fit_config.components, rest_wl):
+        if comp.centre_limits() is not None:
+            low_centre, high_centre = comp.centre_limits()
+            allowed[0] = max(allowed[0], ref_wl * low_centre / rest - ref_wl)
+            allowed[1] = min(allowed[1], ref_wl * high_centre / rest - ref_wl)
     # With start "rest", every component starts at its rest wavelength, as
     # eispac's templates do.
     if fit_config.start == "search" and peak > 0:
@@ -1072,15 +1079,10 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         # components at one wavelength it reduces to shifting the comb bodily.
         lo = float(wv.min()) * ref_wl / float(rest_wl.min()) - ref_wl
         hi = float(wv.max()) * ref_wl / float(rest_wl.max()) - ref_wl
-        # Only shifts that keep each component within its velocity limits.
-        for comp, rest in zip(fit_config.components, rest_wl):
-            if comp.centre_limits() is not None:
-                low_centre, high_centre = comp.centre_limits()
-                lo = max(lo, ref_wl * low_centre / rest - ref_wl)
-                hi = min(hi, ref_wl * high_centre / rest - ref_wl)
+        lo, hi = max(lo, allowed[0]), min(hi, allowed[1])
         step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
         if hi > lo and step > 0:
-            trial = np.arange(lo, hi + 0.5 * step, step)
+            trial = np.minimum(np.arange(lo, hi + 0.5 * step, step), hi)
             score = np.zeros(trial.size)
             for r in rest_wl:
                 score += np.interp(r * (ref_wl + trial) / ref_wl, wv, prof_c,
@@ -1095,8 +1097,8 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
             # nothing to recover.
             shift = float(trial[int(np.argmax(score))])
         else:
-            # The comb is wider than the window, so no shift keeps all of it
-            # inside. Fall back to the brightest pixel and the component
+            # No shift keeps the comb inside the window and within the
+            # limits. Fall back to the brightest pixel and the component
             # nearest to it, read as a Doppler factor.
             peak_wl = float(wv[np.nanargmax(prof_c)])
             nearest = float(rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
@@ -1104,6 +1106,8 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
     else:
         shift = 0.0
 
+    if allowed[0] <= allowed[1]:
+        shift = float(np.clip(shift, *allowed))
     doppler = (ref_wl + shift) / ref_wl
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
