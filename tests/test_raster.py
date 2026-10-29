@@ -134,7 +134,9 @@ def test_an_exposure_is_shared_between_the_snapshots_it_spans(tmp_path):
     # Within one snapshot's span.
     assert series.coverage(2 * u.s, 8 * u.s) == [(0, 1.0)]
     # A quarter in the first, three quarters in the second.
-    assert series.coverage(5 * u.s, 25 * u.s) == pytest.approx([(0, 0.25), (1, 0.75)])
+    shares = series.coverage(5 * u.s, 25 * u.s)
+    assert [index for index, _ in shares] == [0, 1]
+    assert [fraction for _, fraction in shares] == pytest.approx([0.25, 0.75])
     # The last snapshot lasts as long as the gap before it.
     assert series.coverage(40 * u.s, 50 * u.s) == [(2, 1.0)]
     for start, end in ((-1, 5), (45, 51), (5, 5)):
