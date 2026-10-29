@@ -1750,7 +1750,9 @@ class Detector_LW:
     band, order : str, int
         "LW1", "LW2" or "LW3", and the diffraction order, 1 or 2 (2 only for
         LW2 and LW3). They set the sampling, the wavelengths the detector
-        records, and which throughput tables apply.
+        records, and which throughput tables apply. The default is LW3 in
+        first order. A run from a configuration file takes them from the
+        line it observes, and `lw_band_of` gives them for a wavelength.
     dark_current : u.Quantity, optional
         Left unset, the 2 e-/pix/s SSD-SPC-ET004 allows at the start of the
         mission at -40 C (Table 2 item 2-07). That is the only temperature

@@ -18,6 +18,7 @@ from .config import (AluminiumFilter, Detector_SWC, Detector_EIS, Detector_LW,
                      Telescope_EUVST, Telescope_EIS, Telescope_EUVST_LW, Simulation,
                      check_pinhole_lists, _load_throughput_table)
 from .config import _FOCAL_PLANE_SETTINGS, _old_names_used, _same_setting
+from .config import LW_BAND_COVERAGE, check_lw_wavelength, lw_band_of
 from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
@@ -206,6 +207,25 @@ def _check_lw_sections(config: dict) -> None:
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     _check_lw_config(det_fixed, det_sweep, tel_fixed, tel_sweep, sim_fixed, sim_sweep,
                      any(pinholes))
+
+
+def _lw_band_and_order(wavelength: u.Quantity, given: dict, hint: str = "") -> dict:
+    """
+    LW band and order for a line: where it lands, unless `given` holds them.
+
+    A band or order in `given` is checked against the line. `hint` is added
+    to the message when the line lands on no LW detector.
+    """
+    wavelength = u.Quantity(wavelength).to(u.AA)
+    found = lw_band_of(wavelength)
+    if found is None:
+        ranges = ", ".join(f"{band} in order {order} {low:.1f}-{high:.1f}"
+                           for (band, order), (low, high) in LW_BAND_COVERAGE.items())
+        raise ValueError(f"The observed line, {wavelength:.3f}, lands on no EUVST LW detector, "
+                         f"which records {ranges} Angstrom.{hint}")
+    band = {"band": given.get("band", found[0]), "order": given.get("order", found[1])}
+    check_lw_wavelength(wavelength, band["band"], band["order"])
+    return band
 
 
 def _dataclass_keys(cls) -> set:
@@ -874,6 +894,25 @@ def main() -> None:
     if instrument == "LW":
         _check_lw_config(det_fixed, det_sweep, tel_fixed, tel_sweep, sim_fixed, sim_sweep,
                          pinhole_sizes or pinhole_positions or pinhole_positions_spectral)
+        # The band and order the observed line lands on, unless given; a
+        # given one is checked against the line.
+        if uniform_intensity_mode:
+            line_wavelength = uniform_rest_wavelength
+        elif synthesis_series_mode or (not raster_mode and synthesis_is_hdf5):
+            path = series_paths[0] if synthesis_series_mode else synthesis_file
+            line_wavelength = read_synthesis_layout(path, reference_line)[
+                "lines"][reference_line]["rest_wavelength"]
+        else:
+            # An atmosphere series or a synthesis pickle: the line's name
+            # gives its wavelength.
+            from .synthesis import _parse_line_name
+            line_wavelength = _parse_line_name(reference_line)[2] * u.AA
+        hint = ("" if not uniform_intensity_mode or "rest_wavelength" in config else
+                f" rest_wavelength was left at its default, {uniform_rest_wavelength}, an SW "
+                f"line; give the LW line's.")
+        band = _lw_band_and_order(line_wavelength, det_fixed, hint)
+        det_fixed.update(band)
+        tel_fixed.update(band)
     if instrument == "EIS":
         if config.get("filter"):
             warnings.warn(

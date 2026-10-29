@@ -118,8 +118,8 @@ LW has detector and telescope settings of its own. Those not listed here, such a
 
 | Section and key | What it sets | Default |
 | --- | --- | --- |
-| `detector.band`, `telescope.band` | The band, `LW1`, `LW2` or `LW3`. Give it in either section. | `LW3` |
-| `detector.order`, `telescope.order` | The diffraction order, 1, or 2 for LW2 and LW3. Give it in either section. | `1` |
+| `detector.band`, `telescope.band` | The band, `LW1`, `LW2` or `LW3`, in either section | the band the observed line lands on |
+| `detector.order`, `telescope.order` | The diffraction order, 1, or 2 for LW2 and LW3, in either section | the order the observed line lands on |
 | `detector.aps_temperature` | The APS's temperature | `-40 Celsius` |
 | `detector.dark_current` | The dark current | `2 electron / (pix s)` at -40 Celsius; it must be given at any other temperature |
 | `detector.read_noise_rms` | The read noise | `40 electron / pix` |

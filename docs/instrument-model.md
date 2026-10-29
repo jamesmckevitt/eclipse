@@ -26,14 +26,15 @@ The LW channel records three bands, and LW2 and LW3 in second order as well:
 | `LW2` | 919.1 - 1049.0 | 459.5 - 524.5 |
 | `LW3` | 1108.3 - 1225.4 | 554.1 - 612.7 |
 
-These are the ranges each detector is expected to record (SSD-SPC-ET004). Give the band and order of the line you observe in the `detector:` or the `telescope:` section. The default is `LW3` in first order. A line in second order is given at its own wavelength. For example, for Si XII 499.41 in second order on LW2:
+These are the ranges each detector is expected to record (SSD-SPC-ET004). They do not overlap, so the wavelength of the line you observe says which band records it, and in which order. ECLIPSE takes the band and order from the observed line: the uniform intensity's `rest_wavelength`, or the reference line. Si XII 499.41, for example, is recorded by LW2 in second order, and needs no more than:
 
 ```yaml
 instrument: LW
-detector:
-  band: LW2
-  order: 2
+uniform_intensity: 50 erg / (s cm2 sr)
+rest_wavelength: 499.406 AA
 ```
+
+The band and order can also be given, in the `detector:` or the `telescope:` section, as `band: LW2` and `order: 2`. They are then checked against the line.
 
 The throughput comes from the sensitivity budget, RSC-2022035, which does not reach the edges of every detector. A run stops with an error if a wavelength of its window lies off the band, or on it beyond the budget's tables: above 845 Angstrom in LW1, above 1039 Angstrom in LW2, and above 520 and 609 Angstrom in second order. Mg X 609.79 is one such line.
 

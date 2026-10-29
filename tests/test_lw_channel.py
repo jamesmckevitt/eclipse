@@ -374,3 +374,51 @@ def test_the_mcp_gain_drawn_by_inverse_transform_uses_one_number_per_pixel():
             photons[0] * det.electrons_per_photon ** 2, rel=0.1)
     assert after[0] == after[1]
     assert np.all(det.photons_to_electrons(np.zeros(3), inverse_transform=True) == 0)
+
+
+def _run_lw(tmp_path, monkeypatch):
+    """Run a short uniform-intensity LW config for O VI 1031.91; return its detector."""
+    import sys
+
+    import yaml
+
+    from eclipse.analysis import load_instrument_response_results
+    from eclipse.main import main
+
+    config = {"instrument": "LW", "uniform_intensity": "300 erg / (s cm2 sr)",
+              "rest_wavelength": "1031.912 AA", "n_iter": 2, "ncpu": 1,
+              "simulation": {"expos": "5 s", "slit_width": "0.4 arcsec"}}
+    path = tmp_path / "lw.yaml"
+    path.write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(path)])
+    monkeypatch.chdir(tmp_path)
+    main()
+    results = load_instrument_response_results(tmp_path / "run" / "result" / "lw.h5")
+    (combination,) = results["results"]["all_combinations"].values()
+    return combination["config_objects"]
+
+
+def test_the_band_and_order_come_from_the_observed_line(tmp_path, monkeypatch):
+    objects = _run_lw(tmp_path, monkeypatch)
+    assert (objects["detector"].band, objects["detector"].order) == ("LW2", 1)
+    assert (objects["telescope"].band, objects["telescope"].order) == ("LW2", 1)
+
+
+@pytest.mark.parametrize("given, message", [
+    ({"band": "LW3"}, "1031.912 A is not recorded by LW3 in order 1"),
+    ({"order": 2}, "not recorded by LW2 in order 2"),
+])
+def test_a_band_or_order_the_line_does_not_land_on_is_refused(given, message):
+    from eclipse.main import _lw_band_and_order
+
+    with pytest.raises(ValueError, match=message):
+        _lw_band_and_order(1031.912 * u.AA, given)
+
+
+def test_each_line_gets_the_band_it_lands_on():
+    from eclipse.main import _lw_band_and_order
+
+    assert _lw_band_and_order(499.406 * u.AA, {}) == {"band": "LW2", "order": 2}
+    assert _lw_band_and_order(1215.67 * u.AA, {"band": "LW3"}) == {"band": "LW3", "order": 1}
+    with pytest.raises(ValueError, match="lands on no EUVST LW detector.*rest_wavelength"):
+        _lw_band_and_order(195.119 * u.AA, {}, hint=" rest_wavelength was left at its default")
