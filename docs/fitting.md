@@ -32,10 +32,6 @@ Without `components`, a single Gaussian is fitted. A `components` list needs at 
 
 The results hold the intensity, velocity and width of every component, by its name. `primary_component` is the one the analysis functions give unless asked for another. Results files from older versions of ECLIPSE may hold the primary component alone, and `list_fit_components` then says so. [Every component of a blend](analysis.md#every-component-of-a-blend) shows how to get each.
 
-!!! warning "The primary component must be present in the data"
-
-    The analysis reports `primary_component` unless asked for another.
-
 ## A faint blend
 
 In a noisy spectrum, a fit can put a blend a whole line spacing from the truth when one of its lines is faint. Starting at the rest wavelengths and limiting each line's velocity and width makes this rare, as in eispac's templates. These are the settings of eispac's `fe_12_195_119.2c` template, which the [configuration reference](configuration.md#fitting) describes:
