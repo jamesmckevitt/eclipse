@@ -53,7 +53,7 @@ fitting:
       tie_width: 0
 ```
 
-Here is the Doppler velocity of Fe XII 195.12 over the [worked example](worked-example.ipynb)'s active region, as it is and as measured with these settings in a 60 s exposure, with two pixels binned along the slit.
+Here is the Doppler velocity of Fe XII 195.12 over the [worked example](worked-example.ipynb)'s active region, as it is and as measured with these settings in a 60 s exposure, with two pixels binned along the slit. Away from the faintest parts of the field, the measurement follows the flows.
 
 ![The true Doppler velocity of Fe XII 195.12 over the active region, and the velocity measured in 60 s](images/example-doppler.png)
 
