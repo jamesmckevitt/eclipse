@@ -34,7 +34,7 @@ The results hold the intensity, velocity and width of every component, by its na
 
 ## A faint blend
 
-In a noisy spectrum, a fit can put a blend a whole line spacing from the truth when one of its lines is faint. Starting at the rest wavelengths and limiting each line's velocity and width makes this rare, as in eispac's templates. These are the settings of eispac's `fe_12_195_119.2c` template, which the [configuration reference](configuration.md#fitting) describes:
+When one line of a blend is faint, more fitting options help to get good results. These settings follow the constraints [EISPAC](https://github.com/USNavalResearchLaboratory/eispac/blob/v0.99.4/eispac/data/templates/fe_12_195_119.2c.template.h5) uses to fit Fe XII 195.119 and the faint 195.179 beside it. The [configuration reference](configuration.md#fitting) describes `start` and the limits.
 
 ```yaml
 fitting:
