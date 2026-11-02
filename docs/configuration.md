@@ -136,6 +136,9 @@ For visible light, the filter's transmission is 10^(-t / `visible_decade_thickne
 | `bessel_correction` | Whether the standard deviations over the iterations use n - 1 in place of n (Bessel's correction) | `False` |
 | `save_iterations` | Whether to keep every iteration's fit in the results | `False` |
 | `weighted` | Whether to weight each pixel of the DN spectra by its uncertainty, worked out from its own signal, and fit the photon spectra by their Poisson likelihood | `True` |
+| `start` | Where each fit of a blend starts: `search`, where the components best match the spectrum, or `rest`, at their rest wavelengths; see [A faint blend](fitting.md#a-faint-blend) | `search` |
+
+Each entry of `components` takes `wavelength`, `tie_center`, `tie_width`, `amplitude_greater_than` and `name`, described on [Fitting blended lines](fitting.md), and `velocity_limits` and `width_limits`. `velocity_limits` are the lowest and highest velocity the fit may give the line, from its own rest wavelength, and `width_limits` the lowest and highest Gaussian sigma. A line beyond the limits is fitted at a limit, and still counts in the mean and standard deviation. A component with `tie_center` follows the other's velocity limits and cannot have its own, and one with `tie_width` the other's width limits.
 
 ## Pinholes
 
