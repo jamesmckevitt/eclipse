@@ -34,7 +34,7 @@ The results hold the intensity, velocity and width of every component, by its na
 
 ## A faint blend
 
-When one line of a blend is faint, more fitting options help to get good results. These are the constraints [EISPAC](https://github.com/USNavalResearchLaboratory/eispac/blob/main/eispac/data/templates/fe_12_195_119.2c.template.h5) uses to fit Fe XII 195.119 and the faint 195.179 beside it. The [configuration reference](configuration.md#fitting) describes each option.
+When one line of a blend is faint, more fitting options help to get good results. These settings follow the constraints [EISPAC](https://github.com/USNavalResearchLaboratory/eispac/blob/v0.99.4/eispac/data/templates/fe_12_195_119.2c.template.h5) uses to fit Fe XII 195.119 and the faint 195.179 beside it. The [configuration reference](configuration.md#fitting) describes `start` and the limits.
 
 ```yaml
 fitting:
