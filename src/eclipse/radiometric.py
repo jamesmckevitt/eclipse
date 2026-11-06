@@ -118,6 +118,12 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
     hold no EUV. Each of the `n_binned` pixels summed after read-out adds
     its own dark current, read noise and rounding.
 
+    For an intensified detector (`Detector_LW`), each detected photon gives
+    an exponentially distributed number of electrons, whose variance is its
+    mean squared, so the EUV term is twice the electrons per photon times
+    the EUV electrons. The detector's read-noise pedestal is taken off
+    before, and its multiplexer noise is added.
+
     Parameters
     ----------
     dn : np.ndarray
@@ -129,7 +135,7 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
         `binned_photon_wavelengths`. Sets the electrons per photon.
     t_exp : u.Quantity
         Exposure time, for the dark current unless `dark_time` is given.
-    det : Detector_SWC or Detector_EIS
+    det : Detector_SWC, Detector_EIS or Detector_LW
         Detector.
     visible_electrons : np.ndarray or float, optional
         Mean electrons from visible light in each pixel, as added by
@@ -157,12 +163,23 @@ def dn_variance(dn: np.ndarray, wavelength: u.Quantity, t_exp: u.Quantity, det,
     read = n_binned * det.read_noise_rms.to_value(u.electron / u.pixel) ** 2
     visible = np.asarray(visible_electrons, dtype=float)
     electrons = np.asarray(dn, dtype=float) * gain
+    pedestal = getattr(det, "read_noise_pedestal", None)
+    if pedestal is not None:
+        electrons = electrons - n_binned * pedestal.to_value(u.electron / u.pixel)
     euv = np.maximum(electrons - dark - visible, 0.0)
-    mean = electrons_per_photon(wavelength, det)
-    square = mean**2 if rms_wavelength is None else electrons_per_photon(rms_wavelength, det)**2
-    per_electron = square / mean + det.si_fano
+    if hasattr(det, "photons_to_electrons"):
+        per_electron = 2 * det.electrons_per_photon
+    else:
+        mean = electrons_per_photon(wavelength, det)
+        square = (mean**2 if rms_wavelength is None
+                  else electrons_per_photon(rms_wavelength, det)**2)
+        per_electron = square / mean + det.si_fano
     variance_electrons = per_electron * euv + dark + visible + read
-    return variance_electrons / gain ** 2 + n_binned / 12.0
+    variance = variance_electrons / gain ** 2 + n_binned / 12.0
+    mux = getattr(det, "mux_noise_dn", None)
+    if mux is not None:
+        variance = variance + n_binned * mux.to_value(u.DN / u.pixel) ** 2
+    return variance
 
 
 def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantity, det,
@@ -260,22 +277,26 @@ def _vectorized_fano_noise(photon_counts: np.ndarray, rest_wavelength: u.Quantit
 
 
 def _detected_photons(photons: np.ndarray, det, *, noise: bool = True,
-                      inverse_transform: bool = False) -> np.ndarray:
+                      inverse_transform: bool = False, qe=None) -> np.ndarray:
     """
     Photons detected in each pixel, given the quantum efficiency `det.qe_euv`.
+
+    `qe`, one value or one per pixel, replaces `det.qe_euv` when given.
 
     With `noise` on, each pixel is a binomial draw over its whole photons,
     and fractions of a photon are dropped. With `noise` off, it is the mean,
     `qe_euv` times the photons. `inverse_transform` draws by
     inverse-transform sampling, for common random numbers.
     """
+    if qe is None:
+        qe = det.qe_euv
     if not noise:
-        return (np.asarray(photons) * det.qe_euv).astype(float, copy=False)
+        return (np.asarray(photons) * qe).astype(float, copy=False)
     trials = np.asarray(photons).astype(np.int64)
     if inverse_transform:
-        detected = _binomial_inverse_transform(trials, det.qe_euv)
+        detected = _binomial_inverse_transform(trials, qe)
     else:
-        detected = np.random.binomial(trials, det.qe_euv)
+        detected = np.random.binomial(trials, qe)
     return detected.astype(float)
 
 
@@ -931,8 +952,10 @@ def to_electrons(
         spread. Without them, `meta["rest_wav"]` sets both.
     t_exp : u.Quantity
         Exposure time, for the dark current unless `dark_time` is given.
-    det : Detector_SWC or Detector_EIS
-        Detector.
+    det : Detector_SWC, Detector_EIS or Detector_LW
+        Detector. For `Detector_LW` the detection efficiency is taken at
+        each pixel's wavelength, and each detected photon gives the MCP's
+        gain instead of a Fano spread.
     dark_current_inverse_transform : bool, optional
         Draw the dark current by inverse-transform sampling, for common
         random numbers between runs that differ in dark current. Default
@@ -941,8 +964,8 @@ def to_electrons(
         If False, every random draw is replaced by its mean. Default True.
     photon_shot_inverse_transform : bool, optional
         Draw the detected photons by inverse-transform sampling, and the Fano
-        spread for every pixel, for common random numbers between runs that
-        differ in photon flux. Default False.
+        spread or the MCP gain for every pixel, for common random numbers
+        between runs that differ in photon flux. Default False.
     dark_time : u.Quantity, optional
         Time each pixel collects dark current, one value or an array that
         broadcasts against the pixels, such as one per wavelength pixel from
@@ -964,15 +987,26 @@ def to_electrons(
     else:
         rest_wavelength = rms_wavelength = meta["rest_wav"]
 
+    # A detector whose efficiency varies with wavelength (Detector_LW) gives
+    # each pixel its own, at the pixel's wavelength.
     incident = photon_counts.to(u.photon / u.pix).data
+    qe = (det.qe_euv_at(photon_counts.axis_world_coords(2)[0])
+          if hasattr(det, "qe_euv_at") else det.qe_euv)
     photons_detected = _detected_photons(incident, det, noise=noise,
-                                         inverse_transform=photon_shot_inverse_transform)
+                                         inverse_transform=photon_shot_inverse_transform,
+                                         qe=qe)
 
-    # Apply Fano noise per pixel, vectorized
-    electron_counts = _vectorized_fano_noise(photons_detected,
-                                             rest_wavelength, det, noise=noise,
-                                             every_pixel=photon_shot_inverse_transform,
-                                             rms_wavelength=rms_wavelength)
+    if hasattr(det, "photons_to_electrons"):
+        # An intensified detector: the electrons come from the MCP's gain,
+        # not from the photon's energy in silicon.
+        electron_counts = det.photons_to_electrons(
+            photons_detected, noise=noise, inverse_transform=photon_shot_inverse_transform)
+    else:
+        # Apply Fano noise per pixel, vectorized
+        electron_counts = _vectorized_fano_noise(photons_detected,
+                                                 rest_wavelength, det, noise=noise,
+                                                 every_pixel=photon_shot_inverse_transform,
+                                                 rms_wavelength=rms_wavelength)
 
     e = electron_counts * (u.electron / u.pixel)
 
@@ -987,6 +1021,10 @@ def to_electrons(
     # Add read noise. It has zero mean, so without noise nothing is added.
     if noise:
         e += _read_noise(photon_counts.data.shape, det) * (u.electron / u.pixel)
+    # A detector may add a constant offset as well, which is its own mean.
+    pedestal = getattr(det, "read_noise_pedestal", None)
+    if pedestal is not None:
+        e += pedestal.to(u.electron / u.pixel)
 
     # Not clipped at zero: a CCD reads out above a bias level, so read noise
     # takes a dark pixel below it as often as above, and ECLIPSE's
@@ -1003,27 +1041,35 @@ def to_electrons(
     )
 
 
-def to_dn(electrons: NDCube, det) -> NDCube:
+def to_dn(electrons: NDCube, det, *, noise: bool = True) -> NDCube:
     """
     Convert electrons to DN, rounded to the nearest DN and clipped at the digitiser maximum.
 
-    Nothing is clipped at the CCD full well, `Detector_SWC.full_well`,
-    though it is lower than the digitiser maximum.
+    Nothing is clipped at the detector's full well, `full_well`, though it
+    is lower than the digitiser maximum. A detector with `mux_noise_dn` has
+    noise added after the electrons are converted to DN.
 
     Parameters
     ----------
     electrons : NDCube
         Electrons in each pixel, from `to_electrons`.
-    det : Detector_SWC or Detector_EIS
+    det : Detector_SWC, Detector_EIS or Detector_LW
         Detector, with its gain and `max_dn`.
+    noise : bool, optional
+        If False, add no multiplexer noise, which has zero mean. Default True.
 
     Returns
     -------
     NDCube
         DN in each pixel, in DN per pixel.
     """
+    electrons_e = electrons.unit.to(u.electron / u.pixel) * electrons.data
+    mux = getattr(det, "mux_noise_dn", None)
+    if noise and mux is not None:
+        electrons_e = electrons_e + np.random.normal(
+            0.0, (mux * det.gain_e_per_dn).to_value(u.electron / u.pixel), np.shape(electrons_e))
     return NDCube(
-        data=_digitise(electrons.unit.to(u.electron / u.pixel) * electrons.data, det),
+        data=_digitise(electrons_e, det),
         wcs=electrons.wcs.deepcopy(),
         unit=u.DN / u.pixel,
         meta=electrons.meta,
@@ -1169,6 +1215,13 @@ def add_visible_stray_light(electrons: NDCube, t_exp: u.Quantity, det, sim, tel=
         Electrons in each pixel with the stray light added, in electron per
         pixel.
     """
+    if getattr(det, "visible_blind", False):
+        if u.Quantity(sim.vis_sl).value != 0:
+            raise ValueError(
+                f"{type(det).__name__} does not respond to visible light, so "
+                f"vis_sl must be 0.")
+        return electrons
+
     # Convert vis_sl from photon/s/cm2 to photon/s/pixel using detector pixel area
     pixel_area = ((det.pix_size*1*u.pix)**2)/u.pix  # cm/pix -> cm2/pixel
     vis_sl_per_pixel = (sim.vis_sl * pixel_area).to(u.photon / (u.s * u.pixel))

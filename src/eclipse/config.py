@@ -10,10 +10,11 @@ import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import ClassVar, List
 import numpy as np
 import astropy.units as u
 import scipy.interpolate
+import scipy.special
 from . import eis_calibration
 from .utils import _warn_outside, angle_to_distance
 from importlib.resources import files
@@ -315,7 +316,7 @@ def _check_psf_params(tel, section: str = "telescope") -> None:
                        and np.isfinite(q.value) and q.value > 0 for q in value)):
         raise ValueError(f"{section}.psf_params must be two FWHMs in pixels, along the slit "
                          f"and along the dispersion, such as [2.66 pix, 2.54 pix]; got {value!r}.")
-    across = tel.psf_across_slit
+    across = getattr(tel, "psf_across_slit", None)
     if across is not None and not (isinstance(across, u.Quantity) and across.isscalar
                                    and across.unit.is_equivalent(u.arcsec)
                                    and np.isfinite(across.value) and across.value > 0):
@@ -393,6 +394,27 @@ def _check_tables(obj, names: tuple, section: str) -> None:
             setattr(obj, name, value)
         if not hasattr(value, "is_file"):
             raise ValueError(f"{section}.{name} must be the path of a table, got {value!r}.")
+
+
+def _check_quantity(value, unit: u.Unit, name: str, non_negative: bool = False) -> None:
+    """Refuse `value` unless it is a finite quantity like `unit`, above zero or at least zero."""
+    if not (isinstance(value, u.Quantity) and value.unit.is_equivalent(unit)
+            and np.all(np.isfinite(value.value))):
+        raise ValueError(f"{name} must be a finite quantity in a unit of "
+                         f"{unit.physical_type}, such as {unit}; got {value!r}.")
+    if not np.all(value.value >= 0 if non_negative else value.value > 0):
+        raise ValueError(f"{name} must be {'zero or more' if non_negative else 'more than zero'}"
+                         f", got {value}.")
+
+
+def _check_optional_fraction(value, name: str, otherwise: str) -> None:
+    """Refuse `value` unless it is None or a number from 0 to 1; `otherwise` says what None gives."""
+    if value is None:
+        return
+    if (isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.number))
+            or not 0 <= value <= 1):
+        raise ValueError(f"{name} is a fraction, from 0 to 1, or left out for {otherwise}; "
+                         f"got {value!r}.")
 
 
 def _check_detector(det, section: str = "detector") -> None:
@@ -638,6 +660,9 @@ _SCAN_SOURCE = ("SOLC-EUVST-MSSL-RS-0002 v2.0 for the range. The read-out times 
 _CTE_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than "
                "0.999993; SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, gives 0.99999 as typical")
 _NOT_RECORDED = "Not recorded"
+_LW_SPEC = "SSD-SPC-ET004, Table 2"
+_LW_BUDGET = "RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate"
+_NRL_MODEL = "NRL's IAPS noise model"
 
 
 @dataclass
@@ -1539,6 +1564,504 @@ class Telescope_EIS:
         return self.effective_area(wl0) / eis_calibration.QE_IN_TABLES
 
 
+# ------------------------------------------------------------------
+#  The LW channel
+# ------------------------------------------------------------------
+# What each LW detector is expected to record in first order [A]
+# (SSD-SPC-ET004 section 3.2.1, which also gives the narrower ranges the
+# science requires: 720.36-846.98, 928.89-1043.08 and 1116.21-1217.70 A).
+_LW_FIRST_ORDER_COVERAGE = {
+    "LW1": (709.544, 851.396),
+    "LW2": (919.095, 1048.973),
+    "LW3": (1108.288, 1225.405),
+}
+
+# The wavelengths that land on each detector, per band and diffraction
+# order [A]. Light of wavelength lambda in order m leaves the grating at the
+# angle light of m * lambda does in first order, so second-order light
+# covers half the first-order range: 459.5-524.5 A on LW2 and 554.1-612.7 A
+# on LW3, which contain the 463.8-521.6 and 557.5-610.45 A the science
+# requires (SSD-SPC-ET004 Table 1).
+LW_BAND_COVERAGE = {
+    (band, order): (lo / order, hi / order)
+    for band, (lo, hi) in _LW_FIRST_ORDER_COVERAGE.items()
+    for order in (1, 2)
+    if not (band == "LW1" and order == 2)
+}
+
+# Where the sensitivity budget RSC-2022035 tabulates each band and order
+# [A], and so where the LW throughput is known. It stops short of the
+# detector in places, LW1 at 845 A for example.
+LW_BAND_TABLE_RANGE = {
+    ("LW1", 1): (709.0, 845.0),
+    ("LW2", 1): (919.0, 1039.0),
+    ("LW3", 1): (1108.0, 1224.0),
+    ("LW2", 2): (460.0, 520.0),
+    ("LW3", 2): (553.0, 609.0),
+}
+
+# Detector sampling per band and order (RSC-2022021C p.6): spectral
+# [mA/pix] and spatial [arcsec/pix], for the 16.7 um pixel at the MCP.
+LW_BAND_SAMPLING = {
+    ("LW1", 1): (36.9, 0.162),
+    ("LW2", 1): (33.6, 0.159),
+    ("LW3", 1): (30.2, 0.155),
+    ("LW2", 2): (16.8, 0.159),
+    ("LW3", 2): (15.1, 0.155),
+}
+
+# Resolution per band and order (RSC-2022021C p.7), chosen as for the SW
+# psf_params: the spatial FWHM in FOV2 with scanning [arcsec], and the
+# spectral resolution with the 0.2 arcsec slit [mA], the largest across
+# the band in each case. The spectral value is the optics and the slit
+# added in quadrature, as for SW (Appendix A.2 of the same document).
+LW_BAND_RESOLUTION = {
+    ("LW1", 1): (0.429, 59.92),
+    ("LW2", 1): (0.382, 64.49),
+    ("LW3", 1): (0.381, 74.84),
+    ("LW2", 2): (0.382, 25.38),
+    ("LW3", 2): (0.381, 31.38),
+}
+
+
+def _lw_key(band: str, order: int) -> tuple:
+    """The (band, order) key of the LW tables, checked."""
+    key = (str(band).upper(), int(order))
+    if key not in LW_BAND_COVERAGE:
+        raise ValueError(
+            f"There is no LW band {band!r} in order {order}. EUVST observes "
+            f"{', '.join(f'{b} in order {o}' for b, o in LW_BAND_COVERAGE)}.")
+    return key
+
+
+def check_lw_wavelength(wavelength: u.Quantity, band: str, order: int) -> None:
+    """
+    Refuse a wavelength whose LW throughput is not known.
+
+    The LW throughput tables hold the five band and order segments one after
+    another, so interpolating them between segments, 520 to 553 A say, would
+    give a plausible number for light EUVST cannot record. Every wavelength
+    must therefore land on the detector of `band` in `order`
+    (`LW_BAND_COVERAGE`) and lie where the sensitivity budget tabulates it
+    (`LW_BAND_TABLE_RANGE`). A wavelength that lands on the detector
+    beyond the tables, such as Mg X 609.79 A in LW3 second order, is really
+    recorded, but its throughput is not yet known, and it is refused with a
+    message saying so.
+
+    Parameters
+    ----------
+    wavelength : u.Quantity
+        One wavelength or an array of them.
+    band, order : str, int
+        The LW band ("LW1", "LW2" or "LW3") and diffraction order.
+
+    Raises
+    ------
+    ValueError
+        If any wavelength is off the detector or outside the tables.
+    """
+    key = _lw_key(band, order)
+    wl = np.atleast_1d(u.Quantity(wavelength).to_value(u.AA))
+    lo, hi = LW_BAND_COVERAGE[key]
+    off = wl[(wl < lo) | (wl > hi)]
+    if off.size:
+        first = off[0]
+        covering = [f"{b} in order {o}" for (b, o), (l, h) in LW_BAND_COVERAGE.items()
+                    if l <= first <= h]
+        hint = (f" It lands on {' and '.join(covering)}." if covering
+                else " It lands on no EUVST LW detector.")
+        raise ValueError(
+            f"{first:.3f} A is not recorded by {key[0]} in order {key[1]}, which "
+            f"covers {lo:.2f}-{hi:.2f} A.{hint}")
+    t_lo, t_hi = LW_BAND_TABLE_RANGE[key]
+    untabulated = wl[(wl < t_lo) | (wl > t_hi)]
+    if untabulated.size:
+        raise ValueError(
+            f"{untabulated[0]:.3f} A lands on {key[0]} in order {key[1]}, but the "
+            f"sensitivity budget RSC-2022035 gives its throughput only over "
+            f"{t_lo:.0f}-{t_hi:.0f} A, so the throughput there is not yet known "
+            f"and ECLIPSE will not guess it.")
+
+
+def check_lw_pair(det, tel) -> None:
+    """
+    Refuse an LW detector and telescope that are not set to the same band and order.
+
+    The telescope gives the throughput and PSF, and the detector the
+    sampling and detection efficiency, so both must describe the one band
+    the line lands on. Anything other than an LW pair is let through.
+    """
+    lw = [isinstance(det, Detector_LW), isinstance(tel, Telescope_EUVST_LW)]
+    if not any(lw):
+        return
+    if not all(lw):
+        raise ValueError("The LW channel needs Detector_LW with Telescope_EUVST_LW; got "
+                         f"{type(det).__name__} with {type(tel).__name__}.")
+    if (det.band, det.order) != (tel.band, tel.order):
+        raise ValueError(f"The detector is set to {det.band} in order {det.order} but the "
+                         f"telescope to {tel.band} in order {tel.order}. Give both the band "
+                         f"and order the line lands on.")
+
+
+def lw_band_of(wavelength: u.Quantity) -> tuple | None:
+    """The (band, order) whose LW detector records `wavelength`, or None if none does."""
+    wl = u.Quantity(wavelength).to_value(u.AA)
+    for key, (lo, hi) in LW_BAND_COVERAGE.items():
+        if lo <= wl <= hi:
+            return key
+    return None
+
+
+@dataclass
+class Detector_LW:
+    """
+    Solar-C/EUVST LW detector: an intensified active pixel sensor (IAPS).
+
+    Each of the three bands is recorded by a microchannel plate (MCP)
+    intensifier coupled through a 1:1.675 fibre-optic taper to two
+    1920 x 2048 APS with 10 um pixels, 3884 x 2048 pixels of 16.7 um at the
+    MCP including a 44-pixel gap between the two (SSD-SPC-ET004 section
+    3.2.2 and Table 2; RSC-2022021C p.6). The gap is not modelled.
+
+    A detected photon frees one photoelectron from the photocathode on the
+    MCP's front, CsI on LW1 and LW3 and KBr on LW2. The single-plate MCP
+    multiplies it into a charge cloud of mean `gain_mcp` electrons, which
+    a P43 phosphor turns into green light. The light passes the exit fibre
+    optic, the taper, two bonds and a thin metal layer on the small end of
+    the taper that passes `attenuation` of it, there so that the MCP can
+    run at the high gain where the photocathode detects the most photons
+    (RPR-SC-210013 section 3.2.2), and the APS detects it.
+
+    The probability of detecting a photon comes from the sensitivity budget
+    RSC-2022035 (`qe_table`) at each pixel's own wavelength. It steps from
+    0.297 at 1208 A to 0.010 at 1212 A, where the LW3 MCP is left bare so
+    that Lyman-alpha can be observed (SSD-SPC-ET004 Table 2 item 1-11). Set
+    `qe_euv` to use one number at every wavelength instead.
+
+    The APS read noise, dark current, temperature and full well are the
+    values SSD-SPC-ET004 specifies, so each is a limit the flight detector
+    must meet rather than a measurement of it. The intensifier's gains and
+    transmissions, the conversion gain and the multiplexer noise are the
+    values NRL's own IAPS noise model uses; SSD-SPC-ET004 does not give
+    them. The conversion gain in particular is still to be decided.
+
+    Parameters
+    ----------
+    band, order : str, int
+        "LW1", "LW2" or "LW3", and the diffraction order, 1 or 2 (2 only for
+        LW2 and LW3). They set the sampling, the wavelengths the detector
+        records, and which throughput tables apply. The default is LW3 in
+        first order. A run from a configuration file takes them from the
+        line it observes, and `lw_band_of` gives them for a wavelength.
+    dark_current : u.Quantity, optional
+        Left unset, the 2 e-/pix/s SSD-SPC-ET004 allows at the start of the
+        mission at -40 C (Table 2 item 2-07). That is the only temperature
+        it is given at, so for any other `aps_temperature` it must be set.
+    """
+    band: str = "LW3"
+    order: int = 1
+    aps_temperature: u.Quantity = field(
+        default=-40 * u.deg_C,
+        metadata={"source": f"{_LW_SPEC}, item 2-18: target -40 Celsius, capability -75 to "
+                            f"-20 Celsius", "unit": "Celsius"})
+    qe_euv: float | None = None  # None: the qe_table at each pixel's wavelength
+    read_noise_rms: u.Quantity = field(
+        default=40.0 * u.electron / u.pixel,
+        metadata={"source": f"{_LW_SPEC}, item 2-06 (requirement): at 4 Mpixel/s in low gain, "
+                            f"at the start of the mission", "unit": "electrons"})
+    # A constant added to every pixel's electrons, the offset NRL's model
+    # draws its read noise about. SSD-SPC-ET004 specifies none.
+    read_noise_pedestal: u.Quantity = 0.0 * u.electron / u.pixel
+    dark_current: u.Quantity | None = field(
+        default=None,
+        metadata={"source": f"{_LW_SPEC}, item 2-07 (requirement): at -40 Celsius, at the "
+                            f"start of the mission"})
+    gain_e_per_dn: u.Quantity = field(
+        default=6.0 * u.electron / u.DN,
+        metadata={"source": f"{_NRL_MODEL}; still to be decided",
+                  "unit": "electrons per DN"})
+    max_dn: u.Quantity = field(default=65535 * u.DN / u.pixel,
+                               metadata={"source": f"{_NRL_MODEL}: a 16-bit converter",
+                                         "unit": "DN"})
+    # Noise of the video chain, added after digitisation.
+    mux_noise_dn: u.Quantity = field(default=1.891 * u.DN / u.pixel,
+                                     metadata={"source": _NRL_MODEL, "unit": "DN"})
+    # Linear full well in low gain. As for Detector_SWC, nothing is clipped
+    # or spilled at it: it says which pixels a frame would fill. At 6 e-/DN
+    # it is 14,333 DN, well below the digitiser's 65535.
+    full_well: u.Quantity = field(
+        default=86000 * u.electron / u.pixel,
+        metadata={"source": f"{_LW_SPEC}, item 2-04 (requirement): linear, in low gain",
+                  "unit": "electrons"})
+    # Mean MCP gain at best focus, 950 V.
+    gain_mcp: float = field(default=1000.0, metadata={"source": _NRL_MODEL})
+    # Phosphor gain, 5.5 to 9 at best focus.
+    gain_phosphor: float = field(default=7.25, metadata={"source": _NRL_MODEL})
+    # Exit fibre optic 0.82, taper 0.81.
+    efficiency_fiber_optic: float = field(default=0.66, metadata={"source": _NRL_MODEL})
+    # Two bonds of 0.9.
+    transmission_bonding: float = field(
+        default=0.81,
+        metadata={"source": f"{_NRL_MODEL}. {_LW_SPEC}, item 4-03, requires more than 0.9 "
+                            f"each"})
+    # The metal layer on the small end of the taper.
+    attenuation: float = field(
+        default=0.01,
+        metadata={"source": f"{_NRL_MODEL}. RPR-SC-210013, Sec. 3.2.2, describes the layer"})
+    qe_aps: float = field(
+        default=0.34,
+        metadata={"source": f"{_NRL_MODEL}. {_LW_SPEC}, item 2-08, requires at least 0.25 at "
+                            f"540 nm"})
+    pix_size: u.Quantity = field(
+        default=(16.7 * u.um).cgs / u.pixel,
+        metadata={"source": "SSD-SPC-ET004, Sec. 3.2.2, and RSC-2022021C: 10 micron APS "
+                            "pixels through the 1:1.675 taper", "unit": "micron"})
+    wvl_res: u.Quantity | None = field(  # from (band, order) if None
+        default=None, metadata={"source": "RSC-2022021C: the sampling of each band"})
+    plate_scale_angle: u.Quantity | None = field(  # from (band, order) if None
+        default=None, metadata={"source": "RSC-2022021C: the sampling of each band"})
+    qe_table: Path = field(
+        default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'lw_detector_efficiency.dat',
+        metadata={"source": _LW_BUDGET})
+
+    # The MCP does not respond to visible light, which is why the LW channel
+    # has no filter (SSD-SPC-ET004 section 3.2.2), so there is no visible
+    # stray light to add. Not a field: it is what the detector is.
+    visible_blind: ClassVar[bool] = True
+    # No setting of the LW detector has been renamed.
+    _OLD_NAMES: ClassVar[dict] = {}
+
+    def __post_init__(self):
+        key = _lw_key(self.band, self.order)
+        self.band, self.order = key
+        spectral_maa, spatial_arcsec = LW_BAND_SAMPLING[key]
+        if self.wvl_res is None:
+            self.wvl_res = (spectral_maa * u.mAA).cgs / u.pixel
+        if self.plate_scale_angle is None:
+            self.plate_scale_angle = spatial_arcsec * u.arcsec / u.pixel
+        _check_settings(self, "detector",
+                        positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size",
+                                  "gain_mcp", "gain_phosphor"),
+                        non_negative=("read_noise_rms", "read_noise_pedestal", "mux_noise_dn"),
+                        fractions=("efficiency_fiber_optic", "transmission_bonding",
+                                   "attenuation", "qe_aps"),
+                        optional=("qe_euv", "dark_current"))
+        _check_quantity(self.wvl_res, u.cm / u.pixel, "detector.wvl_res")
+        _check_quantity(self.plate_scale_angle, u.arcsec / u.pixel, "detector.plate_scale_angle")
+        _check_optional_fraction(self.qe_euv, "detector.qe_euv", "the qe_table")
+        if self.aps_temperature.to_value(u.K, equivalencies=u.temperature()) <= 0:
+            raise ValueError(f"detector.aps_temperature must be above absolute zero, got "
+                             f"{self.aps_temperature}; -40 K was perhaps meant as -40 C.")
+        _check_tables(self, ("qe_table",), "detector")
+        if self.dark_current is None:
+            specified = -40 * u.deg_C
+            temperature = u.Quantity(self.aps_temperature).to(
+                u.deg_C, equivalencies=u.temperature())
+            if not np.isclose(temperature.value, specified.value):
+                raise ValueError(
+                    f"The APS dark current is specified only at {specified} "
+                    f"(SSD-SPC-ET004 Table 2 item 2-07), and no law gives it at "
+                    f"{temperature}. Set dark_current for that temperature.")
+            self.dark_current = 2.0 * u.electron / (u.pixel * u.s)
+        _check_quantity(self.dark_current, u.electron / (u.pixel * u.s), "detector.dark_current",
+                        non_negative=True)
+
+    def qe_euv_at(self, wavelength: u.Quantity) -> float | np.ndarray:
+        """
+        Probability of detecting a photon, at one wavelength or at each of several.
+
+        `qe_euv` when it is set, else the sensitivity budget's detector
+        efficiency. Every wavelength must lie where the budget tabulates the
+        band (:func:`check_lw_wavelength`).
+        """
+        check_lw_wavelength(wavelength, self.band, self.order)
+        if self.qe_euv is not None:
+            return self.qe_euv
+        wl_tab, tr_tab = _load_throughput_table(self.qe_table)
+        return _interp_tr(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
+
+    @property
+    def post_mcp_efficiency(self) -> float:
+        """
+        APS electrons per electron out of the MCP.
+
+        The phosphor gain, the transmissions of the fibre optics, bonds and
+        attenuating layer, and the APS QE, multiplied: 0.013178 with the
+        defaults, so a detected photon gives 13.18 electrons in the APS at
+        the mean MCP gain.
+        """
+        return float(self.gain_phosphor * self.efficiency_fiber_optic
+                     * self.transmission_bonding * self.attenuation * self.qe_aps)
+
+    @property
+    def electrons_per_photon(self) -> float:
+        """Mean APS electrons per detected photon, at every wavelength."""
+        return self.gain_mcp * self.post_mcp_efficiency
+
+    def photons_to_electrons(self, detected, *, noise: bool = True,
+                             inverse_transform: bool = False) -> np.ndarray:
+        """
+        APS electrons from the photons the photocathode detected, per pixel.
+
+        Each photoelectron leaves the single-plate MCP as a charge cloud
+        whose size is exponentially distributed about `gain_mcp`, as NRL's
+        model has it. A sum of n independent exponentials of mean G is a
+        gamma distribution of shape n and scale G, so one gamma draw per
+        pixel gives the sum. An exponential's variance is its mean squared,
+        so the MCP doubles the variance of the photon count: the
+        signal-to-noise of n detected photons is sqrt(n / 2), not sqrt(n).
+
+        The electrons do not depend on the photon's wavelength, and there is
+        no Fano spread: the visible photons the APS detects each give one
+        electron, and the spread comes from the MCP.
+
+        Parameters
+        ----------
+        detected : np.ndarray
+            Detected photons per pixel, whole numbers with `noise` True.
+        noise : bool, optional
+            When False, return the mean, `detected` times
+            :attr:`electrons_per_photon`. Default True.
+        inverse_transform : bool, optional
+            Draw by inverse-transform sampling, one uniform per pixel, so
+            that runs differing only in photon flux use the same random
+            numbers. Default False.
+        """
+        detected = np.asarray(detected, dtype=float)
+        if not noise:
+            return detected * self.electrons_per_photon
+        if inverse_transform:
+            u_draw = np.random.random(size=detected.shape)
+            np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
+            charge = np.zeros_like(detected)
+            lit = detected > 0
+            charge[lit] = self.gain_mcp * scipy.special.gammaincinv(detected[lit], u_draw[lit])
+            return self.post_mcp_efficiency * charge
+        # A gamma of shape 0 is 0, so a pixel with no photons needs no care.
+        return self.post_mcp_efficiency * np.random.gamma(detected, self.gain_mcp)
+
+    @property
+    def plate_scale_length(self) -> u.Quantity:
+        return angle_to_distance(self.plate_scale_angle * 1*u.pix) / u.pixel
+
+
+@dataclass
+class Telescope_EUVST_LW:
+    """
+    Solar-C/EUVST telescope configuration for the LW channel.
+
+    The LW channel shares the 28 cm primary mirror and the slit with SW, and
+    half the light, which its own grating (1740 lines/mm, RSC-2022021C p.8)
+    disperses onto the IAPS in first and second order. There is no filter.
+
+    The throughput is that of the sensitivity budget RSC-2022035, current
+    best estimate: the collecting area times the coating reflectance, the
+    Debye-Waller loss of the mirror's microroughness, the grating efficiency
+    in `order` and the contamination factor. The detector efficiency is
+    applied by the detector, as a draw. With the detector efficiency this
+    reproduces the budget's effective area to 0.05 per cent on every row:
+    0.243 cm2 at H I 1215.67 A and 6.82 cm2 at H I 1025.72 A.
+
+    band and order must match the detector's. They also set psf_params,
+    from the resolution RSC-2022021C gives for the band.
+    """
+    band: str = "LW3"
+    order: int = 1
+    D_ap: u.Quantity = field(
+        default=0.28 * u.m,
+        metadata={"source": "RSC-2022021C, Optical Design Summary: entrance pupil 280 mm",
+                  "unit": "m"})
+    # 0.6 nm reproduces the budget's current best estimate, from the EM1
+    # measurement; 1.0 nm reproduces its worst case.
+    microroughness_sigma: u.Quantity = field(
+        default=0.6 * u.nm,
+        metadata={"source": f"{_LW_BUDGET}, whose throughput it reproduces; 1.0 nm "
+                            f"reproduces its worst case", "unit": "nm"})
+    contamination_factor: float | None = None  # None: the budget's table
+    psf_type: str = "gaussian"
+    # [spatial, spectral] FWHM in pixels; from (band, order) if None.
+    psf_params: list | None = field(
+        default=None,
+        metadata={"source": "RSC-2022021C: the worst resolution of each band over the 280 x 280 "
+                            "arcsec field, and with the 0.2 arcsec slit"})
+    # The slit width psf_params' spectral FWHM is quoted with, as for SW.
+    psf_slit_width: u.Quantity = field(
+        default=0.2 * u.arcsec,
+        metadata={"source": "RSC-2022021C, Appendix A.2", "unit": "arcsec"})
+
+    pm_table: Path = field(
+        default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'lw_primary_mirror_coating_reflectance.dat',
+        metadata={"source": _LW_BUDGET})
+    grating_table_1st: Path = field(
+        default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'lw_grating_efficiency_1st_order.dat',
+        metadata={"source": _LW_BUDGET})
+    grating_table_2nd: Path = field(
+        default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'lw_grating_efficiency_2nd_order.dat',
+        metadata={"source": _LW_BUDGET})
+    contamination_table: Path = field(
+        default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'lw_contamination.dat',
+        metadata={"source": _LW_BUDGET})
+
+    def __post_init__(self):
+        key = _lw_key(self.band, self.order)
+        self.band, self.order = key
+        if self.psf_params is None:
+            spectral_maa, spatial_arcsec = LW_BAND_SAMPLING[key]
+            spatial_fwhm, spectral_fwhm = LW_BAND_RESOLUTION[key]
+            self.psf_params = [spatial_fwhm / spatial_arcsec * u.pixel,
+                               spectral_fwhm / spectral_maa * u.pixel]
+        _check_settings(self, "telescope", positive=("D_ap", "psf_slit_width"),
+                        non_negative=("microroughness_sigma",))
+        _check_optional_fraction(self.contamination_factor, "telescope.contamination_factor",
+                                 "the contamination_table")
+        _check_psf_params(self)
+        _check_tables(self, ("pm_table", "grating_table_1st", "grating_table_2nd",
+                             "contamination_table"), "telescope")
+
+    @property
+    def collecting_area(self) -> u.Quantity:
+        # Half the light goes to SW ("Grating Geo. Area rate" 0.5 in RSC-2022035).
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2
+
+    def _table(self, path, wavelength: u.Quantity) -> float | np.ndarray:
+        wl_tab, tr_tab = _load_throughput_table(path)
+        return _interp_tr(u.Quantity(wavelength).to_value(u.nm), wl_tab, tr_tab)
+
+    def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
+        """Reflectance of the primary mirror's LW coating."""
+        return self._table(self.pm_table, wl0)
+
+    def grating_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
+        """Efficiency of the LW grating in `order`."""
+        return self._table(self.grating_table_1st if self.order == 1
+                           else self.grating_table_2nd, wl0)
+
+    def microroughness_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
+        """The Debye-Waller specular efficiency, exp(-(4 pi sigma / lambda)^2)."""
+        term = (4 * np.pi * self.microroughness_sigma.to(u.nm) / u.Quantity(wl0).to(u.nm)) ** 2
+        return np.exp(-term.value)
+
+    def contamination_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
+        """`contamination_factor` when it is set, else the budget's."""
+        if self.contamination_factor is not None:
+            return self.contamination_factor
+        return self._table(self.contamination_table, wl0)
+
+    def throughput(self, wl0: u.Quantity) -> float | np.ndarray:
+        """
+        The LW optics' throughput, without the detector efficiency.
+
+        Every wavelength must lie where the budget tabulates the band
+        (:func:`check_lw_wavelength`).
+        """
+        check_lw_wavelength(wl0, self.band, self.order)
+        return (self.primary_mirror_efficiency(wl0) * self.microroughness_efficiency(wl0)
+                * self.grating_efficiency(wl0) * self.contamination_efficiency(wl0))
+
+    def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
+        return self.collecting_area * self.throughput(wl0)
+
+
 @dataclass
 class Simulation:
     """
@@ -1680,9 +2203,22 @@ class Simulation:
         if inst == "EIS":
             if slit_val not in allowed_slits["EIS"]:
                 raise ValueError("For EIS, slit_width must be 1 or 2 arcsec, its two slits.")
-        elif inst in ("SWC"):
+        elif inst in ("SWC", "LW"):
+            # LW looks through the same slit as SW.
             if slit_val not in allowed_slits["SWC"]:
-                raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
+                raise ValueError(f"For {inst}, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
+        if inst == "LW":
+            # The LW MCP does not see visible light (SSD-SPC-ET004 section
+            # 3.2.2), and the pinholes are holes in the SW filter, which the
+            # LW light does not pass through.
+            if u.Quantity(self.vis_sl).value != 0:
+                raise ValueError(
+                    "The LW detector does not respond to visible light, so it has "
+                    "no visible stray light: vis_sl must be 0 for LW.")
+            if self.enable_pinholes or self.pinhole_sizes:
+                raise ValueError(
+                    "Pinholes are holes in the SW filter, which the LW light does "
+                    "not pass through, so they are not supported for LW.")
 
         if self.psf_boundary not in ("replicate", "zero"):
             raise ValueError(

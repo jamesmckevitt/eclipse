@@ -19,8 +19,8 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from eclipse.config import (DETECTOR_MATERIALS, AluminiumFilter,  # noqa: E402
-                            Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
-                            Telescope_EUVST)
+                            Detector_EIS, Detector_LW, Detector_SWC, Simulation,
+                            Telescope_EIS, Telescope_EUVST, Telescope_EUVST_LW)
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
 PAGE_NAME = "docs/instrument-sources.md"
@@ -29,6 +29,7 @@ PAGE_NAME = "docs/instrument-sources.md"
 INSTRUMENTS = {
     "SWC": {"detector": Detector_SWC, "telescope": Telescope_EUVST, "filter": AluminiumFilter,
             "simulation": Simulation},
+    "LW": {"detector": Detector_LW, "telescope": Telescope_EUVST_LW},
     "EIS": {"detector": Detector_EIS, "telescope": Telescope_EIS},
 }
 
@@ -60,10 +61,13 @@ PLAIN = re.compile(rf"{NUMBER}(?:(?:, | and ){NUMBER})*(?: (?:{_WORD})(?: per (?
 # Settings whose hand-written Default cell does not give the default itself.
 # The PSF row gives the design values used when the defaults are None, the
 # dispersion row gives the polynomial's degree, and the fiducial row gives
-# one length for the narrow slits and one for the widest.
+# one length for the narrow slits and one for the widest. The LW rows give
+# the values each band takes when the defaults are None.
 # tests/test_instrument_sources.py checks these cells.
 NOT_SHOWN = {("SWC", "telescope.psf_params"), ("SWC", "telescope.field_of_view"),
-             ("SWC", "detector.dispersion"), ("SWC", "telescope.fiducial_lengths")}
+             ("SWC", "detector.dispersion"), ("SWC", "telescope.fiducial_lengths"),
+             ("LW", "telescope.psf_params"), ("LW", "detector.wvl_res"),
+             ("LW", "detector.plate_scale_angle"), ("LW", "detector.dark_current")}
 
 
 def _number(value):
@@ -266,7 +270,8 @@ def table_rows(lines):
             if not mark or mark.group(1) not in INSTRUMENTS:
                 raise ValueError(f"Line {index + 1} of {PAGE_NAME} looks like a table mark "
                                  f"but is not one: {line!r}. Marks read <!-- SWC settings: "
-                                 f"... --> or <!-- EIS settings: ... -->.")
+                                 f"... -->, <!-- LW settings: ... --> or <!-- EIS "
+                                 f"settings: ... -->.")
             if pending or (index > 0 and lines[index - 1].strip()):
                 raise ValueError(f"The table mark on line {index + 1} of {PAGE_NAME} must "
                                  f"follow a blank line.")

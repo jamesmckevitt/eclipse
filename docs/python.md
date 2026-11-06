@@ -4,7 +4,7 @@ Everything `synthesise-spectra` and `eclipse` do is available from Python, in th
 
 ## The instrument
 
-The instrument is described by a few objects: `Telescope_EUVST`, which holds its `AluminiumFilter` as `filter`, `Detector_SWC`, and `Simulation`, or `Telescope_EIS` and `Detector_EIS` for Hinode/EIS. Their settings have the same names as in the [configuration file](configuration.md), and are given as keyword arguments, such as `Detector_SWC(ccd_temperature=-50 * u.deg_C)`. Left out, each takes its default.
+The instrument is described by a few objects: `Telescope_EUVST`, which holds its `AluminiumFilter` as `filter`, `Detector_SWC`, and `Simulation`, with `Telescope_EUVST_LW` and `Detector_LW` for the LW channel, or `Telescope_EIS` and `Detector_EIS` for Hinode/EIS. Their settings have the same names as in the [configuration file](configuration.md), and are given as keyword arguments, such as `Detector_SWC(ccd_temperature=-50 * u.deg_C)`. Left out, each takes its default.
 
 ### Effective area
 

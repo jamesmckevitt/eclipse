@@ -15,7 +15,7 @@ from .radiometric import (
     photons_to_pixel_counts, apply_focusing_optics_psf, to_electrons, add_visible_stray_light, to_dn,
     add_pinhole_visible_light, dn_variance, _digitise, _spectral_response
 )
-from .config import Detector_SWC
+from .config import Detector_SWC, check_lw_pair
 from .readout import (FocalPlane_SWC, ReadoutSequence, dark_current_time,
                       windows_from_wavelengths)
 from .pinhole_diffraction import (_pinholes_on, _with_filter_transmission,
@@ -173,6 +173,7 @@ def _photons_on_the_detector(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim,
     collected by the telescope, the photons per pixel, those after the PSF,
     and those with the pinholes' light.
     """
+    check_lw_pair(det, tel)
     # The slit's ends and fiducials are cut out as the scene is laid onto the
     # pixels, so a cube laid on without them, or a uniform intensity, which
     # has no position along the slit, would silently be left unmasked.
@@ -384,7 +385,7 @@ def _simulate_once(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, *,
         electrons_pinholes = electrons_stray
     
     # Convert to digital numbers
-    dn = to_dn(electrons_pinholes, det)
+    dn = to_dn(electrons_pinholes, det, noise=noise)
 
     return (intensity_exp, photons_total, photons_throughput, photons_pixels, 
             photons_focused, photon_arrivals, electrons, electrons_stray, 

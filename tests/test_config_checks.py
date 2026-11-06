@@ -254,7 +254,7 @@ def test_an_empty_value_is_refused(tmp_path, monkeypatch, section, message):
 @pytest.mark.parametrize("extra, message", [
     ({"n_iter": 0}, "'n_iter' must be a whole number"),
     ({"n_iter": "1e3"}, "'n_iter' must be a whole number"),
-    ({"instrument": None}, "'instrument' must be SWC or EIS"),
+    ({"instrument": None}, "'instrument' must be SWC, LW or EIS"),
     ({"offchip_bin_slit": 2.7}, "'offchip_bin_slit' must be whole numbers"),
     ({"thermal_width": "-20 km/s"}, "'thermal_width' must be a positive speed"),
     ({"thermal_width": "0 km/s"}, "'thermal_width' must be a positive speed"),

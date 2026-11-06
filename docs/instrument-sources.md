@@ -85,6 +85,45 @@ These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) us
 | `filter.visible_decade_thickness` | 170 Angstrom: visible light falls by a factor 10 per 170 Angstrom of aluminium, times the mesh | Not recorded |
 | `simulation.pinhole_visible_wavelength` | 600 nm | Not recorded |
 
+## EUVST-LW
+
+The LW channel has settings of its own, for its telescope and its intensified APS detector. The documents are the IAPS specification SSD-SPC-ET004, the sensitivity budget RSC-2022035 of 29 May 2026, and the optical design summary RSC-2022021C. Some values of the intensifier are only in NRL's model of the IAPS noise, and no project document gives them.
+
+<!-- LW settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
+| Setting | Default | Source |
+| --- | --- | --- |
+| `telescope.D_ap` | 0.28 m | RSC-2022021C, Optical Design Summary: entrance pupil 280 mm |
+| `telescope.microroughness_sigma` | 0.6 nm | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate, whose throughput it reproduces; 1.0 nm reproduces its worst case |
+| `telescope.pm_table` | packaged table | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate |
+| `telescope.grating_table_1st` | packaged table | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate |
+| `telescope.grating_table_2nd` | packaged table | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate |
+| `telescope.contamination_table` | packaged table | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate |
+| `telescope.psf_params` | for each band along the slit, 0.429, 0.382 and 0.381 arcsec for LW1, LW2 and LW3; in wavelength with the 0.2 arcsec slit, 59.92, 64.49 and 74.84 mA, and 25.38 and 31.38 mA for LW2 and LW3 in second order | RSC-2022021C: the worst resolution of each band over the 280 x 280 arcsec field, and with the 0.2 arcsec slit |
+| `telescope.psf_slit_width` | 0.2 arcsec | RSC-2022021C, Appendix A.2 |
+| `detector.wvl_res` | for each band, 36.9, 33.6 and 30.2 mA per pixel for LW1, LW2 and LW3, and 16.8 and 15.1 mA per pixel for LW2 and LW3 in second order | RSC-2022021C: the sampling of each band |
+| `detector.plate_scale_angle` | for each band, 0.162, 0.159 and 0.155 arcsec per pixel for LW1, LW2 and LW3 | RSC-2022021C: the sampling of each band |
+| `detector.pix_size` | 16.7 micron | SSD-SPC-ET004, Sec. 3.2.2, and RSC-2022021C: 10 micron APS pixels through the 1:1.675 taper |
+| `detector.qe_table` | packaged table | RSC-2022035, Sensitivity Budget (29 May 2026), current best estimate |
+
+<!-- LW settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
+
+| Setting | Default | Source |
+| --- | --- | --- |
+| `detector.aps_temperature` | -40 Celsius | SSD-SPC-ET004, Table 2, item 2-18: target -40 Celsius, capability -75 to -20 Celsius |
+| `detector.dark_current` | 2 electrons per pixel per second at -40 Celsius; it must be given for any other temperature | SSD-SPC-ET004, Table 2, item 2-07 (requirement): at -40 Celsius, at the start of the mission |
+| `detector.read_noise_rms` | 40 electrons | SSD-SPC-ET004, Table 2, item 2-06 (requirement): at 4 Mpixel/s in low gain, at the start of the mission |
+| `detector.full_well` | 86000 electrons | SSD-SPC-ET004, Table 2, item 2-04 (requirement): linear, in low gain |
+| `detector.gain_e_per_dn` | 6 electrons per DN | NRL's IAPS noise model; still to be decided |
+| `detector.max_dn` | 65535 DN | NRL's IAPS noise model: a 16-bit converter |
+| `detector.mux_noise_dn` | 1.891 DN | NRL's IAPS noise model |
+| `detector.gain_mcp` | 1000 | NRL's IAPS noise model |
+| `detector.gain_phosphor` | 7.25 | NRL's IAPS noise model |
+| `detector.efficiency_fiber_optic` | 0.66 | NRL's IAPS noise model |
+| `detector.transmission_bonding` | 0.81 | NRL's IAPS noise model. SSD-SPC-ET004, Table 2, item 4-03, requires more than 0.9 each |
+| `detector.attenuation` | 0.01 | NRL's IAPS noise model. RPR-SC-210013, Sec. 3.2.2, describes the layer |
+| `detector.qe_aps` | 0.34 | NRL's IAPS noise model. SSD-SPC-ET004, Table 2, item 2-08, requires at least 0.25 at 540 nm |
+
 ## Hinode/EIS
 
 <!-- EIS settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->

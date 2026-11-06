@@ -4,3 +4,38 @@ are from RSC-2022035A, EUVST Sensitivity Budget (13 Dec 2024).
 Aluminium, aluminium oxide, and carbon throughputs retrieved from:
 https://henke.lbl.gov/optical_constants/filter2.html
 11/08/2025
+LW channel tables (lw_*.dat):
+Extracted from the EUVST sensitivity budget RSC-2022035 (the spreadsheet
+of 29 May 2026, sheets LW1/LW2/LW3; NAOJ), current-best-estimate (CBE)
+columns, on 2026-09-02. Wavelength converted from A to nm. Second-order
+rows are indexed by the true photon wavelength. The spreadsheet also
+carries CSR and Worst columns. The microroughness factor is NOT in these
+tables because ECLIPSE computes it from microroughness_sigma with the
+Debye-Waller factor: sigma = 0.6 nm reproduces the CBE column and 1.0 nm
+the Worst column.
+
+The budget's CBE effective area is reproduced by
+  0.5 * geometric area * coating * Debye-Waller * grating * contamination * QE
+to a constant 0.05 per cent on every row, the residual being the budget's
+rounding of the geometric area (615.44 cm2 against 615.75 cm2 for 28 cm).
+For example it gives 0.243 cm2 at H I 1215.67 A and 6.82 cm2 at H I 1025.72 A.
+
+The detector efficiency drops from 0.297 at 1208 A to 0.010 from 1212 A to
+the end of the LW3 table at 1224 A. That is the LW3 microchannel plate being
+left without a photocathode from about 1210 A (SSD-SPC-ET004 Table 2 items
+1-10 and 1-11: CsI on LW1 and LW3, KBr on LW2, "LW3 MCP bare for >~1210 A",
+and a required 1-3 per cent at 1215.67 A), so that Lyman-alpha can be
+observed without swamping the detector. Second-order LW3 light lands where
+first-order light of twice its wavelength does, so second order meets the
+bare region from about 605 A, and the column drops there too, from 0.372 at
+605 A to 0.093 at 609 A. It drops less than in first order because a bare
+MCP detects shorter wavelengths better.
+
+This step is separate from Detector_LW.attenuation, the thin metal layer on
+the small end of the fibre-optic taper that passes 1 per cent of the
+phosphor light at every wavelength (RPR-SC-210013 section 3.2.2). Both apply.
+
+The tables stop short of the detector's edges in places: LW1 at 845 A,
+LW2 at 1039 A, and the second orders at 520 A and 609 A. A wavelength that
+falls on the detector beyond them has no known throughput, and ECLIPSE
+refuses it rather than extrapolate.

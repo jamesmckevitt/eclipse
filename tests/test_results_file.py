@@ -17,9 +17,9 @@ from astropy.wcs import WCS, Sip
 from ndcube import NDCube
 
 from eclipse import results_file
-from eclipse.config import (AluminiumFilter, Detector_EIS,
+from eclipse.config import (AluminiumFilter, Detector_EIS, Detector_LW,
                             Detector_SWC, Simulation, Telescope_EIS,
-                            Telescope_EUVST)
+                            Telescope_EUVST, Telescope_EUVST_LW)
 from eclipse.fitting import FitComponent, FitConfig
 from eclipse.raster import RasterPlan, SynthesisSettings
 from eclipse.results_file import is_results_file, load_results, save_results
@@ -298,6 +298,12 @@ def _same(before, after):
                     psf_params=[2.0 * u.pixel, 2.5 * u.pixel]),
     Telescope_EIS(psf_params=[2.0 * u.pixel, 2.5 * u.pixel],
                   calibration="dz2025", date="2012-06-03"),
+    Detector_LW(band="LW2", order=2, aps_temperature=-30 * u.deg_C,
+                dark_current=3.0 * u.electron / (u.pixel * u.s), qe_euv=0.3,
+                read_noise_rms=30 * u.electron / u.pixel,
+                read_noise_pedestal=100 * u.electron / u.pixel, attenuation=0.02),
+    Telescope_EUVST_LW(band="LW2", order=2, microroughness_sigma=1.0 * u.nm,
+                       contamination_factor=0.9),
     RasterPlan(start=100 * u.s, steps=4, step=0.3 * u.arcsec, repeats=2,
                cadence=12 * u.s, centre=1.5 * u.Mm),
     # Synthesis settings of a time series, with a NumPy type as the precision.

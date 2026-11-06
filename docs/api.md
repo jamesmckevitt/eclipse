@@ -10,6 +10,10 @@ Everything on this page is imported from `eclipse`, such as `from eclipse import
 
 ::: eclipse.Detector_SWC
 
+::: eclipse.Telescope_EUVST_LW
+
+::: eclipse.Detector_LW
+
 ::: eclipse.Telescope_EIS
 
 ::: eclipse.Detector_EIS

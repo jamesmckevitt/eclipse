@@ -9,7 +9,8 @@ __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
 # Import main classes and functions for easy access
-from .config import Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, AluminiumFilter
+from .config import (Detector_SWC, Detector_EIS, Detector_LW, Telescope_EUVST, Telescope_EIS,
+                     Telescope_EUVST_LW, Simulation, AluminiumFilter)
 from .eis_calibration import effective_area as eis_effective_area
 from .utils import wl_to_vel, vel_to_wl, angle_to_distance, distance_to_angle
 from .radiometric import (
@@ -45,8 +46,8 @@ from .analysis import (
 from .deprecated import get_dem_data_from_results
 
 __all__ = [
-    "Detector_SWC", "Detector_EIS", "Telescope_EUVST", "Telescope_EIS", 
-    "Simulation", "AluminiumFilter",
+    "Detector_SWC", "Detector_EIS", "Detector_LW", "Telescope_EUVST", "Telescope_EIS",
+    "Telescope_EUVST_LW", "Simulation", "AluminiumFilter",
     "eis_effective_area",
     "wl_to_vel", "vel_to_wl", "angle_to_distance", "distance_to_angle",
     "intensity_to_photons", "add_telescope_throughput", "photons_to_pixel_counts",
