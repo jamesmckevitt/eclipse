@@ -30,6 +30,10 @@ Each entry in `components` is one Gaussian, and needs a `wavelength`, its rest w
 
 Without `components`, a single Gaussian is fitted. A `components` list needs at least two entries, since one on its own is not a blend.
 
+Here are the fits to Fe XII 195.119 and 195.179 in one pixel of the core of the [worked example](worked-example.ipynb)'s active region, and in one of its quiet Sun, in a 60 s exposure with two pixels binned along the slit:
+
+![Measured spectra of Fe XII in two pixels, with the two fitted lines](images/example-blend-fit.png)
+
 The results hold the intensity, velocity and width of every component, by its name. `primary_component` is the one the analysis functions give unless asked for another. Results files from older versions of ECLIPSE may hold the primary component alone, and `list_fit_components` then says so. [Every component of a blend](analysis.md#every-component-of-a-blend) shows how to get each.
 
 ## A faint blend
@@ -48,6 +52,10 @@ fitting:
       tie_center: 0
       tie_width: 0
 ```
+
+Here is the Doppler velocity of Fe XII 195.12 over the active region, as it is, as measured with the default start, and as measured with these settings, in a 60 s exposure with two pixels binned along the slit. The speckle in the middle map is fits that landed far from the truth:
+
+![The true Doppler velocity of Fe XII 195.12 over the active region, and the velocity measured with the default start and with these settings](images/example-doppler.png)
 
 ## The fit
 

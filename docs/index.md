@@ -59,6 +59,22 @@ flowchart LR
 
 **3. Analyse the results.** Find how precisely the instrument measured each line, compare the measurements with the truth, compare the settings the run swept through, and make maps. See [Analysing the results](analysis.md).
 
+## An example
+
+Most of these pages follow one example: a MURaM simulation of an active region in the quiet Sun. It covers 300 by 300 arcsec, so it fills the EUVST-SW slit from end to end. The [worked example](worked-example.ipynb) takes it from the simulation's files to the maps below, and the other pages show what their settings do to it. The simulation is [a test release](https://doi.org/10.5522/04/34806267), not for scientific use.
+
+Here is what a run gives for Fe XII 195.12, observed with the 0.4 arcsec slit in 60 s exposures:
+
+![Four maps of the active region: the Fe XII intensity as synthesised, the signal recorded by the detector, the measured Doppler velocity and its precision](images/example-stages.png)
+
+From left to right, these are the line's intensity as it leaves the Sun, the signal the detector records, the Doppler velocity fitted to the spectra, and how precisely that velocity is measured.
+
+A raster like this is built up one slit position at a time. At each position, the camera records the spectrum of the whole band, all along the slit:
+
+![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
+
+[A full-CCD frame](full-ccd-frame.md) makes this frame.
+
 ## Where to start
 
 To install ECLIPSE and make a first run, see [Getting started](quickstart.md). Then start from what you have:

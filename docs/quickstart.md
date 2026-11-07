@@ -92,4 +92,4 @@ simulation:
 
 Both commands list their options with `--help`. [Running a simulation](instrument-response.md) explains the configuration file, and the [configuration reference](configuration.md) lists every setting.
 
-The [worked example](worked-example.ipynb) goes through a full run with a real simulation, from downloading it to a map of the measured intensity. [Where to start](index.md#where-to-start) lists the other starting points.
+The [worked example](worked-example.ipynb) goes through a full run with a real simulation, from downloading it to maps of the measured intensity and Doppler velocity. [Where to start](index.md#where-to-start) lists the other starting points.

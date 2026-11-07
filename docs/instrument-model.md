@@ -15,7 +15,11 @@ The EUVST long wavelength channel (LW) is coming soon, and will complete EUVST.
 
 ECLIPSE's default settings describe EUVST-SW. [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000) describes the instrument model. It will be updated as EUVST is built, tested and commissioned.
 
-Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide. Its PSF is modelled, from simulations and some measurements of the mirror's roughness, and will be measured before launch; ECLIPSE prints a warning saying so whenever `psf: True` is set.
+Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide. A raster steps across the region one slit width at a time, so a wider slit gives coarser pixels across the slit, in x, and leaves them the same along it, in y. Here is the core of the [worked example](worked-example.ipynb)'s active region through each slit, without noise:
+
+![The core of the active region, 30 arcsec across, through the 0.2, 0.4, 0.8 and 1.6 arcsec slits](images/example-slits.png)
+
+Its PSF is modelled, from simulations and some measurements of the mirror's roughness, and will be measured before launch; ECLIPSE prints a warning saying so whenever `psf: True` is set.
 
 ### Hinode/EIS
 
@@ -58,6 +62,10 @@ telescope:
 ## The point spread function
 
 With `simulation.psf: True`, ECLIPSE blurs the spectra with the instrument's point spread function (PSF), along the slit and in wavelength, before they reach the detector's pixels. It is off by default.
+
+Here is Fe XII 195.12 from the core of the active region, 20 arcsec across, observed without noise in 60 s. The PSF smooths the thinnest threads:
+
+![Fe XII 195.12 over 20 by 20 arcsec of the active region's core, without and with the PSF](images/example-psf.png)
 
 ### What the SW PSF is made of
 
@@ -138,6 +146,10 @@ simulation:
 ```
 
 - With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
+
+The active region fills the slit, so both fiducials cross it:
+
+![The active region without and with the slit's mask, which adds two dark rows at the fiducials](images/example-slit-mask.png)
 
 ## Visible light
 
