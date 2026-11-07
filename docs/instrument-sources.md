@@ -22,7 +22,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `telescope.pointing_jitter` | none: the budget's 0.110 arcsec, or no jitter with `resolution_budget: none` | RSC-2022033B rev. B, Table 3-1 row 20 |
 | `simulation.slit_width` | 0.2 arcsec; the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide | RSC-2022021C |
 | `telescope.slit_length` | 300 arcsec | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170 |
-| `telescope.fiducial_centres`, `telescope.fiducial_lengths` | -70 and +25 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170 |
+| `telescope.fiducial_centres`, `telescope.fiducial_lengths` | -70 and +25 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170; EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40; north from RSC-2022020A and RSC-2023006A |
 
 ## EUVST filter
 

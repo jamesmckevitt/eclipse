@@ -629,6 +629,8 @@ _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6
 _HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
 _SENSITIVITY_BUDGET = "RSC-2022035A, Sensitivity Budget (13 Dec 2024)"
 _SLIT_REQUIREMENTS = "TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170"
+_FIDUCIAL_POSITIONS = ("TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170; EUVST-CNR-REQ-001 v4.72, "
+                       "R-SA-GEO-40; north from RSC-2022020A and RSC-2023006A")
 _SW_CCD_SPEC = "SOLC-EUVST-MSSL-SP-0001 v1.4"
 _SW_QE_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-1, expects an EUV QE of "
                  "0.75; SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.3 requires more than 0.71")
@@ -1209,34 +1211,26 @@ class Telescope_EUVST:
     # narrow slits and 21.8 um (1.6 arcsec) in the widest (TASI-SCE-SSS-0001
     # issue 1, R-SA-SYS-REQ-1160 and 1170). They are centred -340 um (-25
     # arcsec) and +950 um (+70 arcsec) from the slit's centre along the y-axis
-    # of the slit's local frame (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40).
+    # of the slit's frame (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40).
     #
-    # Here positive along the slit is increasing y of the synthesis, which is
-    # solar north in nominal observations. The slit's +y is south, so the
-    # fiducials are at +25 and -70 arcsec:
-    # - The global frame has +Y from the slit centre P to the optical axis,
-    #   and +Z towards the aperture; the slit's local +y also runs from P
-    #   towards the axis (RSC-2022020A, Sects. 3.2 and 3.4; the slit's
-    #   rotation matrix in RSC-2022021C, Sect. 5).
-    # - The pointing frame's +Y also runs from the slit to the axis, and
-    #   points to solar north in nominal observations (RSC-2023006A, Table
-    #   3-1A).
-    # - The primary mirror is the only reflection before the slit, and a
-    #   concave mirror inverts the image, so north on the sky lands at the
-    #   slit's -y, the end with the -340 um fiducial.
-    # The grating's magnification of -6.239 (RSC-2022021C) inverts the slit
-    # again, so north is at the detector's +y, towards global +Y (RSC-2022020A,
-    # Sect. 3.6). Which readout output is on that side is not in these
-    # documents.
+    # Here positive is increasing y of the synthesis, solar north in nominal
+    # observations. The slit's +y is south, so the fiducials are at +25 and
+    # -70 arcsec. The slit's +y runs from the slit centre towards the
+    # telescope's Z-axis, which is global +Y (RSC-2022020A, Sects. 3.2 and
+    # 3.4; the slit's rotation matrix in RSC-2022021C, Sect. 5). The pointing
+    # frame's +Y, the same direction, is solar north in nominal observations
+    # (RSC-2023006A, Table 3-1A). The primary mirror inverts the image, so
+    # north on the sky lands at the slit's -y. The slit-jaw imager is on the
+    # global -X side (NAOJ-TI-21015d), as the slit frame's +x towards it needs.
     slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True,
                                     metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
         default_factory=lambda: [-70.0 * u.arcsec, 25.0 * u.arcsec], kw_only=True,
-        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
+        metadata={"source": _FIDUCIAL_POSITIONS, "unit": "arcsec"})
     fiducial_lengths: list = field(
         default_factory=lambda: [0.8 * u.arcsec, 0.8 * u.arcsec, 0.8 * u.arcsec, 1.6 * u.arcsec],
         kw_only=True,
-        metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
+        metadata={"source": _FIDUCIAL_POSITIONS, "unit": "arcsec"})
 
     # Wavelength-dependent efficiency tables
     pm_table: Path = field(default_factory=lambda: files('eclipse') / 'data' / 'throughput' / 'primary_mirror_coating_reflectance.dat',

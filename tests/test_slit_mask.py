@@ -100,11 +100,11 @@ def test_the_mask_is_off_by_default_and_for_swc_only():
 
 
 def test_the_fiducial_lists_are_one_setting_not_a_sweep():
-    fixed, sweep = _parse_section({"fiducial_centres": ["-25 arcsec", "70 arcsec"],
+    fixed, sweep = _parse_section({"fiducial_centres": ["-70 arcsec", "25 arcsec"],
                                    "fiducial_lengths": ["0.8 arcsec", "0.8 arcsec",
                                                         "0.8 arcsec", "1.6 arcsec"]}, "telescope")
     assert not sweep
-    assert fixed["fiducial_centres"] == [-25 * u.arcsec, 70 * u.arcsec]
+    assert fixed["fiducial_centres"] == [-70 * u.arcsec, 25 * u.arcsec]
     Telescope_EUVST(**fixed)
 
 
