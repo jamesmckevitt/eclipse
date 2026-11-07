@@ -1155,9 +1155,11 @@ class Telescope_EUVST:
     slit_length : u.Quantity
         Length of the slits. Default 300 arcsec. Keyword only.
     fiducial_centres : list of u.Quantity
-        Middle of each fiducial along the slit, from the slit's centre. A
-        fiducial is a short gap in the slit, used to co-align observations
-        made with different slits. Default -25 and 70 arcsec. Keyword only.
+        Middle of each fiducial along the slit, from the slit's centre.
+        Positive is towards increasing y of the synthesis, which is solar north
+        in nominal observations. A fiducial is a short gap in the slit, used
+        to co-align observations made with different slits. Default -25 and
+        70 arcsec. Keyword only.
     fiducial_lengths : list of u.Quantity
         Fiducial length for the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that
         order. Default 0.8, 0.8, 0.8 and 1.6 arcsec. Keyword only.
@@ -1206,8 +1208,29 @@ class Telescope_EUVST:
     # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
     # narrow slits and 21.8 um (1.6 arcsec) in the widest, centred -340 um
     # (-25 arcsec) and +950 um (+70 arcsec) from its centre along the slit
-    # (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170). The documents
-    # do not say which end of the slit is positive on the detector.
+    # (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170). REQ-1170 gives
+    # the positions along the slit assembly's x-axis. The document's other
+    # requirements put the slit along y, so the positions are read as y, with
+    # their signs.
+    #
+    # Positive along the slit is increasing y of the scene. In nominal
+    # observations this is solar north, as follows. The frames are defined in
+    # RSC-2022020, taken to be the RPR-SC-190028 that the slit documents cite,
+    # which has the same title.
+    # - The telescope's global frame has +Z towards the aperture and +Y from
+    #   the slit to the optical axis, 220 mm away (EUVST-CNR-REQ-001 v1.37,
+    #   Sect. 2.2.6).
+    # - The slit assembly's +y runs from the axis to the slit, nearly opposite
+    #   to global +Y, as its z lies along the chief ray, towards the mirror
+    #   (same section).
+    # - The pointing frame's +Y is the line from the slit to the axis, and
+    #   points to solar north in nominal observations (RSC-2023006A, Table
+    #   3-1A). Its Figure 3-1 draws it with the global frame's +Z and +X.
+    # - The primary mirror is the only reflection before the slit, and a
+    #   concave mirror inverts the image, so north on the sky lands at the
+    #   slit assembly's +y, where the +70 arcsec fiducial is.
+    # These documents do not say which end of the CCD columns the slit's +y
+    # falls on.
     slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True,
                                     metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
