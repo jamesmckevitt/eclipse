@@ -8,7 +8,7 @@ The figures in `docs/images` whose names start with `example-` come from the MUR
     for spec in "fe9 Fe09_171.0730" "fe10 Fe10_184.5370" "fe14 Fe14_211.3170"; do
       set -- $spec
       synthesise-spectra --atmosphere muram_ar_1160000.h5 --lines $2 --mass-per-electron 1.19 \
-        --goft-temperature-chunk 20 --precision float32 --output-dir synth --output-name $1.h5
+        --goft-temperature-chunk 20 --precision float32 --n-workers 8 --output-dir synth --output-name $1.h5
     done
     ```
 

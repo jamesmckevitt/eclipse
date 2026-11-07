@@ -8,9 +8,11 @@ This page makes the frame for the active region of the [worked example](worked-e
 
 ![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
 
-On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure, on the same scale along the slit. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise. It is all that is recorded outside the band, below 170 Angstrom and above 212.3 Angstrom.
+On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure, on the same scale along the slit. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise. It is all that is recorded outside the spectral band, below 170 Angstrom and above 212.3 Angstrom.
 
 ## 1. Every line in the band
+
+Each step below starts worker processes, so in a script its code goes under `if __name__ == "__main__":`.
 
 `band_contribution_functions` works out the contribution function of every CHIANTI line in the band, on the synthesis's grids and with its abundances, and `write_band_lines` keeps them in a file:
 
@@ -45,7 +47,7 @@ if __name__ == "__main__":
                                                 abundance=lines.abundance)
 ```
 
-This takes about 6 minutes on 16 cores.
+This takes about 4 minutes on 128 cores.
 
 ## 3. The frame
 

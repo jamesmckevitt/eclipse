@@ -58,14 +58,13 @@ def sweep_maps():
         "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 60 * u.s})
 
 
-@cache
 def maps(name, **settings):
     return create_sunpy_maps_from_combo(combination(name, **settings), date_obs=DATE)
 
 
 @cache
-def fe12():
-    return read_synthesis(SYNTHESIS)
+def synthesis(path):
+    return read_synthesis(path)
 
 
 def save(fig, name):
@@ -103,8 +102,8 @@ def frame_data():
 
 
 def stages():
-    """The three stages of a run, on the home page."""
-    line = fe12().lines["Fe12_195.1190"]
+    """What a run gives, from the synthesis to the velocity precision, on the home page."""
+    line = synthesis(SYNTHESIS).lines["Fe12_195.1190"]
     wavelength = line.wavelength.to_value(u.AA)
     radiance = line.intensity.to_value(u.erg / (u.s * u.cm**2 * u.sr * u.AA))
     intensity = np.trapezoid(radiance, wavelength, axis=-1)
@@ -193,8 +192,7 @@ def lines():
     """The four lines' intensity, seen from above, as synthesised."""
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), sharey=True, layout="constrained")
     for ax, (file, title) in zip(axes, LINES):
-        synthesis = fe12() if file == SYNTHESIS else read_synthesis(file)
-        line = next(iter(synthesis.lines.values()))
+        line = next(iter(synthesis(file).lines.values()))
         intensity = np.trapezoid(line.intensity.value, line.wavelength.value, axis=-1)
         ax.imshow(intensity, origin="lower", cmap="gray", extent=[-150, 150, -150, 150],
                   norm=LogNorm(*np.percentile(intensity, [1, 99.8])))
@@ -206,12 +204,12 @@ def lines():
 
 def pixels():
     """The spectrum and the DEM of a pixel in the core and one in the quiet Sun."""
-    synthesis = fe12()
+    lines = synthesis(SYNTHESIS).lines
     products = read_synthesis_products(SYNTHESIS, keys=["dem_map", "logT_grid"])
     unit = u.erg / (u.s * u.cm**2 * u.sr * u.AA)
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), layout="constrained")
     for i, (name, (y, x)) in enumerate(PIXELS.items()):
-        for line, label in zip(synthesis.lines.values(), (name, None)):
+        for line, label in zip(lines.values(), (name, None)):
             axes[0].plot(line.wavelength.to_value(u.AA), line.intensity[y, x].to_value(unit),
                          color=f"C{i}", label=label)
         axes[1].plot(products["logT_grid"], products["dem_map"][y, x], color=f"C{i}", label=name)
