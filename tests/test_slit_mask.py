@@ -73,8 +73,8 @@ def test_the_openings_of_each_slit():
     tel = Telescope_EUVST()
     for slit, gap in ((0.2, 0.8), (0.4, 0.8), (0.8, 0.8), (1.6, 1.6)):
         openings = tel.slit_openings(slit * u.arcsec).to_value(u.arcsec)
-        expected = [[-150.0, -25.0 - gap / 2], [-25.0 + gap / 2, 70.0 - gap / 2],
-                    [70.0 + gap / 2, 150.0]]
+        expected = [[-150.0, -70.0 - gap / 2], [-70.0 + gap / 2, 25.0 - gap / 2],
+                    [25.0 + gap / 2, 150.0]]
         assert openings == pytest.approx(np.array(expected))
     with pytest.raises(ValueError, match="0.2, 0.4, 0.8 and 1.6 arcsec"):
         tel.slit_openings(0.3 * u.arcsec)
