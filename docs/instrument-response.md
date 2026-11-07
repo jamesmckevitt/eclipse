@@ -104,7 +104,7 @@ For recommended values, see [McKevitt et al. (2026), PASJ 78, 1524](https://acad
 offchip_bin_slit: [1, 2, 4]   # swept like any other list
 ```
 
-In the example above, with the 0.4 arcsec slit and 60 s exposures, binning two pixels takes the median precision from 4.1 to 2.9 km/s. Each pixel along the slit then covers 0.32 arcsec rather than 0.16:
+In the example above, with the 0.4 arcsec slit and 60 s exposures, binning two pixels takes the median precision from 4.0 to 2.8 km/s. Each pixel along the slit then covers 0.32 arcsec rather than 0.16:
 
 ![The velocity precision over the active region without binning and with two pixels binned](images/example-binning.png)
 

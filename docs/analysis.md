@@ -43,7 +43,7 @@ print(f"{np.nanmedian(stats['v_std']):.2f}")
 ```
 
 ```text
-2.86 km / s
+2.78 km / s
 ```
 
 This is the median over the whole field of the velocity's standard deviation.
@@ -78,14 +78,14 @@ for settings in get_parameter_combinations(results):
 ```
 
 ```text
-0.2 arcsec 15.0 s 1 10.96 km / s
-0.2 arcsec 15.0 s 2 7.23 km / s
-0.2 arcsec 60.0 s 1 4.65 km / s
-0.2 arcsec 60.0 s 2 3.21 km / s
-0.4 arcsec 15.0 s 1 9.34 km / s
-0.4 arcsec 15.0 s 2 6.27 km / s
-0.4 arcsec 60.0 s 1 4.11 km / s
-0.4 arcsec 60.0 s 2 2.86 km / s
+0.2 arcsec 15.0 s 1 10.55 km / s
+0.2 arcsec 15.0 s 2 6.96 km / s
+0.2 arcsec 60.0 s 1 4.50 km / s
+0.2 arcsec 60.0 s 2 3.11 km / s
+0.4 arcsec 15.0 s 1 9.03 km / s
+0.4 arcsec 15.0 s 2 6.06 km / s
+0.4 arcsec 60.0 s 1 3.98 km / s
+0.4 arcsec 60.0 s 2 2.78 km / s
 ```
 
 ### Every component of a blend
@@ -101,8 +101,8 @@ for name in list_fit_components(combination):
 ```
 
 ```text
-Fe XII 195.119 2365 DN
-Fe XII 195.179 69 DN
+Fe XII 195.119 2503 DN
+Fe XII 195.179 73 DN
 ```
 
 For each component, the statistics also hold its name as `component`, its rest wavelength as `rest_wavelength`, and what it is tied to as `tied`.
