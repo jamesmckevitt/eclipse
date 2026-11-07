@@ -25,6 +25,10 @@ eclipse --config configs/uniform.yaml
 
 The line fills a single pixel on the sky, and is laid onto the detector's wavelength pixels directly.
 
+This takes about 5 minutes on 96 cores. The standard deviation of the fitted velocity over the 500 iterations shows how precisely each combination measures it. It improves with the square root of the exposure time:
+
+![Velocity precision against exposure time for the 0.2 and 0.4 arcsec slits](images/example-uniform.png)
+
 ## Off-chip binning
 
 [`offchip_bin_slit`](instrument-response.md#off-chip-slit-binning) works here too. ECLIPSE puts the same line in as many pixels along the slit as are binned together, each with its own noise, and adds them up as the binning would:
@@ -42,6 +46,4 @@ With `psf: True`, the line is blurred by the instrument's spectral response befo
 
 The input intensity is known exactly and is the same everywhere, so all of the scatter in the fitted results comes from the instrument. That makes it useful for building an uncertainty budget, such as carrying a line's intensity precision through to the uncertainty on a FIP bias.
 
-It is also much faster than the other routes, because there is no contribution function to compute. You can sweep quickly over many instrument settings and exposure times. For example, the figure below sweeps Fe XII 195.119, with a width of 20 km/s, over exposures from 5 to 80 s, with the 0.4 arcsec slit, the PSF and 500 iterations each. It does so at two intensities: 200 erg / (s cm2 sr), the median over the [worked example](worked-example.ipynb)'s simulation, and ten times that. Each intensity took about three minutes.
-
-![Velocity precision against exposure time for the two intensities](images/example-uniform.png)
+It is also much faster than the other routes, because there is no contribution function to compute. You can sweep quickly over many instrument settings and exposure times.

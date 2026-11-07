@@ -70,13 +70,13 @@ With a simulation, a run has two steps. First `synthesise-spectra` turns the sim
 
 ```bash
 # Make the spectrum of Fe XII 195.119 Angstrom from an atmosphere file
-synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
+synthesise-spectra --atmosphere muram_ar_1160000.h5 --lines Fe12_195.1190 --output-dir ./run/input
 
 # Pass it through the instrument
 eclipse --config ./run/input/config.yaml
 ```
 
-An atmosphere file holds a simulation's temperature, density and velocity. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write one from your simulation's output. `synthesise-spectra` writes the spectra to `./run/input/synthesised_spectra.h5`.
+An atmosphere file holds a simulation's temperature, density and velocity. `muram_ar_1160000.h5` is the active region used as the example in these docs, and [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write one from your simulation's output. `synthesise-spectra` writes the spectra to `./run/input/synthesised_spectra.h5`.
 
 `eclipse` reads its settings from a configuration file. There is no default one, so write `config.yaml` yourself before running it:
 

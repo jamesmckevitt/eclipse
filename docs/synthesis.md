@@ -56,61 +56,90 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
-### Worked example: a MURaM flare
+### Worked example: a MURaM active region
 
-The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several MURaM and Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
+Most of the examples in these docs use a MURaM simulation of an active region in the quiet Sun. It covers 300 by 300 arcsec, as long as an EUVST-SW slit, so it fills the slit from end to end. It is on the UCL Research Data Repository, as [McKevitt (2026)](https://doi.org/10.5522/04/34806267). It is a test release, not for scientific use: the [worked example](worked-example.ipynb) says what is known to be off.
 
-This example uses the flare simulation of [Cheung et al. (2019)](https://doi.org/10.1038/s41550-018-0629-3), run `ar098192`, at snapshot 300000, during the flare. Download the temperature, density and vertical velocity (400 MB each):
+Each of the simulation's files holds one quantity in every cell, as 32-bit floats, ordered by y, then x, then height, with height changing fastest. The box is 1088 by 1088 cells of 200 km across, and 781 cells of 64 km in height, from 8 Mm below the photosphere to 42 Mm above it. The synthesis needs three of the files, 3.7 GB each:
+
+- `eosT.1160000`: the temperature, in K;
+- `result_prim_0.1160000`: the mass density, in g / cm3;
+- `result_prim_1.1160000`: the vertical velocity, in cm / s, positive upward.
+
+Download them into a folder called `muram_ar`:
 
 ```bash
-for variable in lgtg lgr uz; do
-  curl -O https://sdc.uio.no/vol/simulations/ar098192/atmos/MURaM_ar098192_${variable}_300000.fits
-done
+mkdir muram_ar
+curl -L -o muram_ar/eosT.1160000 https://ndownloader.figshare.com/files/70714761
+curl -L -o muram_ar/result_prim_0.1160000 https://ndownloader.figshare.com/files/70714599
+curl -L -o muram_ar/result_prim_1.1160000 https://ndownloader.figshare.com/files/70714614
 ```
 
-Then write them to an atmosphere file:
+Then write them to an atmosphere file. Only the heights above 1 Mm are kept, since the cooler layers below do not emit coronal lines, and leaving them out saves memory:
 
 ```python
+from pathlib import Path
+
 import astropy.units as u
 import numpy as np
-from astropy.io import fits
 from eclipse import Atmosphere, write_atmosphere, edges_from_centres
 
-def variable(name, snapshot=300000):
-    with fits.open(f"MURaM_ar098192_{name}_{snapshot}.fits") as hdul:
-        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
+SNAPSHOT = 1160000
+FOLDER = Path("muram_ar")
+NX = NY = 1088
+NZ = 781
+z = (np.arange(NZ) + 0.5) * 0.064 - 8.016   # height of each cell's centre above the photosphere, Mm
+keep = z >= 1.0
+x = (np.arange(NX) + 0.5 - NX / 2) * 0.2    # Mm
 
-lgtg, header, z = variable("lgtg")
-lgr, _, _ = variable("lgr")
-uz, _, _ = variable("uz")
 
-nz, ny, nx = lgtg.shape
-x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
-y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
+def variable(name):
+    """One of the simulation's files, as (height, y, x), above 1 Mm."""
+    cube = np.fromfile(FOLDER / f"{name}.{SNAPSHOT}", dtype="<f4").reshape(NY, NX, NZ)
+    return np.ascontiguousarray(cube[:, :, keep].transpose(2, 0, 1))
+
 
 atmosphere = Atmosphere(
-    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
-    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
-    velocity_z=uz * u.m / u.s,
-    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
-    z_edges=edges_from_centres(z * u.Mm),
-    time=header["ELAPSED"] * u.s,
-    source="MURaM ar098192 snapshot 300000, Hinode SDC Europe",
+    temperature=variable("eosT") * u.K,
+    mass_density=variable("result_prim_0") * u.g / u.cm**3,
+    velocity_z=variable("result_prim_1") * u.cm / u.s,
+    x_edges=edges_from_centres(x * u.Mm), y_edges=edges_from_centres(x * u.Mm),
+    z_edges=edges_from_centres(z[keep] * u.Mm),
+    time=566510.0 * u.s,
+    source=f"MURaM 300 arcsec active region, run 006, snapshot {SNAPSHOT}",
 )
-write_atmosphere(atmosphere, "muram_300000.h5")
+write_atmosphere(atmosphere, f"muram_ar_{SNAPSHOT}.h5")
 ```
 
-The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise the flare line Fe XXIV 192.028 from the surface upwards:
+`eclipse-atmosphere info muram_ar_1160000.h5` then shows what the file holds:
+
+```text
+muram_ar_1160000.h5
+  Shape (nz, ny, nx): (640, 1088, 1088)
+  x: -108.800 Mm to 108.800 Mm, cells of 0.2000 Mm
+  y: -108.800 Mm to 108.800 Mm, cells of 0.2000 Mm
+  z: 1.008 Mm to 41.968 Mm, cells of 0.0640 Mm
+  Density: mass_density
+  Velocities: z
+  Time: 566510.000 s
+  Source: MURaM 300 arcsec active region, run 006, snapshot 1160000
+```
+
+There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). The simulation's own equation of state gives 1.19 atomic mass units per electron in the corona, so `--mass-per-electron` is set to match. Fe XII 195.179 lies in the same window as 195.119, so both are synthesised:
 
 ```bash
-synthesise-spectra --atmosphere muram_300000.h5 \
-  --lines Fe24_192.0280 \
-  --crop-z "0 Mm" "42 Mm" \
-  --vel-lim "1000 km/s" --vel-res "10 km/s" \
-  --output-dir ./run/input
+synthesise-spectra --atmosphere muram_ar_1160000.h5 \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --mass-per-electron 1.19 \
+  --goft-temperature-chunk 20 --precision float32 \
+  --output-dir ./run/input --output-name muram_ar_fe12.h5
 ```
 
+`--goft-temperature-chunk` and `--precision float32` keep the memory down. This takes about 15 minutes and 330 GB of memory on 128 cores. [The output](#the-output) shows what it gives.
+
 ### Worked example: Bifrost quiet Sun
+
+The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several MURaM and Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
 
 This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
 
@@ -168,13 +197,13 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
 ```bash
 # The shortest run
 synthesise-spectra \
-  --atmosphere ./data/atmosphere.h5 \
+  --atmosphere muram_ar_1160000.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --output-dir ./run/input
 
 # The same, with more of the options, most at their defaults
 synthesise-spectra \
-  --atmosphere ./data/atmosphere.h5 \
+  --atmosphere muram_ar_1160000.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \
@@ -248,6 +277,42 @@ synthesise-spectra --help
 
 `synthesise-spectra` writes a synthesis file. It holds each line's spectra over the image, which is what [`eclipse`](instrument-response.md) observes, and what the synthesis worked out on the way. [Files](files.md#synthesis-files) describes it, and how to read it in Python.
 
-These are four lines synthesised from the MURaM active region of the [worked example](worked-example.ipynb), seen from above, each summed over wavelength. Fe IX and Fe X, which form near 0.8 and 1.1 MK, show fine threads, and Fe XIV, near 2 MK, smoother emission.
+Here is how to read it. This gives the spectrum and the DEM of a pixel in the core of the [active region](#worked-example-a-muram-active-region), and of one in its quiet Sun:
 
-![The intensity of Fe IX 171.07, Fe X 184.54, Fe XII 195.12 and Fe XIV 211.32 over the simulated active region](images/example-lines.png)
+```python
+import astropy.units as u
+import matplotlib.pyplot as plt
+from eclipse import read_synthesis, read_synthesis_products
+
+path = "run/input/muram_ar_fe12.h5"
+synthesis = read_synthesis(path)
+products = read_synthesis_products(path, keys=["dem_map", "logT_grid"])
+unit = u.erg / (u.s * u.cm**2 * u.sr * u.AA)
+
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), layout="constrained")
+for i, (name, (y, x)) in enumerate({"Core": (544, 544), "Quiet Sun": (150, 150)}.items()):
+    for line, label in zip(synthesis.lines.values(), (name, None)):
+        axes[0].plot(line.wavelength.to_value(u.AA), line.intensity[y, x].to_value(unit),
+                     color=f"C{i}", label=label)
+    axes[1].plot(products["logT_grid"], products["dem_map"][y, x], color=f"C{i}", label=name)
+axes[0].set_xlim(195.03, 195.27)
+axes[0].set_yscale("log")
+axes[0].set_ylim(1e1, 3e5)
+axes[0].set_xlabel("Wavelength [Angstrom]")
+axes[0].set_ylabel("Radiance [erg / (s cm2 sr Angstrom)]")
+axes[0].legend()
+axes[1].set_xlim(5.5, 6.8)
+axes[1].set_yscale("log")
+axes[1].set_ylim(1e25, None)
+axes[1].set_xlabel("log10 T [K]")
+axes[1].set_ylabel("DEM [cm-5 per unit log10 T]")
+plt.show()
+```
+
+![The spectrum of Fe XII 195.119 and 195.179, and the DEM, in a pixel of the core and one of the quiet Sun](images/example-pixels.png)
+
+The spectra hold the line as it leaves the Sun, before the instrument blurs it. Each line is on its own wavelengths, around its rest wavelength.
+
+The same synthesis, run for three other lines, shows the region at different temperatures. Each map is the line's spectrum summed over wavelength. Fe IX and Fe X, which form near 0.8 and 1.1 MK, show fine threads, and Fe XIV, near 2 MK, smoother emission:
+
+![The intensity of Fe IX 171.07, Fe X 184.54, Fe XII 195.12 and Fe XIV 211.32 over the active region](images/example-lines.png)

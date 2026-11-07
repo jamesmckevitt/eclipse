@@ -1,15 +1,15 @@
 instrument: SWC
-synthesis_file: synth/fe12.h5
+synthesis_file: ./run/input/muram_ar_fe12.h5
 reference_line: Fe12_195.1190
-n_iter: 10
+n_iter: 1
 ncpu: -1
 fit_signals: dn
-offchip_bin_slit: 2
 
 simulation:
-  slit_width: 0.4 arcsec
+  slit_width: [0.2 arcsec, 0.4 arcsec, 0.8 arcsec, 1.6 arcsec]
   expos: 60 s
   psf: True
+  noise: False
   slit_mask: True
 
 fitting:

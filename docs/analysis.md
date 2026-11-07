@@ -2,12 +2,14 @@
 
 `eclipse` writes its results to `run/result/<config name>.h5`. ECLIPSE's analysis functions read them, and pick out the measurements you need.
 
+The examples on this page read the sweep from [Running a simulation](instrument-response.md), which observed the active region of the [worked example](worked-example.ipynb) with eight combinations of settings.
+
 ## Loading the results
 
 ```python
 from eclipse import load_instrument_response_results, summary_table
 
-results = load_instrument_response_results("run/result/config.h5")
+results = load_instrument_response_results("run/result/muram_ar_sweep.h5")
 summary_table(results)
 ```
 
@@ -22,8 +24,9 @@ import astropy.units as u
 from eclipse import get_results_for_combination
 
 combination = get_results_for_combination(results, **{
-    "simulation.expos": 20 * u.s,
-    "simulation.slit_width": 0.2 * u.arcsec,
+    "simulation.expos": 60 * u.s,
+    "simulation.slit_width": 0.4 * u.arcsec,
+    "offchip_bin_slit": 2,
 })
 ```
 
@@ -32,11 +35,18 @@ Values with units need their units. If what you give matches more than one combi
 ## How precisely each line was measured
 
 ```python
+import numpy as np
 from eclipse import analyse_fit_statistics
 
 stats = analyse_fit_statistics(combination)
-print(stats["v_std"])
+print(f"{np.nanmedian(stats['v_std']):.2f}")
 ```
+
+```text
+2.86 km / s
+```
+
+This is the median over the whole field of the velocity's standard deviation.
 
 `analyse_fit_statistics` gives maps, with one value per pixel, of the fitted line's:
 
@@ -53,6 +63,31 @@ The width is the Gaussian's sigma, and the intensity is the fitted line's counts
 
 By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](fitting.md#which-signals-are-fitted)).
 
+### Comparing combinations
+
+`get_parameter_combinations` makes it easy to go through a sweep:
+
+```python
+from eclipse import get_parameter_combinations
+
+for settings in get_parameter_combinations(results):
+    chosen = {key: settings[key] for key in
+              ("simulation.slit_width", "simulation.expos", "offchip_bin_slit")}
+    stats = analyse_fit_statistics(get_results_for_combination(results, **chosen))
+    print(*chosen.values(), f"{np.nanmedian(stats['v_std']):.2f}")
+```
+
+```text
+0.2 arcsec 15.0 s 1 10.96 km / s
+0.2 arcsec 15.0 s 2 7.23 km / s
+0.2 arcsec 60.0 s 1 4.65 km / s
+0.2 arcsec 60.0 s 2 3.21 km / s
+0.4 arcsec 15.0 s 1 9.34 km / s
+0.4 arcsec 15.0 s 2 6.27 km / s
+0.4 arcsec 60.0 s 1 4.11 km / s
+0.4 arcsec 60.0 s 2 2.86 km / s
+```
+
 ### Every component of a blend
 
 When a [blend](fitting.md) is fitted, the results hold every component. `list_fit_components` names them, and `component=` picks one; without it, `analyse_fit_statistics` gives the primary component:
@@ -62,7 +97,12 @@ from eclipse import list_fit_components
 
 for name in list_fit_components(combination):
     stats = analyse_fit_statistics(combination, component=name)
-    print(name, stats["v_std"])
+    print(name, f"{np.nanmedian(stats['i_mean']):.0f}")
+```
+
+```text
+Fe XII 195.119 2365 DN
+Fe XII 195.179 69 DN
 ```
 
 For each component, the statistics also hold its name as `component`, its rest wavelength as `rest_wavelength`, and what it is tied to as `tied`.
@@ -71,6 +111,10 @@ For each component, the statistics also hold its name as `component`, its rest w
 
 The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no noise and no PSF. `v_true` and `w_true` come from that fit. `v_err` then says how far the measured velocity is off on average, where `v_std` says how much it scatters.
 
+Here is `v_err` as a map, for this combination. In the core it is about 0.5 km/s, and in the faintest parts of the field it reaches several km/s:
+
+![The true velocity minus the mean measured velocity over the active region](images/example-velocity-error.png)
+
 ## Maps
 
 `create_sunpy_maps_from_combo` makes SunPy maps of a combination's results:
@@ -78,7 +122,7 @@ The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no 
 ```python
 from eclipse import create_sunpy_maps_from_combo
 
-maps = create_sunpy_maps_from_combo(combination, date_obs="2024-03-20T00:00:00")
+maps = create_sunpy_maps_from_combo(combination, date_obs="2026-01-01T00:00:00")
 maps["velocity_std"].peek()
 ```
 
@@ -98,11 +142,26 @@ Each map also holds its unit, as `maps["velocity_std"].unit`.
 
 It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures, in seconds, at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
 
-These are `total_dn` and `velocity_std` from the run of the [worked example](worked-example.ipynb): Fe XII 195.12 in 60 s exposures, with two pixels binned along the slit. The velocity is measured to 1 to 2 km/s in the active region's core, and more coarsely where the line is faint.
+These are `total_dn` and `velocity_std` of this combination:
 
 ![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](images/example-precision.png)
 
-The [worked example](worked-example.ipynb) plots several of these maps.
+The velocity is measured to about 1 km/s in the core, and to about 4 km/s in the quiet Sun. It is worst in the fans beside the core, where the line is faintest. The two thin lines are the slit's fiducials.
+
+An exposure sweep gives the `exposure_time` map. [This run](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml) observes the region with the 0.4 arcsec slit and two pixels binned, in exposures of 15, 30, 60, 120 and 240 s, with 30 iterations:
+
+```python
+results = load_instrument_response_results("run/result/muram_ar_exposures.h5")
+exposures = [get_results_for_combination(results, **{"simulation.expos": settings["simulation.expos"]})
+             for settings in get_parameter_combinations(results)]
+maps = create_sunpy_maps_from_combo(exposures[0], exposure_time_results=exposures,
+                                    date_obs="2026-01-01T00:00:00")
+maps["exposure_time"].peek()
+```
+
+![The shortest exposure that measures each pixel's velocity to within 2 km/s](images/example-exposure-time.png)
+
+The core reaches 2 km/s within 60 s. About half of the quiet Sun reaches it within 240 s, and the grey pixels do not reach it in any of these exposures.
 
 ## Every iteration
 
