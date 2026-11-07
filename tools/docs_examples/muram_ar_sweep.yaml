@@ -29,7 +29,6 @@ telescope:
 filter:
   al_thickness: 1485 angstrom
   oxide_thickness: 95 angstrom
-  c_thickness: 40 angstrom
   mesh_throughput: 0.8
 
 # The fit, as in the worked example

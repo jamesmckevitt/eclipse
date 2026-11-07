@@ -30,7 +30,7 @@ Each entry in `components` is one Gaussian, and needs a `wavelength`, its rest w
 
 Without `components`, a single Gaussian is fitted. A `components` list needs at least two entries, since one on its own is not a blend.
 
-Here are the fits to Fe XII 195.119 and 195.179 in one pixel of the core of the [worked example](worked-example.ipynb)'s active region, and in one of its quiet Sun, in a 60 s exposure:
+Here are the fits to Fe XII 195.119 and 195.179 in one pixel of the core of the [worked example](worked-example.ipynb)'s active region, and in one of its quiet Sun, in a 60 s exposure with two pixels binned along the slit:
 
 ![Measured spectra of Fe XII in two pixels, with the two fitted lines](images/example-blend-fit.png)
 

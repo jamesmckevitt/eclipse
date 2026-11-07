@@ -197,13 +197,13 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
 ```bash
 # The shortest run
 synthesise-spectra \
-  --atmosphere muram_ar_1160000.h5 \
+  --atmosphere ./data/atmosphere.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --output-dir ./run/input
 
 # The same, with more of the options, most at their defaults
 synthesise-spectra \
-  --atmosphere muram_ar_1160000.h5 \
+  --atmosphere ./data/atmosphere.h5 \
   --lines Fe12_195.1190 Fe12_195.1790 \
   --abundance sun_coronal_2021_chianti \
   --n-workers 4 \

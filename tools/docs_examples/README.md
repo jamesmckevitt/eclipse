@@ -5,7 +5,7 @@ The figures in `docs/images` whose names start with `example-` come from the MUR
 1. Synthesise three more lines:
 
     ```bash
-    for spec in "fe9 Fe9_171.0730" "fe10 Fe10_184.5370" "fe14 Fe14_211.3170"; do
+    for spec in "fe9 Fe09_171.0730" "fe10 Fe10_184.5370" "fe14 Fe14_211.3170"; do
       set -- $spec
       synthesise-spectra --atmosphere muram_ar_1160000.h5 --lines $2 --mass-per-electron 1.19 \
         --goft-temperature-chunk 20 --precision float32 --output-dir synth --output-name $1.h5
@@ -31,4 +31,4 @@ The figures in `docs/images` whose names start with `example-` come from the MUR
     python $REPO/tools/docs_examples/make_figures.py $REPO/docs/images
     ```
 
-Each synthesis takes about 15 minutes and 330 GB of memory on 128 cores, and `band.py` about two hours and 210 GB. On 128 cores, `muram_ar_sweep.yaml` takes about three hours and 120 GB, and `muram_ar_exposures.yaml` about two hours and 100 GB. The others take a few minutes each.
+On 128 cores, each synthesis takes about 15 minutes and 210 GB of memory, `band.py` about two hours and 210 GB, `muram_ar_sweep.yaml` about three hours and 120 GB, and `muram_ar_exposures.yaml` about two hours and 100 GB. `frame.py` takes about 8 minutes, and the other configurations up to half an hour each.

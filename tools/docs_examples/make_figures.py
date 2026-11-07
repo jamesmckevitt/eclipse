@@ -58,8 +58,14 @@ def sweep_maps():
         "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 60 * u.s})
 
 
+@cache
 def maps(name, **settings):
     return create_sunpy_maps_from_combo(combination(name, **settings), date_obs=DATE)
+
+
+@cache
+def fe12():
+    return read_synthesis(SYNTHESIS)
 
 
 def save(fig, name):
@@ -98,7 +104,7 @@ def frame_data():
 
 def stages():
     """The three stages of a run, on the home page."""
-    line = read_synthesis(SYNTHESIS).lines["Fe12_195.1190"]
+    line = fe12().lines["Fe12_195.1190"]
     wavelength = line.wavelength.to_value(u.AA)
     radiance = line.intensity.to_value(u.erg / (u.s * u.cm**2 * u.sr * u.AA))
     intensity = np.trapezoid(radiance, wavelength, axis=-1)
@@ -187,7 +193,7 @@ def lines():
     """The four lines' intensity, seen from above, as synthesised."""
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), sharey=True, layout="constrained")
     for ax, (file, title) in zip(axes, LINES):
-        synthesis = read_synthesis(file)
+        synthesis = fe12() if file == SYNTHESIS else read_synthesis(file)
         line = next(iter(synthesis.lines.values()))
         intensity = np.trapezoid(line.intensity.value, line.wavelength.value, axis=-1)
         ax.imshow(intensity, origin="lower", cmap="gray", extent=[-150, 150, -150, 150],
@@ -200,7 +206,7 @@ def lines():
 
 def pixels():
     """The spectrum and the DEM of a pixel in the core and one in the quiet Sun."""
-    synthesis = read_synthesis(SYNTHESIS)
+    synthesis = fe12()
     products = read_synthesis_products(SYNTHESIS, keys=["dem_map", "logT_grid"])
     unit = u.erg / (u.s * u.cm**2 * u.sr * u.AA)
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), layout="constrained")

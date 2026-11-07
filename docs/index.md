@@ -63,7 +63,7 @@ flowchart LR
 
 Most of these pages follow one example: a MURaM simulation of an active region in the quiet Sun. It covers 300 by 300 arcsec, so it fills the EUVST-SW slit from end to end. The [worked example](worked-example.ipynb) takes it from the simulation's files to the maps below, and the other pages show what their settings do to it. The simulation is [a test release](https://doi.org/10.5522/04/34806267), not for scientific use.
 
-These are the three stages for Fe XII 195.12, observed with the 0.4 arcsec slit in 60 s exposures:
+Here is what a run gives for Fe XII 195.12, observed with the 0.4 arcsec slit in 60 s exposures:
 
 ![Four maps of the active region: the Fe XII intensity as synthesised, the signal recorded by the detector, the measured Doppler velocity and its precision](images/example-stages.png)
 

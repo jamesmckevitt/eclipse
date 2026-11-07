@@ -8,7 +8,7 @@ This page makes the frame for the active region of the [worked example](worked-e
 
 ![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
 
-On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure, on the same scale along the slit. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise, and the rows above 212.3 Angstrom, beyond the band, record nothing else.
+On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure, on the same scale along the slit. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise. It is all that is recorded outside the band, below 170 Angstrom and above 212.3 Angstrom.
 
 ## 1. Every line in the band
 
@@ -52,10 +52,11 @@ This takes about 6 minutes on 16 cores.
 ```python
 from eclipse import full_ccd_frame, write_full_frame
 
-frame = full_ccd_frame("run/input/muram_ar_fe12.h5", lines, slit_position=0 * u.arcsec,
-                       exposure=60 * u.s, slit_width=0.4 * u.arcsec, slit_mask=True,
-                       n_workers=16, continuum=(wavelength, free, two_photon))
-write_full_frame(frame, "frame.h5")
+if __name__ == "__main__":
+    frame = full_ccd_frame("run/input/muram_ar_fe12.h5", lines, slit_position=0 * u.arcsec,
+                           exposure=60 * u.s, slit_width=0.4 * u.arcsec, slit_mask=True,
+                           n_workers=16, continuum=(wavelength, free, two_photon))
+    write_full_frame(frame, "frame.h5")
 ```
 
 The result is the frame at the top of this page. `dn` holds it as it is read out, with the prescan and overscan of each output, and `rate` holds the photons reaching each pixel. The median of the image columns in each row gives the spectrum of the whole band:
@@ -63,21 +64,22 @@ The result is the frame at the top of this page. `dn` holds it as it is read out
 ```python
 import matplotlib.pyplot as plt
 
-pre, over = frame.settings["serial_prescan"], frame.settings["serial_overscan"]
-fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
-for ccd in ("left", "right"):
-    rows = frame.wavelength[ccd].to_value(u.AA)
-    half = frame.rate[ccd].shape[1] // 2
-    columns = np.r_[pre:pre + half, pre + half + 2 * over:pre + 2 * half + 2 * over]
-    order = np.argsort(rows)
-    spectrum = np.median(frame.dn[ccd][:rows.size, columns], axis=1)
-    ax.plot(rows[order], spectrum[order], label=f"{ccd} CCD")
-ax.set_xlim(169, 213)
-ax.set_yscale("log")
-ax.set_xlabel("Wavelength [Angstrom]")
-ax.set_ylabel("DN per pixel")
-ax.legend()
-plt.show()
+if __name__ == "__main__":
+    pre, over = frame.settings["serial_prescan"], frame.settings["serial_overscan"]
+    fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
+    for ccd in ("left", "right"):
+        rows = frame.wavelength[ccd].to_value(u.AA)
+        half = frame.rate[ccd].shape[1] // 2
+        columns = np.r_[pre:pre + half, pre + half + 2 * over:pre + 2 * half + 2 * over]
+        order = np.argsort(rows)
+        spectrum = np.median(frame.dn[ccd][:rows.size, columns], axis=1)
+        ax.plot(rows[order], spectrum[order], label=f"{ccd} CCD")
+    ax.set_xlim(169, 213)
+    ax.set_yscale("log")
+    ax.set_xlabel("Wavelength [Angstrom]")
+    ax.set_ylabel("DN per pixel")
+    ax.legend()
+    plt.show()
 ```
 
 ![The spectrum of the band in the frame, from 170 to 212 Angstrom, with the median over the slit in each row](images/example-frame-spectrum.png)
@@ -95,15 +97,16 @@ The slit width, PSF and noise can instead be taken from a `Simulation`, as in an
 ```python
 from eclipse import Simulation
 
-sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, noise=True, slit_mask=True)
-frame = full_ccd_frame("run/input/muram_ar_fe12.h5", lines, slit_position=0 * u.arcsec,
-                       exposure=60 * u.s, sim=sim, n_workers=16,
-                       continuum=(wavelength, free, two_photon))
+if __name__ == "__main__":
+    sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, noise=True, slit_mask=True)
+    frame = full_ccd_frame("run/input/muram_ar_fe12.h5", lines, slit_position=0 * u.arcsec,
+                           exposure=60 * u.s, sim=sim, n_workers=16,
+                           continuum=(wavelength, free, two_photon))
 ```
 
 The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf`, `noise`, `psf_boundary` and `slit_mask`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these six arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame does not model pinholes or visible stray light. `vis_sl` must be left at zero and no pinholes enabled. `instrument` must be `"SWC"`.
 
-The frame on this page, with 22 densities and 121 velocity bins, takes about 8 minutes and 35 GB of memory with 16 workers. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
+The frame on this page, with 22 densities and 121 velocity bins, takes about 4 minutes and 35 GB of memory with 16 workers. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
 Every part of each line, and of the continuum, is counted in photons at its own wavelength, with the telescope's throughput there, and the photons in each pixel free the electrons of their own energy.
 
