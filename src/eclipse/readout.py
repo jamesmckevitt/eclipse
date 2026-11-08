@@ -158,10 +158,11 @@ class FocalPlane_SWC:
 
         Positive is towards solar north in nominal observations. Without
         `ccd`, the columns count from the south end of the slit. With `ccd`,
-        they count from the CCD's left output, as the camera reads them:
-        from the north end on the left CCD, and from the south end on the
-        right CCD, which is turned half a turn so that each serial register
-        is on an outer edge.
+        they count from the CCD's left output, as the camera reads them.
+        On the left CCD that is the north end (EUVST SWC FPGA Requirements
+        Specification, SolC-FPGA-RS-060). The right CCD faces the other way,
+        with its serial register on its own outer edge, so on it that is the
+        south end.
         """
         middle = (self.n_columns - 1) / 2
         offset = np.asarray(column, dtype=float) - middle
@@ -187,7 +188,8 @@ class FocalPlane_SWC:
         Wavelength recorded by the centre of `row`.
 
         Give `column` to include the drift of a line along the slit; without
-        :attr:`slit_image_tilt` it makes no difference.
+        :attr:`slit_image_tilt` it makes no difference. `column` counts from
+        the south end of the slit on both CCDs, as in :meth:`line_shift`.
         """
         s = (self.position(row, ccd) - self.line_shift(column)).to_value(u.mm)
         lam = np.polynomial.polynomial.polyval(s, self.dispersion) * u.Angstrom

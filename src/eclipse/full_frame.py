@@ -479,7 +479,8 @@ class FullFrame:
         Angle along the slit of each image column, from the slit's centre,
         positive towards solar north in nominal observations. The columns
         count from the left output, so on the left CCD the angle falls with
-        the column number.
+        the column number. If not given, it is taken from
+        `FocalPlane_SWC.field_angle` for the columns of `rate`.
     """
 
     rate: Dict[str, np.ndarray]
@@ -493,6 +494,13 @@ class FullFrame:
     slit_width: u.Quantity
     settings: dict = field(default_factory=dict)
     field_angle: Dict[str, u.Quantity] = field(default_factory=dict)
+
+    def __post_init__(self):
+        for ccd, rate in self.rate.items():
+            if ccd not in self.field_angle:
+                focal_plane = FocalPlane_SWC(n_columns=np.shape(rate)[1])
+                self.field_angle[ccd] = focal_plane.field_angle(
+                    np.arange(focal_plane.n_columns), ccd)
 
 
 def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
@@ -630,9 +638,6 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates. Along the slit, the image centre is at the slit centre.
-        The scene's y increases towards solar north, and the columns of
-        each CCD count from its left output: from the north end of the slit
-        on the left CCD, and from the south end on the right CCD.
     exposure : u.Quantity
         Exposure time.
     slit_width : u.Quantity, optional
@@ -688,6 +693,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     Returns
     -------
     FullFrame
+        The synthesis's y is taken to increase towards solar north. Each
+        CCD's columns count from its left output: from the north end of the
+        slit on the left CCD, and from the south end on the right CCD (see
+        `FullFrame.field_angle`).
 
     Raises
     ------
@@ -836,15 +845,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         for t in temperatures:
             add(_rates_at(t, context))
     rate, per_wavelength, per_square = totals
-    # The columns so far count from the south end of the slit. The camera
-    # reads each CCD's columns from its left output, which is at the north
-    # end of the slit on the left CCD (EUVST SWC FPGA Requirements
-    # Specification, figure with SolC-FPGA-RS-060: the solar spatial
-    # direction points to the left output, with the wavelength rising away
-    # from the register). The right CCD is turned half a turn, so its left
-    # output is at the south end.
-    for total in totals:
-        total["left"] = total["left"][::-1].copy()
+    # Count each CCD's columns from its left output, as the camera reads them.
+    for ccd in CCDS:
+        if focal_plane.field_angle(1, ccd) < focal_plane.field_angle(0, ccd):
+            for total in totals:
+                total[ccd] = total[ccd][::-1]
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)

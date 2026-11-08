@@ -13,7 +13,7 @@ from eclipse.atmosphere import Atmosphere, write_atmosphere
 from eclipse.band import BandLines, IonLines
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.frame import photons_from_lines
-from eclipse.full_frame import (_density_shares, _settings_from_simulation,
+from eclipse.full_frame import (FullFrame, _density_shares, _settings_from_simulation,
                                 full_ccd_frame, lay_out_register, write_full_frame)
 from eclipse.readout import FocalPlane_SWC
 from eclipse.synthesis_file import read_synthesis_products
@@ -93,10 +93,10 @@ def blurred_frame(uniform_synthesis):
                           n_workers=1)
 
 
-def _one_line(products, logN=None, g_off_the_synthesis=None):
+def _one_line(products, logN=None, g_off_the_synthesis=None, rest=REST):
     logT = products["logT_grid"]
     logN = products["logN_grid"] if logN is None else logN
-    ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=np.array([REST]),
+    ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=np.array([rest]),
                    observed=np.array([True]), temperatures=np.arange(logT.size),
                    g=np.full((1, logN.size, logT.size), G0))
     if g_off_the_synthesis is not None:
@@ -104,7 +104,7 @@ def _one_line(products, logN=None, g_off_the_synthesis=None):
         # reach the frame.
         off = ~np.isin(np.round(logN, 6), np.round(products["logN_grid"], 6))
         ion.g[:, off, :] = g_off_the_synthesis
-    return BandLines(band=(194.0, 196.0), logT_grid=logT, logN_grid=logN,
+    return BandLines(band=(rest - 1.0, rest + 1.0), logT_grid=logT, logN_grid=logN,
                      abundance=products["config"]["abundance"], hdf5_dbase_root="test",
                      ions=[ion])
 
@@ -177,26 +177,40 @@ def test_each_ccds_columns_count_from_its_left_output():
         focal_plane.field_angle(columns, "middle")
 
 
-def test_the_left_ccds_columns_run_from_the_north_end_of_the_slit(uniform_synthesis):
-    """With fiducials at uneven places along a short slit, the left CCD's rate in each column
-    follows the open part of the slit at that column's angle counted from the north end."""
+@pytest.mark.parametrize("ccd, rest, other", [("left", REST, "right"),
+                                               ("right", 203.8, "left")])
+def test_each_ccds_columns_run_from_its_left_output(uniform_synthesis, ccd, rest, other):
+    """With fiducials at uneven places along a short slit, a line's rate in each column
+    follows the open part of the slit at that column's angle counted from the CCD's left
+    output: the north end on the left CCD, the south end on the right CCD."""
     products = read_synthesis_products(uniform_synthesis)
     telescope = Telescope_EUVST(resolution_budget="none", slit_length=5 * u.arcsec,
                                 fiducial_centres=[-1.5 * u.arcsec, 0.8 * u.arcsec])
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
-                           telescope=telescope, psf=False, noise=False, n_workers=1,
-                           slit_mask=True)
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products, rest=rest), 0.3 * u.Mm,
+                           1000 * u.s, telescope=telescope, psf=False, noise=False,
+                           n_workers=1, slit_mask=True)
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
     openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
-    rate = frame.rate["left"]
+    rate = frame.rate[ccd]
+    assert rate.any() and not frame.rate[other].any()
     peak = rate.max(axis=1, keepdims=True)
     tolerance = dict(rtol=1e-9, atol=1e-12 * peak.max())
-    assert np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, "left"),
+    assert np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, ccd),
                        **tolerance)
-    assert not np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, "right"),
+    assert not np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, other),
                            **tolerance)
-    assert np.array_equal(frame.field_angle["left"], -frame.field_angle["right"])
-    assert frame.field_angle["left"][0] > 0
+    assert np.array_equal(frame.field_angle[ccd],
+                          focal_plane.field_angle(np.arange(focal_plane.n_columns), ccd))
+    assert (frame.field_angle[ccd][0] > 0) == (ccd == "left")
+
+
+def test_a_frame_made_without_column_angles_takes_the_focal_planes(sharp_frame):
+    fields = {name: getattr(sharp_frame, name) for name in
+              ("rate", "photons", "dn", "wavelength", "photon_wavelength",
+               "photon_rms_wavelength", "exposure", "slit_position", "slit_width")}
+    frame = FullFrame(**fields)
+    for ccd in ("left", "right"):
+        assert np.array_equal(frame.field_angle[ccd], sharp_frame.field_angle[ccd])
 
 
 def test_the_prescan_and_overscan_hold_only_the_read_noise():
