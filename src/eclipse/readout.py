@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field, replace
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import astropy.units as u
 import numpy as np
@@ -152,16 +152,29 @@ class FocalPlane_SWC:
         edge = self.outer_edge.to_value(u.mm)
         return (-edge + offset if ccd == "left" else edge - offset) * u.mm
 
-    def field_angle(self, column) -> u.Quantity:
-        """Angle along the slit of a column, from the centre of the field."""
+    def field_angle(self, column, ccd: Optional[str] = None) -> u.Quantity:
+        """
+        Angle along the slit of a column, from the centre of the field.
+
+        Positive is towards solar north in nominal observations. Without
+        `ccd`, the columns count from the south end of the slit. With `ccd`,
+        they count from the CCD's left output, as the camera reads them:
+        from the north end on the left CCD, and from the south end on the
+        right CCD, which is turned half a turn so that each serial register
+        is on an outer edge.
+        """
         middle = (self.n_columns - 1) / 2
-        return (np.asarray(column, dtype=float) - middle) * self.plate_scale
+        offset = np.asarray(column, dtype=float) - middle
+        if ccd is not None and self._check_ccd(ccd) == "left":
+            offset = -offset
+        return offset * self.plate_scale
 
     def line_shift(self, column=None) -> u.Quantity:
         """
         Shift of a line from where it lands at the field centre, in mm along
         the dispersion, positive toward longer wavelength. Zero everywhere
-        unless :attr:`slit_image_tilt` is non-zero.
+        unless :attr:`slit_image_tilt` is non-zero. `column` counts from the
+        south end of the slit, as in :meth:`field_angle` without a CCD.
         """
         linear, quadratic = self.slit_image_tilt
         if column is None or (linear == 0.0 and quadratic == 0.0):

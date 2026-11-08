@@ -475,6 +475,11 @@ class FullFrame:
     settings : dict
         Options the frame was made with, and the prescan and overscan sizes
         in `dn`.
+    field_angle : dict
+        Angle along the slit of each image column, from the slit's centre,
+        positive towards solar north in nominal observations. The columns
+        count from the left output, so on the left CCD the angle falls with
+        the column number.
     """
 
     rate: Dict[str, np.ndarray]
@@ -487,6 +492,7 @@ class FullFrame:
     slit_position: u.Quantity
     slit_width: u.Quantity
     settings: dict = field(default_factory=dict)
+    field_angle: Dict[str, u.Quantity] = field(default_factory=dict)
 
 
 def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
@@ -624,6 +630,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates. Along the slit, the image centre is at the slit centre.
+        The scene's y increases towards solar north, and the columns of
+        each CCD count from its left output: from the north end of the slit
+        on the left CCD, and from the south end on the right CCD.
     exposure : u.Quantity
         Exposure time.
     slit_width : u.Quantity, optional
@@ -827,6 +836,15 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         for t in temperatures:
             add(_rates_at(t, context))
     rate, per_wavelength, per_square = totals
+    # The columns so far count from the south end of the slit. The camera
+    # reads each CCD's columns from its left output, which is at the north
+    # end of the slit on the left CCD (EUVST SWC FPGA Requirements
+    # Specification, figure with SolC-FPGA-RS-060: the solar spatial
+    # direction points to the left output, with the wavelength rising away
+    # from the register). The right CCD is turned half a turn, so its left
+    # output is at the south end.
+    for total in totals:
+        total["left"] = total["left"][::-1].copy()
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
@@ -835,7 +853,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     dark_time = dark[:, np.newaxis] * dark_image
     rows = np.arange(focal_plane.n_rows)
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
-             "photon_rms_wavelength": {}}
+             "photon_rms_wavelength": {}, "field_angle": {}}
     for ccd in CCDS:
         # Far from a line, the exact part and the correction nearly cancel and
         # can leave a rate slightly below zero. Clip at zero, as a run does
@@ -873,6 +891,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
         frame["photon_rms_wavelength"][ccd] = rms_wavelength
+        frame["field_angle"][ccd] = focal_plane.field_angle(np.arange(focal_plane.n_columns),
+                                                            ccd)
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
@@ -885,7 +905,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
 
 FRAME_FORMAT = "eclipse-full-ccd-frame"
-FRAME_VERSION = 1
+FRAME_VERSION = 2
 
 
 def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
@@ -900,6 +920,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.
     - `wavelength`: wavelength each image row records.
+    - `field_angle`: angle along the slit of each image column, positive
+      towards solar north in nominal observations.
     - `photon_wavelength` and `photon_rms_wavelength`: wavelengths of the
       mean and root mean square energies of each pixel's photons.
 
@@ -934,6 +956,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
                                      ("rate", frame.rate[ccd], "photon / s"),
                                      ("wavelength", frame.wavelength[ccd].to_value(u.AA),
                                       "Angstrom"),
+                                     ("field_angle", frame.field_angle[ccd].to_value(u.arcsec),
+                                      "arcsec"),
                                      ("photon_wavelength",
                                       frame.photon_wavelength[ccd].to_value(u.AA), "Angstrom"),
                                      ("photon_rms_wavelength",
