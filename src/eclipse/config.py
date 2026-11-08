@@ -1226,8 +1226,10 @@ class Telescope_EUVST:
     #
     # The grating's magnification of -6.239 (RSC-2022021C) inverts the slit
     # image again, so north is at the detector's +y, towards global +Y
-    # (RSC-2022020A, Sect. 3.6). These documents do not say which readout
-    # output is on that side.
+    # (RSC-2022020A, Sect. 3.6). The left CCD's left output reads that end of
+    # the slit (EUVST SWC FPGA Requirements Specification, SolC-FPGA-RS-060).
+    # The right CCD faces the other way, with its serial register on its own
+    # outer edge, so its right output reads it.
     slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True,
                                     metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
