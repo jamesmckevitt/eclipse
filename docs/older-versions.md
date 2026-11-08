@@ -28,7 +28,7 @@ ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_respo
 
 ## Frame files
 
-ECLIPSE 0.14.0 and earlier wrote frame files of version 1, whose columns count from the south end of the slit on both CCDs. From version 2, each CCD's columns count from its left output, so the left CCD's run the other way, and `field_angle` gives each column's angle along the slit.
+ECLIPSE 0.13.0 and 0.14.0 wrote frame files of version 1, whose columns count from the south end of the slit on both CCDs. From version 2, each CCD's columns count from its left output, so the left CCD's run the other way, and `field_angle` gives each column's angle along the slit. Version 1 files have no `field_angle`.
 
 ## Reading MURaM's own files
 

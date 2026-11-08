@@ -479,8 +479,8 @@ class FullFrame:
         Angle along the slit of each image column, from the slit's centre,
         positive towards solar north in nominal observations. The columns
         count from the left output, so on the left CCD the angle falls with
-        the column number. If not given, it is taken from
-        `FocalPlane_SWC.field_angle` for the columns of `rate`.
+        the column number. If not given, it is taken from a default
+        `FocalPlane_SWC` with the columns of `rate`.
     """
 
     rate: Dict[str, np.ndarray]
@@ -496,6 +496,7 @@ class FullFrame:
     field_angle: Dict[str, u.Quantity] = field(default_factory=dict)
 
     def __post_init__(self):
+        self.field_angle = dict(self.field_angle)
         for ccd, rate in self.rate.items():
             if ccd not in self.field_angle:
                 focal_plane = FocalPlane_SWC(n_columns=np.shape(rate)[1])
@@ -849,7 +850,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     for ccd in CCDS:
         if focal_plane.field_angle(1, ccd) < focal_plane.field_angle(0, ccd):
             for total in totals:
-                total[ccd] = total[ccd][::-1]
+                total[ccd] = total[ccd][::-1].copy()
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
