@@ -134,7 +134,7 @@ simulation:
 
 ## The slit's fiducials
 
-Each SWC slit is 300 arcsec long and is interrupted in two places. These gaps, the fiducials, block the light over a short length of the slit, so they show as dark rows along the slit in every slit's data. They are there to line up observations made with different slits.
+Each SWC slit is 300 arcsec long and is interrupted in two places. These gaps, the fiducials, block the light over a short length of the slit, so they show as dark rows along the slit in every slit's data. They are there to line up observations made with different slits. In nominal observations they are 25 arcsec north and 70 arcsec south of the slit's centre.
 
 With `simulation.slit_mask: True`, no light reaches the pixels behind the fiducials or beyond the ends of the slit. A pixel partly behind one gets the part of the light that falls on its open part. It is off by default, which leaves the slit open along the whole atmosphere.
 

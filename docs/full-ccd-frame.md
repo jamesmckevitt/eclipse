@@ -90,6 +90,8 @@ Fe XII 195.12 is the brightest line, near the far end of the left CCD. The flat 
 
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit, which is the middle column of the CCDs.
 
+A frame takes the synthesis file's y to increase towards solar north, as in nominal observations. Each CCD's columns count from its left output, as the camera reads them. On the left CCD, that is from the north end of the slit. The right CCD faces the other way, with its serial register on its own outer edge, so its columns count from the south end. `field_angle` gives the angle of each column along the slit.
+
 With the PSF on, the blur along the slit carries light out of the columns at the ends of the scene. `psf_boundary` sets what the blur brings in from beyond the scene, as in a run. With `"replicate"`, the default, the Sun beyond the scene is taken to look like the scene's edges, and the columns beyond the scene get no light. With `"zero"`, the Sun beyond the scene is dark, so the columns at the ends of the scene lose up to about a third of their light to the columns just beyond. `psf_boundary` sets the same across the slit, for a slit near the synthesis's x edges. With `"replicate"`, a slit partly beyond those edges gets light only over its part inside them.
 
 With `slit_mask=True`, no light reaches the columns beyond the ends of the 300 arcsec slit or behind its fiducials, as in a run (see [The slit's fiducials](instrument-model.md#the-slits-fiducials)). The CCD's 2048 columns cover 326 arcsec along the slit, so about 80 columns at each end are beyond the slit. It is off by default.
@@ -122,6 +124,7 @@ For each CCD, `"left"` and `"right"`:
 - `photons`: the photons in each pixel over the exposure;
 - `dn`: the frame as it is read out, in DN;
 - `wavelength`: the wavelength each row records;
+- `field_angle`: the angle along the slit of each column, from the slit's centre, positive towards solar north in nominal observations;
 - `photon_wavelength`: the wavelength of the mean energy of each pixel's photons;
 - `photon_rms_wavelength`: the wavelength of the root mean square energy of each pixel's photons, which sets how far their electrons spread.
 

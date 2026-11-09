@@ -8,12 +8,13 @@ import astropy.units as u
 import numpy as np
 import pytest
 
+import eclipse
 from eclipse import synthesis
 from eclipse.atmosphere import Atmosphere, write_atmosphere
 from eclipse.band import BandLines, IonLines
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.frame import photons_from_lines
-from eclipse.full_frame import (_density_shares, _settings_from_simulation,
+from eclipse.full_frame import (FullFrame, _density_shares, _settings_from_simulation,
                                 full_ccd_frame, lay_out_register, write_full_frame)
 from eclipse.readout import FocalPlane_SWC
 from eclipse.synthesis_file import read_synthesis_products
@@ -93,10 +94,10 @@ def blurred_frame(uniform_synthesis):
                           n_workers=1)
 
 
-def _one_line(products, logN=None, g_off_the_synthesis=None):
+def _one_line(products, logN=None, g_off_the_synthesis=None, rest=REST):
     logT = products["logT_grid"]
     logN = products["logN_grid"] if logN is None else logN
-    ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=np.array([REST]),
+    ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=np.array([rest]),
                    observed=np.array([True]), temperatures=np.arange(logT.size),
                    g=np.full((1, logN.size, logT.size), G0))
     if g_off_the_synthesis is not None:
@@ -104,7 +105,7 @@ def _one_line(products, logN=None, g_off_the_synthesis=None):
         # reach the frame.
         off = ~np.isin(np.round(logN, 6), np.round(products["logN_grid"], 6))
         ion.g[:, off, :] = g_off_the_synthesis
-    return BandLines(band=(194.0, 196.0), logT_grid=logT, logN_grid=logN,
+    return BandLines(band=(rest - 1.0, rest + 1.0), logT_grid=logT, logN_grid=logN,
                      abundance=products["config"]["abundance"], hdf5_dbase_root="test",
                      ions=[ion])
 
@@ -157,6 +158,61 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_pa
         assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
                 f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
                                                        det.parallel_overscan_rows)
+        assert f.attrs["software_version"] == eclipse.__version__
+        assert f.attrs["git_commit_id"] == eclipse.utils.get_git_commit_id()
+        for ccd in ("left", "right"):
+            assert np.array_equal(f[f"{ccd}/field_angle"][()],
+                                  frame.field_angle[ccd].to_value(u.arcsec))
+            assert f[f"{ccd}/field_angle"].attrs["unit"] == "arcsec"
+
+
+def test_each_ccds_columns_count_from_its_left_output():
+    """The left output is at the north end of the slit on the left CCD and at the south end on
+    the right CCD, which is turned half a turn."""
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    columns = np.arange(focal_plane.n_columns)
+    plain = focal_plane.field_angle(columns)
+    assert plain[0] < 0 < plain[-1]
+    assert np.array_equal(focal_plane.field_angle(columns, "right"), plain)
+    assert np.array_equal(focal_plane.field_angle(columns, "left"), -plain)
+    with pytest.raises(ValueError, match="ccd must be"):
+        focal_plane.field_angle(columns, "middle")
+
+
+@pytest.mark.parametrize("ccd, rest, other", [("left", REST, "right"),
+                                               ("right", 203.8, "left")])
+def test_each_ccds_columns_run_from_its_left_output(uniform_synthesis, ccd, rest, other):
+    """With fiducials at uneven places along a short slit, a line's rate in each column
+    follows the open part of the slit at that column's angle counted from the CCD's left
+    output: the north end on the left CCD, the south end on the right CCD."""
+    products = read_synthesis_products(uniform_synthesis)
+    telescope = Telescope_EUVST(resolution_budget="none", slit_length=5 * u.arcsec,
+                                fiducial_centres=[-1.5 * u.arcsec, 0.8 * u.arcsec])
+    frame = full_ccd_frame(uniform_synthesis, _one_line(products, rest=rest), 0.3 * u.Mm,
+                           1000 * u.s, telescope=telescope, psf=False, noise=False,
+                           n_workers=1, slit_mask=True)
+    focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
+    openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
+    rate = frame.rate[ccd]
+    assert rate.any() and not frame.rate[other].any()
+    peak = rate.max(axis=1, keepdims=True)
+    tolerance = dict(rtol=1e-9, atol=1e-12 * peak.max())
+    assert np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, ccd),
+                       **tolerance)
+    assert not np.allclose(rate, peak * _columns_in_the_scene(focal_plane, openings, other),
+                           **tolerance)
+    assert np.array_equal(frame.field_angle[ccd],
+                          focal_plane.field_angle(np.arange(focal_plane.n_columns), ccd))
+    assert (frame.field_angle[ccd][0] > 0) == (ccd == "left")
+
+
+def test_a_frame_made_without_column_angles_takes_the_focal_planes(sharp_frame):
+    fields = {name: getattr(sharp_frame, name) for name in
+              ("rate", "photons", "dn", "wavelength", "photon_wavelength",
+               "photon_rms_wavelength", "exposure", "slit_position", "slit_width")}
+    frame = FullFrame(**fields)
+    for ccd in ("left", "right"):
+        assert np.array_equal(frame.field_angle[ccd], sharp_frame.field_angle[ccd])
 
 
 def test_the_prescan_and_overscan_hold_only_the_read_noise():
@@ -599,19 +655,20 @@ def test_the_frame_api_is_exported_from_the_package():
             assert name in eclipse.__all__
 
 
-def _columns_in_the_scene(focal_plane, openings=None):
-    """Fraction of each column along the slit inside the 4.4 Mm scene, centred on the field,
-    and inside `openings` (arcsec) if given."""
+def _columns_in_the_scene(focal_plane, openings=None, ccd="left"):
+    """Fraction of each column of `ccd` along the slit inside the 4.4 Mm scene, centred on the
+    field, and inside `openings` (arcsec) if given."""
     from eclipse.utils import distance_to_angle
 
     half = distance_to_angle(4.4 * u.Mm).to_value(u.arcsec) / 2
-    edges = focal_plane.field_angle(np.arange(focal_plane.n_columns + 1) - 0.5).to_value(u.arcsec)
+    edges = focal_plane.field_angle(np.arange(focal_plane.n_columns + 1) - 0.5,
+                                    ccd).to_value(u.arcsec)
+    lower, upper = np.minimum(edges[:-1], edges[1:]), np.maximum(edges[:-1], edges[1:])
     inside = 0.0
     for low, high in [(-half, half)] if openings is None else openings:
         low, high = max(low, -half), min(high, half)
-        inside = inside + np.clip(np.minimum(edges[1:], high) - np.maximum(edges[:-1], low),
-                                  0.0, None)
-    return inside / np.diff(edges)
+        inside = inside + np.clip(np.minimum(upper, high) - np.maximum(lower, low), 0.0, None)
+    return inside / (upper - lower)
 
 
 def test_replicate_gives_the_ends_of_a_uniform_scene_the_middle_rate(blurred_frame):
@@ -691,11 +748,13 @@ def test_the_slit_mask_darkens_the_columns_beyond_the_slit_and_behind_the_fiduci
                            telescope=telescope, noise=False, n_workers=1, slit_mask=True)
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
     openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
-    fraction = _columns_in_the_scene(focal_plane, openings)
-    # The blurred frame's middle column is open, as the slit's centre is between the fiducials.
-    middle = blurred_frame.rate["left"][:, focal_plane.n_columns // 2]
-    assert np.allclose(frame.rate["left"], middle[:, np.newaxis] * fraction, rtol=1e-9,
-                       atol=1e-12 * middle.max())
+    for ccd in ("right", "left"):
+        fraction = _columns_in_the_scene(focal_plane, openings, ccd)
+        # The blurred frame's middle column is open, as the slit's centre is between the
+        # fiducials.
+        middle = blurred_frame.rate[ccd][:, focal_plane.n_columns // 2]
+        assert np.allclose(frame.rate[ccd], middle[:, np.newaxis] * fraction, rtol=1e-9,
+                           atol=1e-12 * middle.max())
     scene = _columns_in_the_scene(focal_plane)
     assert np.count_nonzero((fraction == 0) & (scene == 1)) >= 6
     assert np.count_nonzero((fraction < 1) & (fraction > 0)) == 6
@@ -725,8 +784,7 @@ def test_a_simulation_with_the_slit_mask_and_a_dark_boundary_gives_the_keyword_f
     _same_frames(from_sim, from_keywords)
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
     openings = common["telescope"].slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
-    edges = focal_plane.field_angle(np.arange(focal_plane.n_columns + 1) - 0.5).to_value(u.arcsec)
-    middles = (edges[:-1] + edges[1:]) / 2
+    middles = focal_plane.field_angle(np.arange(focal_plane.n_columns), "left").to_value(u.arcsec)
     closed = ~np.any((middles[:, None] > openings[:, 0] - 0.08)
                      & (middles[:, None] < openings[:, 1] + 0.08), axis=1)
     assert closed.sum() > 6 and not from_sim.rate["left"][:, closed].any()
