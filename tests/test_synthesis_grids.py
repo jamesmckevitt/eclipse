@@ -225,6 +225,25 @@ def test_a_velocity_grid_in_any_unit_shifts_the_lines_alike():
         assert u.allclose(spectrum["wl_grid"], reference["wl_grid"], rtol=1e-15)
 
 
+@pytest.mark.parametrize("g_shape", [(2, 3, 2), (1, 1, 2)])
+def test_each_pixel_takes_its_own_contribution_function(g_shape):
+    """G can differ from pixel to pixel, or be one G for the whole image."""
+    generator = np.random.default_rng(1)
+    logT_grid = np.array([6.0, 6.2])
+    vel_grid = np.array([-10.0e5, 0.0, 10.0e5]) * (u.cm / u.s)
+    em_tv = generator.random((2, 3, 2, 3))
+    g = generator.random(g_shape)
+    goft = _one_line_goft(2, 3, 2)
+    goft["Fe12_195.1190"]["g"] = g
+    synthesise_spectra(goft, em_tv, vel_grid, logT_grid)
+    for row, column in np.ndindex(2, 3):
+        pixel = _one_line_goft(1, 1, 2)
+        pixel["Fe12_195.1190"]["g"] = np.broadcast_to(g, (2, 3, 2))[row, column][None, None]
+        synthesise_spectra(pixel, em_tv[row, column][None, None], vel_grid, logT_grid)
+        assert goft["Fe12_195.1190"]["si"][row, column] == pytest.approx(
+            pixel["Fe12_195.1190"]["si"][0, 0], rel=1e-12)
+
+
 def test_emission_beyond_the_velocity_grid_is_left_out_and_said_to_be():
     """A 500 km/s flow emits beyond a +-300 km/s window, while the DEM keeps it."""
     logT = np.full((2, 1, 1), 6.1)
