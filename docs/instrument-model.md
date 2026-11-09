@@ -126,7 +126,7 @@ simulation:
 
 The active region fills the slit, so both fiducials cross it:
 
-![The active region without and with the slit's mask, which adds two dark rows at the fiducials](images/example-slit-mask.png)
+![The active region without and with the slit's mask, which adds two dark rows at the fiducials and dark bands beyond the ends of the slit](images/example-slit-mask.png)
 
 ## Visible light
 
