@@ -111,10 +111,6 @@ For each component, the statistics also hold its name as `component`, its rest w
 
 The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no noise and no PSF. `v_true` and `w_true` come from that fit. `v_err` then says how far the measured velocity is off on average, where `v_std` says how much it scatters.
 
-Here is `v_err` as a map, for this combination. In the core it is about 0.5 km/s, and in the faintest parts of the field it reaches several km/s:
-
-![The true velocity minus the mean measured velocity over the active region](images/example-velocity-error.png)
-
 ## Maps
 
 `create_sunpy_maps_from_combo` makes SunPy maps of a combination's results:
@@ -155,13 +151,12 @@ results = load_instrument_response_results("run/result/muram_ar_exposures.h5")
 exposures = [get_results_for_combination(results, **{"simulation.expos": settings["simulation.expos"]})
              for settings in get_parameter_combinations(results)]
 maps = create_sunpy_maps_from_combo(exposures[0], exposure_time_results=exposures,
+                                    precision_requirement=5 * u.km / u.s,
                                     date_obs="2026-01-01T00:00:00")
 maps["exposure_time"].peek()
 ```
 
-![The shortest exposure that measures each pixel's velocity to within 2 km/s](images/example-exposure-time.png)
-
-The core reaches 2 km/s within 60 s. About half of the quiet Sun reaches it within 240 s, and the grey pixels do not reach it in any of these exposures.
+![The shortest exposure that measures each pixel's velocity to within 5 km/s](images/example-exposure-time.png)
 
 ## Every iteration
 

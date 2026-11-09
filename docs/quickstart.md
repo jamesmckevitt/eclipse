@@ -16,7 +16,7 @@ pip install eclipse
 pip install git+https://github.com/jamesmckevitt/eclipse.git
 ```
 
-ECLIPSE computes line emission with [fiasco](https://fiasco.readthedocs.io/), which needs its own copy of the CHIANTI atomic database. The first time ECLIPSE needs the database, fiasco asks whether to download and build it. The download is about 600 MB and the build takes several minutes, so the first run is slower than later ones.
+ECLIPSE computes line emission with [fiasco](https://fiasco.readthedocs.io/), which needs its own copy of the CHIANTI atomic database. The first time ECLIPSE needs the database, fiasco asks whether to download and build it, so the first run is slower than later ones.
 
 ## A first run
 
@@ -39,7 +39,7 @@ and run it:
 eclipse --config first_run.yaml
 ```
 
-This observes the line in exposures of 5 s and 20 s, and writes the results to `run/result/first_run.h5`. It takes about half a minute on 8 cores. Then, in Python:
+This observes the line in exposures of 5 s and 20 s, and writes the results to `run/result/first_run.h5`. Then, in Python:
 
 ```python
 import astropy.units as u

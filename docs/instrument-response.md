@@ -76,7 +76,7 @@ fitting:
 
 **A setting given as a list of more than one value is swept**: ECLIPSE runs every combination of the swept values, as for `offchip_bin_slit`, `slit_width` and `expos` above, which make eight combinations. A list of one value is just that value. At the top level, only `offchip_bin_slit` is swept. The other lists there, such as the pinhole lists and a time series' files, are lists of things rather than sweeps, as are the fitting components. A few settings are lists themselves, and take one value: `telescope.psf_params`, `telescope.fiducial_centres` and `telescope.fiducial_lengths`. So does `telescope.psf_slit_width`, the slit `psf_params` was measured with.
 
-This takes about three hours and 120 GB of memory on 128 cores. Here are four of the eight combinations, with two pixels binned along the slit. Each map shows how precisely the velocity is measured in each pixel: its standard deviation over the ten iterations. A longer exposure collects more photons, so it measures the velocity more precisely, and so does a wider slit, though by less:
+Here are four of the eight combinations, with two pixels binned along the slit. Each map shows how precisely the velocity is measured in each pixel (its standard deviation over the ten iterations):
 
 ![The velocity precision over the active region for the 0.2 and 0.4 arcsec slits, in 15 and 60 s exposures](images/example-sweep.png)
 

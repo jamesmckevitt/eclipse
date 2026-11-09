@@ -8,7 +8,7 @@ This page makes the frame for the active region of the [worked example](worked-e
 
 ![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
 
-On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure, on the same scale along the slit. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise. It is all that is recorded outside the spectral band, below 170 Angstrom and above 212.3 Angstrom.
+On the left is the Fe XII map of the region, observed without noise, with the slit in red. The triangles mark the slit's two fiducials. On the right is everything the two CCDs record through that slit in one 60 s exposure. Each vertical streak is one spectral line, seen all the way along the slit. The bright band across them is the core of the region, where the slit crosses it. The grey background is the detector's dark current and noise.
 
 ## 1. Every line in the band
 
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     write_band_lines(lines, "band_lines.h5")
 ```
 
-On the default grids this takes about two hours and 210 GB of memory on 128 cores, so it is done once. A synthesis's densities are always steps of 0.3 in log10 n_e, so lines worked out over a wider run of those steps serve any synthesis whose densities fall within it.
+This only needs doing once. A synthesis's densities are always steps of 0.3 in log10 n_e, so lines worked out over a wider run of those steps serve any synthesis whose densities fall within it.
 
 ## 2. The continuum
 
@@ -46,8 +46,6 @@ if __name__ == "__main__":
     free, two_photon = compute_continuum_fiasco(wavelength, lines.logT_grid, lines.logN_grid,
                                                 abundance=lines.abundance)
 ```
-
-This takes about 4 minutes on 128 cores.
 
 ## 3. The frame
 
@@ -86,8 +84,6 @@ if __name__ == "__main__":
 
 ![The spectrum of the band in the frame, from 170 to 212 Angstrom, with the median over the slit in each row](images/example-frame-spectrum.png)
 
-Fe XII 195.12 is the brightest line, near the far end of the left CCD. The flat level between the lines is mostly the dark current.
-
 `slit_position` is where the middle of the slit is, across it, in the synthesis file's x coordinates. Along the slit, the middle of the image is at the middle of the slit, which is the middle column of the CCDs.
 
 A frame takes the synthesis file's y to increase towards solar north, as in nominal observations. Each CCD's columns count from its left output, as the camera reads them. On the left CCD, that is from the north end of the slit. The right CCD faces the other way, with its serial register on its own outer edge, so its columns count from the south end. `field_angle` gives the angle of each column along the slit.
@@ -110,7 +106,7 @@ if __name__ == "__main__":
 
 The frame uses the `Simulation`'s `slit_width`, `psf`, `spectral_psf`, `noise`, `psf_boundary` and `slit_mask`. A `Simulation` has the PSF off unless it is made with `psf=True`. When one of these six arguments of `full_ccd_frame` equals its default, the `Simulation`'s value is used, even if the argument was typed out. An argument with any other value must agree with the `Simulation`. The exposure is set by `exposure`, not by the `Simulation`'s `expos`. The number of workers is set by `n_workers`. A frame does not model pinholes or visible stray light. `vis_sl` must be left at zero and no pinholes enabled. `instrument` must be `"SWC"`.
 
-The frame on this page, with 22 densities and 121 velocity bins, takes about 4 minutes and 35 GB of memory with 16 workers. By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
+By default `full_ccd_frame` runs a worker process on every CPU it may use, and each adds to the memory; set `n_workers` to use fewer.
 
 Every part of each line, and of the continuum, is counted in photons at its own wavelength, with the telescope's throughput there, and the photons in each pixel free the electrons of their own energy.
 

@@ -23,16 +23,14 @@ from matplotlib.ticker import NullFormatter
 
 from eclipse import (Detector_SWC, Telescope_EUVST, create_sunpy_maps_from_combo,
                      get_parameter_combinations, get_results_for_combination,
-                     load_instrument_response_results, read_synthesis, read_synthesis_products)
+                     load_instrument_response_results, read_synthesis)
 from eclipse.analysis import format_exposure_time_colorbar
 
 OUT = Path(sys.argv[1])
 DATE = "2026-01-01T00:00:00"
 SYNTHESIS = "run/input/muram_ar_fe12.h5"
-LINES = [("synth/fe9.h5", "Fe IX 171.07"), ("synth/fe10.h5", "Fe X 184.54"),
-         (SYNTHESIS, "Fe XII 195.12"), ("synth/fe14.h5", "Fe XIV 211.32")]
-# Pixels of the synthesis used as examples, as (y, x).
-PIXELS = {"Core": (544, 544), "Quiet Sun": (150, 150)}
+# A pixel of the synthesis in the core of the region, as (y, x).
+CORE = (544, 544)
 VELOCITY = dict(cmap="RdBu_r", vmin=-25, vmax=25)
 
 
@@ -118,13 +116,14 @@ def stages():
     axes[0].set_xlabel("x [arcsec]")
     fig.colorbar(drawn, ax=axes[0], location="bottom", label="erg / (s cm2 sr)", shrink=0.9)
     dn = observed["total_dn"]
-    drawn = show(axes[1], dn, "Recorded", cmap="gray",
+    drawn = show(axes[1], dn, "Measured intensity", cmap="gray",
                  norm=LogNorm(*np.nanpercentile(dn.data[dn.data > 0], [1, 99.9])))
     bar = fig.colorbar(drawn, ax=axes[1], location="bottom", label="DN", shrink=0.9)
     bar.ax.xaxis.set_minor_formatter(NullFormatter())
     drawn = show(axes[2], observed["velocity_from_fit"], "Measured velocity", **VELOCITY)
     fig.colorbar(drawn, ax=axes[2], location="bottom", label="km/s", shrink=0.9, extend="both")
-    drawn = show(axes[3], observed["velocity_std"], "Velocity precision", vmin=0, vmax=10)
+    drawn = show(axes[3], observed["velocity_std"], "Velocity measurement precision", vmin=0,
+                 vmax=10)
     fig.colorbar(drawn, ax=axes[3], location="bottom", label="km/s", shrink=0.9, extend="max")
     axes[0].set_ylabel("y [arcsec]")
     save(fig, "example-stages")
@@ -187,45 +186,6 @@ def frame_spectrum():
     ax.set_ylabel("DN per pixel")
     ax.legend()
     save(fig, "example-frame-spectrum")
-
-
-def lines():
-    """The four lines' intensity, seen from above, as synthesised."""
-    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), sharey=True, layout="constrained")
-    for ax, (file, title) in zip(axes, LINES):
-        line = next(iter(synthesis(file).lines.values()))
-        intensity = np.trapezoid(line.intensity.value, line.wavelength.value, axis=-1)
-        ax.imshow(intensity, origin="lower", cmap="gray", extent=[-150, 150, -150, 150],
-                  norm=LogNorm(*np.percentile(intensity, [1, 99.8])))
-        ax.set_title(title)
-        ax.set_xlabel("x [arcsec]")
-    axes[0].set_ylabel("y [arcsec]")
-    save(fig, "example-lines")
-
-
-def pixels():
-    """The spectrum and the DEM of a pixel in the core and one in the quiet Sun."""
-    lines = synthesis(SYNTHESIS).lines
-    products = read_synthesis_products(SYNTHESIS, keys=["dem_map", "logT_grid"])
-    unit = u.erg / (u.s * u.cm**2 * u.sr * u.AA)
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), layout="constrained")
-    for i, (name, (y, x)) in enumerate(PIXELS.items()):
-        for line, label in zip(lines.values(), (name, None)):
-            axes[0].plot(line.wavelength.to_value(u.AA), line.intensity[y, x].to_value(unit),
-                         color=f"C{i}", label=label)
-        axes[1].plot(products["logT_grid"], products["dem_map"][y, x], color=f"C{i}", label=name)
-    axes[0].set_xlim(195.03, 195.27)
-    axes[0].set_yscale("log")
-    axes[0].set_ylim(1e1, 3e5)
-    axes[0].set_xlabel("Wavelength [Angstrom]")
-    axes[0].set_ylabel("Radiance [erg / (s cm2 sr Angstrom)]")
-    axes[0].legend()
-    axes[1].set_xlim(5.5, 6.8)
-    axes[1].set_yscale("log")
-    axes[1].set_ylim(1e25, None)
-    axes[1].set_xlabel("log10 T [K]")
-    axes[1].set_ylabel("DEM [cm-5 per unit log10 T]")
-    save(fig, "example-pixels")
 
 
 def sweep():
@@ -311,29 +271,27 @@ def slit_mask():
 
 
 def blend_fit():
-    """A measured spectrum and its fit, in a pixel of the core and one of the quiet Sun."""
+    """A measured spectrum and its fit, in a pixel of the core."""
     result = combination("muram_ar_fe12")
     spectra = result["first_dn_signal"].data
     fit = result["dn_fit_stats"]["first_fit_data"]
     wavelength = result["first_dn_signal"].axis_world_coords("em.wl")[0].to_value(u.AA)
     fine = np.linspace(wavelength[0], wavelength[-1], 400)
     ny, nx = spectra.shape[:2]
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.5), layout="constrained")
-    for ax, (name, (y, x)) in zip(axes, PIXELS.items()):
-        # The same place on the sky, in this run's pixels.
-        row, column = int(y / 1088 * ny), int(x / 1088 * nx)
-        ax.step(wavelength, spectra[row, column], where="mid", color="black", label="Measured")
-        params = fit[row, column]
-        background = params[-1]
-        profiles = [amplitude * np.exp(-0.5 * ((fine - centre * 1e8) / (width * 1e8))**2)
-                    for amplitude, centre, width in (params[0:3], params[3:6])]
-        ax.plot(fine, background + sum(profiles), color="tab:red", lw=3, label="Fit")
-        for profile, label in zip(profiles, ("Fe XII 195.119", "Fe XII 195.179")):
-            ax.plot(fine, background + profile, label=label)
-        ax.set_title(name)
-        ax.set_xlabel("Wavelength [Angstrom]")
-    axes[0].set_ylabel("DN per pixel")
-    axes[0].legend()
+    fig, ax = plt.subplots(figsize=(4.8, 3.5), layout="constrained")
+    # The same place on the sky, in this run's pixels.
+    row, column = int(CORE[0] / 1088 * ny), int(CORE[1] / 1088 * nx)
+    ax.step(wavelength, spectra[row, column], where="mid", color="black", label="Measured")
+    params = fit[row, column]
+    background = params[-1]
+    profiles = [amplitude * np.exp(-0.5 * ((fine - centre * 1e8) / (width * 1e8))**2)
+                for amplitude, centre, width in (params[0:3], params[3:6])]
+    ax.plot(fine, background + sum(profiles), color="tab:red", lw=3, label="Fit")
+    for profile, label in zip(profiles, ("Fe XII 195.119", "Fe XII 195.179")):
+        ax.plot(fine, background + profile, label=label)
+    ax.set_xlabel("Wavelength [Angstrom]")
+    ax.set_ylabel("DN per pixel")
+    ax.legend()
     save(fig, "example-blend-fit")
 
 
@@ -365,26 +323,21 @@ def precision():
     save(fig, "example-precision")
 
 
-def velocity_error():
-    """The true velocity minus the mean measured velocity."""
-    fig, ax = plt.subplots(figsize=(4.8, 3.9), layout="constrained")
-    drawn = show(ax, sweep_maps()["velocity_err"], "velocity_err", cmap="RdBu_r", vmin=-5, vmax=5)
-    ax.set_ylabel("y [arcsec]")
-    fig.colorbar(drawn, ax=ax, label="km/s", extend="both")
-    save(fig, "example-velocity-error")
-
-
 def exposure_time():
-    """The shortest exposure that measures each pixel's velocity to within 2 km/s."""
+    """The shortest exposure that measures each pixel's velocity to within 5 km/s."""
+    requirement = 5 * u.km / u.s
     run = results("muram_ar_exposures")
     every = [get_results_for_combination(run, **{"simulation.expos": settings["simulation.expos"]})
              for settings in get_parameter_combinations(run)]
-    image = create_sunpy_maps_from_combo(every[0], exposure_time_results=every,
-                                         date_obs=DATE)["exposure_time"]
+    image = create_sunpy_maps_from_combo(every[0], exposure_time_results=every, date_obs=DATE,
+                                         precision_requirement=requirement)["exposure_time"]
     fig = plt.figure(figsize=(4.8, 3.9), layout="constrained")
     ax = fig.add_subplot(projection=image)
-    drawn = image.plot(axes=ax, title="Exposure for 2 km/s")
-    format_exposure_time_colorbar(image, fig.colorbar(drawn, ax=ax))
+    drawn = image.plot(axes=ax, title="Exposure for 5 km/s")
+    # A pixel that misses the requirement at the longest exposure is off the top of the scale.
+    drawn.set_data(np.nan_to_num(image.data, posinf=1e9))
+    drawn.cmap.set_over("tab:red")
+    format_exposure_time_colorbar(image, fig.colorbar(drawn, ax=ax, extend="max"), requirement)
     save(fig, "example-exposure-time")
 
 
@@ -416,9 +369,8 @@ def uniform():
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    every = (stages, slit_and_frame, frame_spectrum, lines, pixels, sweep, binning, noise, psf,
-             slits, slit_mask, blend_fit, doppler, precision, velocity_error, exposure_time,
-             uniform)
+    every = (stages, slit_and_frame, frame_spectrum, sweep, binning, noise, psf, slits, slit_mask,
+             blend_fit, doppler, precision, exposure_time, uniform)
     for make in [globals()[name] for name in sys.argv[2:]] or every:
         make()
         print(make.__name__)

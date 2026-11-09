@@ -25,7 +25,7 @@ eclipse --config configs/uniform.yaml
 
 The line fills a single pixel on the sky, and is laid onto the detector's wavelength pixels directly.
 
-This takes about 5 minutes on 96 cores. The standard deviation of the fitted velocity over the 500 iterations shows how precisely each combination measures it. It improves with the square root of the exposure time:
+The standard deviation of the fitted velocity over the 500 iterations shows how precisely each combination measures it:
 
 ![Velocity precision against exposure time for the 0.2 and 0.4 arcsec slits](images/example-uniform.png)
 

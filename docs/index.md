@@ -59,15 +59,13 @@ flowchart LR
 
 **3. Analyse the results.** Find how precisely the instrument measured each line, compare the measurements with the truth, compare the settings the run swept through, and make maps. See [Analysing the results](analysis.md).
 
-## An example
+## What to expect
 
-Most of these pages follow one example: a MURaM simulation of an active region in the quiet Sun. It covers 300 by 300 arcsec, so it fills the EUVST-SW slit from end to end. The [worked example](worked-example.ipynb) takes it from the simulation's files to the maps below, and the other pages show what their settings do to it. The simulation is [a test release](https://doi.org/10.5522/04/34806267), not for scientific use.
+The [worked example](worked-example.ipynb) takes a MURaM simulation of an active region from its files to the maps below, and the other pages show what their settings do.
 
-Here is what a run gives for Fe XII 195.12, observed with the 0.4 arcsec slit in 60 s exposures:
+An example simulation of Fe XII 195.12 emission, observed with the 0.4 arcsec slit with 60 s exposures per slit position:
 
-![Four maps of the active region: the Fe XII intensity as synthesised, the signal recorded by the detector, the measured Doppler velocity and its precision](images/example-stages.png)
-
-From left to right, these are the line's intensity as it leaves the Sun, the signal the detector records, the Doppler velocity fitted to the spectra, and how precisely that velocity is measured.
+![Four maps of the active region: the Fe XII intensity as synthesised, the measured intensity, the measured Doppler velocity and its measurement precision](images/example-stages.png)
 
 A raster like this is built up one slit position at a time. At each position, the camera records the spectrum of the whole band, all along the slit:
 
@@ -81,7 +79,7 @@ To install ECLIPSE and make a first run, see [Getting started](quickstart.md). T
 
 | You have | Go to | Use it when | What you run |
 | --- | --- | --- | --- |
-| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic structure on the sky and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `synthesise-spectra`, then `eclipse` |
+| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic solar structure and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `synthesise-spectra`, then `eclipse` |
 | A series of MHD snapshots | [Time series](time-series.md) | The atmosphere changes during the observation, as it does in a raster or a sit-and-stare. | `eclipse`, which synthesises each exposure as it goes |
 | A VDEM | [From a DEM or VDEM](dem-synthesis.md#with-velocities-a-vdem) | Your simulation has already been reduced to the emission measure at each temperature and line-of-sight velocity. | A short Python script, then `eclipse` |
 | A DEM | [From a DEM or VDEM](dem-synthesis.md) | You have a DEM inferred from observations. It has no velocities, so the lines are not Doppler shifted. | A short Python script, then `eclipse` |
