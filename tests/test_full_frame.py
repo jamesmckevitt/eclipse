@@ -8,6 +8,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
+import eclipse
 from eclipse import synthesis
 from eclipse.atmosphere import Atmosphere, write_atmosphere
 from eclipse.band import BandLines, IonLines
@@ -157,7 +158,8 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_pa
         assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
                 f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
                                                        det.parallel_overscan_rows)
-        assert f.attrs["version"] == 2
+        assert f.attrs["software_version"] == eclipse.__version__
+        assert f.attrs["git_commit_id"] == eclipse.utils.get_git_commit_id()
         for ccd in ("left", "right"):
             assert np.array_equal(f[f"{ccd}/field_angle"][()],
                                   frame.field_angle[ccd].to_value(u.arcsec))

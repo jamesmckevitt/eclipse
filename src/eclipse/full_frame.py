@@ -34,7 +34,7 @@ from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import (light_onto_pixels, pixel_weights, pixel_weights_through,
                        points_onto_pixels)
-from .utils import _fwhm_to_sigma, distance_to_angle
+from .utils import _fwhm_to_sigma, _get_software_version, distance_to_angle, get_git_commit_id
 
 CCDS = ("left", "right")
 C_CM_S = const.c.to_value(u.cm / u.s)
@@ -911,7 +911,6 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
 
 FRAME_FORMAT = "eclipse-full-ccd-frame"
-FRAME_VERSION = 2
 
 
 def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
@@ -920,8 +919,10 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
 
     The root holds the settings as attributes, including the prescan and
     overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
-    `parallel_overscan_rows`). A group for each CCD, `left` and `right`,
-    holds these datasets, each with its unit:
+    `parallel_overscan_rows`), and the version of ECLIPSE and the git commit
+    that wrote the file (`software_version` and `git_commit_id`). A group
+    for each CCD, `left` and `right`, holds these datasets, each with its
+    unit:
 
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.
@@ -948,7 +949,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     path = Path(path).expanduser()
     with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FRAME_FORMAT
-        f.attrs["version"] = FRAME_VERSION
+        f.attrs["software_version"] = _get_software_version()
+        f.attrs["git_commit_id"] = get_git_commit_id()
         for name in ("exposure", "slit_position", "slit_width"):
             value = getattr(frame, name)
             f.attrs[name] = value.value

@@ -126,7 +126,7 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 
 ## Frame files
 
-`write_full_frame` writes a [full-CCD frame](full-ccd-frame.md). Its root has a `format` attribute of `eclipse-full-ccd-frame`, a `version` of `2`, and these attributes:
+`write_full_frame` writes a [full-CCD frame](full-ccd-frame.md). Its root has a `format` attribute of `eclipse-full-ccd-frame` and these attributes:
 
 | Attribute | Value |
 | --- | --- |
@@ -135,6 +135,7 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 | `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
 | `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
 | `parallel_overscan_rows` | The overscan rows read after the image |
+| `software_version`, `git_commit_id` | The version of ECLIPSE and the git commit that wrote the file |
 
 A group for each CCD, `left` and `right`, holds these datasets, each with a `unit` attribute:
 
