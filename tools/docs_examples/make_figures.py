@@ -87,7 +87,7 @@ def show(ax, image, title=None, **settings):
 
 
 def frame_data():
-    """The image columns of the frame's CCDs, in DN, and their wavelengths in Angstrom."""
+    """Each CCD's image columns from south to north, in DN, and their wavelengths in Angstrom."""
     shown = {}
     with h5py.File("frame.h5") as f:
         pre, over = int(f.attrs["serial_prescan"]), int(f.attrs["serial_overscan"])
@@ -96,6 +96,7 @@ def frame_data():
             data = f[ccd]["dn"][()][:wavelength.size].astype(float)
             half = (data.shape[1] - 2 * pre - 2 * over) // 2
             columns = np.r_[pre:pre + half, pre + half + 2 * over:pre + 2 * half + 2 * over]
+            columns = columns[np.argsort(f[ccd]["field_angle"][()])]
             order = np.argsort(wavelength)
             shown[ccd] = (wavelength[order], data[:, columns][order].T)
     return shown

@@ -43,7 +43,7 @@ print(f"{np.nanmedian(stats['v_std']):.2f}")
 ```
 
 ```text
-2.78 km / s
+2.77 km / s
 ```
 
 This is the median over the whole field of the velocity's standard deviation.
@@ -84,8 +84,8 @@ for settings in get_parameter_combinations(results):
 0.2 arcsec 60.0 s 2 3.11 km / s
 0.4 arcsec 15.0 s 1 9.03 km / s
 0.4 arcsec 15.0 s 2 6.06 km / s
-0.4 arcsec 60.0 s 1 3.98 km / s
-0.4 arcsec 60.0 s 2 2.78 km / s
+0.4 arcsec 60.0 s 1 3.97 km / s
+0.4 arcsec 60.0 s 2 2.77 km / s
 ```
 
 ### Every component of a blend
