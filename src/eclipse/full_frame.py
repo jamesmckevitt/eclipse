@@ -34,7 +34,7 @@ from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import (light_onto_pixels, pixel_weights, pixel_weights_through,
                        points_onto_pixels)
-from .utils import _fwhm_to_sigma, distance_to_angle
+from .utils import _fwhm_to_sigma, _get_software_version, distance_to_angle, get_git_commit_id
 
 CCDS = ("left", "right")
 C_CM_S = const.c.to_value(u.cm / u.s)
@@ -475,6 +475,12 @@ class FullFrame:
     settings : dict
         Options the frame was made with, and the prescan and overscan sizes
         in `dn`.
+    field_angle : dict
+        Angle along the slit of each image column, from the slit's centre,
+        positive towards solar north in nominal observations. The columns
+        count from the left output, so on the left CCD the angle falls with
+        the column number. If not given, it is taken from a default
+        `FocalPlane_SWC` with the columns of `rate`.
     """
 
     rate: Dict[str, np.ndarray]
@@ -487,6 +493,15 @@ class FullFrame:
     slit_position: u.Quantity
     slit_width: u.Quantity
     settings: dict = field(default_factory=dict)
+    field_angle: Dict[str, u.Quantity] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.field_angle = dict(self.field_angle)
+        for ccd, rate in self.rate.items():
+            if ccd not in self.field_angle:
+                focal_plane = FocalPlane_SWC(n_columns=np.shape(rate)[1])
+                self.field_angle[ccd] = focal_plane.field_angle(
+                    np.arange(focal_plane.n_columns), ccd)
 
 
 def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
@@ -679,6 +694,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     Returns
     -------
     FullFrame
+        The synthesis's y is taken to increase towards solar north. Each
+        CCD's columns count from its left output: from the north end of the
+        slit on the left CCD, and from the south end on the right CCD (see
+        `FullFrame.field_angle`).
 
     Raises
     ------
@@ -827,6 +846,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         for t in temperatures:
             add(_rates_at(t, context))
     rate, per_wavelength, per_square = totals
+    # Count each CCD's columns from its left output, as the camera reads them.
+    for ccd in CCDS:
+        if focal_plane.field_angle(1, ccd) < focal_plane.field_angle(0, ccd):
+            for total in totals:
+                total[ccd] = total[ccd][::-1].copy()
 
     sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
@@ -835,7 +859,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     dark_time = dark[:, np.newaxis] * dark_image
     rows = np.arange(focal_plane.n_rows)
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
-             "photon_rms_wavelength": {}}
+             "photon_rms_wavelength": {}, "field_angle": {}}
     for ccd in CCDS:
         # Far from a line, the exact part and the correction nearly cancel and
         # can leave a rate slightly below zero. Clip at zero, as a run does
@@ -873,6 +897,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
         frame["photon_rms_wavelength"][ccd] = rms_wavelength
+        frame["field_angle"][ccd] = focal_plane.field_angle(np.arange(focal_plane.n_columns),
+                                                            ccd)
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
@@ -885,7 +911,6 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
 
 
 FRAME_FORMAT = "eclipse-full-ccd-frame"
-FRAME_VERSION = 1
 
 
 def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
@@ -894,12 +919,16 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
 
     The root holds the settings as attributes, including the prescan and
     overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
-    `parallel_overscan_rows`). A group for each CCD, `left` and `right`,
-    holds these datasets, each with its unit:
+    `parallel_overscan_rows`), and the version of ECLIPSE and the git commit
+    that wrote the file (`software_version` and `git_commit_id`). A group
+    for each CCD, `left` and `right`, holds these datasets, each with its
+    unit:
 
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.
     - `wavelength`: wavelength each image row records.
+    - `field_angle`: angle along the slit of each image column, positive
+      towards solar north in nominal observations.
     - `photon_wavelength` and `photon_rms_wavelength`: wavelengths of the
       mean and root mean square energies of each pixel's photons.
 
@@ -920,7 +949,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     path = Path(path).expanduser()
     with _replacing(path) as partial, h5py.File(partial, "w") as f:
         f.attrs["format"] = FRAME_FORMAT
-        f.attrs["version"] = FRAME_VERSION
+        f.attrs["software_version"] = _get_software_version()
+        f.attrs["git_commit_id"] = get_git_commit_id()
         for name in ("exposure", "slit_position", "slit_width"):
             value = getattr(frame, name)
             f.attrs[name] = value.value
@@ -934,6 +964,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
                                      ("rate", frame.rate[ccd], "photon / s"),
                                      ("wavelength", frame.wavelength[ccd].to_value(u.AA),
                                       "Angstrom"),
+                                     ("field_angle", frame.field_angle[ccd].to_value(u.arcsec),
+                                      "arcsec"),
                                      ("photon_wavelength",
                                       frame.photon_wavelength[ccd].to_value(u.AA), "Angstrom"),
                                      ("photon_rms_wavelength",

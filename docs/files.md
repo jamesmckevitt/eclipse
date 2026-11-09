@@ -126,7 +126,7 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 
 ## Frame files
 
-`write_full_frame` writes a [full-CCD frame](full-ccd-frame.md). Its root has a `format` attribute of `eclipse-full-ccd-frame`, a `version` of `1`, and these attributes:
+`write_full_frame` writes a [full-CCD frame](full-ccd-frame.md). Its root has a `format` attribute of `eclipse-full-ccd-frame` and these attributes:
 
 | Attribute | Value |
 | --- | --- |
@@ -135,6 +135,7 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 | `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
 | `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
 | `parallel_overscan_rows` | The overscan rows read after the image |
+| `software_version`, `git_commit_id` | The version of ECLIPSE and the git commit that wrote the file |
 
 A group for each CCD, `left` and `right`, holds these datasets, each with a `unit` attribute:
 
@@ -144,6 +145,7 @@ A group for each CCD, `left` and `right`, holds these datasets, each with a `uni
 | `photons` | `(n_rows + parallel_overscan_rows, n_columns)` | The photons in each pixel over the exposure |
 | `rate` | `(n_rows, n_columns)` | The photons per second reaching each image pixel |
 | `wavelength` | `(n_rows,)` | The wavelength each row records |
+| `field_angle` | `(n_columns,)` | The angle along the slit of each column, in arcsec from the slit's centre, positive towards solar north in nominal observations |
 | `photon_wavelength`, `photon_rms_wavelength` | `(n_rows + parallel_overscan_rows, n_columns)` | The wavelengths of the mean and root mean square energies of each pixel's photons |
 
-Each row of `dn` is, in order, the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan.
+Each row of `dn` is, in order, the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The columns count from the left output, so on the left CCD they run from the north end of the slit, and on the right CCD from the south end.
