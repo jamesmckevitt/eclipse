@@ -1380,11 +1380,13 @@ def synthesise_spectra(
         phi = np.exp(-0.5 * (delta / sigma_T[:, None, None]) ** 2)
         phi /= sigma_T[:, None, None] * np.sqrt(2 * np.pi)
 
-        # EM(row,col,T,v) * G(T)  ->  (n_rows,n_cols,nT,nv)
-        weighted = em_tv * data["g"][..., None]
-
-        # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (n_rows,n_cols,n_lambda)
-        spec_map = np.tensordot(weighted, phi, axes=([2, 3], [0, 1]))
+        # One row at a time, as EM(row,col,T,v) * G(T) can be as large as em_tv.
+        g = np.broadcast_to(data["g"], em_tv.shape[:3])
+        spec_map = np.zeros((*em_tv.shape[:2], wl_grid.size))
+        for row in range(em_tv.shape[0]):
+            weighted = em_tv[row] * g[row, ..., None]
+            # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (n_cols,n_lambda)
+            spec_map[row] = np.tensordot(weighted, phi, axes=([1, 2], [0, 1]))
 
         data["si"] = spec_map / (4 * np.pi)
 
