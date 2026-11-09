@@ -405,6 +405,11 @@ def angle_to_distance(angle: u.Quantity) -> u.Quantity:
     return 2 * const.au * np.tan(angle.to(u.rad) / 2)
 
 
+# Per-pixel photon values a cube can carry in its meta, shaped like its data.
+_PHOTON_META = ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
+                "blocked_photon_wavelength", "blocked_photon_rms_wavelength")
+
+
 def rebin_slit_offchip(cube, n_bin: int):
     """Sum adjacent pixels along the slit axis to simulate off-chip binning.
 
@@ -459,10 +464,8 @@ def rebin_slit_offchip(cube, n_bin: int):
     # Drop the per-pixel photon metadata: binned_photon_wavelengths works out
     # the binned pixels' photon wavelengths from the photons of their rows.
     meta = cube.meta
-    carried = ("photon_wavelength", "photon_rms_wavelength", "photon_filter_transmission",
-               "blocked_photon_wavelength", "blocked_photon_rms_wavelength")
-    if isinstance(meta, dict) and any(key in meta for key in carried):
-        meta = {key: value for key, value in meta.items() if key not in carried}
+    if isinstance(meta, dict) and any(key in meta for key in _PHOTON_META):
+        meta = {key: value for key, value in meta.items() if key not in _PHOTON_META}
     return NDCube(data=rebinned, wcs=new_wcs, unit=cube.unit, meta=meta)
 
 

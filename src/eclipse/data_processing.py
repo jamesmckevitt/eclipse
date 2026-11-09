@@ -18,8 +18,8 @@ from .radiometric import (_carry_photon_meta, _spectral_response, across_slit_fw
 from .radiometric import slit_image_width, spectral_blur_fwhm, spectral_psf_fwhm  # noqa: F401
 from .sampling import (centred_edges, light_onto_pixels, photons_onto_pixels, pixel_weights,
                        pixel_weights_through)
-from .utils import (_bin_edges, _unpickle, distance_to_angle, _fwhm_to_sigma, has_wrong_velocity_sign,
-                    onto_wavelength_bins)
+from .utils import (_PHOTON_META, _bin_edges, _unpickle, distance_to_angle, _fwhm_to_sigma,
+                    has_wrong_velocity_sign, onto_wavelength_bins)
 
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
@@ -534,6 +534,43 @@ def _slit_openings(tel, sim) -> dict:
     if not getattr(sim, "slit_mask", False):
         return {}
     return {"openings": _openings_along_the_slit(tel, sim.slit_width)}
+
+
+def crop_to_the_slit(cube: NDCube, tel, det, slit_width: u.Quantity) -> NDCube:
+    """
+    Cube cut to the rows along the slit that light reaches, as in real data.
+
+    The slit's centre is the middle of the cube along the slit. A row partly
+    inside the slit is kept.
+
+    Parameters
+    ----------
+    cube : NDCube
+        Cube on the detector's pixels, shape `(n_slit, n_scan, n_lambda)`.
+    tel : Telescope_EUVST
+        Telescope, for the slit's length.
+    det : Detector_SWC
+        Detector, for the plate scale.
+    slit_width : u.Quantity
+        Slit in use.
+
+    Returns
+    -------
+    NDCube
+        Those rows, at the same places on the Sun.
+    """
+    openings = _openings_along_the_slit(tel, slit_width)
+    pitch = det.plate_scale_angle.to_value(u.arcsec / u.pix)
+    edges = centred_edges(cube.data.shape[0], pitch)
+    inside = np.flatnonzero((edges[1:] > openings[0, 0]) & (edges[:-1] < openings[-1, 1]))
+    first, last = inside[0], inside[-1] + 1
+    wcs = cube.wcs.deepcopy()
+    wcs.wcs.crpix[2] -= first
+    meta = {key: value[first:last] if key in _PHOTON_META else value
+            for key, value in (cube.meta or {}).items()}
+    if "fov_along_slit" in meta:
+        meta["fov_along_slit"] = (last - first) * pitch * u.arcsec
+    return NDCube(cube.data[first:last], wcs=wcs, unit=cube.unit, meta=meta)
 
 
 def _openings_along_the_slit(tel, slit_width: u.Quantity) -> np.ndarray:
