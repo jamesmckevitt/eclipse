@@ -335,7 +335,7 @@ def exposure_time():
     ax = fig.add_subplot(projection=image)
     drawn = image.plot(axes=ax, title="Exposure for 5 km/s")
     # A pixel that misses the requirement at the longest exposure is off the top of the scale.
-    drawn.set_data(np.nan_to_num(image.data, posinf=1e9))
+    drawn.set_data(np.nan_to_num(image.data, nan=np.nan, posinf=1e9))
     drawn.cmap.set_over("tab:red")
     format_exposure_time_colorbar(image, fig.colorbar(drawn, ax=ax, extend="max"), requirement)
     save(fig, "example-exposure-time")
