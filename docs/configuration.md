@@ -96,7 +96,7 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 | `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
 | `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
 | `psf_across_slit` | The FWHM of the telescope optics' blur across the slit, which brings in light from either side of it. For SWC the resolution budget's blur before the slit is added to it. | none | none |
-| `slit_length` | The length of the slits | `300 arcsec` | - |
+| `slit_length` | The length of the slits | `280 arcsec` | - |
 | `fiducial_centres` | Where the middle of each fiducial is along the slit, from its centre. Positive is towards increasing y of the synthesis, which is solar north in nominal observations. This is one value, not a sweep. | `[-70 arcsec, 25 arcsec]` | - |
 | `fiducial_lengths` | The length of the fiducials of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that order. This is one value, not a sweep. | `[0.8 arcsec, 0.8 arcsec, 0.8 arcsec, 1.6 arcsec]` | - |
 | `pm_table` | A table of the primary mirror's reflectance | packaged | - |

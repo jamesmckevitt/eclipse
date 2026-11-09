@@ -628,8 +628,9 @@ _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6
                             "1500 Angstrom aluminium foil")
 _HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
 _SENSITIVITY_BUDGET = "RSC-2022035A, Sensitivity Budget (13 Dec 2024)"
-_SLIT_REQUIREMENTS = "TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170"
-_FIDUCIALS = ("TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170; EUVST-CNR-REQ-001 v4.72, "
+_SLIT_REQUIREMENTS = ("EUVST-CNR-REQ-001 v4.72, R-SA-GEO-30, 3.80 mm; TASI-SCE-SSS-0001 issue 1, "
+                      "R-SA-SYS-REQ-1160, gives 4.07 mm")
+_FIDUCIALS = ("TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170; EUVST-CNR-REQ-001 v4.72, "
               "R-SA-GEO-40; direction from RSC-2022020A, RSC-2022021C, RSC-2023006A and "
               "NAOJ-TI-21015d")
 _SW_CCD_SPEC = "SOLC-EUVST-MSSL-SP-0001 v1.4"
@@ -1156,7 +1157,7 @@ class Telescope_EUVST:
         light from either side of it. The budget's blur before the slit is
         added to it in quadrature. Default None, for none. Keyword only.
     slit_length : u.Quantity
-        Length of the slits. Default 300 arcsec. Keyword only.
+        Length of the slits. Default 280 arcsec. Keyword only.
     fiducial_centres : list of u.Quantity
         Middle of each fiducial along the slit, from the slit's centre.
         Positive is towards increasing y of the synthesis, which is solar north
@@ -1207,12 +1208,13 @@ class Telescope_EUVST:
     pointing_jitter: u.Quantity | None = field(
         default=None, kw_only=True,
         metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20", "unit": "arcsec"})
-    # The slits are 4.07 mm long, 300 arcsec at the slit's 13.57 um per arcsec,
-    # and each has two fiducials, gaps 10.9 um (0.8 arcsec) long in the three
-    # narrow slits and 21.8 um (1.6 arcsec) in the widest (TASI-SCE-SSS-0001
-    # issue 1, R-SA-SYS-REQ-1160 and 1170). They are centred -340 um (-25
-    # arcsec) and +950 um (+70 arcsec) from the slit's centre along the y-axis
-    # of the slit's frame (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40).
+    # The slits are 3.80 mm long, 280 arcsec at the slit's 13.57 um per arcsec
+    # (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-30). Each has two fiducials, gaps
+    # 10.9 um (0.8 arcsec) long in the three narrow slits and 21.8 um (1.6
+    # arcsec) in the widest (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170).
+    # They are centred -340 um (-25 arcsec) and +950 um (+70 arcsec) from the
+    # slit's centre along the y-axis of the slit's frame
+    # (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40).
     #
     # Here positive is increasing y of the synthesis, solar north in nominal
     # observations. The slit's +y is south, so the fiducials are at +25 and
@@ -1230,7 +1232,7 @@ class Telescope_EUVST:
     # the slit (EUVST SWC FPGA Requirements Specification, SolC-FPGA-RS-060).
     # The right CCD faces the other way, with its serial register on its own
     # outer edge, so its right output reads it.
-    slit_length: u.Quantity = field(default=300.0 * u.arcsec, kw_only=True,
+    slit_length: u.Quantity = field(default=280.0 * u.arcsec, kw_only=True,
                                     metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
         default_factory=lambda: [-70.0 * u.arcsec, 25.0 * u.arcsec], kw_only=True,

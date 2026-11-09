@@ -2,7 +2,7 @@
 
 ECLIPSE's default instrument settings come from SOLAR-C design documents and EIS calibrations. This page lists each setting with its default and the document it comes from, so a result can be traced to the design it reflects. The settings themselves are described in the [configuration reference](configuration.md).
 
-Documents are named as the project names them: RSC numbers are SOLAR-C documents, SOLC-EUVST-MSSL numbers are documents for the SW camera, and TASI-SCE-SSS-0001 is the requirements for the slit assembly. RSC-2022021C is the optical design summary of March 2025, which describes optical design version 20230909. Where no source is recorded, the page says so. Where a design document gives a different value, the page gives that value too.
+Documents are named as the project names them: RSC numbers are SOLAR-C documents, SOLC-EUVST-MSSL numbers are documents for the SW camera, and TASI-SCE-SSS-0001 and EUVST-CNR-REQ-001 are the requirements for the slit assembly. RSC-2022021C is the optical design summary of March 2025, which describes optical design version 20230909. Where no source is recorded, the page says so. Where a design document gives a different value, the page gives that value too.
 
 ## EUVST telescope and optics
 
@@ -21,8 +21,8 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 | `telescope.resolution_budget` | `current_estimate` | RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1 |
 | `telescope.pointing_jitter` | none: the budget's 0.110 arcsec, or no jitter with `resolution_budget: none` | RSC-2022033B rev. B, Table 3-1 row 20 |
 | `simulation.slit_width` | 0.2 arcsec; the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide | RSC-2022021C |
-| `telescope.slit_length` | 300 arcsec | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170 |
-| `telescope.fiducial_centres`, `telescope.fiducial_lengths` | -70 and +25 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160 and 1170; EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40; direction from RSC-2022020A, RSC-2022021C, RSC-2023006A and NAOJ-TI-21015d |
+| `telescope.slit_length` | 280 arcsec | EUVST-CNR-REQ-001 v4.72, R-SA-GEO-30, 3.80 mm; TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160, gives 4.07 mm |
+| `telescope.fiducial_centres`, `telescope.fiducial_lengths` | -70 and +25 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170; EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40; direction from RSC-2022020A, RSC-2022021C, RSC-2023006A and NAOJ-TI-21015d |
 
 ## EUVST filter
 
