@@ -769,8 +769,11 @@ def create_sunpy_maps_from_combo(
             best_exp[msk] = s
 
         # Pixels that miss the requirement even at the longest exposure need
-        # longer than any run, so they go above the scale.
-        best_exp[np.isnan(best_exp)] = np.inf
+        # longer than any run, so they go above the scale. A pixel with no
+        # fit at any exposure, such as behind a fiducial, stays NaN.
+        measured = np.any([np.isfinite(analysis["v_std"]) | (analysis.get("failed_fits", 1) > 0)
+                           for analysis in analysis_per_exp.values()], axis=0)
+        best_exp[np.isnan(best_exp) & measured] = np.inf
 
         # One colour per exposure time, each spanning halfway to the next.
         times = np.asarray(exp_times, dtype=float)

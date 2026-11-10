@@ -10,7 +10,7 @@ from astropy.wcs import WCS
 from ndcube import NDCube
 
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
-from eclipse.data_processing import rebin_atmosphere
+from eclipse.data_processing import crop_to_the_slit, rebin_atmosphere
 from eclipse.sampling import centred_edges, pixel_weights, pixel_weights_through
 from eclipse.utils import VELOCITY_CONVENTION, _parse_section, angle_to_distance
 
@@ -167,9 +167,8 @@ def test_the_mask_is_refused_for_a_cube_it_was_not_applied_to():
         monte_carlo(cube, 1 * u.s, det, tel, sim, n_iter=1, uniform_mode=True)
 
 
-@pytest.mark.parametrize("psf", [False, True])
-def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
-    """End to end from a synthesis file, binned off-chip or not, so the mask reaches the fits."""
+def _instrument_run(tmp_path, monkeypatch, n_cells, simulation, **settings):
+    """Results of `eclipse` on a uniform line over `n_cells` by `n_cells` of 0.192 Mm."""
     import sys
 
     import astropy.constants as const
@@ -179,7 +178,7 @@ def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
     from eclipse.main import main
     from eclipse.synthesis_file import write_line_cubes
 
-    n_spec, n_cells = 121, 8
+    n_spec = 121
     step = (5 * u.km / u.s / const.c * REST).to_value(u.cm)
     sigma = (20 * u.km / u.s / const.c * REST).to_value(u.cm)
     offsets = (np.arange(n_spec) - n_spec // 2) * step
@@ -198,16 +197,92 @@ def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
     config = tmp_path / "masked.yaml"
     config.write_text(yaml.safe_dump({
         "instrument": "SWC", "synthesis_file": str(synthesis_file),
-        "reference_line": "Fe12_195.1190", "n_iter": 1, "ncpu": 1,
-        "offchip_bin_slit": [1, 2],
-        "simulation": {"slit_width": "0.4 arcsec", "expos": "10 s", "psf": psf,
-                       "noise": False, "slit_mask": True},
+        "reference_line": "Fe12_195.1190", "n_iter": 1, "ncpu": 1, **settings,
+        "simulation": {"slit_width": "0.4 arcsec", "expos": "10 s", "noise": False, **simulation},
     }))
     monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
     monkeypatch.chdir(tmp_path)
     main()
-    results = load_instrument_response_results(tmp_path / "run" / "result" / "masked.h5")
+    return load_instrument_response_results(tmp_path / "run" / "result" / "masked.h5")
+
+
+@pytest.mark.parametrize("psf", [False, True])
+def test_an_instrument_run_with_the_mask_on(tmp_path, monkeypatch, psf):
+    """End to end from a synthesis file, binned off-chip or not, so the mask reaches the fits."""
+    results = _instrument_run(tmp_path, monkeypatch, 8, {"psf": psf, "slit_mask": True},
+                              offchip_bin_slit=[1, 2])
     assert len(results["results"]["all_combinations"]) == 2
+
+
+def test_a_masked_run_covers_the_slit_and_blanks_its_fiducial(tmp_path, monkeypatch):
+    """A scene 4.2 arcsec long through a 3 arcsec slit with one fiducial at its centre."""
+    from eclipse.analysis import create_sunpy_maps_from_combo, get_results_for_combination
+
+    results = _instrument_run(tmp_path, monkeypatch, 16,
+                              {"slit_mask": [False, True], "expos": ["10 s", "20 s"]},
+                              telescope={"slit_length": "3 arcsec",
+                                         "fiducial_centres": ["0 arcsec"]})
+
+    def of(flag, seconds):
+        return get_results_for_combination(results, **{"simulation.slit_mask": flag,
+                                                       "simulation.expos": seconds * u.s})
+
+    whole, masked = of(False, 10), of(True, 10)
+    tel = Telescope_EUVST(slit_length=3 * u.arcsec, fiducial_centres=[0 * u.arcsec])
+    pitch = Detector_SWC().plate_scale_angle.to_value(u.arcsec / u.pix)
+    share = _open_share(centred_edges(whole["first_dn_signal"].data.shape[0], pitch),
+                        tel.slit_openings(0.4 * u.arcsec).to_value(u.arcsec))
+    lit = np.flatnonzero(share > 0)
+    share = share[lit[0]:lit[-1] + 1]
+    assert np.count_nonzero(share == 0) > 0
+    assert masked["first_dn_signal"].data.shape[0] == share.size
+    assert masked["ground_truth"]["fit_truth_data"].shape[0] == share.size
+    stats = masked["dn_fit_stats"]
+    velocity = stats["components"][stats["primary_component"]]["velocity"]["mean"].value
+    assert np.array_equal(np.isnan(velocity).all(axis=1), share == 0)
+    assert np.isfinite(velocity[share > 0]).all()
+    assert not stats["failed_fits"].any()
+    exposure = create_sunpy_maps_from_combo(masked, exposure_time_results=[masked, of(True, 20)],
+                                            date_obs="2026-01-01T00:00:00")["exposure_time"]
+    assert np.array_equal(np.isnan(exposure.data).all(axis=1), share == 0)
+    assert not np.isnan(exposure.data[share > 0]).any()
+
+
+def test_cropping_keeps_each_rows_place_on_the_sun():
+    det = Detector_SWC()
+    tel = Telescope_EUVST(slit_length=2 * u.arcsec, fiducial_centres=[0 * u.arcsec])
+    cube = rebin_atmosphere(_scene(np.ones((80, 4, 21)), 0.1 * u.arcsec), det,
+                            Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1),
+                            tel=tel)
+    photon_wavelength = np.arange(cube.data.size, dtype=float).reshape(cube.data.shape) * u.AA
+    cube.meta["photon_wavelength"] = photon_wavelength
+    cropped = crop_to_the_slit(cube, tel, det, 0.4 * u.arcsec)
+    edges = centred_edges(cube.data.shape[0], det.plate_scale_angle.to_value(u.arcsec / u.pix))
+    inside = np.flatnonzero((edges[1:] > -1.0) & (edges[:-1] < 1.0))
+    assert cropped.data.shape == (inside.size, *cube.data.shape[1:])
+    assert inside.size < cube.data.shape[0]
+    assert (cropped.wcs.pixel_to_world_values(0, 0, 0)[2]
+            == pytest.approx(cube.wcs.pixel_to_world_values(0, 0, inside[0])[2]))
+    assert np.array_equal(cropped.meta["photon_wavelength"],
+                          photon_wavelength[inside[0]:inside[-1] + 1])
+
+
+def test_a_scene_shorter_than_the_slit_is_not_cropped():
+    det, tel = Detector_SWC(), Telescope_EUVST()
+    cube = rebin_atmosphere(_scene(np.ones((40, 4, 21)), 0.1 * u.arcsec), det,
+                            Simulation(instrument="SWC", slit_width=0.4 * u.arcsec, ncpu=1),
+                            tel=tel)
+    assert crop_to_the_slit(cube, tel, det, 0.4 * u.arcsec).data.shape == cube.data.shape
+
+
+def test_a_binned_row_is_unlit_only_if_all_its_rows_are():
+    """Rows 0 and 1 are dark, 2 and 3 half so, 4 and 5 dark, 6 and 7 lit, and 8 is binned away."""
+    from eclipse.monte_carlo import _unlit_rows
+
+    lit = np.array([0, 0, 1, 0, 0, 0, 1, 1, 1], dtype=float)
+    cube = _scene(np.tile(lit[:, np.newaxis, np.newaxis], (1, 4, 21)), 0.1 * u.arcsec)
+    assert _unlit_rows(cube, 2).tolist() == [True, False, True, False]
+    assert _unlit_rows(cube, 1).tolist() == (lit == 0).tolist()
 
 
 def test_a_cube_masked_without_the_psf_is_not_blurred_afterwards():

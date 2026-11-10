@@ -16,7 +16,7 @@ import h5py
 
 from .config import AluminiumFilter, Detector_SWC, Detector_EIS, Telescope_EUVST, Telescope_EIS, Simulation, check_pinhole_lists, _load_throughput_table
 from .config import _FOCAL_PLANE_SETTINGS, _old_names_used, _same_setting
-from .data_processing import (_whole_pixels, load_atmosphere, rebin_atmosphere,
+from .data_processing import (_whole_pixels, crop_to_the_slit, load_atmosphere, rebin_atmosphere,
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .atmosphere import _is_pickle
@@ -1277,8 +1277,10 @@ def main() -> None:
     def _check_offchip_bins(fov_along_slit):
         """Refuse an offchip_bin_slit that bins more rows than a combination's scene covers."""
         for combo_values in _combinations():
-            _, n_bin, _, _, _, det, _ = _combination(combo_values)
-            n_slit = _whole_pixels(fov_along_slit, det.plate_scale_angle)
+            _, n_bin, _, _, tel, det, sim = _combination(combo_values)
+            # A masked run keeps only the rows along the slit.
+            extent = min(fov_along_slit, tel.slit_length) if sim.slit_mask else fov_along_slit
+            n_slit = _whole_pixels(extent, det.plate_scale_angle)
             if n_bin > n_slit:
                 raise ValueError(
                     f"offchip_bin_slit {n_bin} bins more rows than the {n_slit} along the "
@@ -1325,7 +1327,9 @@ def main() -> None:
             cube_reb_key = (*sampling_key, expos.to_value(u.s), raster_repeat)
         else:
             cube_reb_key = sampling_key
-        rebin_cache_key = (*cube_reb_key, offchip_bin_slit)
+        # The slit's mask cuts the truth to the slit's length, as well as the observation.
+        slit_key = (TEL.slit_length.to_value(u.arcsec),) if slit_mask else ()
+        rebin_cache_key = (*cube_reb_key, offchip_bin_slit, *slit_key)
 
         if atmosphere_series_mode and cube_reb_key not in cube_reb_cache:
             print(f"\nSynthesising the time series as observed "
@@ -1399,7 +1403,9 @@ def main() -> None:
 
         if rebin_cache_key not in rebin_cache:
             # Apply off-chip binning
-            cube_reb_binned = rebin_slit_offchip(cube_reb, offchip_bin_slit)
+            cube_reb_binned = rebin_slit_offchip(
+                crop_to_the_slit(cube_reb, TEL, DET, slit_width) if slit_mask else cube_reb,
+                offchip_bin_slit)
 
             # A weighted ground-truth fit uses the expected DN uncertainties,
             # which depend on the exposure and the instrument, so it is
@@ -1413,6 +1419,8 @@ def main() -> None:
             # series adds the exposure time, which changes the cube too.
             cube_key = ((sampling_key[0], expos.to_value(u.s), raster_repeat, offchip_bin_slit)
                         if raster_mode else (sampling_key[0], offchip_bin_slit))
+            if "slit_mask" in sim_sweep or "slit_length" in tel_sweep:
+                cube_key += slit_key
             cube_reb_dict.setdefault(cube_key, cube_reb_binned)
             if raster_mode:
                 raster_cubes[cube_key] = raster_summed[cube_reb_key]
@@ -1488,7 +1496,8 @@ def main() -> None:
                 else:
                     observed = rebin_spectra(synthesis, reference_line, DET, SIM_obs,
                                              summed=summed_input, meta=file_meta, tel=TEL)
-                observed_cache[psf_key] = observed
+                observed_cache[psf_key] = (crop_to_the_slit(observed, TEL, DET, slit_width)
+                                           if slit_mask else observed)
             cube_obs = observed_cache[psf_key]
 
         # Progress output
