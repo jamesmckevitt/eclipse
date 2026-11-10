@@ -29,7 +29,8 @@ from eclipse.analysis import format_exposure_time_colorbar
 OUT = Path(sys.argv[1])
 DATE = "2026-01-01T00:00:00"
 SYNTHESIS = "run/input/muram_ar_fe12.h5"
-VELOCITY = dict(cmap="RdBu_r", vmin=-25, vmax=25)
+# Fits left blank, behind the fiducials, are black rather than the white of zero velocity.
+VELOCITY = dict(cmap=plt.get_cmap("RdBu_r").with_extremes(bad="black"), vmin=-25, vmax=25)
 
 
 @cache
@@ -64,7 +65,7 @@ def synthesis(path):
 
 
 def save(fig, name):
-    fig.savefig(OUT / f"{name}.png", dpi=110, bbox_inches="tight")
+    fig.savefig(OUT / f"{name}.png", dpi=200, bbox_inches="tight")
 
 
 def extent(image):
