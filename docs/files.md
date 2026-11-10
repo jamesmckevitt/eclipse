@@ -96,7 +96,7 @@ A synthesis file from ECLIPSE holds each line's spectra over the image, and also
 ```python
 import eclipse
 
-data = eclipse.load_synthesis("./run/input/synthesised_spectra.h5")
+data = eclipse.load_synthesis("./run/input/muram_ar_fe12.h5")
 
 # A line cube for each line, indexed [y, x, wavelength]
 fe12_195 = data["line_cubes"]["Fe12_195.1190"]

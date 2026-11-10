@@ -2,7 +2,7 @@
 
 `synthesise-spectra` turns a 3D MHD simulation into the spectra it emits, taking the plasma to be optically thin. For each pixel of the image, it adds up the emission measure of the cells along the line of sight by their temperature and velocity. It then multiplies that by each line's contribution function, G(T, n_e), which says how much the line emits at each temperature and density. The contribution functions come from the CHIANTI atomic database, through [fiasco](https://fiasco.readthedocs.io/).
 
-The spectra are written to a synthesis file, which `eclipse` then observes (see [Running a simulation](instrument-response.md)).
+The spectra are written to a [synthesis file](files.md#synthesis-files), which `eclipse` then observes (see [Running a simulation](instrument-response.md)).
 
 ## Atmosphere files
 
@@ -56,63 +56,15 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
-### Worked example: a MURaM flare
+### Worked example: a MURaM active region
 
-The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several MURaM and Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
-
-This example uses the flare simulation of [Cheung et al. (2019)](https://doi.org/10.1038/s41550-018-0629-3), run `ar098192`, at snapshot 300000, during the flare. Download the temperature, density and vertical velocity (400 MB each):
-
-```bash
-for variable in lgtg lgr uz; do
-  curl -O https://sdc.uio.no/vol/simulations/ar098192/atmos/MURaM_ar098192_${variable}_300000.fits
-done
-```
-
-Then write them to an atmosphere file:
-
-```python
-import astropy.units as u
-import numpy as np
-from astropy.io import fits
-from eclipse import Atmosphere, write_atmosphere, edges_from_centres
-
-def variable(name, snapshot=300000):
-    with fits.open(f"MURaM_ar098192_{name}_{snapshot}.fits") as hdul:
-        return hdul[0].data, hdul[0].header, hdul[1].data  # cube (nz, ny, nx), header, z centres in Mm
-
-lgtg, header, z = variable("lgtg")
-lgr, _, _ = variable("lgr")
-uz, _, _ = variable("uz")
-
-nz, ny, nx = lgtg.shape
-x = (header["CRVAL1"] + (np.arange(nx) + 1 - header["CRPIX1"]) * header["CDELT1"]) * u.Mm
-y = (header["CRVAL2"] + (np.arange(ny) + 1 - header["CRPIX2"]) * header["CDELT2"]) * u.Mm
-
-atmosphere = Atmosphere(
-    temperature=10.0 ** lgtg.astype(np.float64) * u.K,
-    mass_density=10.0 ** lgr.astype(np.float64) * u.kg / u.m**3,
-    velocity_z=uz * u.m / u.s,
-    x_edges=edges_from_centres(x), y_edges=edges_from_centres(y),
-    z_edges=edges_from_centres(z * u.Mm),
-    time=header["ELAPSED"] * u.s,
-    source="MURaM ar098192 snapshot 300000, Hinode SDC Europe",
-)
-write_atmosphere(atmosphere, "muram_300000.h5")
-```
-
-The box is 98 by 49 Mm, and runs from 7.5 Mm below the surface to 42 Mm above it. There is no electron density in these files, so ECLIPSE works it out from the mass density as described [above](#electron-density). To synthesise the flare line Fe XXIV 192.028 from the surface upwards:
-
-```bash
-synthesise-spectra --atmosphere muram_300000.h5 \
-  --lines Fe24_192.0280 \
-  --crop-z "0 Mm" "42 Mm" \
-  --vel-lim "1000 km/s" --vel-res "10 km/s" \
-  --output-dir ./run/input
-```
+The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
 
 ### Worked example: Bifrost quiet Sun
 
-This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity (480 MB each):
+The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
+
+This example uses the enhanced-network run `en024048_hion` of [Carlsson et al. (2016)](https://doi.org/10.1051/0004-6361/201527226), at snapshot 385. It has an uneven z axis and carries its own electron density. Download the temperature, density, electron density and vertical velocity:
 
 ```bash
 for variable in lgtg lgr lgne uz; do
@@ -241,9 +193,4 @@ synthesise-spectra --help
 - Use `--downsample 2` or `--downsample 4` for a first test
 - Use `--precision float32` to use less memory, at some cost in accuracy
 - Crop to the region you need, to save time
-- Watch the memory: a full-resolution synthesis of a large box can need tens of GB
 - Side views (`--integration-axis x`, `-x`, `y` or `+y`) need the atmosphere file to hold the velocity along that axis
-
-## The output
-
-`synthesise-spectra` writes a synthesis file. It holds each line's spectra over the image, which is what [`eclipse`](instrument-response.md) observes, and what the synthesis worked out on the way. [Files](files.md#synthesis-files) describes it, and how to read it in Python.

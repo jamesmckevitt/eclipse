@@ -59,13 +59,27 @@ flowchart LR
 
 **3. Analyse the results.** Find how precisely the instrument measured each line, compare the measurements with the truth, compare the settings the run swept through, and make maps. See [Analysing the results](analysis.md).
 
+## What to expect
+
+The [worked example](worked-example.ipynb) takes a MURaM simulation of an active region from its files to the maps below, and the other pages show what their settings do.
+
+An example simulation of Fe XII 195.12 emission, observed with the 0.4 arcsec slit with 60 s exposures per slit position:
+
+![Four maps of the active region: the Fe XII intensity as synthesised, the measured intensity, the measured Doppler velocity and its measurement precision](images/example-stages.png)
+
+A raster like this is built up one slit position at a time. At each position, the camera records the spectrum of the whole band, all along the slit:
+
+![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
+
+[A full-CCD frame](full-ccd-frame.md) makes this frame.
+
 ## Where to start
 
 To install ECLIPSE and make a first run, see [Getting started](quickstart.md). Then start from what you have:
 
 | You have | Go to | Use it when | What you run |
 | --- | --- | --- | --- |
-| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic structure on the sky and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `synthesise-spectra`, then `eclipse` |
+| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic solar structure and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `synthesise-spectra`, then `eclipse` |
 | A series of MHD snapshots | [Time series](time-series.md) | The atmosphere changes during the observation, as it does in a raster or a sit-and-stare. | `eclipse`, which synthesises each exposure as it goes |
 | A VDEM | [From a DEM or VDEM](dem-synthesis.md#with-velocities-a-vdem) | Your simulation has already been reduced to the emission measure at each temperature and line-of-sight velocity. | A short Python script, then `eclipse` |
 | A DEM | [From a DEM or VDEM](dem-synthesis.md) | You have a DEM inferred from observations. It has no velocities, so the lines are not Doppler shifted. | A short Python script, then `eclipse` |

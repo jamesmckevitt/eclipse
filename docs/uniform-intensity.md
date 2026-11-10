@@ -25,6 +25,10 @@ eclipse --config configs/uniform.yaml
 
 The line fills a single pixel on the sky, and is laid onto the detector's wavelength pixels directly.
 
+The standard deviation of the fitted velocity over the 500 iterations shows how precisely each combination measures it:
+
+![Velocity precision against exposure time for the 0.2 and 0.4 arcsec slits](images/example-uniform.png)
+
 ## Off-chip binning
 
 [`offchip_bin_slit`](instrument-response.md#off-chip-slit-binning) works here too. ECLIPSE puts the same line in as many pixels along the slit as are binned together, each with its own noise, and adds them up as the binning would:

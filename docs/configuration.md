@@ -91,7 +91,7 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 | `microroughness_sigma` | The RMS roughness of the primary mirror | `0.3 nm` | - |
 | `psf_type` | The shape of the PSF; only `gaussian` is modelled | `gaussian` | `gaussian` |
 | `psf_params` | The FWHMs in pixels of the optical design's PSF, along the slit and in wavelength. This is one value, not a sweep. | from `field_of_view` | `[3 pix, 3 pix]` |
-| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [what the SW PSF is made of](instrument-model.md#what-the-sw-psf-is-made-of). | `280x280` | - |
+| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [The SW PSF along the slit](instrument-model.md#the-sw-psf-along-the-slit). | `280x280` | - |
 | `resolution_budget` | The blur added to the optical design's from the resolution budget: `current_estimate`, `allocation` or `none` | `current_estimate` | - |
 | `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
 | `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
@@ -106,7 +106,7 @@ The last four settings describe the SW focal plane. A run takes each pixel's wav
 
 A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. Lines starting with `#`, and any lines before the data, are skipped.
 
-The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. [What the SW PSF is made of](instrument-model.md#what-the-sw-psf-is-made-of) describes them, and they are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
+The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. They are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
 
 ## filter
 

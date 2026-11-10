@@ -54,7 +54,7 @@ synthesise-spectra \
 
 In this mode x and y are centred on zero, and z = 0 is the centre of the bottom cell. `--crop-x`, `--crop-y` and `--crop-z` are measured from there.
 
-To move over, write each snapshot as an [atmosphere file](synthesis.md#atmosphere-files), as in the [MURaM example](synthesis.md#worked-example-a-muram-flare).
+To move over, write each snapshot as an [atmosphere file](synthesis.md#atmosphere-files), as in the [Bifrost example](synthesis.md#worked-example-bifrost-quiet-sun).
 
 ## Dynamic mode
 
@@ -79,7 +79,7 @@ synthesise-spectra \
 
 The instrument run on the synthesis file must have exactly one slit width, the one used in the synthesis, and exactly one exposure time, equal to `--slit-rest-time`.
 
-To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [MURaM example](synthesis.md#worked-example-a-muram-flare), and give the files as `atmosphere_series`; see [Time series](time-series.md).
+To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](synthesis.md#worked-example-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Time series](time-series.md).
 
 ## Renamed options
 
