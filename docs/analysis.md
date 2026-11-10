@@ -43,7 +43,7 @@ print(f"{np.nanmedian(stats['v_std']):.2f}")
 ```
 
 ```text
-2.96 km / s
+2.80 km / s
 ```
 
 This is the median over the whole field of the velocity's standard deviation.
@@ -78,14 +78,14 @@ for settings in get_parameter_combinations(results):
 ```
 
 ```text
-0.2 arcsec 15.0 s 1 11.48 km / s
-0.2 arcsec 15.0 s 2 7.55 km / s
-0.2 arcsec 60.0 s 1 4.84 km / s
-0.2 arcsec 60.0 s 2 3.33 km / s
-0.4 arcsec 15.0 s 1 9.76 km / s
-0.4 arcsec 15.0 s 2 6.55 km / s
-0.4 arcsec 60.0 s 1 4.27 km / s
-0.4 arcsec 60.0 s 2 2.96 km / s
+0.2 arcsec 15.0 s 1 10.68 km / s
+0.2 arcsec 15.0 s 2 7.05 km / s
+0.2 arcsec 60.0 s 1 4.54 km / s
+0.2 arcsec 60.0 s 2 3.14 km / s
+0.4 arcsec 15.0 s 1 9.13 km / s
+0.4 arcsec 15.0 s 2 6.13 km / s
+0.4 arcsec 60.0 s 1 4.02 km / s
+0.4 arcsec 60.0 s 2 2.80 km / s
 ```
 
 ### Every component of a blend
@@ -101,8 +101,8 @@ for name in list_fit_components(combination):
 ```
 
 ```text
-Fe XII 195.119 2210 DN
-Fe XII 195.179 64 DN
+Fe XII 195.119 2436 DN
+Fe XII 195.179 71 DN
 ```
 
 For each component, the statistics also hold its name as `component`, its rest wavelength as `rest_wavelength`, and what it is tied to as `tied`.
@@ -142,7 +142,7 @@ These are `total_dn` and `velocity_std` of this combination:
 
 ![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](images/example-precision.png)
 
-The velocity is measured to about 1 km/s in the core, and to about 4 km/s in the quiet Sun. It is worst in the fans beside the core, where the line is faintest. The two thin lines are the slit's fiducials, and the bands at the top and bottom are beyond the ends of the slit.
+The velocity is measured to about 1 km/s in the core, and to about 4 km/s in the quiet Sun. It is worst in the fans beside the core, where the line is faintest. The two thin lines are the slit's fiducials.
 
 An exposure sweep gives the `exposure_time` map. [This run](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml) observes the region with the 0.4 arcsec slit and two pixels binned, in exposures of 15, 30, 60, 120 and 240 s, with 30 iterations:
 

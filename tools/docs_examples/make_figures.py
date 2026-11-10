@@ -29,8 +29,6 @@ from eclipse.analysis import format_exposure_time_colorbar
 OUT = Path(sys.argv[1])
 DATE = "2026-01-01T00:00:00"
 SYNTHESIS = "run/input/muram_ar_fe12.h5"
-# A pixel of the synthesis in the core of the region, as (y, x).
-CORE = (544, 544)
 VELOCITY = dict(cmap="RdBu_r", vmin=-25, vmax=25)
 
 
@@ -109,8 +107,9 @@ def stages():
     observed = main_maps()
     fig, axes = plt.subplots(1, 4, figsize=(13, 4.1), sharex=True, sharey=True,
                              layout="constrained")
-    box = extent(observed["total_dn"])
-    drawn = axes[0].imshow(intensity, origin="lower", cmap="gray", extent=box,
+    # The synthesis covers the whole square scene; the observed maps stop at the slit's ends.
+    x_range = extent(observed["total_dn"])[:2]
+    drawn = axes[0].imshow(intensity, origin="lower", cmap="gray", extent=[*x_range, *x_range],
                            norm=LogNorm(*np.percentile(intensity, [1, 99.9])))
     axes[0].set_title("Synthesised")
     axes[0].set_xlabel("x [arcsec]")
@@ -126,6 +125,7 @@ def stages():
                  vmax=10)
     fig.colorbar(drawn, ax=axes[3], location="bottom", label="km/s", shrink=0.9, extend="max")
     axes[0].set_ylabel("y [arcsec]")
+    axes[0].set_ylim(extent(dn)[2:])
     save(fig, "example-stages")
 
 
@@ -267,6 +267,7 @@ def slit_mask():
         show(ax, image, f"slit_mask: {flag}", cmap="gray",
              norm=PowerNorm(0.5, *np.nanpercentile(image.data, [1, 99.9])))
     axes[0].set_ylabel("y [arcsec]")
+    axes[0].set_ylim(-150, 150)
     save(fig, "example-slit-mask")
 
 
@@ -279,8 +280,8 @@ def blend_fit():
     fine = np.linspace(wavelength[0], wavelength[-1], 400)
     ny, nx = spectra.shape[:2]
     fig, ax = plt.subplots(figsize=(4.8, 3.5), layout="constrained")
-    # The same place on the sky, in this run's pixels.
-    row, column = int(CORE[0] / 1088 * ny), int(CORE[1] / 1088 * nx)
+    # The core is in the middle of the region.
+    row, column = ny // 2, nx // 2
     ax.step(wavelength, spectra[row, column], where="mid", color="black", label="Measured")
     params = fit[row, column]
     background = params[-1]
