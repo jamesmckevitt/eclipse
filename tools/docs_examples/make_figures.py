@@ -262,12 +262,14 @@ def slits():
 def slit_mask():
     """The active region without and with the slit's mask."""
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.9), sharey=True, layout="constrained")
-    for ax, flag in zip(axes, (False, True)):
-        image = maps("muram_ar_slit_mask", **{"simulation.slit_mask": flag})["total_dn"]
+    images = [maps("muram_ar_slit_mask", **{"simulation.slit_mask": flag})["total_dn"]
+              for flag in (False, True)]
+    for ax, flag, image in zip(axes, (False, True), images):
         show(ax, image, f"slit_mask: {flag}", cmap="gray",
              norm=PowerNorm(0.5, *np.nanpercentile(image.data, [1, 99.9])))
     axes[0].set_ylabel("y [arcsec]")
-    axes[0].set_ylim(-150, 150)
+    # The whole scene, so the masked map shows where it stops.
+    axes[0].set_ylim(extent(images[0])[2:])
     save(fig, "example-slit-mask")
 
 
