@@ -1595,7 +1595,9 @@ class Simulation:
         How the slit is combined with the optics blur: `"quadrature"`
         (default) or `"convolution"`.
     slit_mask : bool
-        Whether the slit's ends and fiducials block the light (SWC only).
+        Whether the slit's ends and fiducials block the light (SWC only). A
+        run then keeps only the rows along the slit, and blanks the fits in
+        the rows behind a fiducial.
         Default False. Keyword only.
     focal_plane_dispersion : bool
         Whether the width in wavelength of the pixels is that of the SW

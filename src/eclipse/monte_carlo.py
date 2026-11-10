@@ -26,8 +26,12 @@ from .utils import angle_to_distance, binned_photon_wavelengths, rebin_slit_offc
 
 def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
                  units: list, signal: NDCube, rest_wavelength: u.Quantity,
-                 fit_config) -> dict:
+                 fit_config, unlit: np.ndarray | None = None) -> dict:
     """Statistics of one signal's fits, printing how many fits failed."""
+    if unlit is not None:
+        # A row no light reaches holds only noise, so its fits are blanked.
+        fit_data[:, unlit] = np.nan
+        failed[:, unlit] = False
     results = summarise_fits(fit_data, failed, units,
                              spectral_pixel_width(signal), rest_wavelength,
                              fit_config)
@@ -44,6 +48,13 @@ def _fit_results(label: str, fit_data: np.ndarray, failed: np.ndarray,
         line = f"  {label} fits: none of {failed.size} failed"
     print(line)
     return results
+
+
+def _unlit_rows(cube: NDCube, n_bin: int) -> np.ndarray:
+    """Whether no light reaches each row of `cube` once `n_bin` rows are binned."""
+    dark = np.all(cube.data == 0, axis=(1, 2))
+    n_kept = dark.size // n_bin
+    return dark[:n_kept * n_bin].reshape(n_kept, n_bin).all(axis=1)
 
 
 def _with_photon_wavelength(cube: NDCube) -> NDCube:
@@ -496,6 +507,8 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         return np.sqrt(dn_variance(dn_data, mean, t_exp, det, visible, offchip_bin_slit,
                                    rms_wavelength=rms, dark_time=dark_time))
 
+    unlit = _unlit_rows(I_cube, offchip_bin_slit) if getattr(sim, "slit_mask", False) else None
+
     # --- MPI distribution: split iterations across ranks -----------------
     comm, rank, world_size = _get_mpi_info()
     if world_size > 1:
@@ -648,13 +661,13 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
                 dn_fit_results = _fit_results(
                     "DN", np.stack([v for v, _ in dn_fit_values_list]),
                     np.stack([f for _, f in dn_fit_values_list]),
-                    dn_fit_units, first_dn_signal, rest_wavelength, fit_config)
+                    dn_fit_units, first_dn_signal, rest_wavelength, fit_config, unlit)
 
             if do_photon and photon_fit_values_list:
                 photon_fit_results = _fit_results(
                     "Photon", np.stack([v for v, _ in photon_fit_values_list]),
                     np.stack([f for _, f in photon_fit_values_list]),
                     photon_fit_units, first_photon_signal, rest_wavelength,
-                    fit_config)
+                    fit_config, unlit)
     
     return first_dn_signal, dn_fit_results, first_photon_signal, photon_fit_results
