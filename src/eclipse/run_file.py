@@ -267,7 +267,7 @@ def _settings_key(config: dict) -> str:
 
     settings = {key: value for key, value in (config.get("synthesis") or {}).items()
                 if key not in _COMPUTING_KEYS}
-    return _hash({"atmosphere": str(Path(config["atmosphere"]).resolve()),
+    return _hash({"atmosphere": os.path.abspath(config["atmosphere"]),
                   "synthesis": settings, "eclipse": __version__})
 
 
@@ -295,18 +295,25 @@ def _stored_key(path: Path, name: str = "run_key") -> Optional[str]:
     return None if key is None else str(key)
 
 
-def _made_already(config: dict, name: str) -> bool:
+# Synthesis files already warned about, once each.
+_WARNED = set()
+
+
+def _made_already(config: dict, name: str, warn: bool = True) -> bool:
     """
     Whether a run's synthesis file holds what it would synthesise.
 
     With its atmosphere file gone, only the settings can be checked, and a
-    warning says so.
+    warning says so, once for each file.
     """
     path = synthesis_path(config, name)
     if Path(config["atmosphere"]).is_file():
         return _stored_key(path) == _run_key(config)
     if _stored_key(path, "run_settings_key") != _settings_key(config):
         return False
+    if not warn or path in _WARNED:
+        return True
+    _WARNED.add(path)
     warnings.warn(f"The atmosphere {config['atmosphere']} is not there, so {path}, made from "
                   f"it with these settings, is used as it is.", UserWarning, stacklevel=2)
     return True
@@ -425,14 +432,13 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     if synthesises(config):
         synthesis_arguments(config, name)
         if ("synthesise" in steps and not Path(config["atmosphere"]).is_file()
-                and _stored_key(synthesis_path(config, name), "run_settings_key")
-                != _settings_key(config)):
+                and not _made_already(config, name, warn=False)):
             raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
     if "frame" in config and "frame" in steps:
         _frame_settings(config, name)
     observed = observation_config(config, name)
-    instrument = str(observed.get("instrument", "SWC")).upper()
-    _validate_config_keys(observed, instrument)
+    if "observe" in steps:
+        _validate_config_keys(observed, str(observed.get("instrument", "SWC")).upper())
 
 
 def _observe_one(config: dict, name: str, source: Optional[str] = None,
@@ -454,6 +460,10 @@ def _observe_one(config: dict, name: str, source: Optional[str] = None,
             raise FileNotFoundError(f"The synthesis {path} is not made yet: run 'eclipse "
                                     f"synthesise' first, or 'eclipse run'.")
         if not _made_already(config, name):
+            if not Path(config["atmosphere"]).is_file():
+                raise ValueError(f"The synthesis {path} was not made with these settings, and "
+                                 f"the atmosphere {config['atmosphere']} it would be made "
+                                 f"from again is not there.")
             raise ValueError(f"The synthesis {path} was not made from this atmosphere with "
                              f"these settings: run 'eclipse synthesise' or 'eclipse run' "
                              f"to make it again.")
@@ -543,7 +553,7 @@ def _band_lines(settings: dict):
     made_from = {"band": settings["band"], "abundance": abundance, "database": database,
                  "logT": np.asarray(products["logT_grid"]).tolist(),
                  "logN": np.asarray(products["logN_grid"]).tolist(), "eclipse": __version__}
-    key = hashlib.sha256(json.dumps(made_from, sort_keys=True, default=str).encode()).hexdigest()
+    key = _hash(made_from)
     path = settings["band_lines"]
     if not _reusable(path, key, "band's lines"):
         lines = band_contribution_functions(
@@ -628,20 +638,21 @@ def _first_rank(step, *args):
             result = step(*args)
         except BaseException as error:
             failure = error
-            # Said now, before the other ranks stop the job.
-            traceback.print_exc()
+            # A refusal says why itself; anything else needs its traceback.
+            if not isinstance(error, (ValueError, FileNotFoundError)):
+                traceback.print_exc()
         finally:
             os.sched_setaffinity(0, pinned)
     waiting = comm.Ibarrier()
     while not waiting.Test():
         time.sleep(1.0)
-    failed = comm.bcast(failure is not None, root=0)
+    # Every rank reports the error, so it is seen whichever ends the job.
+    message = comm.bcast(None if failure is None else f"{type(failure).__name__}: {failure}",
+                         root=0)
     if failure is not None:
         raise failure
-    if failed:
-        # Long enough for the first rank to report its error and end the job.
-        time.sleep(30.0)
-        raise FirstRankFailed(f"The first MPI rank failed; its error says why.")
+    if message is not None:
+        raise FirstRankFailed(f"On the first MPI rank: {message}")
     return result
 
 

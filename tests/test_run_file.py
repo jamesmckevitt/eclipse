@@ -389,7 +389,7 @@ def test_a_synthesis_is_observed_after_its_atmosphere_is_moved(tmp_path, monkeyp
     atmosphere.rename(tmp_path / "archived.h5")
     with pytest.warns(UserWarning, match="is not there"):
         eclipse.observe(_job(atmosphere), name="job")
-    with pytest.raises(ValueError, match="not made from this atmosphere"):
+    with pytest.raises(ValueError, match="not made with these settings, and the atmosphere"):
         eclipse.observe(_job(atmosphere), name="job", settings=["synthesis.vel_res='1 km/s'"])
     with pytest.raises(FileNotFoundError, match="Atmosphere file not found"):
         eclipse.synthesise(_job(atmosphere), name="job",
