@@ -345,8 +345,11 @@ class SkyView:
     def _image_parts(self, faces, reach, offsets):
         """Image pixels shapes on the base at `offsets` fall on, with copies when wrapping."""
         n_rows, n_columns = self.image_shape
+        projected = self._on_sky(offsets)
         for shift in self._copies(reach):
-            centres = self._on_sky(offsets + shift)
+            # A copy is the same image moved by where the shift is seen.
+            centres = projected + (self.frame[:2, 0] * shift[0]
+                                   + self.frame[:2, 1] * shift[1]) / self._pitch
             near = np.flatnonzero((centres[:, 0] + reach[0] > 0)
                                   & (centres[:, 0] - reach[0] < n_columns)
                                   & (centres[:, 1] + reach[1] > 0)

@@ -81,5 +81,7 @@ def _overlap_kernel(corners, weight, depth, middle, slope, reach, span, centres,
                                           + slope[f, 0] * (moment_u - area * middle[f, 0])
                                           + slope[f, 1] * (moment_v - area * middle[f, 1]))
                 # The near and far faces' parts cancel to rounding error where
-                # the shadow only touches the pixel.
-                shares[n, step_u, step_v] = max(total, 0.0)
+                # the shadow only touches the pixel; that is not a negative share.
+                if -1e-12 < total < 0.0:
+                    total = 0.0
+                shares[n, step_u, step_v] = total

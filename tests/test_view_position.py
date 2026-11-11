@@ -122,10 +122,12 @@ def test_a_repeating_slab_is_uniform_and_seen_through_one_over_cos(projection, x
 
 
 @pytest.mark.parametrize("projection", PROJECTIONS)
-def test_a_long_thin_repeating_strip_fills_its_image(projection):
+@pytest.mark.parametrize("x, y, rotation, shape",
+                         [(600, 0, 30, (2, 40)), (800, 300, 75, (2, 40)), (-500, 600, 10, (40, 2))])
+def test_a_long_thin_repeating_strip_fills_its_image(projection, x, y, rotation, shape):
     """A strip turned on the sky is seen again across its width many times over."""
-    log_t, log_n, xe, ye, ze, dz_cm = _slab(nz=6, ny=2, nx=40)
-    frame, angle = disk_frame(600 * u.arcsec, 0 * u.arcsec, 30 * u.deg)
+    log_t, log_n, xe, ye, ze, dz_cm = _slab(nz=6, ny=shape[0], nx=shape[1])
+    frame, angle = disk_frame(x * u.arcsec, y * u.arcsec, rotation * u.deg)
     sky = SkyView(frame, xe, ye, ze, True, projection)
     dem, _ = compute_dem(log_t, log_n, dz_cm, LOGT, "z", sky=sky)
     em = dem.sum(axis=-1) * 0.1
