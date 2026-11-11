@@ -13,6 +13,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -88,7 +89,7 @@ def apply_setting(config: dict, setting: str) -> dict:
     return changed
 
 
-def load(source, settings=(), name: Optional[str] = None, **sections) -> tuple[dict, str, str]:
+def load(source, name: Optional[str] = None) -> tuple[dict, str, str]:
     """
     A run file's configuration, its name and where it came from.
 
@@ -96,14 +97,9 @@ def load(source, settings=(), name: Optional[str] = None, **sections) -> tuple[d
     ----------
     source : str, Path or dict
         A run file, or its configuration.
-    settings : sequence of str, optional
-        Settings to change, each `key=value` as for :func:`apply_setting`.
     name : str, optional
         Name of the run. Default the file's name without its suffix, or
         `"run"` for a configuration given as a dict.
-    **sections
-        Top-level keys or whole sections, laid over the file's with
-        :func:`merge`.
 
     Returns
     -------
@@ -127,10 +123,21 @@ def load(source, settings=(), name: Optional[str] = None, **sections) -> tuple[d
     if not isinstance(config, dict):
         raise ValueError(f"A run file is a mapping of keys to values, got "
                          f"{type(config).__name__}: {label}")
-    config = merge(config, sections)
+    return config, name or "run", label
+
+
+def adjust(config: dict, settings=(), sections: Optional[dict] = None) -> dict:
+    """
+    A run's configuration with sections laid over it, then settings changed.
+
+    `sections` holds top-level keys or whole sections, laid over the
+    configuration with :func:`merge`, and each of `settings` is `key=value`
+    as for :func:`apply_setting`.
+    """
+    config = merge(config, sections or {})
     for setting in settings:
         config = apply_setting(config, setting)
-    return config, name or "run", label
+    return config
 
 
 def runs(config: dict, name: str) -> list[tuple[str, dict]]:
@@ -205,9 +212,11 @@ def _option_words(key: str, action, value) -> list[str]:
     return [f"{flag}={value}"]
 
 
-def synthesis_arguments(config: dict, name: str) -> list[str]:
+def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) -> list[str]:
     """
     `synthesise-spectra` command-line words for a run's synthesis.
+
+    The synthesis is written to `output`, or to the run's synthesis file.
 
     Raises
     ------
@@ -229,11 +238,16 @@ def synthesis_arguments(config: dict, name: str) -> list[str]:
     if path.suffix.lower() != ".h5":
         raise ValueError(f"A run writes its synthesis to an HDF5 file ending in .h5, not "
                          f"{path}.")
-    words = [f"--atmosphere={config['atmosphere']}", f"--output-dir={path.parent}",
-             f"--output-name={path.name}"]
+    output = path if output is None else Path(output)
+    words = [f"--atmosphere={config['atmosphere']}", f"--output-dir={output.parent}",
+             f"--output-name={output.name}"]
     for key, value in section.items():
         words += _option_words(key, options[key], value)
     return words
+
+
+# Synthesis settings that change how it is computed, not what it gives.
+_COMPUTING_KEYS = ("n_workers", "goft_temperature_chunk")
 
 
 def _run_key(config: dict) -> str:
@@ -247,8 +261,10 @@ def _run_key(config: dict) -> str:
 
     atmosphere = Path(config["atmosphere"]).resolve()
     status = atmosphere.stat()
+    settings = {key: value for key, value in (config.get("synthesis") or {}).items()
+                if key not in _COMPUTING_KEYS}
     made_from = {"atmosphere": str(atmosphere), "size": status.st_size,
-                 "modified": status.st_mtime_ns, "synthesis": config.get("synthesis") or {},
+                 "modified": status.st_mtime_ns, "synthesis": settings,
                  "eclipse": __version__}
     text = json.dumps(made_from, sort_keys=True, default=str)
     return hashlib.sha256(text.encode()).hexdigest()
@@ -266,11 +282,22 @@ def _stored_key(path: Path) -> Optional[str]:
     return None if key is None else str(key)
 
 
-def _store_key(path: Path, key: str) -> None:
+def _write_with_key(path: Path, key: str, write) -> None:
+    """
+    Write a file with `write(partial path)` and mark it with `key`.
+
+    The file is written under another name and moved into place only once
+    it is complete, so a run stopped part way leaves no file that looks
+    like its own.
+    """
     import h5py
 
-    with h5py.File(path, "a") as file:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f".{path.stem}.partial{path.suffix}")
+    write(partial)
+    with h5py.File(partial, "a") as file:
         file.attrs["run_key"] = key
+    os.replace(partial, path)
 
 
 def _reusable(path: Path, key: str, what: str) -> bool:
@@ -307,15 +334,12 @@ def _synthesise_one(config: dict, name: str) -> Path:
     """
     from .synthesis import main as run_synthesis, parse_arguments
 
-    words = synthesis_arguments(config, name)
+    synthesis_arguments(config, name)
     path = synthesis_path(config, name)
-    if not Path(config["atmosphere"]).is_file():
-        raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
     key = _run_key(config)
-    if _reusable(path, key, "synthesis"):
-        return path
-    run_synthesis(parse_arguments(words))
-    _store_key(path, key)
+    if not _reusable(path, key, "synthesis"):
+        _write_with_key(path, key, lambda partial: run_synthesis(
+            parse_arguments(synthesis_arguments(config, name, output=partial))))
     return path
 
 
@@ -348,20 +372,19 @@ def observation_config(config: dict, name: str) -> dict:
 
 def check(config: dict, name: str) -> None:
     """
-    Check a run's keys before anything is computed.
+    Check a run's settings before anything is computed.
 
-    So a mistake in the observation's settings is found before an
-    atmosphere is synthesised, which can take hours.
+    So a mistake in the observation's or the frame's settings is found
+    before an atmosphere is synthesised, which can take hours.
     """
     from .main import _validate_config_keys
 
     if synthesises(config):
         synthesis_arguments(config, name)
+        if not Path(config["atmosphere"]).is_file():
+            raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
     if "frame" in config:
-        frame = config["frame"]
-        if not isinstance(frame, dict):
-            raise ValueError("The 'frame:' section must be a mapping of settings to values.")
-        check_config_keys(frame, FRAME_KEYS, "'frame' section")
+        _frame_settings(config, name)
     observed = observation_config(config, name)
     instrument = str(observed.get("instrument", "SWC")).upper()
     _validate_config_keys(observed, instrument)
@@ -380,60 +403,111 @@ def _observe_one(config: dict, name: str, source: Optional[str] = None,
     from .main import run_config
 
     observed = observation_config(config, name)
-    if synthesises(config) and not Path(observed["synthesis_file"]).is_file():
-        raise FileNotFoundError(f"The synthesis {observed['synthesis_file']} is not made yet: "
-                                f"run 'eclipse synthesise' first, or 'eclipse run'.")
+    if synthesises(config):
+        path = Path(observed["synthesis_file"])
+        if not path.is_file():
+            raise FileNotFoundError(f"The synthesis {path} is not made yet: run 'eclipse "
+                                    f"synthesise' first, or 'eclipse run'.")
+        if _stored_key(path) != _run_key(config):
+            raise ValueError(f"The synthesis {path} was not made from this atmosphere with "
+                             f"these settings: run 'eclipse synthesise' or 'eclipse run' "
+                             f"to make it again.")
     return run_config(observed, name, source=source, debug=debug)
 
 
 # ----------------------------------------------------------------------
 # The full-CCD frame
 # ----------------------------------------------------------------------
-def _single(section: dict, key: str, where: str, default=None):
-    """One value of a run's setting: a list of more than one is refused."""
-    value = section.get(key, default)
-    if isinstance(value, (list, tuple)):
-        if len(value) != 1:
-            raise ValueError(f"A frame takes one value of '{where}.{key}', got {value!r}. "
-                             f"Give it in the 'frame:' section.")
-        value = value[0]
-    return value
+# Settings of the simulation: section a frame uses, besides its exposure and
+# slit width.
+_FRAME_SIMULATION_KEYS = ("psf", "spectral_psf", "noise", "psf_boundary", "slit_mask")
 
 
-def _band_lines(config: dict, frame: dict, synthesis: Path, n_workers: int):
+def _one_value(section: str, settings: dict) -> dict:
+    """A section's settings parsed, each with one value; a sweep is refused."""
+    fixed, sweep = _parse_section(settings, section)
+    if sweep:
+        raise ValueError(f"A frame takes one value of each setting, but "
+                         f"'{section}.{next(iter(sweep))}' has several. Give one, or give "
+                         f"the frame's own in the 'frame:' section where it has one.")
+    return fixed
+
+
+def _frame_settings(config: dict, name: str) -> dict:
+    """
+    Everything a run's frame needs, read from its sections and checked.
+
+    The instrument's settings come from the run's `simulation:`,
+    `detector:`, `telescope:` and `filter:` sections, each with one value,
+    and the frame's exposure and slit width from `frame:` if it gives them.
+    """
+    frame = config.get("frame")
+    if not isinstance(frame, dict):
+        raise ValueError("A run makes a frame from its 'frame:' section; this one has none.")
+    check_config_keys(frame, FRAME_KEYS, "'frame' section")
+    if str(config.get("instrument", "SWC")).upper() != "SWC":
+        raise ValueError("A full-CCD frame is of the SW camera, so the instrument is SWC.")
+    if "slit_position" not in frame:
+        raise ValueError("The 'frame:' section needs a 'slit_position', such as 0 arcsec.")
+    simulation = config.get("simulation") or {}
+    used = {key: simulation[key] for key in _FRAME_SIMULATION_KEYS if key in simulation}
+    for key, own in (("expos", "exposure"), ("slit_width", "slit_width")):
+        if own not in frame and key in simulation:
+            used[key] = simulation[key]
+    used = _one_value("simulation", used)
+    exposure = frame.get("exposure", used.pop("expos", None))
+    if exposure is None:
+        raise ValueError("A frame needs an exposure time: give 'frame.exposure', or one "
+                         "'simulation.expos'.")
+    exposure = u.Quantity(exposure[0] if isinstance(exposure, list) else exposure)
+    slit_width = u.Quantity(frame.get("slit_width", used.pop("slit_width", 0.2 * u.arcsec)))
+    band = frame.get("band")
+    return {
+        "synthesis": (synthesis_path(config, name) if synthesises(config)
+                      else Path(config.get("synthesis_file", ""))),
+        "slit_position": u.Quantity(frame["slit_position"]),
+        "exposure": exposure,
+        "slit_width": slit_width,
+        "options": used,
+        "detector": _one_value("detector", config.get("detector") or {}),
+        "telescope": _one_value("telescope", config.get("telescope") or {}),
+        "filter": _one_value("filter", config.get("filter") or {}),
+        "n_workers": int(frame.get("n_workers", 0)),
+        "band": (_SW_BAND if band is None
+                 else tuple(u.Quantity(edge).to_value(u.AA) for edge in band)),
+        "band_lines": Path(frame.get("band_lines", "run/input/band_lines.h5")),
+        "continuum": bool(frame.get("continuum", False)),
+        "output": Path(frame.get("output", f"run/result/{name}_frame.h5")),
+    }
+
+
+def _band_lines(settings: dict):
     """Every line in the band, worked out or read back."""
     from . import __version__
     from .band import band_contribution_functions, read_band_lines, write_band_lines
     from .synthesis_file import read_synthesis_products
 
-    products = read_synthesis_products(synthesis, keys=["logT_grid", "logN_grid", "config"])
+    products = read_synthesis_products(settings["synthesis"],
+                                       keys=["logT_grid", "logN_grid", "config"])
     abundance = products["config"].get("abundance", "sun_coronal_2021_chianti")
     database = products["config"].get("hdf5_dbase_root")
-    band = frame.get("band")
-    band = (_SW_BAND if band is None
-            else tuple(u.Quantity(edge).to_value(u.AA) for edge in band))
-    path = Path(frame.get("band_lines", "run/input/band_lines.h5"))
-    made_from = {"band": band, "abundance": abundance, "database": database,
+    made_from = {"band": settings["band"], "abundance": abundance, "database": database,
                  "logT": np.asarray(products["logT_grid"]).tolist(),
                  "logN": np.asarray(products["logN_grid"]).tolist(), "eclipse": __version__}
     key = hashlib.sha256(json.dumps(made_from, sort_keys=True, default=str).encode()).hexdigest()
-    if _reusable(path, key, "band's lines"):
-        return read_band_lines(path)
-    lines = band_contribution_functions(band, products["logT_grid"], products["logN_grid"],
-                                        abundance=abundance, n_workers=n_workers,
-                                        hdf5_dbase_root=database)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_band_lines(lines, path)
-    _store_key(path, key)
-    return lines
+    path = settings["band_lines"]
+    if not _reusable(path, key, "band's lines"):
+        lines = band_contribution_functions(
+            settings["band"], products["logT_grid"], products["logN_grid"],
+            abundance=abundance, n_workers=settings["n_workers"], hdf5_dbase_root=database)
+        _write_with_key(path, key, lambda partial: write_band_lines(lines, partial))
+        return lines
+    return read_band_lines(path)
 
 
 def _frame_one(config: dict, name: str) -> Path:
     """
     Make the full-CCD frame a run's `frame:` section describes.
-
-    The instrument's settings come from the run's `simulation:`, `detector:`,
-    `telescope:` and `filter:` sections, each with one value.
 
     Returns
     -------
@@ -444,52 +518,27 @@ def _frame_one(config: dict, name: str) -> Path:
     from .continuum import compute_continuum_fiasco
     from .full_frame import full_ccd_frame, write_full_frame
 
-    frame = config.get("frame")
-    if not isinstance(frame, dict):
-        raise ValueError("A run makes a frame from its 'frame:' section; this one has none.")
-    check_config_keys(frame, FRAME_KEYS, "'frame' section")
-    if str(config.get("instrument", "SWC")).upper() != "SWC":
-        raise ValueError("A full-CCD frame is of the SW camera, so the instrument is SWC.")
-    synthesis = (synthesis_path(config, name) if synthesises(config)
-                 else Path(config.get("synthesis_file", "")))
-    if not synthesis.is_file():
-        raise FileNotFoundError(f"The synthesis {synthesis} is not there: a frame is made "
-                                f"from a synthesis, given with 'synthesis_file', or made "
-                                f"from the 'atmosphere'.")
-    if "slit_position" not in frame:
-        raise ValueError("The 'frame:' section needs a 'slit_position', such as 0 arcsec.")
-
-    sections = {}
-    for section in ("simulation", "detector", "telescope", "filter"):
-        fixed, sweep = _parse_section(config.get(section) or {}, section)
-        if sweep:
-            raise ValueError(f"A frame takes one value of each setting, but "
-                             f"'{section}.{next(iter(sweep))}' has several.")
-        sections[section] = fixed
-    simulation = sections["simulation"]
-    exposure = u.Quantity(_single(frame, "exposure", "frame",
-                                  _single(simulation, "expos", "simulation")))
-    slit_width = frame.get("slit_width", simulation.get("slit_width", 0.2 * u.arcsec))
-    n_workers = int(frame.get("n_workers", 0))
-    telescope = Telescope_EUVST(filter=AluminiumFilter(**sections["filter"]),
-                                **sections["telescope"])
-    detector = Detector_SWC(**sections["detector"])
-    options = {key: simulation[key] for key in ("psf", "spectral_psf", "noise",
-                                                "psf_boundary", "slit_mask")
-               if key in simulation}
-
-    lines = _band_lines(config, frame, synthesis, n_workers)
+    settings = _frame_settings(config, name)
+    if not settings["synthesis"].is_file():
+        raise FileNotFoundError(f"The synthesis {settings['synthesis']} is not there: a frame "
+                                f"is made from a synthesis, given with 'synthesis_file', or "
+                                f"made from the 'atmosphere'.")
+    telescope = Telescope_EUVST(filter=AluminiumFilter(**settings["filter"]),
+                                **settings["telescope"])
+    detector = Detector_SWC(**settings["detector"])
+    lines = _band_lines(settings)
     continuum = None
-    if frame.get("continuum", False):
+    if settings["continuum"]:
         wavelength = np.linspace(*_CONTINUUM_WAVELENGTHS) * u.AA
         free, two_photon = compute_continuum_fiasco(
             wavelength, lines.logT_grid, lines.logN_grid, abundance=lines.abundance,
-            n_workers=n_workers)
+            n_workers=settings["n_workers"])
         continuum = (wavelength, free, two_photon)
-    made = full_ccd_frame(synthesis, lines, u.Quantity(frame["slit_position"]), exposure,
-                          slit_width=u.Quantity(slit_width), det=detector, telescope=telescope,
-                          continuum=continuum, n_workers=n_workers, **options)
-    path = Path(frame.get("output", f"run/result/{name}_frame.h5"))
+    made = full_ccd_frame(settings["synthesis"], lines, settings["slit_position"],
+                          settings["exposure"], slit_width=settings["slit_width"],
+                          det=detector, telescope=telescope, continuum=continuum,
+                          n_workers=settings["n_workers"], **settings["options"])
+    path = settings["output"]
     path.parent.mkdir(parents=True, exist_ok=True)
     write_full_frame(made, path)
     print(f"Wrote the full-CCD frame to {path}")
@@ -500,13 +549,42 @@ def _frame_one(config: dict, name: str) -> Path:
 # Running every step
 # ----------------------------------------------------------------------
 def _first_rank(step, *args):
-    """Run `step` on the first MPI rank only, and wait for it on the others."""
+    """
+    Run `step` on the first MPI rank only, while the others wait.
+
+    The first rank may use every CPU of the job on its node meanwhile, and
+    the others wait without using them. If the step fails on the first
+    rank, every rank stops.
+    """
+    import time
+
+    from .main import _allowed_cpus, _cpuset
     from .utils import _get_mpi_info
 
     comm, rank, size = _get_mpi_info()
-    result = step(*args) if rank == 0 else None
-    if size > 1:
-        comm.Barrier()
+    if size == 1:
+        return step(*args)
+    result, failure = None, None
+    if rank == 0:
+        pinned = sorted(os.sched_getaffinity(0))
+        widest = _allowed_cpus(os.environ, _cpuset(), pinned)
+        try:
+            if widest:
+                os.sched_setaffinity(0, widest)
+            result = step(*args)
+        except BaseException as error:
+            failure = error
+        finally:
+            os.sched_setaffinity(0, pinned)
+    waiting = comm.Ibarrier()
+    while not waiting.Test():
+        time.sleep(1.0)
+    failed = comm.bcast(failure is not None, root=0)
+    if failure is not None:
+        raise failure
+    if failed:
+        raise RuntimeError(f"The first MPI rank failed to {step.__name__.strip('_')}; "
+                           f"its error says why.")
     return result
 
 
@@ -540,17 +618,40 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
     return RunOutput(name, synthesis, results, frame)
 
 
+def _check_files_apart(found: list) -> None:
+    """Refuse runs that would write different things to the same file."""
+    syntheses, frames = {}, {}
+    for run_name, config in found:
+        if synthesises(config):
+            path = synthesis_path(config, run_name).resolve()
+            key = _run_key(config)
+            other = syntheses.setdefault(path, (run_name, key))
+            if other[1] != key:
+                raise ValueError(f"The runs {other[0]} and {run_name} would synthesise "
+                                 f"differently into {path}; give each its own "
+                                 f"'synthesis_file'.")
+        if "frame" in config:
+            path = _frame_settings(config, run_name)["output"].resolve()
+            other = frames.setdefault(path, run_name)
+            if other != run_name:
+                raise ValueError(f"The runs {other} and {run_name} would both write their "
+                                 f"frame to {path}; give each its own 'frame.output'.")
+
+
 def run_all(source, command: str, *, settings=(), only: Optional[str] = None,
             name: Optional[str] = None, debug: bool = False,
             **sections) -> list[RunOutput]:
     """
     Every run of a run file, through the steps of `command`.
 
-    `command` is one of :data:`STEPS`. `only` picks one run by its name in
-    `runs:`. The runs are checked before any is started.
+    `command` is one of :data:`STEPS`. `sections` and `settings` change each
+    run, after its own settings from `runs:` are laid over the file. `only`
+    picks one run by its name in `runs:`. The runs are checked before any
+    is started.
     """
-    config, name, label = load(source, settings, name=name, **sections)
-    found = runs(config, name)
+    config, name, label = load(source, name=name)
+    found = [(run_name, adjust(run_config, settings, sections))
+             for run_name, run_config in runs(config, name)]
     if only is not None:
         picked = [(run_name, run_config) for run_name, run_config in found
                   if run_name == f"{name}_{only}"]
@@ -565,6 +666,7 @@ def run_all(source, command: str, *, settings=(), only: Optional[str] = None,
         if command == "frame" and "frame" not in run_config:
             raise ValueError(f"The run {run_name} has no 'frame:' section saying what frame "
                              f"to make.")
+    _check_files_apart(found)
     return [run_steps(run_config, run_name, STEPS[command], source=label, debug=debug)
             for run_name, run_config in found]
 

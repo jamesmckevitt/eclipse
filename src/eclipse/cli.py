@@ -82,17 +82,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _first_word(argv: list) -> str | None:
+    """The first command-line word that is not an option or its value."""
+    words = iter(argv)
+    for word in words:
+        if word == "--config":
+            next(words, None)
+        elif not word.startswith("-"):
+            return word
+    return None
+
+
 def main(argv=None):
     """Main CLI entry point."""
     argv = list(sys.argv[1:] if argv is None else argv)
     # Passed on whole, so their own options are not read as eclipse's.
-    if argv and argv[0] == "atmosphere":
+    command = _first_word(argv)
+    if command == "atmosphere":
         from .atmosphere import main as atmosphere_main
-        atmosphere_main(argv[1:])
+        atmosphere_main(argv[argv.index(command) + 1:])
         return
-    if argv and argv[0] == "science-cases":
+    if command == "science-cases":
         from .science_cases import main as science_cases_main
-        science_cases_main(argv[1:])
+        science_cases_main(argv[argv.index(command) + 1:])
         return
     args = build_parser().parse_args(argv)
 
@@ -105,7 +117,8 @@ def main(argv=None):
     if args.command is None:
         if not args.config:
             print("Usage: eclipse run <run file>")
-            print("\nThe documentation says how to write one: https://solarc-eclipse.readthedocs.io")
+            print("\nThe documentation says how to write one: "
+                  "https://solarc-eclipse.readthedocs.io")
             print("\nFor more help: eclipse --help")
             return
         warnings.warn(f"'eclipse --config {args.config}' is the old form of 'eclipse run "

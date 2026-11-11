@@ -9,7 +9,7 @@ import yaml
 
 import eclipse
 from eclipse import run_file
-from eclipse.run_file import (apply_setting, check, load, observation_config, runs,
+from eclipse.run_file import (adjust, apply_setting, check, load, observation_config, runs,
                               synthesis_arguments)
 
 LINE = "Fe12_195.1190"
@@ -78,9 +78,10 @@ def test_a_setting_is_changed_by_its_dotted_key():
 def test_sections_and_settings_are_laid_over_the_file(tmp_path):
     path = tmp_path / "job.yaml"
     path.write_text(yaml.safe_dump({"n_iter": 5, "simulation": {"expos": "1 s", "psf": True}}))
-    config, name, source = load(path, ["simulation.psf=false"], n_iter=3,
-                                simulation={"expos": "5 s"})
+    config, name, source = load(path)
     assert (name, source) == ("job", str(path))
+    config = adjust(config, ["simulation.psf=false"],
+                    {"n_iter": 3, "simulation": {"expos": "5 s"}})
     assert config == {"n_iter": 3, "simulation": {"expos": "5 s", "psf": False}}
 
 
@@ -281,3 +282,96 @@ def test_the_science_cases_as_one_run_file_are_the_separate_configurations(tmp_p
     assert config["n_iter"] == 8 and "uniform_intensity" not in config
     for run_name, run_config in found.items():
         check(run_config, run_name)
+
+
+def test_a_setting_changed_from_outside_wins_over_a_runs_own(tmp_path, monkeypatch, atmosphere,
+                                                             fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    job = _job(atmosphere, runs=[{"name": "fe12", "synthesis": {"lines": [LINE],
+                                                                "vel_res": "2 km/s"}}])
+    eclipse.synthesise(job, name="job", settings=["synthesis.vel_res='1 km/s'"])
+    assert fake_synthesis[0].vel_res == "1 km/s"
+
+
+def test_a_synthesis_stopped_part_way_leaves_nothing_in_the_way(tmp_path, monkeypatch,
+                                                                atmosphere):
+    from eclipse import synthesis
+
+    def stops(args):
+        (Path(args.output_dir) / args.output_name).write_text("half a file")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(synthesis, "main", stops)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        eclipse.synthesise(_job(atmosphere), name="job")
+    assert not Path("run/input/job.h5").exists()
+
+
+def test_settings_that_change_only_how_it_is_computed_keep_the_synthesis(
+        tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    eclipse.synthesise(_job(atmosphere), name="job")
+    eclipse.synthesise(_job(atmosphere), name="job",
+                       settings=["synthesis.n_workers=4", "synthesis.goft_temperature_chunk=5"])
+    assert len(fake_synthesis) == 1
+
+
+def test_a_synthesis_made_from_other_settings_is_not_observed(tmp_path, monkeypatch, atmosphere,
+                                                              fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    eclipse.synthesise(_job(atmosphere), name="job")
+    with pytest.raises(ValueError, match="not made from this atmosphere with these settings"):
+        eclipse.observe(_job(atmosphere), name="job",
+                        settings=["synthesis.lines=[Fe09_171.0730]"])
+
+
+def test_runs_that_would_overwrite_each_others_synthesis_are_refused(
+        tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    job = _job(atmosphere, synthesis_file="run/input/shared.h5",
+               runs=[{"name": "fe12"},
+                     {"name": "fe09", "synthesis": {"lines": ["Fe09_171.0730"]}}])
+    with pytest.raises(ValueError, match="would synthesise differently"):
+        eclipse.synthesise(job, name="job")
+    assert not fake_synthesis
+
+
+def test_a_frame_with_its_own_exposure_leaves_the_runs_sweep_alone(tmp_path, monkeypatch,
+                                                                   atmosphere, fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    job = _job(atmosphere, simulation={"expos": ["5 s", "20 s"]},
+               frame={"slit_position": "0 arcsec", "exposure": "60 s"})
+    check(job, "job")
+    with pytest.raises(ValueError, match="'simulation.expos' has several"):
+        check(_job(atmosphere, simulation={"expos": ["5 s", "20 s"]},
+                   frame={"slit_position": "0 arcsec"}), "job")
+    with pytest.raises(ValueError, match="slit_position"):
+        eclipse.run(_job(atmosphere, frame={"exposure": "60 s"}), name="job")
+    assert not fake_synthesis
+
+
+def test_options_before_a_passed_on_command_are_skipped(monkeypatch):
+    from eclipse import cli, science_cases
+
+    passed = []
+    monkeypatch.setattr(science_cases, "main", lambda argv: passed.append(argv))
+    cli.main(["--debug", "science-cases", "--list"])
+    assert passed == [["--list"]]
+
+
+def test_synthesise_spectra_given_only_a_run_file_makes_the_runs_synthesis(
+        tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    import sys
+
+    from eclipse import synthesis_cli
+
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "job.yaml"
+    path.write_text(yaml.safe_dump(_job(atmosphere)))
+    monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--config", str(path)])
+    synthesis_cli.main()
+    synthesis_cli.main()
+    assert len(fake_synthesis) == 1
+    [output] = eclipse.synthesise(path)
+    assert output.synthesis == Path("run/input/job.h5") and len(fake_synthesis) == 1

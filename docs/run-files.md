@@ -48,7 +48,7 @@ The synthesis is written to `synthesis_file`, if the run file gives one, or to `
 
 A synthesis can take hours, so a run reuses the one it made before if the atmosphere file and the `synthesis:` section are the same. The atmosphere file counts as the same if its path, its size and the time it was last changed are. A run made with another version of ECLIPSE synthesises again.
 
-So changing the exposure times, or any other setting of the instrument, and running the file again only observes. Changing the lines, or remaking the atmosphere file, synthesises again and overwrites the old synthesis. A file at `synthesis_file` that a run file did not make is never overwritten: the run stops and says so.
+So changing the exposure times, or any other setting of the instrument, and running the file again only observes. So does changing `n_workers` or `goft_temperature_chunk`, which change only how the synthesis is computed. Changing the lines, or remaking the atmosphere file, synthesises again and overwrites the old synthesis. `eclipse observe` refuses a synthesis made from other settings, and says to make it again. A file at `synthesis_file` that a run file did not make is never overwritten: the run stops and says so.
 
 ## Changing a setting from the command line
 
@@ -58,7 +58,7 @@ So changing the exposure times, or any other setting of the instrument, and runn
 eclipse run job.yaml --set n_iter=10 --set simulation.expos="[5 s, 60 s]"
 ```
 
-The results are written under the run file's name as usual, so a run with other settings overwrites the results of the last one. Copy the file to keep both.
+In a file with `runs:`, a setting changed with `--set` changes every run, and wins over a run's own. The results are written under the run file's name as usual, so a run with other settings overwrites the results of the last one. Copy the file to keep both.
 
 ## Several runs in one file
 
@@ -82,7 +82,7 @@ runs:
       expos: [20 s, 60 s]
 ```
 
-`eclipse run job.yaml` does both runs in turn. The first writes `run/input/job_fe12.h5` and `run/result/job_fe12.h5`. `--only fe09` does one run only, which suits a job array on a cluster. Every run is checked before any is started.
+`eclipse run job.yaml` does both runs in turn. The first writes `run/input/job_fe12.h5` and `run/result/job_fe12.h5`. `--only fe09` does one run only, which suits a job array on a cluster. Every run is checked before any is started, and runs that would write different syntheses or frames to the same file are refused.
 
 A setting given as a list of values is still [swept](instrument-response.md#the-configuration-file) within a run. Runs are for what a sweep cannot do, such as observing different lines or synthesising with different settings.
 

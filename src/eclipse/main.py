@@ -538,6 +538,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     Path
         The results file.
     """
+    global _STARTING_STDERR
     source = name if source is None else source
     results_path = Path(f"run/result/{name}.h5")
 
@@ -571,13 +572,13 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         if _mpi_rank == 0:
             print(f"MPI distributed mode: {_mpi_size} processes "
                   f"(MC iterations will be split across ranks)")
-        else:
+        elif _STARTING_STDERR is None:
             # Silence stdout and stderr on non-root ranks to avoid duplicated
             # output. Redirect the OS file descriptors, not just the Python
             # objects, because SLURM captures fd 1/2 directly and tqdm can
             # bypass sys.stderr. The original stderr is kept for an error that
-            # must be reported before the run is aborted.
-            global _STARTING_STDERR
+            # must be reported before the run is aborted. A later run of the
+            # same run file finds them silenced already.
             _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
             os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)

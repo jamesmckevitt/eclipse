@@ -200,7 +200,7 @@ def test_suggest_returns_none_when_nothing_is_close():
 # --- the key lists have to agree with what main() reads ----------------------
 
 # main() and the helpers it passes the parsed config to.
-_CONFIG_READERS = ("main", "_parse_pinhole_config", "_parse_fitting_config",
+_CONFIG_READERS = ("run_config", "_parse_pinhole_config", "_parse_fitting_config",
                    "_parse_synthesis_settings", "_parse_raster_plan",
                    "_series_paths", "_reference_line")
 
@@ -334,10 +334,23 @@ def test_every_config_example_in_the_docs_is_valid():
     blocks = _doc_yaml_blocks()
     assert len(blocks) > 5, "expected the docs to carry config examples"
 
+    from eclipse.run_file import FRAME_KEYS, observation_config, runs, synthesis_arguments
+    from eclipse.utils import check_config_keys
+
     for page, block in blocks:
         config = yaml.safe_load(block)
         if not isinstance(config, dict):
             continue
+
+        # A run file's synthesis and frame are checked as a run checks them,
+        # and what each run observes as below.
+        observed = []
+        for name, run in runs(config, "example"):
+            if "atmosphere" in run:
+                synthesis_arguments(run, name)
+            if "frame" in run:
+                check_config_keys(run["frame"], FRAME_KEYS, f"'frame' section in docs/{page}")
+            observed.append(observation_config(run, name))
 
         named = config.get("instrument")
         candidates = [str(named).upper()] if named else ["SWC", "EIS"]
@@ -345,7 +358,8 @@ def test_every_config_example_in_the_docs_is_valid():
         errors = []
         for instrument in candidates:
             try:
-                _validate_config_keys(config, instrument)
+                for each in observed:
+                    _validate_config_keys(each, instrument)
                 break
             except ValueError as error:
                 errors.append(f"as {instrument}: {error}")
