@@ -152,16 +152,12 @@ def disk_frame(x: u.Quantity, y: u.Quantity,
 # ----------------------------------------------------------------------
 # How much of a shape falls in each pixel
 # ----------------------------------------------------------------------
-# A face of a shape's shadow: its corners about the shape's centre, in
-# pixels; the weight of the integral over it; and the depth, an affine
-# function of (u, v): its value at `middle` and its slope.
-_Face = Tuple[np.ndarray, float, float, np.ndarray, np.ndarray]
-
-
-def _parallelogram(middle: np.ndarray, side_a: np.ndarray, side_b: np.ndarray) -> np.ndarray:
-    """Corners of a parallelogram in order around it."""
-    return np.array([middle - 0.5 * side_a - 0.5 * side_b, middle + 0.5 * side_a - 0.5 * side_b,
-                     middle + 0.5 * side_a + 0.5 * side_b, middle - 0.5 * side_a + 0.5 * side_b])
+# A face of a shape's shadow, seen as the parallelogram `middle + s a + t b`
+# about the shape's centre, in pixels, with s and t from -1/2 to 1/2: its
+# middle, its sides a and b, the factor `scale` on its part, and the depth,
+# an affine function of s and t: its value at the middle and its change
+# along a and along b.
+_Face = Tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]
 
 
 def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.ndarray]:
@@ -170,8 +166,9 @@ def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.n
 
     The volume of the cell in front of a region of the sky is the integral
     over the region of the depth of the cell, from its far faces to its near
-    ones (the divergence theorem). Each face's part is an integral of an
-    affine function over a parallelogram. Faces seen edge on have none.
+    ones (the divergence theorem). Each face's part is its seen area times
+    the integral of an affine function of s and t over the part of it in
+    front of the region. A face seen edge on has none.
 
     Parameters
     ----------
@@ -188,28 +185,24 @@ def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.n
     for normal in range(3):
         side_a, side_b = (np.eye(3)[axis] * cell[axis] for axis in range(3) if axis != normal)
         seen_a, seen_b = linear[:2] @ side_a, linear[:2] @ side_b
-        area = seen_a[0] * seen_b[1] - seen_a[1] * seen_b[0]
-        if abs(area) <= 1e-12 * np.linalg.norm(seen_a) * np.linalg.norm(seen_b):
+        area = abs(seen_a[0] * seen_b[1] - seen_a[1] * seen_b[0])
+        if area == 0.0:
             continue
-        slope = np.array([linear[2] @ side_a, linear[2] @ side_b]) @ np.linalg.inv(
-            np.column_stack([seen_a, seen_b]))
         # The face whose outward normal points towards larger w is the near one.
         nearness = np.sign(inverse[normal, 2])
         for outward in (1.0, -1.0):
             offset = 0.5 * outward * cell[normal] * np.eye(3)[normal]
-            middle = linear[:2] @ offset
-            faces.append((_parallelogram(middle, seen_a, seen_b),
-                          outward * nearness * np.sign(area) / volume,
-                          linear[2] @ offset, middle, slope))
+            faces.append((linear[:2] @ offset, seen_a, seen_b,
+                          outward * nearness * area / volume,
+                          np.array([linear[2] @ offset, linear[2] @ side_a,
+                                    linear[2] @ side_b])))
     reach = 0.5 * np.abs(linear[:2] * cell).sum(axis=1)
     return faces, reach
 
 
 def _patch_faces(side_a: np.ndarray, side_b: np.ndarray) -> Tuple[List[_Face], np.ndarray]:
     """The one face of a flat, uniform parallelogram, and its half extent."""
-    area = side_a[0] * side_b[1] - side_a[1] * side_b[0]
-    face = (_parallelogram(np.zeros(2), side_a, side_b), 1.0 / area, 1.0, np.zeros(2),
-            np.zeros(2))
+    face = (np.zeros(2), side_a, side_b, 1.0, np.array([1.0, 0.0, 0.0]))
     return [face], 0.5 * (np.abs(side_a) + np.abs(side_b))
 
 
@@ -244,9 +237,9 @@ def _overlaps(faces: List[_Face], reach: np.ndarray,
         # Compiled with numba, which is loaded only for a view from a position.
         from ._overlap_kernel import _overlap_kernel
 
-        corners, weight, depth, middle, slope = (np.array(column, dtype=float)
+        middle, side_a, side_b, scale, depth = (np.array(column, dtype=float)
                                                  for column in zip(*faces))
-        _overlap_kernel(corners, weight, depth, middle, slope,
+        _overlap_kernel(middle, np.stack([side_a, side_b], axis=1), scale, depth,
                         np.asarray(reach, dtype=float), span, centres, first, shares)
     for step_u in range(span[0]):
         for step_v in range(span[1]):

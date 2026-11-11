@@ -168,6 +168,34 @@ def test_a_raised_feature_is_seen_outward_from_disk_centre(projection):
     assert (image.sum(axis=1) * rows).sum() / image.sum() == pytest.approx(0.0, abs=1e-12)
 
 
+def test_a_face_all_but_edge_on_does_not_magnify_rounding_error():
+    """A cell whose north and south faces are seen 1e-11 from edge on, on pixel edges."""
+    linear = np.array([[4.26701360, 1.30316513e-11, 2.60626072],
+                       [5.55111512e-16, 5.0, -2.5e-11],
+                       [-0.521252144, 4.26705406e-12, 0.853402720]])
+    edge_on = np.where(np.abs(linear) < 1e-9, 0.0, linear)
+    rng = np.random.default_rng(0)
+    centres = rng.uniform(0, 20, (400, 2))
+    # In step with the pixels north to south, to within rounding error.
+    centres[:, 1] = np.floor(centres[:, 1]) + 0.5 + rng.uniform(-1e-14, 1e-14, len(centres))
+    cell = np.array([0.2, 0.2, 0.1])
+    shares = []
+    for matrix in (edge_on, linear):
+        found = {}
+        for p, q, share in _overlaps(*_cell_faces(matrix, cell), centres):
+            for n in range(len(centres)):
+                found[n, p[n], q[n]] = found.get((n, p[n], q[n]), 0.0) + share[n]
+        shares.append(found)
+    for key in set(shares[0]) | set(shares[1]):
+        assert shares[1].get(key, 0.0) == pytest.approx(shares[0].get(key, 0.0), abs=1e-9)
+    for found in shares:
+        assert min(found.values()) >= 0.0
+        totals = np.zeros(len(centres))
+        for (n, _, _), share in found.items():
+            totals[n] += share
+        assert totals == pytest.approx(1.0, rel=1e-11)
+
+
 def test_a_tall_column_near_the_limb_is_seen_without_gaps():
     """Cells taller than a pixel's width on the sky fill the pixels between them."""
     nz, n = 6, 21
@@ -195,7 +223,7 @@ def test_a_cells_shares_are_the_parts_of_it_in_front_of_each_pixel(seed):
     faces, reach = _cell_faces(linear, cell)
     shares = {(int(p[0]), int(q[0])): float(share[0])
               for p, q, share in _overlaps(faces, reach, centre)}
-    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-12)
+    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-11)
     m = 80
     steps = (np.arange(m) + 0.5) / m - 0.5
     points = np.stack(np.meshgrid(steps, steps, steps, indexing="ij"), -1).reshape(-1, 3) * cell
@@ -216,7 +244,9 @@ def test_shares_are_never_negative(x, y, height):
     centres = np.random.default_rng(5).uniform(0, 50, (2000, 2))
     shares = np.array([share for _, _, share in _overlaps(faces, reach, centres)])
     assert shares.min() >= 0.0
-    assert shares.sum(axis=0) == pytest.approx(1.0, rel=1e-12)
+    # Parts within rounding error of nothing are dropped, so the shares of
+    # a cell sum to one to about 1e-11.
+    assert shares.sum(axis=0) == pytest.approx(1.0, rel=1e-11)
 
 
 def test_a_flat_patchs_shares_are_its_area_in_each_pixel():
@@ -224,7 +254,7 @@ def test_a_flat_patchs_shares_are_its_area_in_each_pixel():
     faces, reach = _patch_faces(side_a, side_b)
     shares = {(int(p[0]), int(q[0])): float(share[0])
               for p, q, share in _overlaps(faces, reach, np.array([[0.4, 0.7]]))}
-    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-12)
+    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-11)
     m = 400
     steps = (np.arange(m) + 0.5) / m - 0.5
     a, b = np.meshgrid(steps, steps, indexing="ij")
