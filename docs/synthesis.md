@@ -78,6 +78,19 @@ Both keep all of each cell's emission, and at disk centre with no rotation both 
 
 A box is taken to repeat sideways, as MURaM and Bifrost boxes do, so a line of sight leaving one side comes back in at the other, and every pixel of the image sees the box's full height. The image covers where the box's base is seen. `--no-wrap` ends the lines of sight at the box's sides instead, and so does cropping in x or y, since a cropped box does not repeat. The image then covers every cell, and the pixels near its edges see only part of a column.
 
+#### The curved surface
+
+The box is flat, but the Sun is not. Across a box 300 arcsec wide the local vertical turns by about 18 degrees, so the heliocentric angle changes from one side of the image to the other, and a horizontal flow is seen partly along the line of sight towards the box's edges. `--curvature` lays the box on the curved surface instead:
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec" --curvature
+```
+
+Distances along the surface from the box's centre are the box's own x and y (an azimuthal equidistant map), and each column stands along its own vertical. A flat box cannot be laid on a sphere without stretching it a little: this map shortens lengths across the corners of a box 300 arcsec wide by under one per cent. Each cell keeps the emission measure it has in the simulation, and is shared between the image's pixels exactly, as with `--projection exact`; the curvature within one cell is left out. The lines of sight are taken to be parallel. Each cell's Doppler velocity is the flow along the line of sight in its own column's axes, so the atmosphere file needs `velocity_x`, `velocity_y` and `velocity_z`.
+
+The box must lie on the side of the Sun facing the observer. A box taken to repeat sideways is laid on the surface again past each of its sides, and its image must be on the disk, since copies behind the limb would otherwise be seen above it.
+
 ### Worked example: a MURaM active region
 
 The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
@@ -199,6 +212,7 @@ synthesise-spectra --help
 - `--position`: The helioprojective x and y of the box's centre, for a line of sight slanted through it, for example `--position "600 arcsec" "-200 arcsec"`; see [Seen from a position on the disk](#seen-from-a-position-on-the-disk). Not with `--integration-axis`.
 - `--rotation`: With `--position`, turn the box about the vertical by this angle, from its x pointing west towards north, for example `--rotation "30 deg"`. Default 0 deg
 - `--projection`: With `--position`, how cells are shared between the image's pixels: `two-step` (default) or `exact`, which is slower
+- `--curvature`: With `--position`, lay the box on the curved solar surface, each column along its own vertical; see [The curved surface](#the-curved-surface). Needs the velocity along x, y and z
 - `--no-wrap`: With `--position`, end the lines of sight at the box's sides, rather than taking the box to repeat sideways
 
 **Cropping, in the file's coordinates, with units:**
