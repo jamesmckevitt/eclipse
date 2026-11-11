@@ -65,7 +65,7 @@ synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
   --position "600 arcsec" "-200 arcsec"
 ```
 
-The box's x is taken to point west, its y north and its z up, along the local vertical. Away from disk centre the line of sight is slanted through the box, at the heliocentric angle from the vertical, and the image is foreshortened towards the limb. The Doppler velocity is the part of the flow along the line of sight, so the atmosphere file needs the velocity along each axis the line of sight leans along: `velocity_x` for a position west or east of centre, `velocity_y` for one north or south, and `velocity_z`.
+The observer is taken to be 1 AU from the Sun, above its equator, with solar north up. The position is converted to a point on the surface with SunPy's coordinate frames. The box's x is taken to point west, its y north and its z up, along the local vertical. Away from disk centre the line of sight is slanted through the box, at the heliocentric angle from the vertical, and the image is foreshortened towards the limb. The Doppler velocity is the part of the flow along the line of sight, so the atmosphere file needs the velocity along each axis the line of sight leans along: `velocity_x` for a position west or east of centre, `velocity_y` for one north or south, and `velocity_z`.
 
 A box is taken to repeat sideways, as MURaM and Bifrost boxes do, so a line of sight leaving one side comes back in at the other. `--no-wrap` ends the lines of sight at the box's sides instead, and so does cropping in x or y, since a cropped box does not repeat. The pixels near the image's edges then see only part of a column.
 

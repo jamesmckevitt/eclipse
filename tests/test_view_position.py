@@ -25,22 +25,28 @@ def _slab(nz=40, ny=24, nx=24, size=0.2, dz=0.1):
 
 def test_disk_centre_looks_straight_down():
     frame, angle = disk_frame(0 * u.arcsec, 0 * u.arcsec)
-    assert frame == pytest.approx(np.eye(3), abs=1e-15)
-    assert angle.to_value(u.deg) == pytest.approx(0.0, abs=1e-12)
+    assert frame == pytest.approx(np.eye(3), abs=1e-12)
+    assert angle.to_value(u.deg) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_the_local_vertical_leans_away_from_disk_centre():
-    """West of centre the vertical leans west, at the heliocentric angle."""
-    frame, angle = disk_frame(600 * u.arcsec, 0 * u.arcsec)
-    radius = np.arcsin((const.R_sun / const.au).decompose().value)
-    r = (600 * u.arcsec).to_value(u.rad)
-    expected = np.degrees(np.arcsin(np.sin(r) / np.sin(radius)) - r)
-    assert angle.to_value(u.deg) == pytest.approx(expected, rel=1e-12)
+    """West of centre the vertical leans west."""
+    frame, _ = disk_frame(600 * u.arcsec, 0 * u.arcsec)
     up = frame[:, 2]
-    assert up[0] > 0 and up[1] == pytest.approx(0.0, abs=1e-15)
-    assert frame.T @ frame == pytest.approx(np.eye(3), abs=1e-14)
+    assert up[0] > 0 and up[1] == pytest.approx(0.0, abs=1e-12)
+    assert frame.T @ frame == pytest.approx(np.eye(3), abs=1e-12)
     # North on the box is north on the sky on the equator.
-    assert frame[:, 1] == pytest.approx([0.0, 1.0, 0.0], abs=1e-15)
+    assert frame[:, 1] == pytest.approx([0.0, 1.0, 0.0], abs=1e-12)
+
+
+@pytest.mark.parametrize("x, y", [(600, 0), (-300, 450), (200, -700), (0, 950)])
+def test_the_heliocentric_angle_follows_the_sine_rule(x, y):
+    """sin(angle) = D sin(r) / R_sun, at angle r from disk centre seen from distance D."""
+    _, angle = disk_frame(x * u.arcsec, y * u.arcsec)
+    tx, ty = (x * u.arcsec).to_value(u.rad), (y * u.arcsec).to_value(u.rad)
+    sin_r = np.sqrt(1.0 - (np.cos(tx) * np.cos(ty)) ** 2)
+    expected = np.degrees(np.arcsin(sin_r * (const.au / const.R_sun).decompose().value))
+    assert angle.to_value(u.deg) == pytest.approx(expected, rel=1e-9)
 
 
 def test_a_position_off_the_disk_is_refused():
@@ -166,3 +172,62 @@ def test_a_position_sets_the_line_of_sight_itself(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="--integration-axis"):
         _synthesise(tmp_path, monkeypatch, ("0 arcsec", "500 arcsec"), (None, 3.0, 8.0),
                     extra=("--integration-axis", "x"))
+
+
+def test_the_image_is_where_the_emission_was_put(tmp_path, monkeypatch):
+    """The synthesis's pixel edges are the sky view's, centred on the box's centre."""
+    from eclipse.synthesis_file import read_synthesis
+
+    saved = read_synthesis(_synthesise(tmp_path, monkeypatch, ("0 arcsec", "600 arcsec"),
+                                       (None, 2.0, 1.0)))
+    frame, _ = disk_frame(0 * u.arcsec, 600 * u.arcsec)
+    sky = SkyView(frame, _edges(10, 0.2), _edges(6, 0.2), np.arange(9) * 0.1 * u.Mm, wrap=True)
+    assert u.allclose(saved.x_edges, sky.x_edges, atol=1e-9 * u.Mm)
+    assert u.allclose(saved.y_edges, sky.y_edges, atol=1e-9 * u.Mm)
+
+
+def test_no_wrap_is_only_for_a_position(tmp_path, monkeypatch):
+    import sys
+
+    from eclipse import synthesis
+
+    monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--atmosphere", "a.h5",
+                                      "--lines", "Fe12_195.1190", "--no-wrap"])
+    with pytest.raises(ValueError, match="--position"):
+        synthesis.main()
+
+
+def test_an_explicit_view_from_above_is_not_taken_with_a_position(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="--integration-axis"):
+        _synthesise(tmp_path, monkeypatch, ("0 arcsec", "500 arcsec"), (None, 3.0, 8.0),
+                    extra=("--integration-axis", "z"))
+
+
+@pytest.mark.parametrize("x, y", [(600, 0), (-300, 450), (200, -700)])
+def test_the_frame_agrees_with_sunpys_coordinates(x, y):
+    """Moving a point up, or north on the Sun, moves it on the sky as the frame says."""
+    from astropy.coordinates import SkyCoord
+    from sunpy.coordinates import HeliographicStonyhurst, Helioprojective
+
+    observer = HeliographicStonyhurst(0 * u.deg, 0 * u.deg, const.au, obstime="2026-01-01")
+    sky = Helioprojective(observer=observer, obstime="2026-01-01")
+    on_disk = HeliographicStonyhurst(obstime="2026-01-01")
+    point = SkyCoord(x * u.arcsec, y * u.arcsec,
+                     frame=sky).make_3d()
+    surface = SkyCoord(point).transform_to(on_disk)
+    step = 1e-3 * u.Mm
+
+    def seen(lon, lat, radius):
+        moved = SkyCoord(lon, lat, radius, frame=on_disk).transform_to(sky)
+        return np.array([moved.Tx.to_value(u.rad), moved.Ty.to_value(u.rad)])
+
+    start = seen(surface.lon, surface.lat, surface.radius)
+    up = seen(surface.lon, surface.lat, surface.radius + step) - start
+    north = seen(surface.lon, surface.lat + (step / surface.radius).decompose() * u.rad,
+                 surface.radius) - start
+    frame, _ = disk_frame(x * u.arcsec, y * u.arcsec)
+    # A step at the Sun subtends step / distance, from the observer to the point.
+    scale = (step / point.distance).decompose().value
+    # To within the finite step.
+    assert up / scale == pytest.approx(frame[:2, 2], abs=1e-5)
+    assert north / scale == pytest.approx(frame[:2, 1], abs=1e-5)

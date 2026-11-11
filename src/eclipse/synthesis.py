@@ -14,6 +14,9 @@ import psutil
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
+from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, Helioprojective
+from sunpy.util.exceptions import SunpyUserWarning
 from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
@@ -1264,24 +1267,49 @@ def disk_frame(x: u.Quantity, y: u.Quantity) -> Tuple[np.ndarray, u.Quantity]:
     ValueError
         If the position is not on the disk.
     """
-    x = u.Quantity(x).to_value(u.rad)
-    y = u.Quantity(y).to_value(u.rad)
-    r = np.hypot(x, y)
-    # The local vertical meets the line of sight at the heliocentric angle,
-    # less the angle the position is from disk centre as seen from 1 AU.
-    sine = np.sin(r) * (const.au / const.R_sun).decompose().value
-    if sine >= 1.0:
-        radius = np.arcsin((const.R_sun / const.au).decompose().value) * u.rad
-        raise ValueError(f"The position is {(r * u.rad).to(u.arcsec):.1f} from disk centre, "
-                         f"on or beyond the limb at {radius.to(u.arcsec):.1f}; a box is "
-                         f"seen from a position on the disk.")
-    theta = np.arcsin(sine) - r
-    phi = np.arctan2(y, x)
-    up = np.array([np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)])
-    north = np.array([0.0, 1.0, 0.0]) - up[1] * up
-    north /= np.linalg.norm(north)
+    observer = HeliographicStonyhurst(0 * u.deg, 0 * u.deg, const.au)
+    sky = Helioprojective(observer=observer)
+    # Heliocentric coordinates: x west, y north and z towards the observer,
+    # with the origin at the Sun's centre.
+    heliocentric = Heliocentric(observer=observer)
+
+    def position(coordinate):
+        return SkyCoord(coordinate).transform_to(heliocentric).cartesian.xyz.to_value(u.Mm)
+
+    def unit(vector):
+        return vector / np.linalg.norm(vector)
+
+    def across(vector, normal):
+        """Unit vector along the part of `vector` perpendicular to `normal`."""
+        return unit(vector - (vector @ normal) * normal)
+
+    # Where the line of sight first meets the surface; NaN off the disk,
+    # which is reported below.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SunpyUserWarning)
+        surface = SkyCoord(x, y, frame=sky).make_3d()
+    if not np.isfinite(surface.distance):
+        r = np.hypot(u.Quantity(x).to_value(u.arcsec), u.Quantity(y).to_value(u.arcsec)) * u.arcsec
+        radius = np.arcsin((const.R_sun / const.au).decompose()).to(u.arcsec)
+        raise ValueError(f"The position is {r:.1f} from disk centre, on or beyond the "
+                         f"limb at {radius:.1f}; a box is seen from a position on the disk.")
+    point = position(surface)
+    up = unit(point)
+    pole = unit(position(SkyCoord(0 * u.deg, 90 * u.deg, const.R_sun,
+                                  frame=HeliographicStonyhurst())))
+    north = across(pole, up)
     west = np.cross(north, up)
-    return np.column_stack([west, north, up]), (theta * u.rad).to(u.deg)
+    # The sky's z is the line of sight from the position, which is parallel
+    # to within the box's size to the line of sight from every other point
+    # of it. The sky's y is the direction of increasing Ty there, towards
+    # the pole of the helioprojective frame.
+    sky_z = unit(position(observer) - point)
+    sky_pole = position(SkyCoord(0 * u.deg, 90 * u.deg, const.au, frame=sky)) - position(observer)
+    sky_y = across(sky_pole, sky_z)
+    sky_x = np.cross(sky_y, sky_z)
+    frame = np.vstack([sky_x, sky_y, sky_z]) @ np.column_stack([west, north, up])
+    theta = np.arctan2(np.linalg.norm(np.cross(up, sky_z)), up @ sky_z)
+    return frame, (theta * u.rad).to(u.deg)
 
 
 class SkyView:
@@ -1304,15 +1332,16 @@ class SkyView:
         Edges of the box's cells. x and y must be evenly spaced.
     wrap : bool
         Take the box to repeat sideways, as MURaM and Bifrost boxes do, so
-        a line of sight leaving one side comes back in at the other and
-        every pixel sees a full column. Otherwise lines of sight end at the
-        box's sides, and the pixels near its edges see only part of a
-        column.
+        a line of sight leaving one side comes back in at the other, and
+        every line of sight through the box's image crosses its full height.
+        Otherwise lines of sight end at the box's sides, and the image is
+        wider, with part columns along its edges.
 
     Attributes
     ----------
     image_shape : tuple of int
-        Pixels of the image, `(rows, columns)`: north, then west.
+        Pixels of the image, `(rows, columns)`: north, then west. They take
+        in every cell, so the corners of a slanted view are empty.
     x_edges, y_edges : u.Quantity
         Edges of the image's pixels on the sky, west and north of the
         projection of the box's centre at z = 0.
@@ -1338,24 +1367,39 @@ class SkyView:
         west = self.frame[0, 0] * x + self.frame[0, 1] * y + self.frame[0, 2] * z
         north = self.frame[1, 0] * x + self.frame[1, 1] * y + self.frame[1, 2] * z
         shape = (ze.size - 1, ye.size - 1, xe.size - 1)
-        self._lower, self._share, sizes = [], [], []
+        self._lower, self._share, edges = [], [], []
         for position, pitch, n_box in ((north, dy, shape[1]), (west, dx, shape[2])):
-            position = np.broadcast_to(position, shape)
-            # As many pixels as cells, and a whole number more on each side,
-            # so a view from straight above puts each cell on a pixel centre.
-            spare = max(1, int(np.ceil(np.abs(position).max() / pitch + 1 - n_box / 2)))
-            n = n_box + 2 * spare
-            index = position / pitch + n / 2 - 0.5
+            position = np.broadcast_to(position, shape) / pitch
+            # Pixel centres fall where the box's cells do in a view from
+            # straight above: on whole multiples of the pitch for an odd
+            # number of cells, halfway between them for an even number. The
+            # image reaches a pixel beyond the outermost cells.
+            offset = 0.0 if n_box % 2 else 0.5
+            first = int(np.floor(position.min() - offset + 1e-9)) - 1
+            last = int(np.ceil(position.max() - offset - 1e-9)) + 1
+            index = position - offset - first
             # A cell a rounding error from a pixel centre is on it.
             nearest = np.round(index)
             index = np.where(np.abs(index - nearest) < 1e-9, nearest, index)
             lower = np.floor(index)
             self._share.append(index - lower)
-            self._lower.append(lower.astype(np.int64))
-            sizes.append(n)
-        self.image_shape = tuple(sizes)
-        self.y_edges = (np.arange(sizes[0] + 1) - sizes[0] / 2) * dy * u.Mm
-        self.x_edges = (np.arange(sizes[1] + 1) - sizes[1] / 2) * dx * u.Mm
+            self._lower.append(lower.astype(np.int32))
+            edges.append((np.arange(first, last + 2) + offset - 0.5) * pitch * u.Mm)
+        self.y_edges, self.x_edges = edges
+        self.image_shape = (self.y_edges.size - 1, self.x_edges.size - 1)
+
+    def reference_cube(self, z_size: u.Quantity, meta=None) -> NDCube:
+        """Empty cube with the image's coordinates, for :func:`create_line_cube`."""
+        wcs = WCS(naxis=3)
+        wcs.wcs.ctype = ["SOLX", "SOLY", "SOLZ"]
+        wcs.wcs.cunit = ["Mm", "Mm", "Mm"]
+        wcs.wcs.crpix = [1, 1, 1]
+        wcs.wcs.crval = [0.5 * (self.x_edges[0] + self.x_edges[1]).to_value(u.Mm),
+                         0.5 * (self.y_edges[0] + self.y_edges[1]).to_value(u.Mm), 0.0]
+        wcs.wcs.cdelt = [(self.x_edges[1] - self.x_edges[0]).to_value(u.Mm),
+                         (self.y_edges[1] - self.y_edges[0]).to_value(u.Mm),
+                         u.Quantity(z_size).to_value(u.Mm)]
+        return NDCube(np.zeros((1, *self.image_shape)), wcs=wcs, meta=meta)
 
     def parts(self):
         """Flat image pixel and weight of each cell, for each of its four pixels."""
@@ -1363,7 +1407,8 @@ class SkyView:
         (row, column), (row_share, column_share) = self._lower, self._share
         for step_row, of_row in ((0, 1.0 - row_share), (1, row_share)):
             for step_column, of_column in ((0, 1.0 - column_share), (1, column_share)):
-                pixel = (np.minimum(row + step_row, n_rows - 1) * n_columns
+                # In 64 bits, as the index into EM(T, v) can pass 2^31.
+                pixel = (np.minimum(row + step_row, n_rows - 1).astype(np.int64) * n_columns
                          + np.minimum(column + step_column, n_columns - 1))
                 yield pixel, of_row * of_column
 
@@ -1377,6 +1422,9 @@ def _pixel_parts(shape: Tuple[int, int, int], integration_axis: str, sky: Option
     if sky is None:
         pixel, image_shape = _image_pixels(shape, integration_axis)
         return [(pixel, None)], image_shape
+    if view_axis_and_side(integration_axis) != ("z", +1):
+        raise ValueError(f"A box seen from a position on the disk is seen from above, so its "
+                         f"integration_axis is 'z', not {integration_axis!r}.")
     return sky.parts(), sky.image_shape
 
 
@@ -1953,6 +2001,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Integration direction
     parser.add_argument("--integration-axis", choices=["x", "y", "z", *SIGNED_VIEWS],
+                       action=_NotedOption,
                        default="z",
                        help="The axis to look along, x, y or z, from +x, -y or above; or the "
                             "axis with a sign for the side to look from, such as -x")
@@ -2307,10 +2356,13 @@ def main(args=None) -> None:
                              f"as '600 arcsec'; got {args.position}.")
         if not args.atmosphere:
             raise ValueError("--position needs an atmosphere file, given with --atmosphere.")
-        if view != "z":
+        if "integration_axis" in getattr(args, "given_options", ()) or view != "z":
             raise ValueError("--position sets the line of sight itself, so --integration-axis "
                              "cannot be given with it.")
         frame, heliocentric_angle = disk_frame(*position)
+    elif getattr(args, "no_wrap", False):
+        raise ValueError("--no-wrap is for a box seen from a position on the disk, given "
+                         "with --position.")
     # A name ending in .pkl still gets the old pickle format, so older scripts
     # keep working until it is removed.
     write_pickle = Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill")
@@ -2525,9 +2577,12 @@ def main(args=None) -> None:
         else:
             # The velocity away from the observer, along the slanted line of
             # sight.
-            away = -sum(part * atmosphere.velocity(axis).to_value(u.cm / u.s)
-                        for axis, part in zip(AXES, towards) if axis in velocities)
-            vel_cube = atmosphere.to_ndcube(away.astype(precision) * u.cm / u.s)
+            away = np.zeros(atmosphere.shape, dtype=precision)
+            for axis, part in zip(AXES, towards):
+                if axis in velocities:
+                    away -= precision(part) * atmosphere.velocity(axis).astype(precision).to_value(
+                        u.cm / u.s)
+            vel_cube = atmosphere.to_ndcube(away * u.cm / u.s)
             wrap = not (getattr(args, "no_wrap", False) or args.crop_x or args.crop_y)
             if not wrap and not getattr(args, "no_wrap", False):
                 print("  The box is cropped sideways, so it is not taken to repeat: lines of "
@@ -2544,9 +2599,8 @@ def main(args=None) -> None:
         if towards is not None:
             # The image is on the sky's pixels, which are as big as the
             # box's cells across.
-            reference_cube = create_atmosphere_ndcube(
-                np.zeros((1, *sky.image_shape)), atmosphere.spacing("x"),
-                atmosphere.spacing("y"), atmosphere.cell_thickness("z").mean())
+            reference_cube = sky.reference_cube(atmosphere.cell_thickness("z").mean(),
+                                                meta=temp_cube.meta)
 
         # The cell sizes are saved in place of the MURaM voxel sizes; a
         # stretched axis has no single size.
