@@ -3,9 +3,9 @@
 import numba
 import numpy as np
 
-# Relative rounding error of a sum of a few face integrals, many times that
-# of one double precision number.
-ROUNDING = 1e-12
+# Rounding error of a sum of a few face integrals, relative to the faces'
+# whole parts: a hundred times what is seen.
+ROUNDING = 1e-13
 
 # The face as a square of side one, in its own coordinates (s, t), corners in
 # order around it.
@@ -47,8 +47,8 @@ def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, sh
     Each face is seen as the parallelogram `middle + s a + t b`, with s and t
     from -1/2 to 1/2 and `a` and `b` its sides. The part of it in front of a
     pixel is cut out in (s, t), where the pixel's edges are straight lines,
-    so that the face's seen area multiplies the integral rather than
-    dividing it, and a face seen all but edge on adds no rounding error.
+    so that the face's seen area is a factor of the integral, and a face
+    seen all but edge on adds no rounding error.
     """
     n_faces = middle.shape[0]
     low_corner = np.empty((n_faces, 2))
@@ -103,11 +103,13 @@ def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, sh
                     part = scale[f] * (depth[f, 0] * area + depth[f, 1] * moment_s
                                        + depth[f, 2] * moment_t)
                     total += part
-                    size += abs(scale[f]) * (abs(depth[f, 0] * area) + abs(depth[f, 1] * moment_s)
-                                             + abs(depth[f, 2] * moment_t))
+                    # Cutting the face leaves rounding error in s and t, where the
+                    # face is a square of side one, whatever the size of the part.
+                    size += abs(scale[f]) * (abs(depth[f, 0])
+                                             + 0.5 * (abs(depth[f, 1]) + abs(depth[f, 2])))
                 # The near and far faces' parts cancel where the shadow only
-                # touches the pixel. What is left within rounding error of
-                # their size is no share at all.
-                if abs(total) <= ROUNDING * size:
+                # touches the pixel. Below zero by no more than rounding error
+                # of their size, what is left is no share at all.
+                if -ROUNDING * size <= total < 0.0:
                     total = 0.0
                 shares[n, step_u, step_v] = total

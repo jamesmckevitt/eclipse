@@ -188,6 +188,12 @@ def test_a_face_all_but_edge_on_does_not_magnify_rounding_error():
         shares.append(found)
     for key in set(shares[0]) | set(shares[1]):
         assert shares[1].get(key, 0.0) == pytest.approx(shares[0].get(key, 0.0), abs=1e-9)
+    for found in shares:
+        assert min(found.values()) >= 0.0
+        totals = np.zeros(len(centres))
+        for (n, _, _), share in found.items():
+            totals[n] += share
+        assert totals == pytest.approx(1.0, rel=1e-12)
 
 
 def test_a_tall_column_near_the_limb_is_seen_without_gaps():
