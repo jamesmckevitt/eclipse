@@ -56,6 +56,19 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
+### Seen from a position on the disk
+
+By default the box is seen from straight above, as at disk centre. `--position` places it elsewhere on the disk, at the helioprojective x and y of its centre:
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec"
+```
+
+The box's x is taken to point west, its y north and its z up, along the local vertical. Away from disk centre the line of sight is slanted through the box, at the heliocentric angle from the vertical, and the image is foreshortened towards the limb. The Doppler velocity is the part of the flow along the line of sight, so the atmosphere file needs the velocity along each axis the line of sight leans along: `velocity_x` for a position west or east of centre, `velocity_y` for one north or south, and `velocity_z`.
+
+A box is taken to repeat sideways, as MURaM and Bifrost boxes do, so a line of sight leaving one side comes back in at the other. `--no-wrap` ends the lines of sight at the box's sides instead, and so does cropping in x or y, since a cropped box does not repeat. The pixels near the image's edges then see only part of a column.
+
 ### Worked example: a MURaM active region
 
 The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
@@ -174,6 +187,8 @@ synthesise-spectra --help
     - `z`: The view from above (+z), looking down through the height
     - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
     - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+- `--position`: The helioprojective x and y of the box's centre, for a line of sight slanted through it, for example `--position "600 arcsec" "-200 arcsec"`; see [Seen from a position on the disk](#seen-from-a-position-on-the-disk). Not with `--integration-axis`.
+- `--no-wrap`: With `--position`, end the lines of sight at the box's sides, rather than taking the box to repeat sideways
 
 **Cropping, in the file's coordinates, with units:**
 
