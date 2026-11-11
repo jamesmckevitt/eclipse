@@ -82,31 +82,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _first_word(argv: list) -> str | None:
-    """The first command-line word that is not an option or its value."""
-    words = iter(argv)
-    for word in words:
-        if word == "--config":
-            next(words, None)
-        elif not word.startswith("-"):
-            return word
-    return None
-
-
 def main(argv=None):
     """Main CLI entry point."""
     argv = list(sys.argv[1:] if argv is None else argv)
     # Passed on whole, so their own options are not read as eclipse's.
-    command = _first_word(argv)
-    if command == "atmosphere":
+    if argv[:1] == ["atmosphere"]:
         from .atmosphere import main as atmosphere_main
-        atmosphere_main(argv[argv.index(command) + 1:])
+        atmosphere_main(argv[1:])
         return
-    if command == "science-cases":
+    if argv[:1] == ["science-cases"]:
         from .science_cases import main as science_cases_main
-        science_cases_main(argv[argv.index(command) + 1:])
+        science_cases_main(argv[1:])
         return
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command in _PASSED_ON:
+        parser.error(f"'{args.command}' takes no options of eclipse's; put it first, as "
+                     f"in 'eclipse {args.command} --help'.")
 
     # Always print the logo first
     print_logo()
@@ -128,7 +120,7 @@ def main(argv=None):
 
     print(f"{args.command.capitalize()}: {args.run_file}")
     print("-" * 60)
-    from .run_file import run_all
+    from .run_file import FirstRankFailed, run_all
     try:
         run_all(args.run_file, args.command, settings=args.settings, only=args.only,
                 debug=args.debug)
@@ -138,7 +130,7 @@ def main(argv=None):
     except Exception as e:
         # A run ECLIPSE cannot do, or a missing file, raises an error that says why.
         # Anything else is unexpected, so print its traceback.
-        if not isinstance(e, (ValueError, FileNotFoundError)):
+        if not isinstance(e, (ValueError, FileNotFoundError, FirstRankFailed)):
             traceback.print_exc()
         _fail(f"Error during {args.command}: {type(e).__name__}: {e}")
 

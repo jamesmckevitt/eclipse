@@ -12,16 +12,12 @@ def main():
 
     words = sys.argv[1:]
     config = _config_option(words)
-    # Given only a run file, the synthesis is the run file's, made as a run
-    # makes it, so it is reused while it holds the same spectra.
+    # Given only a run file, the synthesis is the run's, made as 'eclipse
+    # synthesise' makes it, so it is reused while it holds the same spectra.
     if config is not None and words in (["--config", config], [f"--config={config}"]):
-        from .run_file import _synthesise_one, load, runs
+        from .run_file import run_all
 
-        found = runs(*load(config)[:2])
-        if len(found) != 1:
-            raise ValueError(f"{config} has several runs; synthesise them with "
-                             f"'eclipse synthesise {config}', which takes --only to pick one.")
-        _synthesise_one(found[0][1], found[0][0])
+        run_all(config, "synthesise")
         return
     run_synthesis(parse_arguments(words))
 

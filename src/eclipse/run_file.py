@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -250,54 +251,91 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
 _COMPUTING_KEYS = ("n_workers", "goft_temperature_chunk")
 
 
-def _run_key(config: dict) -> str:
-    """
-    What a run's synthesis is made from, as one string.
-
-    The atmosphere file, with its size and the time it was last changed, the
-    synthesis settings and the version of ECLIPSE.
-    """
-    from . import __version__
-
-    atmosphere = Path(config["atmosphere"]).resolve()
-    status = atmosphere.stat()
-    settings = {key: value for key, value in (config.get("synthesis") or {}).items()
-                if key not in _COMPUTING_KEYS}
-    made_from = {"atmosphere": str(atmosphere), "size": status.st_size,
-                 "modified": status.st_mtime_ns, "synthesis": settings,
-                 "eclipse": __version__}
+def _hash(made_from: dict) -> str:
     text = json.dumps(made_from, sort_keys=True, default=str)
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _stored_key(path: Path) -> Optional[str]:
-    """The key a run file stored in an HDF5 file it wrote, or None."""
+def _settings_key(config: dict) -> str:
+    """
+    What a run's synthesis is made with, as one string.
+
+    The atmosphere file's path, the synthesis settings and the version of
+    ECLIPSE, without the settings that change only how it is computed.
+    """
+    from . import __version__
+
+    settings = {key: value for key, value in (config.get("synthesis") or {}).items()
+                if key not in _COMPUTING_KEYS}
+    return _hash({"atmosphere": str(Path(config["atmosphere"]).resolve()),
+                  "synthesis": settings, "eclipse": __version__})
+
+
+def _run_key(config: dict) -> str:
+    """
+    What a run's synthesis is made from, as one string.
+
+    The settings, and the atmosphere file's size and the time it was last
+    changed.
+    """
+    status = Path(config["atmosphere"]).resolve().stat()
+    return _hash({"settings": _settings_key(config), "size": status.st_size,
+                  "modified": status.st_mtime_ns})
+
+
+def _stored_key(path: Path, name: str = "run_key") -> Optional[str]:
+    """A key a run file stored in an HDF5 file it wrote, or None."""
     import h5py
 
     try:
         with h5py.File(path, "r") as file:
-            key = file.attrs.get("run_key")
+            key = file.attrs.get(name)
     except OSError:
         return None
     return None if key is None else str(key)
 
 
-def _write_with_key(path: Path, key: str, write) -> None:
+def _made_already(config: dict, name: str) -> bool:
     """
-    Write a file with `write(partial path)` and mark it with `key`.
+    Whether a run's synthesis file holds what it would synthesise.
 
-    The file is written under another name and moved into place only once
-    it is complete, so a run stopped part way leaves no file that looks
-    like its own.
+    With its atmosphere file gone, only the settings can be checked, and a
+    warning says so.
+    """
+    path = synthesis_path(config, name)
+    if Path(config["atmosphere"]).is_file():
+        return _stored_key(path) == _run_key(config)
+    if _stored_key(path, "run_settings_key") != _settings_key(config):
+        return False
+    warnings.warn(f"The atmosphere {config['atmosphere']} is not there, so {path}, made from "
+                  f"it with these settings, is used as it is.", UserWarning, stacklevel=2)
+    return True
+
+
+def _write_with_key(path: Path, keys: dict, write) -> None:
+    """
+    Write a file with `write(partial path)` and mark it with `keys`, attributes of its root.
+
+    The file is written under a name of its own and moved into place only
+    once it is complete, so a run stopped part way, or another run writing
+    the same file at the same time, leaves no file that looks finished.
     """
     import h5py
+    import uuid
 
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.stem}.partial{path.suffix}")
-    write(partial)
-    with h5py.File(partial, "a") as file:
-        file.attrs["run_key"] = key
-    os.replace(partial, path)
+    partial = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.partial{path.suffix}")
+    try:
+        write(partial)
+        if not partial.is_file():
+            raise FileNotFoundError(f"Nothing was written to {partial}.")
+        with h5py.File(partial, "a") as file:
+            for name, key in keys.items():
+                file.attrs[name] = key
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _reusable(path: Path, key: str, what: str) -> bool:
@@ -336,9 +374,14 @@ def _synthesise_one(config: dict, name: str) -> Path:
 
     synthesis_arguments(config, name)
     path = synthesis_path(config, name)
+    if not Path(config["atmosphere"]).is_file():
+        if _made_already(config, name):
+            return path
+        raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
     key = _run_key(config)
     if not _reusable(path, key, "synthesis"):
-        _write_with_key(path, key, lambda partial: run_synthesis(
+        keys = {"run_key": key, "run_settings_key": _settings_key(config)}
+        _write_with_key(path, keys, lambda partial: run_synthesis(
             parse_arguments(synthesis_arguments(config, name, output=partial))))
     return path
 
@@ -370,9 +413,9 @@ def observation_config(config: dict, name: str) -> dict:
     return observed
 
 
-def check(config: dict, name: str) -> None:
+def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "frame")) -> None:
     """
-    Check a run's settings before anything is computed.
+    Check a run's settings for `steps` before anything is computed.
 
     So a mistake in the observation's or the frame's settings is found
     before an atmosphere is synthesised, which can take hours.
@@ -381,9 +424,11 @@ def check(config: dict, name: str) -> None:
 
     if synthesises(config):
         synthesis_arguments(config, name)
-        if not Path(config["atmosphere"]).is_file():
+        if ("synthesise" in steps and not Path(config["atmosphere"]).is_file()
+                and _stored_key(synthesis_path(config, name), "run_settings_key")
+                != _settings_key(config)):
             raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
-    if "frame" in config:
+    if "frame" in config and "frame" in steps:
         _frame_settings(config, name)
     observed = observation_config(config, name)
     instrument = str(observed.get("instrument", "SWC")).upper()
@@ -408,7 +453,7 @@ def _observe_one(config: dict, name: str, source: Optional[str] = None,
         if not path.is_file():
             raise FileNotFoundError(f"The synthesis {path} is not made yet: run 'eclipse "
                                     f"synthesise' first, or 'eclipse run'.")
-        if _stored_key(path) != _run_key(config):
+        if not _made_already(config, name):
             raise ValueError(f"The synthesis {path} was not made from this atmosphere with "
                              f"these settings: run 'eclipse synthesise' or 'eclipse run' "
                              f"to make it again.")
@@ -459,7 +504,11 @@ def _frame_settings(config: dict, name: str) -> dict:
     if exposure is None:
         raise ValueError("A frame needs an exposure time: give 'frame.exposure', or one "
                          "'simulation.expos'.")
-    exposure = u.Quantity(exposure[0] if isinstance(exposure, list) else exposure)
+    if isinstance(exposure, (list, tuple)):
+        if len(exposure) != 1:
+            raise ValueError(f"A frame takes one exposure time, got {exposure!r}.")
+        exposure = exposure[0]
+    exposure = u.Quantity(exposure)
     slit_width = u.Quantity(frame.get("slit_width", used.pop("slit_width", 0.2 * u.arcsec)))
     band = frame.get("band")
     return {
@@ -500,7 +549,7 @@ def _band_lines(settings: dict):
         lines = band_contribution_functions(
             settings["band"], products["logT_grid"], products["logN_grid"],
             abundance=abundance, n_workers=settings["n_workers"], hdf5_dbase_root=database)
-        _write_with_key(path, key, lambda partial: write_band_lines(lines, partial))
+        _write_with_key(path, {"run_key": key}, lambda partial: write_band_lines(lines, partial))
         return lines
     return read_band_lines(path)
 
@@ -548,6 +597,10 @@ def _frame_one(config: dict, name: str) -> Path:
 # ----------------------------------------------------------------------
 # Running every step
 # ----------------------------------------------------------------------
+class FirstRankFailed(RuntimeError):
+    """A step run on the first MPI rank only failed there."""
+
+
 def _first_rank(step, *args):
     """
     Run `step` on the first MPI rank only, while the others wait.
@@ -557,6 +610,7 @@ def _first_rank(step, *args):
     rank, every rank stops.
     """
     import time
+    import traceback
 
     from .main import _allowed_cpus, _cpuset
     from .utils import _get_mpi_info
@@ -574,6 +628,8 @@ def _first_rank(step, *args):
             result = step(*args)
         except BaseException as error:
             failure = error
+            # Said now, before the other ranks stop the job.
+            traceback.print_exc()
         finally:
             os.sched_setaffinity(0, pinned)
     waiting = comm.Ibarrier()
@@ -583,8 +639,9 @@ def _first_rank(step, *args):
     if failure is not None:
         raise failure
     if failed:
-        raise RuntimeError(f"The first MPI rank failed to {step.__name__.strip('_')}; "
-                           f"its error says why.")
+        # Long enough for the first rank to report its error and end the job.
+        time.sleep(30.0)
+        raise FirstRankFailed(f"The first MPI rank failed; its error says why.")
     return result
 
 
@@ -601,9 +658,8 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
 
     The synthesis is made only if the run names an atmosphere, and reused
     if its file already holds it. The frame is made only if the run has a
-    `frame:` section.
+    `frame:` section. The run is checked first by :func:`run_all`.
     """
-    check(config, name)
     synthesis = results = frame = None
     if synthesises(config):
         synthesis = synthesis_path(config, name)
@@ -618,19 +674,19 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
     return RunOutput(name, synthesis, results, frame)
 
 
-def _check_files_apart(found: list) -> None:
+def _check_files_apart(found: list, steps: tuple) -> None:
     """Refuse runs that would write different things to the same file."""
     syntheses, frames = {}, {}
     for run_name, config in found:
         if synthesises(config):
             path = synthesis_path(config, run_name).resolve()
-            key = _run_key(config)
+            key = _settings_key(config)
             other = syntheses.setdefault(path, (run_name, key))
             if other[1] != key:
                 raise ValueError(f"The runs {other[0]} and {run_name} would synthesise "
                                  f"differently into {path}; give each its own "
                                  f"'synthesis_file'.")
-        if "frame" in config:
+        if "frame" in config and "frame" in steps:
             path = _frame_settings(config, run_name)["output"].resolve()
             other = frames.setdefault(path, run_name)
             if other != run_name:
@@ -645,11 +701,17 @@ def run_all(source, command: str, *, settings=(), only: Optional[str] = None,
     Every run of a run file, through the steps of `command`.
 
     `command` is one of :data:`STEPS`. `sections` and `settings` change each
-    run, after its own settings from `runs:` are laid over the file. `only`
-    picks one run by its name in `runs:`. The runs are checked before any
-    is started.
+    run, after its own settings from `runs:` are laid over the file, except
+    those of `runs:` itself, which change the list. `only` picks one run by
+    its name in `runs:`. The runs are checked before any is started.
     """
     config, name, label = load(source, name=name)
+    of_runs = [setting for setting in settings
+               if setting.partition("=")[0].strip().split(".")[0] == "runs"]
+    config = adjust(config, of_runs, {key: value for key, value in sections.items()
+                                      if key == "runs"})
+    settings = [setting for setting in settings if setting not in of_runs]
+    sections = {key: value for key, value in sections.items() if key != "runs"}
     found = [(run_name, adjust(run_config, settings, sections))
              for run_name, run_config in runs(config, name)]
     if only is not None:
@@ -661,13 +723,14 @@ def run_all(source, command: str, *, settings=(), only: Optional[str] = None,
                 f"; the runs are {', '.join(names)}." if "runs" in config
                 else ": the run file has no 'runs:'."))
         found = picked
+    steps = STEPS[command]
     for run_name, run_config in found:
-        check(run_config, run_name)
+        check(run_config, run_name, steps)
         if command == "frame" and "frame" not in run_config:
             raise ValueError(f"The run {run_name} has no 'frame:' section saying what frame "
                              f"to make.")
-    _check_files_apart(found)
-    return [run_steps(run_config, run_name, STEPS[command], source=label, debug=debug)
+    _check_files_apart(found, steps)
+    return [run_steps(run_config, run_name, steps, source=label, debug=debug)
             for run_name, run_config in found]
 
 

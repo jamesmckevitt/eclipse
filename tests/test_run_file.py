@@ -351,13 +351,14 @@ def test_a_frame_with_its_own_exposure_leaves_the_runs_sweep_alone(tmp_path, mon
     assert not fake_synthesis
 
 
-def test_options_before_a_passed_on_command_are_skipped(monkeypatch):
+def test_options_before_a_passed_on_command_are_refused(monkeypatch):
     from eclipse import cli, science_cases
 
     passed = []
     monkeypatch.setattr(science_cases, "main", lambda argv: passed.append(argv))
-    cli.main(["--debug", "science-cases", "--list"])
-    assert passed == [["--list"]]
+    with pytest.raises(SystemExit):
+        cli.main(["--debug", "science-cases"])
+    assert not passed
 
 
 def test_synthesise_spectra_given_only_a_run_file_makes_the_runs_synthesis(
@@ -375,3 +376,34 @@ def test_synthesise_spectra_given_only_a_run_file_makes_the_runs_synthesis(
     assert len(fake_synthesis) == 1
     [output] = eclipse.synthesise(path)
     assert output.synthesis == Path("run/input/job.h5") and len(fake_synthesis) == 1
+
+
+def test_a_synthesis_is_observed_after_its_atmosphere_is_moved(tmp_path, monkeypatch, atmosphere,
+                                                               fake_synthesis):
+    import importlib
+
+    main = importlib.import_module("eclipse.main")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "run_config", lambda config, name, **kwargs: config)
+    eclipse.synthesise(_job(atmosphere), name="job")
+    atmosphere.rename(tmp_path / "archived.h5")
+    with pytest.warns(UserWarning, match="is not there"):
+        eclipse.observe(_job(atmosphere), name="job")
+    with pytest.raises(ValueError, match="not made from this atmosphere"):
+        eclipse.observe(_job(atmosphere), name="job", settings=["synthesis.vel_res='1 km/s'"])
+    with pytest.raises(FileNotFoundError, match="Atmosphere file not found"):
+        eclipse.synthesise(_job(atmosphere), name="job",
+                           settings=["synthesis.vel_res='1 km/s'"])
+
+
+def test_a_frame_takes_one_exposure(atmosphere):
+    with pytest.raises(ValueError, match="one exposure time"):
+        check(_job(atmosphere, frame={"slit_position": "0 arcsec",
+                                      "exposure": ["5 s", "60 s"]}), "job")
+
+
+def test_a_runs_setting_replaces_the_list(tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    monkeypatch.chdir(tmp_path)
+    job = _job(atmosphere, runs=[{"name": "fe12"}, {"name": "fe09"}])
+    outputs = eclipse.synthesise(job, name="job", settings=["runs=[{name: fe11}]"])
+    assert [output.name for output in outputs] == ["job_fe11"]
