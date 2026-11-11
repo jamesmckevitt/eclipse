@@ -7,24 +7,26 @@ import numpy as np
 # of one double precision number.
 ROUNDING = 1e-12
 
+# The face as a square of side one, in its own coordinates (s, t), corners in
+# order around it.
+_SQUARE_S = (-0.5, 0.5, 0.5, -0.5)
+_SQUARE_T = (-0.5, -0.5, 0.5, 0.5)
+
 
 @numba.njit(cache=True)
-def _clip_side(xs, ys, count, out_x, out_y, axis, bound, keep_below):
+def _clip(xs, ys, count, out_x, out_y, normal_x, normal_y, bound):
     """
-    Part of a convex polygon on one side of a line of constant u or v.
+    Part of a convex polygon where `normal . (x, y) <= bound`.
 
     The polygon's `count` vertices are in `xs` and `ys`, in order around it.
-    The part at or below `bound` is kept if `keep_below`, else the part at
-    or above it, and written to `out_x` and `out_y`. Returns its number of
+    The part kept is written to `out_x` and `out_y`. Returns its number of
     vertices.
     """
     kept = 0
     for i in range(count):
         j = i + 1 if i + 1 < count else 0
-        here = xs[i] if axis == 0 else ys[i]
-        there = xs[j] if axis == 0 else ys[j]
-        beyond = here - bound if keep_below else bound - here
-        beyond_next = there - bound if keep_below else bound - there
+        beyond = normal_x * xs[i] + normal_y * ys[i] - bound
+        beyond_next = normal_x * xs[j] + normal_y * ys[j] - bound
         if beyond <= 0.0:
             out_x[kept] = xs[i]
             out_y[kept] = ys[i]
@@ -38,15 +40,24 @@ def _clip_side(xs, ys, count, out_x, out_y, axis, bound, keep_below):
 
 
 @numba.njit(parallel=True, cache=True)
-def _overlap_kernel(corners, weight, depth, middle, slope, reach, span, centres, first, shares):
-    """Fill `first` and `shares` for `eclipse.projection._overlaps`, one shape at a time."""
-    n_faces = corners.shape[0]
+def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, shares):
+    """
+    Fill `first` and `shares` for `eclipse.projection._overlaps`, one shape at a time.
+
+    Each face is seen as the parallelogram `middle + s a + t b`, with s and t
+    from -1/2 to 1/2 and `a` and `b` its sides. The part of it in front of a
+    pixel is cut out in (s, t), where the pixel's edges are straight lines,
+    so that the face's seen area multiplies the integral rather than
+    dividing it, and a face seen all but edge on adds no rounding error.
+    """
+    n_faces = middle.shape[0]
     low_corner = np.empty((n_faces, 2))
     high_corner = np.empty((n_faces, 2))
     for f in range(n_faces):
         for axis in range(2):
-            low_corner[f, axis] = corners[f, :, axis].min()
-            high_corner[f, axis] = corners[f, :, axis].max()
+            half = 0.5 * (abs(sides[f, 0, axis]) + abs(sides[f, 1, axis]))
+            low_corner[f, axis] = middle[f, axis] - half
+            high_corner[f, axis] = middle[f, axis] + half
     for n in numba.prange(centres.shape[0]):
         xs, ys = np.empty(16), np.empty(16)
         other_x, other_y = np.empty(16), np.empty(16)
@@ -63,32 +74,37 @@ def _overlap_kernel(corners, weight, depth, middle, slope, reach, span, centres,
                     if (high_corner[f, 0] <= low_u or low_corner[f, 0] >= low_u + 1.0
                             or high_corner[f, 1] <= low_v or low_corner[f, 1] >= low_v + 1.0):
                         continue
+                    a_u, a_v = sides[f, 0, 0], sides[f, 0, 1]
+                    b_u, b_v = sides[f, 1, 0], sides[f, 1, 1]
                     for k in range(4):
-                        xs[k] = corners[f, k, 0]
-                        ys[k] = corners[f, k, 1]
-                    count = _clip_side(xs, ys, 4, other_x, other_y, 0, low_u, False)
-                    count = _clip_side(other_x, other_y, count, xs, ys, 0, low_u + 1.0, True)
-                    count = _clip_side(xs, ys, count, other_x, other_y, 1, low_v, False)
-                    count = _clip_side(other_x, other_y, count, xs, ys, 1, low_v + 1.0, True)
-                    # Signed area and first moments, by the shoelace formula.
-                    area, moment_u, moment_v = 0.0, 0.0, 0.0
+                        xs[k] = _SQUARE_S[k]
+                        ys[k] = _SQUARE_T[k]
+                    # u = middle_u + a_u s + b_u t from low_u to low_u + 1, and
+                    # the same for v.
+                    count = _clip(xs, ys, 4, other_x, other_y, -a_u, -b_u,
+                                  middle[f, 0] - low_u)
+                    count = _clip(other_x, other_y, count, xs, ys, a_u, b_u,
+                                  low_u + 1.0 - middle[f, 0])
+                    count = _clip(xs, ys, count, other_x, other_y, -a_v, -b_v,
+                                  middle[f, 1] - low_v)
+                    count = _clip(other_x, other_y, count, xs, ys, a_v, b_v,
+                                  low_v + 1.0 - middle[f, 1])
+                    # Area and first moments in (s, t), by the shoelace formula.
+                    area, moment_s, moment_t = 0.0, 0.0, 0.0
                     for i in range(count):
                         j = i + 1 if i + 1 < count else 0
                         cross = xs[i] * ys[j] - xs[j] * ys[i]
                         area += cross
-                        moment_u += (xs[i] + xs[j]) * cross
-                        moment_v += (ys[i] + ys[j]) * cross
+                        moment_s += (xs[i] + xs[j]) * cross
+                        moment_t += (ys[i] + ys[j]) * cross
                     area *= 0.5
-                    moment_u /= 6.0
-                    moment_v /= 6.0
-                    part = weight[f] * (depth[f] * area
-                                        + slope[f, 0] * (moment_u - area * middle[f, 0])
-                                        + slope[f, 1] * (moment_v - area * middle[f, 1]))
+                    moment_s /= 6.0
+                    moment_t /= 6.0
+                    part = scale[f] * (depth[f, 0] * area + depth[f, 1] * moment_s
+                                       + depth[f, 2] * moment_t)
                     total += part
-                    size += abs(weight[f]) * (
-                        abs(depth[f] * area)
-                        + abs(slope[f, 0]) * (abs(moment_u) + abs(area * middle[f, 0]))
-                        + abs(slope[f, 1]) * (abs(moment_v) + abs(area * middle[f, 1])))
+                    size += abs(scale[f]) * (abs(depth[f, 0] * area) + abs(depth[f, 1] * moment_s)
+                                             + abs(depth[f, 2] * moment_t))
                 # The near and far faces' parts cancel where the shadow only
                 # touches the pixel. What is left within rounding error of
                 # their size is no share at all.
