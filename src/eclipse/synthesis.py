@@ -2413,10 +2413,10 @@ def main(args=None) -> None:
         print(f"Reading the atmosphere ({print_mem()})")
         crops = dict(crop_x=args.crop_x, crop_y=args.crop_y, crop_z=args.crop_z)
         # A slanted line of sight needs the velocity along each axis it has
-        # a part along.
+        # a part along. A part below 1e-9 is rounding error in the frame.
         towards = None if frame is None else frame[2]
         velocities = (None if towards is None
-                      else tuple(axis for axis, part in zip(AXES, towards) if abs(part) > 1e-12))
+                      else tuple(axis for axis, part in zip(AXES, towards) if abs(part) > 1e-9))
         if args.atmosphere:
             atmosphere = load_atmosphere_file(
                 args.atmosphere, integration_axis, downsample=downsample, **crops,
