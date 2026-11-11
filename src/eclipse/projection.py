@@ -24,16 +24,14 @@ PROJECTIONS = ("two-step", "exact")
 
 
 class DiskGeometry(NamedTuple):
-    """Where a box sits on the Sun, in heliocentric coordinates and Mm."""
+    """How a box sits on the Sun: unit vectors in heliocentric coordinates, and an angle."""
 
-    #: Point of the surface under the box's centre.
-    point: np.ndarray
-    #: Unit vectors along the box's x and y there.
+    #: Along the box's x and y at its centre.
     box_x: np.ndarray
     box_y: np.ndarray
-    #: Unit vector along the local vertical there.
+    #: Along the local vertical there.
     up: np.ndarray
-    #: Rows: unit vectors along the sky's x (west), y (north) and z (towards
+    #: Rows: along the sky's x (west), y (north) and z (towards
     #: the observer).
     sky: np.ndarray
     #: Angle between the local vertical and the line of sight.
@@ -109,7 +107,7 @@ def disk_geometry(x: u.Quantity, y: u.Quantity,
     box_x = np.cos(angle) * west + np.sin(angle) * north
     box_y = -np.sin(angle) * west + np.cos(angle) * north
     theta = np.arctan2(np.linalg.norm(np.cross(up, sky_z)), up @ sky_z)
-    return DiskGeometry(point, box_x, box_y, up, np.vstack([sky_x, sky_y, sky_z]),
+    return DiskGeometry(box_x, box_y, up, np.vstack([sky_x, sky_y, sky_z]),
                         (theta * u.rad).to(u.deg))
 
 
@@ -235,12 +233,13 @@ def _overlaps(faces: List[_Face], reach: np.ndarray,
     shares = np.zeros((len(centres), *span))
     if faces and len(centres):
         # Compiled with numba, which is loaded only for a view from a position.
-        from ._overlap_kernel import _overlap_kernel
+        from ._overlap_kernel import _overlap_kernel, runs
 
         middle, side_a, side_b, scale, depth = (np.array(column, dtype=float)
                                                  for column in zip(*faces))
         _overlap_kernel(middle, np.stack([side_a, side_b], axis=1), scale, depth,
-                        np.asarray(reach, dtype=float), span, centres, first, shares)
+                        np.asarray(reach, dtype=float), span, centres, first, shares,
+                        runs(len(centres)))
     for step_u in range(span[0]):
         for step_v in range(span[1]):
             yield first[:, 0] + step_u, first[:, 1] + step_v, shares[:, step_u, step_v]
@@ -251,8 +250,8 @@ def _cell_overlaps(linear: np.ndarray, cell: np.ndarray,
     """
     Like :func:`_overlaps`, for cells each seen its own way.
 
-    `linear` is `(n, 3, 3)` and `cell` `(n, 3)` or `(3,)`: for each cell,
-    what :func:`_cell_faces` takes.
+    `linear` is `(n, 3, 3)` and `cell` `(n, 3)` or `(3,)`: each cell's matrix
+    and size, as for :func:`_cell_faces`.
     """
     centres = np.ascontiguousarray(centres, dtype=float).reshape(-1, 2)
     linear = np.ascontiguousarray(linear, dtype=float).reshape(-1, 3, 3)
@@ -263,9 +262,9 @@ def _cell_overlaps(linear: np.ndarray, cell: np.ndarray,
     span = np.floor(2.0 * reach.max(axis=0)).astype(np.int64) + 2
     first = np.empty((len(centres), 2), dtype=np.int64)
     shares = np.zeros((len(centres), *span))
-    from ._overlap_kernel import _cell_overlap_kernel
+    from ._overlap_kernel import _cell_overlap_kernel, runs
 
-    _cell_overlap_kernel(linear, cell, centres, span, first, shares)
+    _cell_overlap_kernel(linear, cell, centres, span, first, shares, runs(len(centres)))
     for step_u in range(span[0]):
         for step_v in range(span[1]):
             yield first[:, 0] + step_u, first[:, 1] + step_v, shares[:, step_u, step_v]
@@ -274,7 +273,65 @@ def _cell_overlaps(linear: np.ndarray, cell: np.ndarray,
 # ----------------------------------------------------------------------
 # The view
 # ----------------------------------------------------------------------
-class SkyView:
+class _SkyImage:
+    """The box's cells and the image's pixels, which every view has."""
+
+    #: Whether the box is laid on the curved surface; see :class:`CurvedSkyView`.
+    curved = False
+
+    def _set_box(self, x_edges: u.Quantity, y_edges: u.Quantity, z_edges: u.Quantity):
+        """Keep the box's cell edges in Mm, its shape, pitch, size and centre."""
+        xe, ye, ze = (u.Quantity(edges).to_value(u.Mm) for edges in (x_edges, y_edges, z_edges))
+        self._x_edges, self._y_edges, self._z_edges = xe, ye, ze
+        self._shape = (ze.size - 1, ye.size - 1, xe.size - 1)
+        self._pitch = np.array([xe[1] - xe[0], ye[1] - ye[0]])
+        self._size = np.array([xe[-1] - xe[0], ye[-1] - ye[0]])
+        self._centre = 0.5 * np.array([xe[0] + xe[-1], ye[0] + ye[-1]])
+
+    def _set_image(self, low: np.ndarray, high: np.ndarray, spans: np.ndarray):
+        """
+        Pixels of the image, reaching from `low` to `high` along u and v.
+
+        `low` and `high` are in pixels from where the box's centre at z = 0
+        is seen. The pixels are centred there: their edges are on whole
+        multiples of the pitch from it when the base spans an even number of
+        pixels, `spans`, and halfway between for an odd one. In a view from
+        straight above they are the box's cells.
+        """
+        self._edge_offset = 0.5 * (spans % 2)
+        # A rounding error does not add a pixel.
+        self._first = np.floor(low - self._edge_offset + 1e-9).astype(np.int64)
+        last = np.ceil(high - self._edge_offset - 1e-9).astype(np.int64)
+        n_columns, n_rows = (last - self._first).tolist()
+        self.image_shape = (n_rows, n_columns)
+        self.x_edges, self.y_edges = (
+            ((np.arange(self._first[i], last[i] + 1) + self._edge_offset[i]) * self._pitch[i]
+             + self._centre[i]) * u.Mm for i in range(2))
+
+    @property
+    def accumulation_shape(self) -> Tuple[int, int]:
+        """Grid the cells are summed onto."""
+        return self.image_shape
+
+    def to_image(self, maps: np.ndarray) -> np.ndarray:
+        """Maps on the accumulation grid, `(n_pixels, ...)`, onto the image's pixels."""
+        return maps
+
+    def reference_cube(self, z_size: u.Quantity, meta=None) -> NDCube:
+        """Empty cube with the image's coordinates, for `create_line_cube`."""
+        wcs = WCS(naxis=3)
+        wcs.wcs.ctype = ["SOLX", "SOLY", "SOLZ"]
+        wcs.wcs.cunit = ["Mm", "Mm", "Mm"]
+        wcs.wcs.crpix = [1, 1, 1]
+        wcs.wcs.crval = [0.5 * (self.x_edges[0] + self.x_edges[1]).to_value(u.Mm),
+                         0.5 * (self.y_edges[0] + self.y_edges[1]).to_value(u.Mm), 0.0]
+        wcs.wcs.cdelt = [(self.x_edges[1] - self.x_edges[0]).to_value(u.Mm),
+                         (self.y_edges[1] - self.y_edges[0]).to_value(u.Mm),
+                         u.Quantity(z_size).to_value(u.Mm)]
+        return NDCube(np.zeros((1, *self.image_shape)), wcs=wcs, meta=meta)
+
+
+class SkyView(_SkyImage):
     """
     How each cell of a box is shared between sky pixels, from a position on the disk.
 
@@ -324,9 +381,6 @@ class SkyView:
         y, so that at disk centre they are the box's own.
     """
 
-    #: Whether the box is laid on the curved surface; see :class:`CurvedSkyView`.
-    curved = False
-
     def __init__(self, frame: np.ndarray, x_edges: u.Quantity, y_edges: u.Quantity,
                  z_edges: u.Quantity, wrap: bool, projection: str = PROJECTIONS[0]):
         if projection not in PROJECTIONS:
@@ -335,26 +389,16 @@ class SkyView:
         self.frame = np.asarray(frame, dtype=float)
         self.wrap = bool(wrap)
         self.projection = projection
-        xe, ye, ze = (u.Quantity(edges).to_value(u.Mm) for edges in (x_edges, y_edges, z_edges))
-        self._x_edges, self._y_edges, self._z_edges = xe, ye, ze
-        self._shape = (ze.size - 1, ye.size - 1, xe.size - 1)
-        self._pitch = np.array([xe[1] - xe[0], ye[1] - ye[0]])
-        self._size = np.array([xe[-1] - xe[0], ye[-1] - ye[0]])
-        self._centre = 0.5 * np.array([xe[0] + xe[-1], ye[0] + ye[-1]])
+        self._set_box(x_edges, y_edges, z_edges)
         # A point of the box is seen where its line of sight meets the base,
         # at z = 0: `lean` along x and y per unit height.
         towards = self.frame[2]
         self._lean = -towards[:2] / towards[2]
 
-        # The pixels are centred on where the box's base is seen: their
-        # edges are on whole multiples of the pitch from its centre when the
-        # base spans an even number of pixels, halfway between for an odd
-        # one. In a view from straight above they are the box's cells.
         half = 0.5 * self._size
         base = np.array([[sx * half[0], sy * half[1]] for sx in (-1, 1) for sy in (-1, 1)])
         spans = np.ceil(2.0 * np.abs(base @ self.frame[:2, :2].T).max(axis=0) / self._pitch
                         - 1e-9).astype(np.int64)
-        self._edge_offset = 0.5 * (spans % 2)
         # The image covers the base of a repeating box. Otherwise it covers
         # every cell, or with two steps every column of the base they reach.
         if projection == "two-step":
@@ -362,20 +406,15 @@ class SkyView:
         if self.wrap:
             corners = np.column_stack([base, np.zeros(4)])
         elif projection == "two-step":
-            low = (self._base_first * self._pitch + np.array([xe[0], ye[0]]) - self._centre)
+            low = (self._base_first * self._pitch
+                   + np.array([self._x_edges[0], self._y_edges[0]]) - self._centre)
             high = low + np.array(self.grid_shape[::-1]) * self._pitch
             corners = np.array([[x, y, 0.0] for x in (low[0], high[0]) for y in (low[1], high[1])])
         else:
-            corners = np.array([[*corner, z] for corner in base for z in (ze[0], ze[-1])])
-        seen = corners @ self.frame[:2].T / self._pitch - self._edge_offset
-        # A rounding error does not add a pixel.
-        self._first = np.floor(seen.min(axis=0) + 1e-9).astype(np.int64)
-        last = np.ceil(seen.max(axis=0) - 1e-9).astype(np.int64)
-        n_columns, n_rows = (last - self._first).tolist()
-        self.image_shape = (n_rows, n_columns)
-        self.x_edges, self.y_edges = (
-            ((np.arange(self._first[i], last[i] + 1) + self._edge_offset[i]) * self._pitch[i]
-             + self._centre[i]) * u.Mm for i in range(2))
+            corners = np.array([[*corner, z] for corner in base
+                                for z in (self._z_edges[0], self._z_edges[-1])])
+        seen = corners @ self.frame[:2].T / self._pitch
+        self._set_image(seen.min(axis=0), seen.max(axis=0), spans)
 
         if projection == "two-step":
             self._prepare_resample()
@@ -535,26 +574,13 @@ class SkyView:
         return np.asarray(self._resample @ flat).reshape(
             self.image_shape[0] * self.image_shape[1], *maps.shape[1:])
 
-    def reference_cube(self, z_size: u.Quantity, meta=None) -> NDCube:
-        """Empty cube with the image's coordinates, for `create_line_cube`."""
-        wcs = WCS(naxis=3)
-        wcs.wcs.ctype = ["SOLX", "SOLY", "SOLZ"]
-        wcs.wcs.cunit = ["Mm", "Mm", "Mm"]
-        wcs.wcs.crpix = [1, 1, 1]
-        wcs.wcs.crval = [0.5 * (self.x_edges[0] + self.x_edges[1]).to_value(u.Mm),
-                         0.5 * (self.y_edges[0] + self.y_edges[1]).to_value(u.Mm), 0.0]
-        wcs.wcs.cdelt = [(self.x_edges[1] - self.x_edges[0]).to_value(u.Mm),
-                         (self.y_edges[1] - self.y_edges[0]).to_value(u.Mm),
-                         u.Quantity(z_size).to_value(u.Mm)]
-        return NDCube(np.zeros((1, *self.image_shape)), wcs=wcs, meta=meta)
-
 
 def _dot(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Dot products along the last axis, without BLAS threads."""
     return (a * b).sum(axis=-1)
 
 
-class CurvedSkyView(SkyView):
+class CurvedSkyView(_SkyImage):
     """
     How each cell of a box laid on the curved solar surface is shared between sky pixels.
 
@@ -602,12 +628,8 @@ class CurvedSkyView(SkyView):
                                                      geometry.up])
         self.wrap = bool(wrap)
         self.projection = "exact"
-        xe, ye, ze = (u.Quantity(edges).to_value(u.Mm) for edges in (x_edges, y_edges, z_edges))
-        self._x_edges, self._y_edges, self._z_edges = xe, ye, ze
-        self._shape = (ze.size - 1, ye.size - 1, xe.size - 1)
-        self._pitch = np.array([xe[1] - xe[0], ye[1] - ye[0]])
-        self._size = np.array([xe[-1] - xe[0], ye[-1] - ye[0]])
-        self._centre = 0.5 * np.array([xe[0] + xe[-1], ye[0] + ye[-1]])
+        self._set_box(x_edges, y_edges, z_edges)
+        xe, ye = self._x_edges, self._y_edges
         self._radius = u.Quantity(radius).to_value(u.Mm)
         # From a vector in heliocentric coordinates, in Mm, to (u, v, w): u
         # and v in pixels on the sky, w towards the observer.
@@ -646,20 +668,8 @@ class CurvedSkyView(SkyView):
             for centres, reach in self._layer_extents(self._column_data(np.zeros(2), sides)):
                 low = np.minimum(low, (centres - reach).min(axis=0))
                 high = np.maximum(high, (centres + reach).max(axis=0))
-        # The pixels are centred on where the box's base is seen, as for
-        # SkyView, with edges on whole multiples of the pitch from there when
-        # it spans an even number of pixels and halfway between for an odd.
         spans = np.ceil(np.ptp(outline_seen, axis=0) - 1e-9).astype(np.int64)
-        self._edge_offset = 0.5 * (spans % 2)
-        low, high = low - self._edge_offset, high - self._edge_offset
-        # A rounding error does not add a pixel.
-        self._first = np.floor(low + 1e-9).astype(np.int64)
-        last = np.ceil(high - 1e-9).astype(np.int64)
-        n_columns, n_rows = (last - self._first).tolist()
-        self.image_shape = (n_rows, n_columns)
-        self.x_edges, self.y_edges = (
-            ((np.arange(self._first[i], last[i] + 1) + self._edge_offset[i]) * self._pitch[i]
-             + self._centre[i]) * u.Mm for i in range(2))
+        self._set_image(low, high, spans)
         if self.wrap:
             # Off the disk, copies behind the limb would be seen above it.
             sun = -self._radius * geometry.sky[:2] @ geometry.up

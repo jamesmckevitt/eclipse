@@ -116,23 +116,27 @@ def _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
 
 
 @numba.njit(parallel=True, cache=True)
-def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, shares):
-    """Fill `first` and `shares` for `eclipse.projection._overlaps`, for shapes alike."""
+def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, shares, n_runs):
+    """Fill `first` and `shares` for `eclipse.projection._overlaps`: shapes seen the same way."""
     n_faces = middle.shape[0]
     low_corner = np.empty((n_faces, 2))
     high_corner = np.empty((n_faces, 2))
     _bounds(n_faces, middle, sides, low_corner, high_corner)
-    for n in numba.prange(centres.shape[0]):
+    n_cells = centres.shape[0]
+    # Scratch space is made once for each of `n_runs` runs of cells, not for
+    # each cell.
+    for run in numba.prange(n_runs):
         buffers = np.empty((4, 16))
-        _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
-                      centres[n, 0], centres[n, 1], reach[0], reach[1], span[0], span[1],
-                      buffers, first[n], shares[n])
+        for n in range(run * n_cells // n_runs, (run + 1) * n_cells // n_runs):
+            _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
+                          centres[n, 0], centres[n, 1], reach[0], reach[1], span[0], span[1],
+                          buffers, first[n], shares[n])
 
 
 @numba.njit(cache=True)
 def _cell_faces(linear, cell, middle, sides, scale, depth):
     """
-    Faces of a cell's shadow, as `eclipse.projection._cell_faces` gives them.
+    Faces of a cell's shadow; see `eclipse.projection._cell_faces`.
 
     Fills the arrays and returns the number of faces, with those seen edge
     on left out.
@@ -173,24 +177,33 @@ def _cell_faces(linear, cell, middle, sides, scale, depth):
 
 
 @numba.njit(parallel=True, cache=True)
-def _cell_overlap_kernel(linear, cell, centres, span, first, shares):
+def _cell_overlap_kernel(linear, cell, centres, span, first, shares, n_runs):
     """
     Like `_overlap_kernel`, for cells each seen its own way.
 
-    `linear` is `(n, 3, 3)` and `cell` `(n, 3)`: for each cell, what
-    `eclipse.projection._cell_faces` takes.
+    `linear` is `(n, 3, 3)` and `cell` `(n, 3)`: each cell's matrix and size,
+    as for `eclipse.projection._cell_faces`.
     """
-    for n in numba.prange(centres.shape[0]):
+    n_cells = centres.shape[0]
+    # Scratch space is made once for each of `n_runs` runs of cells, not for
+    # each cell.
+    for run in numba.prange(n_runs):
         middle, sides = np.empty((6, 2)), np.empty((6, 2, 2))
         scale, depth = np.empty(6), np.empty((6, 3))
-        n_faces = _cell_faces(linear[n], cell[n], middle, sides, scale, depth)
         low_corner, high_corner = np.empty((6, 2)), np.empty((6, 2))
-        _bounds(n_faces, middle, sides, low_corner, high_corner)
-        reach_u, reach_v = 0.0, 0.0
-        for j in range(3):
-            reach_u += 0.5 * abs(linear[n, 0, j] * cell[n, j])
-            reach_v += 0.5 * abs(linear[n, 1, j] * cell[n, j])
         buffers = np.empty((4, 16))
-        _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
-                      centres[n, 0], centres[n, 1], reach_u, reach_v, span[0], span[1],
-                      buffers, first[n], shares[n])
+        for n in range(run * n_cells // n_runs, (run + 1) * n_cells // n_runs):
+            n_faces = _cell_faces(linear[n], cell[n], middle, sides, scale, depth)
+            _bounds(n_faces, middle, sides, low_corner, high_corner)
+            reach_u, reach_v = 0.0, 0.0
+            for j in range(3):
+                reach_u += 0.5 * abs(linear[n, 0, j] * cell[n, j])
+                reach_v += 0.5 * abs(linear[n, 1, j] * cell[n, j])
+            _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
+                          centres[n, 0], centres[n, 1], reach_u, reach_v, span[0], span[1],
+                          buffers, first[n], shares[n])
+
+
+def runs(n_cells: int) -> int:
+    """How many runs of cells to share between the threads: a few for each."""
+    return min(n_cells, 4 * numba.get_num_threads())

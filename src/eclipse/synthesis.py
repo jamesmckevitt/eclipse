@@ -1291,7 +1291,7 @@ def build_em_tv(
         3D temperature cube, shape (nz, ny, nx).
     vel_cube : np.ndarray
         3D velocity cube along the integration axis. With a curved `sky`,
-        the velocity along the box's x, y and z, `(3, nz, ny, nx)`, in place.
+        the velocities along the box's x, y and z in its place, three such cubes.
     logT_grid : np.ndarray
         Temperature bin centers.
     vel_grid : np.ndarray
@@ -1338,26 +1338,28 @@ def build_em_tv(
     lower_T, share_T, in_T = _neighbouring_bins(logT_cube, logT_grid, logT_edges)
     # On a curved surface each part of a cell is seen along its own line of
     # sight, and so has its own velocity along it, worked out below.
-    if not (sky is not None and sky.curved):
+    curved = sky is not None and sky.curved
+    in_temperature = ne_sq_dh * in_T
+    beyond, seen = 0.0, 0.0
+    if not curved:
         lower_v, share_v, in_v = _neighbouring_bins(vel_cube, v_centres, v_edges)
+        beyond, seen = in_temperature[~in_v].sum(), in_temperature.sum()
 
     # Sum along the line of sight into each image pixel's bins.
     nT, nv = len(logT_grid), len(v_centres)
     parts, (n_rows, n_cols) = _pixel_parts(logT_cube.shape, integration_axis, sky)
-    in_temperature = ne_sq_dh * in_T
     em_tv = np.zeros(n_rows * n_cols * nT * nv)
-    beyond, seen = 0.0, 0.0
     for cells, pixel, weight, towards in parts:
-        if towards is None:
-            lower_v_c, share_v_c, in_v_c = lower_v[cells], share_v[cells], in_v[cells]
-        else:
+        of_cell = in_temperature[cells] if weight is None else in_temperature[cells] * weight
+        if curved:
             # The velocity away from the observer.
             away = -(towards[:, 0] * vel_cube[0][cells] + towards[:, 1] * vel_cube[1][cells]
                      + towards[:, 2] * vel_cube[2][cells])
             lower_v_c, share_v_c, in_v_c = _neighbouring_bins(away, v_centres, v_edges)
-        of_cell = in_temperature[cells] if weight is None else in_temperature[cells] * weight
-        beyond += of_cell[~in_v_c].sum()
-        seen += of_cell.sum()
+            beyond += of_cell[~in_v_c].sum()
+            seen += of_cell.sum()
+        else:
+            lower_v_c, share_v_c, in_v_c = lower_v[cells], share_v[cells], in_v[cells]
         in_pixel = np.where(in_v_c, of_cell, 0.0)
         lower_T_c, share_T_c = lower_T[cells], share_T[cells]
         for step_T, of_T in ((0, 1.0 - share_T_c), (1, share_T_c)):
@@ -1481,7 +1483,9 @@ def synthesise_cubes(
     electron_density : np.ndarray
         Electron density of every cell in cm^-3, same shape.
     los_velocity : np.ndarray
-        Velocity away from the observer in cm/s, same shape.
+        Velocity away from the observer in cm/s, same shape. With a curved
+        `sky`, the velocities along the box's x, y and z in its place, three
+        such cubes.
     dh_cm : float or np.ndarray
         Cell depth along the line of sight in cm, one value for all cells or
         one per cell along that axis.
@@ -2238,7 +2242,9 @@ def main(args=None) -> None:
             raise ValueError("--curvature shares each cell between sky pixels exactly, so "
                              "it takes no --projection other than 'exact'.")
         projection = "exact" if curvature else (projection or PROJECTIONS[0])
-        frame, heliocentric_angle = disk_frame(*position, rotation)
+        geometry = disk_geometry(*position, rotation)
+        frame = geometry.sky @ np.column_stack([geometry.box_x, geometry.box_y, geometry.up])
+        heliocentric_angle = geometry.heliocentric_angle
     else:
         curvature = False
         for option in ("no_wrap", "rotation", "projection", "curvature"):
@@ -2468,10 +2474,10 @@ def main(args=None) -> None:
                 # The velocity along each of the box's axes; each part of a
                 # cell takes the part along its own line of sight.
                 vel_cube = None
-                velocity_components = np.stack([
+                velocity_components = tuple(
                     atmosphere.velocity(axis).astype(precision).to_value(u.cm / u.s)
-                    for axis in AXES])
-                sky = CurvedSkyView(disk_geometry(*position, rotation), atmosphere.edges("x"),
+                    for axis in AXES)
+                sky = CurvedSkyView(geometry, atmosphere.edges("x"),
                                     atmosphere.edges("y"), atmosphere.edges("z"), wrap)
             else:
                 # The velocity away from the observer, along the slanted line
