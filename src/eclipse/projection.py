@@ -314,12 +314,17 @@ class SkyView:
             self._prepare_resample()
 
     # -- Common geometry ------------------------------------------------
-    def _on_sky(self, offset: np.ndarray) -> np.ndarray:
-        """Image pixel coordinates of points of the base, `(n, 2)` x and y from its centre."""
+    def _across_sky(self, offset: np.ndarray) -> np.ndarray:
+        """How far, in pixels, vectors on the base, `(n, 2)` along x and y, are seen on the sky."""
         # Written out rather than as a matrix product, whose BLAS threads would
         # compete for the cores with the projection's own.
-        seen = (offset[:, :1] * self.frame[:2, 0] + offset[:, 1:] * self.frame[:2, 1])
-        return seen / self._pitch - self._edge_offset - self._first
+        offset = np.atleast_2d(offset)
+        return ((offset[:, :1] * self.frame[:2, 0] + offset[:, 1:] * self.frame[:2, 1])
+                / self._pitch)
+
+    def _on_sky(self, offset: np.ndarray) -> np.ndarray:
+        """Image pixel coordinates of points of the base, `(n, 2)` x and y from its centre."""
+        return self._across_sky(offset) - self._edge_offset - self._first
 
     def _copies(self, reach: np.ndarray):
         """
@@ -348,8 +353,7 @@ class SkyView:
         projected = self._on_sky(offsets)
         for shift in self._copies(reach):
             # A copy is the same image moved by where the shift is seen.
-            centres = projected + (self.frame[:2, 0] * shift[0]
-                                   + self.frame[:2, 1] * shift[1]) / self._pitch
+            centres = projected + self._across_sky(shift)
             near = np.flatnonzero((centres[:, 0] + reach[0] > 0)
                                   & (centres[:, 0] - reach[0] < n_columns)
                                   & (centres[:, 1] + reach[1] > 0)

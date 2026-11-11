@@ -3,6 +3,10 @@
 import numba
 import numpy as np
 
+# Relative rounding error of a sum of a few face integrals, many times that
+# of one double precision number.
+ROUNDING = 1e-12
+
 
 @numba.njit(cache=True)
 def _clip_side(xs, ys, count, out_x, out_y, axis, bound, keep_below):
@@ -54,7 +58,7 @@ def _overlap_kernel(corners, weight, depth, middle, slope, reach, span, centres,
             low_u = first_u + step_u - centres[n, 0]
             for step_v in range(span[1]):
                 low_v = first_v + step_v - centres[n, 1]
-                total = 0.0
+                total, size = 0.0, 0.0
                 for f in range(n_faces):
                     if (high_corner[f, 0] <= low_u or low_corner[f, 0] >= low_u + 1.0
                             or high_corner[f, 1] <= low_v or low_corner[f, 1] >= low_v + 1.0):
@@ -77,11 +81,17 @@ def _overlap_kernel(corners, weight, depth, middle, slope, reach, span, centres,
                     area *= 0.5
                     moment_u /= 6.0
                     moment_v /= 6.0
-                    total += weight[f] * (depth[f] * area
-                                          + slope[f, 0] * (moment_u - area * middle[f, 0])
-                                          + slope[f, 1] * (moment_v - area * middle[f, 1]))
-                # The near and far faces' parts cancel to rounding error where
-                # the shadow only touches the pixel; that is not a negative share.
-                if -1e-12 < total < 0.0:
+                    part = weight[f] * (depth[f] * area
+                                        + slope[f, 0] * (moment_u - area * middle[f, 0])
+                                        + slope[f, 1] * (moment_v - area * middle[f, 1]))
+                    total += part
+                    size += abs(weight[f]) * (
+                        abs(depth[f] * area)
+                        + abs(slope[f, 0]) * (abs(moment_u) + abs(area * middle[f, 0]))
+                        + abs(slope[f, 1]) * (abs(moment_v) + abs(area * middle[f, 1])))
+                # The near and far faces' parts cancel where the shadow only
+                # touches the pixel. What is left within rounding error of
+                # their size is no share at all.
+                if abs(total) <= ROUNDING * size:
                     total = 0.0
                 shares[n, step_u, step_v] = total

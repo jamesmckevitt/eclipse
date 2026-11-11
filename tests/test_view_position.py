@@ -123,7 +123,8 @@ def test_a_repeating_slab_is_uniform_and_seen_through_one_over_cos(projection, x
 
 @pytest.mark.parametrize("projection", PROJECTIONS)
 @pytest.mark.parametrize("x, y, rotation, shape",
-                         [(600, 0, 30, (2, 40)), (800, 300, 75, (2, 40)), (-500, 600, 10, (40, 2))])
+                         [(600, 0, 30, (2, 40)), (800, 300, 75, (2, 40)),
+                          (-500, 600, 10, (40, 2))])
 def test_a_long_thin_repeating_strip_fills_its_image(projection, x, y, rotation, shape):
     """A strip turned on the sky is seen again across its width many times over."""
     log_t, log_n, xe, ye, ze, dz_cm = _slab(nz=6, ny=shape[0], nx=shape[1])
@@ -204,6 +205,18 @@ def test_a_cells_shares_are_the_parts_of_it_in_front_of_each_pixel(seed):
         counted[(p, q)] = counted.get((p, q), 0.0) + 1.0 / len(points)
     for pixel in set(shares) | set(counted):
         assert shares.get(pixel, 0.0) == pytest.approx(counted.get(pixel, 0.0), abs=0.01)
+
+
+@pytest.mark.parametrize("x, y, height", [(300, 200, 0.1), (900, 300, 3.0), (-940, 0, 10.0)])
+def test_shares_are_never_negative(x, y, height):
+    """Including tall cells near the limb, whose near and far faces cancel over many pixels."""
+    frame, _ = disk_frame(x * u.arcsec, y * u.arcsec, 40 * u.deg)
+    linear = np.vstack([frame[:2] / 0.2, frame[2]])
+    faces, reach = _cell_faces(linear, np.array([0.2, 0.2, height]))
+    centres = np.random.default_rng(5).uniform(0, 50, (2000, 2))
+    shares = np.array([share for _, _, share in _overlaps(faces, reach, centres)])
+    assert shares.min() >= 0.0
+    assert shares.sum(axis=0) == pytest.approx(1.0, rel=1e-12)
 
 
 def test_a_flat_patchs_shares_are_its_area_in_each_pixel():
