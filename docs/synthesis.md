@@ -2,7 +2,7 @@
 
 `synthesise-spectra` turns a 3D MHD simulation into the spectra it emits, taking the plasma to be optically thin. For each pixel of the image, it adds up the emission measure of the cells along the line of sight by their temperature and velocity. It then multiplies that by each line's contribution function, G(T, n_e), which says how much the line emits at each temperature and density. The contribution functions come from the CHIANTI atomic database, through [fiasco](https://fiasco.readthedocs.io/).
 
-The spectra are written to a [synthesis file](files.md#synthesis-files), which `eclipse` then observes (see [Running a simulation](instrument-response.md)).
+The spectra are written to a [synthesis file](files.md#synthesis-files), which `eclipse` then observes (see [Running a simulation](instrument-response.md)). A [run file](run-files.md) can do both steps with one command, `eclipse run`: its `synthesis:` section takes the options on this page, with underscores in place of the dashes.
 
 ## Atmosphere files
 
@@ -150,6 +150,7 @@ synthesise-spectra --help
 
 **Input and output:**
 
+- `--config`: A [run file](run-files.md), whose `atmosphere`, `synthesis_file` and `synthesis:` section give the settings. Options given as well override the file's
 - `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in the deprecated modes on [Older versions](older-versions.md))
 - `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
 - `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)

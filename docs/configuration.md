@@ -1,6 +1,6 @@
 # Configuration reference
 
-This page lists every setting of `eclipse`'s configuration file, with its default. [Running a simulation](instrument-response.md#the-configuration-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
+This page lists every setting of the run file that `eclipse run` and `eclipse observe` read, with its default. [Running a simulation](instrument-response.md#the-configuration-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
 
 [Instrument sources](instrument-sources.md) gives the source of each instrument default, where one is known.
 
@@ -25,8 +25,10 @@ A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60
 | `pinhole_positions_spectral` | Where each pinhole is along the spectral axis, as a fraction from 0 to 1 | the middle |
 | `atmosphere_series` | A time series of atmosphere files, in place of a synthesis file; see [Time series](time-series.md) | none |
 | `synthesis_series` | A time series of synthesis files, in place of a synthesis file; see [Time series](time-series.md#from-synthesis-files) | none |
+| `atmosphere` | An atmosphere file to synthesise and then observe, in place of a synthesis file; see [Run files](run-files.md) | none |
+| `runs` | Several runs from one file, each a `name` and the settings it changes; see [Several runs in one file](run-files.md#several-runs-in-one-file) | none |
 
-The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are described below. A time series also has a `raster` section, the observing plan, and for atmosphere files a `synthesis` section; [Time series](time-series.md) lists their settings.
+The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are described below. A time series also has a `raster` section, the observing plan, and for atmosphere files a `synthesis` section; [Time series](time-series.md) lists their settings. A run with an `atmosphere` has a `synthesis` section too, and may have a `frame` section; [Run files](run-files.md) lists their settings.
 
 ## simulation
 

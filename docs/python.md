@@ -119,7 +119,7 @@ Given the telescope and a simulation with `psf=True`, `create_uniform_intensity_
 
 A cube you make yourself is blurred on its pixels, unless `meta["psf_applied"]` is True. Blurring the pixels pulls a line narrower than a pixel toward the pixel's centre, which biases its fitted velocity, and a warning says so. To avoid this, blur your scene by the PSF, in wavelength and along the slit, before you average it onto the pixels, and set `meta["psf_applied"] = True`. The PSF's widths are `spatial_psf_fwhm` along the slit and `spectral_psf_fwhm` in wavelength; [the spectral PSF and the slit](instrument-model.md#the-spectral-psf-and-the-slit) describes the response for `spectral_psf: convolution`.
 
-To observe a synthesis file, use `eclipse`.
+To observe a synthesis file, or synthesise and observe an atmosphere, use a run file. `eclipse.run` does from Python what `eclipse run` does, and takes the settings as a dictionary as well as a file; see [Run files](run-files.md#from-python).
 
 ## Common random numbers
 
@@ -146,7 +146,7 @@ first_dn, dn_stats, first_photon, photon_stats = monte_carlo(
 
 Both are off by default. They don't change a run's statistics, only how closely two runs follow each other, but they make the run slower.
 
-They can only be switched on from Python, not in a config file run with `eclipse --config`. ECLIPSE doesn't seed NumPy's random number generator itself, so call `np.random.seed` with the same value before each run, as in the example. With MPI, both runs also need the same number of ranks, because each rank's random numbers come from the seed and its rank number.
+They can only be switched on from Python, not in a run file run with `eclipse run`. ECLIPSE doesn't seed NumPy's random number generator itself, so call `np.random.seed` with the same value before each run, as in the example. With MPI, both runs also need the same number of ranks, because each rank's random numbers come from the seed and its rank number.
 
 ## Other parts of the package
 

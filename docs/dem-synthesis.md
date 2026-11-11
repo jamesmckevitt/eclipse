@@ -186,7 +186,7 @@ simulation:
 ```
 
 ```bash
-eclipse --config configs/eis_si10.yaml
+eclipse run configs/eis_si10.yaml
 ```
 
 The results can then be analysed as in the [worked example](worked-example.ipynb).

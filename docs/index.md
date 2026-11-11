@@ -79,7 +79,7 @@ To install ECLIPSE and make a first run, see [Getting started](quickstart.md). T
 
 | You have | Go to | Use it when | What you run |
 | --- | --- | --- | --- |
-| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic solar structure and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `synthesise-spectra`, then `eclipse` |
+| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic solar structure and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `eclipse run`, which synthesises and then observes |
 | A series of MHD snapshots | [Time series](time-series.md) | The atmosphere changes during the observation, as it does in a raster or a sit-and-stare. | `eclipse`, which synthesises each exposure as it goes |
 | A VDEM | [From a DEM or VDEM](dem-synthesis.md#with-velocities-a-vdem) | Your simulation has already been reduced to the emission measure at each temperature and line-of-sight velocity. | A short Python script, then `eclipse` |
 | A DEM | [From a DEM or VDEM](dem-synthesis.md) | You have a DEM inferred from observations. It has no velocities, so the lines are not Doppler shifted. | A short Python script, then `eclipse` |

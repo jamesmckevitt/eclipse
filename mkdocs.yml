@@ -34,6 +34,7 @@ nav:
       - Spectra from another code: other-codes.md
   - 2. Simulating the instrument:
       - Running a simulation: instrument-response.md
+      - Run files: run-files.md
       - The instrument model: instrument-model.md
       - Fitting blended lines: fitting.md
       - A single line of known intensity: uniform-intensity.md
