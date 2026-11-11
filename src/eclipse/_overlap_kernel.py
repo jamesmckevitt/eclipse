@@ -3,8 +3,10 @@
 import numba
 import numpy as np
 
-# Rounding error of a sum of a few face integrals, relative to the faces'
-# whole parts: a hundred times what is seen.
+# Cutting a face leaves rounding error in where the cut falls, about that of
+# one double precision number (2e-16) in the face's own coordinates. A sum
+# of face parts within this fraction of the faces' whole parts, a few hundred
+# times that, is taken as zero: the shadow only touches the pixel.
 ROUNDING = 1e-13
 
 # The face as a square of side one, in its own coordinates (s, t), corners in
@@ -108,8 +110,7 @@ def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, sh
                     size += abs(scale[f]) * (abs(depth[f, 0])
                                              + 0.5 * (abs(depth[f, 1]) + abs(depth[f, 2])))
                 # The near and far faces' parts cancel where the shadow only
-                # touches the pixel. Below zero by no more than rounding error
-                # of their size, what is left is no share at all.
-                if -ROUNDING * size <= total < 0.0:
+                # touches the pixel.
+                if abs(total) <= ROUNDING * size:
                     total = 0.0
                 shares[n, step_u, step_v] = total

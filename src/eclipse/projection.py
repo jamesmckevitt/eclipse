@@ -140,7 +140,6 @@ def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.n
         side_a, side_b = (np.eye(3)[axis] * cell[axis] for axis in range(3) if axis != normal)
         seen_a, seen_b = linear[:2] @ side_a, linear[:2] @ side_b
         area = abs(seen_a[0] * seen_b[1] - seen_a[1] * seen_b[0])
-        # A face seen edge on has no part.
         if area == 0.0:
             continue
         # The face whose outward normal points towards larger w is the near one.

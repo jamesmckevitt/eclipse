@@ -193,7 +193,7 @@ def test_a_face_all_but_edge_on_does_not_magnify_rounding_error():
         totals = np.zeros(len(centres))
         for (n, _, _), share in found.items():
             totals[n] += share
-        assert totals == pytest.approx(1.0, rel=1e-12)
+        assert totals == pytest.approx(1.0, rel=1e-11)
 
 
 def test_a_tall_column_near_the_limb_is_seen_without_gaps():
@@ -223,7 +223,7 @@ def test_a_cells_shares_are_the_parts_of_it_in_front_of_each_pixel(seed):
     faces, reach = _cell_faces(linear, cell)
     shares = {(int(p[0]), int(q[0])): float(share[0])
               for p, q, share in _overlaps(faces, reach, centre)}
-    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-12)
+    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-11)
     m = 80
     steps = (np.arange(m) + 0.5) / m - 0.5
     points = np.stack(np.meshgrid(steps, steps, steps, indexing="ij"), -1).reshape(-1, 3) * cell
@@ -244,7 +244,9 @@ def test_shares_are_never_negative(x, y, height):
     centres = np.random.default_rng(5).uniform(0, 50, (2000, 2))
     shares = np.array([share for _, _, share in _overlaps(faces, reach, centres)])
     assert shares.min() >= 0.0
-    assert shares.sum(axis=0) == pytest.approx(1.0, rel=1e-12)
+    # Parts within rounding error of nothing are dropped, so the shares of
+    # a cell sum to one to about 1e-11.
+    assert shares.sum(axis=0) == pytest.approx(1.0, rel=1e-11)
 
 
 def test_a_flat_patchs_shares_are_its_area_in_each_pixel():
@@ -252,7 +254,7 @@ def test_a_flat_patchs_shares_are_its_area_in_each_pixel():
     faces, reach = _patch_faces(side_a, side_b)
     shares = {(int(p[0]), int(q[0])): float(share[0])
               for p, q, share in _overlaps(faces, reach, np.array([[0.4, 0.7]]))}
-    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-12)
+    assert sum(shares.values()) == pytest.approx(1.0, rel=1e-11)
     m = 400
     steps = (np.arange(m) + 0.5) / m - 0.5
     a, b = np.meshgrid(steps, steps, indexing="ij")
