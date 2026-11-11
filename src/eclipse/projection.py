@@ -143,7 +143,9 @@ def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.n
         side_a, side_b = (np.eye(3)[axis] * cell[axis] for axis in range(3) if axis != normal)
         seen_a, seen_b = linear[:2] @ side_a, linear[:2] @ side_b
         area = seen_a[0] * seen_b[1] - seen_a[1] * seen_b[0]
-        if abs(area) <= 1e-12 * np.linalg.norm(seen_a) * np.linalg.norm(seen_b):
+        # A face seen within 1e-8 of edge on is left out: its part is below that,
+        # and its slope, one over its seen area, would magnify rounding error.
+        if abs(area) <= 1e-8 * np.linalg.norm(seen_a) * np.linalg.norm(seen_b):
             continue
         slope = np.array([linear[2] @ side_a, linear[2] @ side_b]) @ np.linalg.inv(
             np.column_stack([seen_a, seen_b]))

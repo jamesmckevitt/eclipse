@@ -168,6 +168,28 @@ def test_a_raised_feature_is_seen_outward_from_disk_centre(projection):
     assert (image.sum(axis=1) * rows).sum() / image.sum() == pytest.approx(0.0, abs=1e-12)
 
 
+def test_a_face_all_but_edge_on_does_not_magnify_rounding_error():
+    """A cell whose north and south faces are seen 1e-11 from edge on, on pixel edges."""
+    linear = np.array([[4.26701360, 1.30316513e-11, 2.60626072],
+                       [5.55111512e-16, 5.0, -2.5e-11],
+                       [-0.521252144, 4.26705406e-12, 0.853402720]])
+    edge_on = np.where(np.abs(linear) < 1e-9, 0.0, linear)
+    rng = np.random.default_rng(0)
+    centres = rng.uniform(0, 20, (400, 2))
+    # In step with the pixels north to south, to within rounding error.
+    centres[:, 1] = np.floor(centres[:, 1]) + 0.5 + rng.uniform(-1e-14, 1e-14, len(centres))
+    cell = np.array([0.2, 0.2, 0.1])
+    shares = []
+    for matrix in (edge_on, linear):
+        found = {}
+        for p, q, share in _overlaps(*_cell_faces(matrix, cell), centres):
+            for n in range(len(centres)):
+                found[n, p[n], q[n]] = found.get((n, p[n], q[n]), 0.0) + share[n]
+        shares.append(found)
+    for key in set(shares[0]) | set(shares[1]):
+        assert shares[1].get(key, 0.0) == pytest.approx(shares[0].get(key, 0.0), abs=1e-9)
+
+
 def test_a_tall_column_near_the_limb_is_seen_without_gaps():
     """Cells taller than a pixel's width on the sky fill the pixels between them."""
     nz, n = 6, 21
