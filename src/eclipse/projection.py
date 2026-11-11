@@ -393,7 +393,10 @@ class SkyView:
     # -- Common geometry ------------------------------------------------
     def _on_sky(self, offset: np.ndarray) -> np.ndarray:
         """Image pixel coordinates of points of the base, `(n, 2)` x and y from its centre."""
-        return (offset @ self.frame[:2, :2].T / self._pitch - self._edge_offset - self._first)
+        # Written out rather than as a matrix product, whose BLAS threads would
+        # compete for the cores with the projection's own.
+        seen = (offset[:, :1] * self.frame[:2, 0] + offset[:, 1:] * self.frame[:2, 1])
+        return seen / self._pitch - self._edge_offset - self._first
 
     def _copies(self):
         """Shifts of the base, along x and y, at which a repeating box is seen again."""
