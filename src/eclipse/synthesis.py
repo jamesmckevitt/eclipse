@@ -14,13 +14,11 @@ import psutil
 import dill
 from ndcube import NDCube
 from astropy.wcs import WCS
-from astropy.coordinates import SkyCoord
-from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, Helioprojective
-from sunpy.util.exceptions import SunpyUserWarning
 from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
+from .projection import PROJECTIONS, SkyView, disk_frame
 from .continuum import compute_continuum_fiasco, continuum_spectra, continuum_windows
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
@@ -924,7 +922,7 @@ def compute_dem(
     logT_grid: np.ndarray,
     integration_axis: str = "z",
     *,
-    sky: "Optional[SkyView]" = None,
+    sky: Optional[SkyView] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     DEM(T) and emission-measure-weighted mean electron density <n_e>(T).
@@ -978,14 +976,20 @@ def compute_dem(
     parts, (n_rows, n_cols) = _pixel_parts(logT_cube.shape, integration_axis, sky)
     em = np.zeros(n_rows * n_cols * nT)   # cm^-5
     em_n = np.zeros_like(em)              # cm^-5 * n_e
-    for pixel, weight in parts:
-        for step, of_T in ((0, 1.0 - share), (1, share)):
-            in_bin = (pixel * nT + np.minimum(lower + step, nT - 1)).ravel()
-            of_T = np.where(inside, of_T, 0.0)
+    for cells, pixel, weight in parts:
+        lower_c, share_c, inside_c = lower[cells], share[cells], inside[cells]
+        w2_c, w3_c = w2[cells], w3[cells]
+        for step, of_T in ((0, 1.0 - share_c), (1, share_c)):
+            in_bin = (pixel * nT + np.minimum(lower_c + step, nT - 1)).ravel()
+            of_T = np.where(inside_c, of_T, 0.0)
             if weight is not None:
                 of_T = of_T * weight
-            np.add.at(em, in_bin, (w2 * of_T).ravel())
-            np.add.at(em_n, in_bin, (w3 * of_T).ravel())
+            np.add.at(em, in_bin, (w2_c * of_T).ravel())
+            np.add.at(em_n, in_bin, (w3_c * of_T).ravel())
+    if sky is not None:
+        em = sky.to_image(em.reshape(n_rows * n_cols, nT))
+        em_n = sky.to_image(em_n.reshape(n_rows * n_cols, nT))
+        n_rows, n_cols = sky.image_shape
     em, em_n = em.reshape(n_rows, n_cols, nT), em_n.reshape(n_rows, n_cols, nT)
 
     dem = em / dlogT
@@ -1241,191 +1245,23 @@ def line_of_sight_velocity(velocity, integration_axis: str):
     return -side * velocity
 
 
-def disk_frame(x: u.Quantity, y: u.Quantity) -> Tuple[np.ndarray, u.Quantity]:
-    """
-    Directions of a box at a position on the solar disk, as seen on the sky.
-
-    The box's x points west, its y north and its z up, along the local
-    vertical at the position. The sky's x points west, its y north and its z
-    towards the observer, at 1 AU. Solar north is taken to be up on the sky.
-
-    Parameters
-    ----------
-    x, y : u.Quantity
-        Helioprojective position of the box's centre, west and north of
-        disk centre, as angles.
-
-    Returns
-    -------
-    frame : np.ndarray
-        `(3, 3)` matrix taking a vector in the box's axes to the sky's.
-    heliocentric_angle : u.Quantity
-        Angle between the local vertical and the line of sight.
-
-    Raises
-    ------
-    ValueError
-        If the position is not on the disk.
-    """
-    observer = HeliographicStonyhurst(0 * u.deg, 0 * u.deg, const.au)
-    sky = Helioprojective(observer=observer)
-    # Heliocentric coordinates: x west, y north and z towards the observer,
-    # with the origin at the Sun's centre.
-    heliocentric = Heliocentric(observer=observer)
-
-    def position(coordinate):
-        return SkyCoord(coordinate).transform_to(heliocentric).cartesian.xyz.to_value(u.Mm)
-
-    def unit(vector):
-        return vector / np.linalg.norm(vector)
-
-    def across(vector, normal):
-        """Unit vector along the part of `vector` perpendicular to `normal`."""
-        return unit(vector - (vector @ normal) * normal)
-
-    # Where the line of sight first meets the surface; NaN off the disk,
-    # which is reported below.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", SunpyUserWarning)
-        surface = SkyCoord(x, y, frame=sky).make_3d()
-    if not np.isfinite(surface.distance):
-        r = np.hypot(u.Quantity(x).to_value(u.arcsec), u.Quantity(y).to_value(u.arcsec)) * u.arcsec
-        radius = np.arcsin((const.R_sun / const.au).decompose()).to(u.arcsec)
-        raise ValueError(f"The position is {r:.1f} from disk centre, on or beyond the "
-                         f"limb at {radius:.1f}; a box is seen from a position on the disk.")
-    point = position(surface)
-    up = unit(point)
-    pole = unit(position(SkyCoord(0 * u.deg, 90 * u.deg, const.R_sun,
-                                  frame=HeliographicStonyhurst())))
-    north = across(pole, up)
-    west = np.cross(north, up)
-    # The sky's z is the line of sight from the position, which is parallel
-    # to within the box's size to the line of sight from every other point
-    # of it. The sky's y is the direction of increasing Ty there, towards
-    # the pole of the helioprojective frame.
-    sky_z = unit(position(observer) - point)
-    sky_pole = position(SkyCoord(0 * u.deg, 90 * u.deg, const.au, frame=sky)) - position(observer)
-    sky_y = across(sky_pole, sky_z)
-    sky_x = np.cross(sky_y, sky_z)
-    frame = np.vstack([sky_x, sky_y, sky_z]) @ np.column_stack([west, north, up])
-    theta = np.arctan2(np.linalg.norm(np.cross(up, sky_z)), up @ sky_z)
-    return frame, (theta * u.rad).to(u.deg)
-
-
-class SkyView:
-    """
-    Where each cell of a box is seen on the sky, from a position on the disk.
-
-    Each cell's emission goes to the sky pixel its line of sight passes
-    through. A cell between pixel centres is split between the four nearest
-    pixels, in proportion to how close it is to each. The sky pixels are as
-    big as the box's cells across, so the emission measure of a pixel is the
-    sum over its cells of n_e^2 times their height. A slanted line of sight
-    crosses more cells, so the sum grows as one over the cosine of the
-    heliocentric angle without any further factor.
-
-    Parameters
-    ----------
-    frame : np.ndarray
-        `(3, 3)` matrix from :func:`disk_frame`.
-    x_edges, y_edges, z_edges : u.Quantity
-        Edges of the box's cells. x and y must be evenly spaced.
-    wrap : bool
-        Take the box to repeat sideways, as MURaM and Bifrost boxes do, so
-        a line of sight leaving one side comes back in at the other, and
-        every line of sight through the box's image crosses its full height.
-        Otherwise lines of sight end at the box's sides, and the image is
-        wider, with part columns along its edges.
-
-    Attributes
-    ----------
-    image_shape : tuple of int
-        Pixels of the image, `(rows, columns)`: north, then west. They take
-        in every cell, so the corners of a slanted view are empty.
-    x_edges, y_edges : u.Quantity
-        Edges of the image's pixels on the sky, west and north of the
-        projection of the box's centre at z = 0.
-    """
-
-    def __init__(self, frame: np.ndarray, x_edges: u.Quantity, y_edges: u.Quantity,
-                 z_edges: u.Quantity, wrap: bool):
-        self.frame = np.asarray(frame, dtype=float)
-        self.wrap = bool(wrap)
-        xe, ye, ze = (u.Quantity(edges).to_value(u.Mm) for edges in (x_edges, y_edges, z_edges))
-        dx, dy = xe[1] - xe[0], ye[1] - ye[0]
-        x = (0.5 * (xe[1:] + xe[:-1]) - 0.5 * (xe[0] + xe[-1]))[np.newaxis, np.newaxis, :]
-        y = (0.5 * (ye[1:] + ye[:-1]) - 0.5 * (ye[0] + ye[-1]))[np.newaxis, :, np.newaxis]
-        z = (0.5 * (ze[1:] + ze[:-1]))[:, np.newaxis, np.newaxis]
-        towards = self.frame[2]
-        if wrap:
-            # The footprint of each cell's line of sight at z = 0, back
-            # inside the box, is where the same column is seen.
-            half_x, half_y = 0.5 * (xe[-1] - xe[0]), 0.5 * (ye[-1] - ye[0])
-            x = np.mod(x - z * towards[0] / towards[2] + half_x, 2 * half_x) - half_x
-            y = np.mod(y - z * towards[1] / towards[2] + half_y, 2 * half_y) - half_y
-            z = 0.0
-        west = self.frame[0, 0] * x + self.frame[0, 1] * y + self.frame[0, 2] * z
-        north = self.frame[1, 0] * x + self.frame[1, 1] * y + self.frame[1, 2] * z
-        shape = (ze.size - 1, ye.size - 1, xe.size - 1)
-        self._lower, self._share, edges = [], [], []
-        for position, pitch, n_box in ((north, dy, shape[1]), (west, dx, shape[2])):
-            position = np.broadcast_to(position, shape) / pitch
-            # Pixel centres fall where the box's cells do in a view from
-            # straight above: on whole multiples of the pitch for an odd
-            # number of cells, halfway between them for an even number. The
-            # image reaches a pixel beyond the outermost cells.
-            offset = 0.0 if n_box % 2 else 0.5
-            first = int(np.floor(position.min() - offset + 1e-9)) - 1
-            last = int(np.ceil(position.max() - offset - 1e-9)) + 1
-            index = position - offset - first
-            # A cell a rounding error from a pixel centre is on it.
-            nearest = np.round(index)
-            index = np.where(np.abs(index - nearest) < 1e-9, nearest, index)
-            lower = np.floor(index)
-            self._share.append(index - lower)
-            self._lower.append(lower.astype(np.int32))
-            edges.append((np.arange(first, last + 2) + offset - 0.5) * pitch * u.Mm)
-        self.y_edges, self.x_edges = edges
-        self.image_shape = (self.y_edges.size - 1, self.x_edges.size - 1)
-
-    def reference_cube(self, z_size: u.Quantity, meta=None) -> NDCube:
-        """Empty cube with the image's coordinates, for :func:`create_line_cube`."""
-        wcs = WCS(naxis=3)
-        wcs.wcs.ctype = ["SOLX", "SOLY", "SOLZ"]
-        wcs.wcs.cunit = ["Mm", "Mm", "Mm"]
-        wcs.wcs.crpix = [1, 1, 1]
-        wcs.wcs.crval = [0.5 * (self.x_edges[0] + self.x_edges[1]).to_value(u.Mm),
-                         0.5 * (self.y_edges[0] + self.y_edges[1]).to_value(u.Mm), 0.0]
-        wcs.wcs.cdelt = [(self.x_edges[1] - self.x_edges[0]).to_value(u.Mm),
-                         (self.y_edges[1] - self.y_edges[0]).to_value(u.Mm),
-                         u.Quantity(z_size).to_value(u.Mm)]
-        return NDCube(np.zeros((1, *self.image_shape)), wcs=wcs, meta=meta)
-
-    def parts(self):
-        """Flat image pixel and weight of each cell, for each of its four pixels."""
-        n_rows, n_columns = self.image_shape
-        (row, column), (row_share, column_share) = self._lower, self._share
-        for step_row, of_row in ((0, 1.0 - row_share), (1, row_share)):
-            for step_column, of_column in ((0, 1.0 - column_share), (1, column_share)):
-                # In 64 bits, as the index into EM(T, v) can pass 2^31.
-                pixel = (np.minimum(row + step_row, n_rows - 1).astype(np.int64) * n_columns
-                         + np.minimum(column + step_column, n_columns - 1))
-                yield pixel, of_row * of_column
-
-
 def _pixel_parts(shape: Tuple[int, int, int], integration_axis: str, sky: Optional[SkyView]):
     """
-    Image pixels each cell is seen in, with their weights, and the image shape.
+    Cells, the pixels they go to and their shares, and the grid they are summed on.
 
-    Along an axis of the box each cell is in one pixel, with no weight.
+    Returns `(parts, grid_shape)`. Each part is `(cells, pixel, share)`:
+    `cells` indexes the box's arrays, `pixel` is the flat pixel of the grid
+    each picked cell goes to and `share` its share there, or None for all of
+    it. Along an axis of the box each cell is in one pixel. With `sky` the
+    grid may be the box's base, which `sky.to_image` takes to the image.
     """
     if sky is None:
         pixel, image_shape = _image_pixels(shape, integration_axis)
-        return [(pixel, None)], image_shape
+        return [(Ellipsis, pixel, None)], image_shape
     if view_axis_and_side(integration_axis) != ("z", +1):
         raise ValueError(f"A box seen from a position on the disk is seen from above, so its "
                          f"integration_axis is 'z', not {integration_axis!r}.")
-    return sky.parts(), sky.image_shape
+    return sky.parts(), sky.accumulation_shape
 
 
 def build_em_tv(
@@ -1479,7 +1315,8 @@ def build_em_tv(
         - with `sky`: (*sky.image_shape, nT, nv)
     """
     axis, _ = view_axis_and_side(integration_axis)
-    print(f"  Building 4-D emission-measure cube along {axis}-axis...")
+    print("  Building 4-D emission-measure cube along "
+          + (f"{axis}-axis..." if sky is None else "the slanted line of sight..."))
 
     _, logT_edges = _temperature_bins(logT_grid)
     v_centres = (vel_grid.to_value(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
@@ -1517,13 +1354,18 @@ def build_em_tv(
     parts, (n_rows, n_cols) = _pixel_parts(logT_cube.shape, integration_axis, sky)
     em = np.where(in_T & in_v, ne_sq_dh, 0.0)
     em_tv = np.zeros(n_rows * n_cols * nT * nv)
-    for pixel, weight in parts:
-        in_pixel = em if weight is None else em * weight
-        for step_T, of_T in ((0, 1.0 - share_T), (1, share_T)):
-            in_bin_T = pixel * nT + np.minimum(lower_T + step_T, nT - 1)
-            for step_v, of_v in ((0, 1.0 - share_v), (1, share_v)):
-                in_bin = in_bin_T * nv + np.minimum(lower_v + step_v, nv - 1)
+    for cells, pixel, weight in parts:
+        in_pixel = em[cells] if weight is None else em[cells] * weight
+        lower_T_c, share_T_c = lower_T[cells], share_T[cells]
+        lower_v_c, share_v_c = lower_v[cells], share_v[cells]
+        for step_T, of_T in ((0, 1.0 - share_T_c), (1, share_T_c)):
+            in_bin_T = pixel * nT + np.minimum(lower_T_c + step_T, nT - 1)
+            for step_v, of_v in ((0, 1.0 - share_v_c), (1, share_v_c)):
+                in_bin = in_bin_T * nv + np.minimum(lower_v_c + step_v, nv - 1)
                 np.add.at(em_tv, in_bin.ravel(), (in_pixel * of_T * of_v).ravel())
+    if sky is not None:
+        em_tv = sky.to_image(em_tv.reshape(n_rows * n_cols, nT * nv))
+        n_rows, n_cols = sky.image_shape
     return em_tv.reshape(n_rows, n_cols, nT, nv)
 
 
@@ -2011,8 +1853,18 @@ def build_parser() -> argparse.ArgumentParser:
                        help="See the box from this position on the solar disk: the "
                             "helioprojective x and y of its centre, west and north of disk "
                             "centre (e.g. '600 arcsec' '-200 arcsec'). The box's x is taken "
-                            "to point west, y north and z up. The atmosphere file needs the "
-                            "velocity along each axis the line of sight leans along")
+                            "to point west, y north and z up, unless turned by --rotation. "
+                            "The atmosphere file needs the velocity along each axis the line "
+                            "of sight leans along")
+    parser.add_argument("--rotation", type=str, default=None,
+                       help="With --position, turn the box about the vertical by this angle, "
+                            "from its x pointing west towards north (e.g. '30 deg'). "
+                            "Default 0 deg")
+    parser.add_argument("--projection", choices=PROJECTIONS, default=None,
+                       help="With --position, how cells are shared between sky pixels: "
+                            "'two-step' (default) along the line of sight onto the box's "
+                            "base, then onto the sky by area; or 'exact', each cell straight "
+                            "onto the sky, which is slower")
     parser.add_argument("--no-wrap", action="store_true",
                        help="With --position, end lines of sight at the box's sides, rather "
                             "than taking the box to repeat sideways")
@@ -2348,7 +2200,7 @@ def main(args=None) -> None:
     check_atmosphere_options(args)
     # A position on the disk sets the line of sight itself, slanted through
     # the box from above.
-    position, frame = None, None
+    position, frame, rotation, projection = None, None, None, None
     if getattr(args, "position", None):
         position = tuple(u.Quantity(value) for value in args.position)
         if not all(value.unit.is_equivalent(u.arcsec) for value in position):
@@ -2359,10 +2211,16 @@ def main(args=None) -> None:
         if "integration_axis" in getattr(args, "given_options", ()) or view != "z":
             raise ValueError("--position sets the line of sight itself, so --integration-axis "
                              "cannot be given with it.")
-        frame, heliocentric_angle = disk_frame(*position)
-    elif getattr(args, "no_wrap", False):
-        raise ValueError("--no-wrap is for a box seen from a position on the disk, given "
-                         "with --position.")
+        rotation = u.Quantity(getattr(args, "rotation", None) or "0 deg")
+        if not rotation.unit.is_equivalent(u.deg):
+            raise ValueError(f"--rotation is an angle, such as '30 deg'; got {args.rotation}.")
+        projection = getattr(args, "projection", None) or PROJECTIONS[0]
+        frame, heliocentric_angle = disk_frame(*position, rotation)
+    else:
+        for option in ("no_wrap", "rotation", "projection"):
+            if getattr(args, option, None):
+                raise ValueError(f"--{option.replace('_', '-')} is for a box seen from a "
+                                 f"position on the disk, given with --position.")
     # A name ending in .pkl still gets the old pickle format, so older scripts
     # keep working until it is removed.
     write_pickle = Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill")
@@ -2540,7 +2398,8 @@ def main(args=None) -> None:
             print(f"  Integration axis: {view}")
         else:
             print(f"  Seen from ({position[0]}, {position[1]}), at "
-                  f"{heliocentric_angle:.1f} from the vertical")
+                  f"{heliocentric_angle:.1f} from the vertical, turned by {rotation}, "
+                  f"{projection} projection")
         print(f"  Velocity grid: +/-{vel_lim:.1f} at {vel_res:.1f} resolution")
         print(f"  Precision: {precision}")
         if downsample:
@@ -2588,7 +2447,7 @@ def main(args=None) -> None:
                 print("  The box is cropped sideways, so it is not taken to repeat: lines of "
                       "sight end at its sides")
             sky = SkyView(frame, atmosphere.edges("x"), atmosphere.edges("y"),
-                          atmosphere.edges("z"), wrap)
+                          atmosphere.edges("z"), wrap, projection)
         rho = None
         if atmosphere.mass_density is not None:
             rho = atmosphere.mass_density.astype(precision)
@@ -2748,7 +2607,9 @@ def main(args=None) -> None:
             "integration_axis": view,
             "velocity_convention": VELOCITY_CONVENTION,
             "observer_side": observer_side,
-            "position": None if position is None else [str(value) for value in position],
+            "position": None if position is None else list(position),
+            "rotation": rotation,
+            "projection": projection,
             "heliocentric_angle": None if position is None else heliocentric_angle,
             "wrap": None if sky is None else sky.wrap,
             "crop_params": {
