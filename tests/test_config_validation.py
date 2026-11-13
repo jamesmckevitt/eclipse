@@ -334,7 +334,8 @@ def test_every_config_example_in_the_docs_is_valid():
     blocks = _doc_yaml_blocks()
     assert len(blocks) > 5, "expected the docs to carry config examples"
 
-    from eclipse.run_file import FRAME_KEYS, observation_config, runs, synthesis_arguments
+    from eclipse.run_file import (FRAME_KEYS, observation_config, runs, synthesis_arguments,
+                                  synthesises)
     from eclipse.utils import check_config_keys
 
     for page, block in blocks:
@@ -349,7 +350,7 @@ def test_every_config_example_in_the_docs_is_valid():
             # A run with a frame and no lines is for `eclipse frame`, which
             # synthesises the band itself.
             lines = (run.get("synthesis") or {}).get("lines")
-            if "atmosphere" in run and (lines or "frame" not in run):
+            if synthesises(run) and (lines or "frame" not in run):
                 synthesis_arguments(run, name)
             if "frame" in run:
                 check_config_keys(run["frame"], FRAME_KEYS, f"'frame' section in docs/{page}")
