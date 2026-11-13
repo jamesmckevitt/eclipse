@@ -337,6 +337,19 @@ def test_a_file_of_a_bands_lines_is_read_back_only_if_it_serves(tmp_path, monkey
     # Densities within the file's, and a band inside its own.
     lines = band_lines_for(path, (194.5, 196.0), logT, logN)
     assert lines.band == (194.0, 196.5) and lines.logN_grid.size == 21
+    # A file that is not there is worked out on the wider grid, if one is given.
+    made = []
+    monkeypatch.setattr(band_module, "band_contribution_functions",
+                        lambda band, logT, logN, **kwargs: made.append(logN) or _band_lines(
+                            logT, logN, band))
+    wide = np.linspace(7.0, 13.0, 21)
+    new = band_lines_for(tmp_path / "new.h5", (194.5, 196.0), logT, logN, wider_grid=wide)
+    assert np.array_equal(made[0], wide) and new.logN_grid.size == 21
+    assert (tmp_path / "new.h5").is_file()
+    with pytest.raises(ValueError, match="wider_grid must have every density"):
+        band_lines_for(tmp_path / "other.h5", (194.5, 196.0), logT, logN + 0.1, wider_grid=wide)
+    monkeypatch.setattr(band_module, "band_contribution_functions",
+                        lambda *args, **kwargs: pytest.fail("the lines were worked out"))
     for settings, message in (
             (dict(band=(193.0, 196.0)), "holds the band 194 to 196.5"),
             (dict(abundance="sun_coronal_1992_feldman"), "abundances"),
