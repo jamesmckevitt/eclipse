@@ -147,8 +147,9 @@ G_LINES = np.array([1e-24, 3e-24, 2e-24])
 
 def _band_lines(logT_grid, logN_grid, band=(194.0, 196.5), **kwargs):
     g = np.broadcast_to(G_LINES[:, None, None], (LINES.size, logN_grid.size, logT_grid.size))
-    # G rises with density, so the density the lines are taken at shows.
-    g = g * (1 + np.arange(logN_grid.size))[None, :, None]
+    # G rises with density, by its value at 1e7 cm^-3 for each decade, so the density the
+    # lines are taken at shows.
+    g = g * (1 + (np.asarray(logN_grid, dtype=float) - 7.0))[None, :, None]
     ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=LINES,
                    observed=np.ones(LINES.size, dtype=bool),
                    temperatures=np.arange(logT_grid.size), g=g)
@@ -171,9 +172,9 @@ def test_the_bands_spectrum_holds_each_lines_light_at_its_doppler_shift():
     spectra = band_spectra(lines, em, density, velocity, wavelength, n_workers=1)
     assert spectra.shape == (2, 1, wavelength.size) and spectra.unit == u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     per_bin = (spectra * 0.002 * u.AA).to_value(u.erg / (u.s * u.cm**2 * u.sr))
-    # G at 1e9 is twice G_LINES, and halfway to 1e10 it is 2.5 times.
-    assert per_bin[0].sum() == pytest.approx(4e27 * 2 * G_LINES.sum() / (4 * np.pi), rel=1e-9)
-    assert per_bin[1].sum() == pytest.approx(1e27 * 2.5 * G_LINES.sum() / (4 * np.pi), rel=1e-9)
+    # G at 1e9 is three times G_LINES, and halfway to 1e10 it is 3.5 times.
+    assert per_bin[0].sum() == pytest.approx(4e27 * 3 * G_LINES.sum() / (4 * np.pi), rel=1e-9)
+    assert per_bin[1].sum() == pytest.approx(1e27 * 3.5 * G_LINES.sum() / (4 * np.pi), rel=1e-9)
     # Each line's light is centred on its wavelength, moved by the Doppler shift.
     for pixel, shift in ((0, 1.0), (1, 1.0 + (100 * u.km / u.s / const.c).to_value(""))):
         for line, g in zip(LINES, G_LINES):
@@ -254,9 +255,7 @@ def test_a_band_is_synthesised_as_one_spectrum_and_its_lines_kept_in_a_file(tmp_
     assert products["goft"] == {}
     # Each pixel's light is its emission measure times G at its density.
     em, density = products["em_tv"].sum(axis=(2, 3)), products["electron_density"].max(axis=2)
-    position = np.interp(np.log10(density), products["logN_grid"],
-                         1 + np.arange(products["logN_grid"].size))
-    expected = em * position * G_LINES.sum() / (4 * np.pi)
+    expected = em * (1 + (np.log10(density) - 7.0)) * G_LINES.sum() / (4 * np.pi)
     light = (line.radiance() * 0.002 * u.AA).to_value(u.erg / (u.s * u.cm**2 * u.sr)).sum(axis=2)
     assert np.allclose(light, expected, rtol=1e-6, atol=0) and expected.min() > 0
     # The lines are kept beside the synthesis, and read back by the next one.
