@@ -166,7 +166,8 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_pa
         assert f["left/dn"].shape == (rows, samples) and f.attrs["noise"] == np.False_
         assert f["left/photon_wavelength"].shape == (rows, det.n_columns)
         assert f["left/photon_rms_wavelength"].shape == (rows, det.n_columns)
-        assert f.attrs["spectra"] == "Fe12_195.1190" and f.attrs["continuum"] == np.False_
+        assert [name.decode() for name in f["spectra"][()]] == ["Fe12_195.1190"]
+        assert f.attrs["continuum"] == np.False_
         assert f.attrs["psf_boundary"] == "replicate" and f.attrs["slit_mask"] == np.False_
         assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
                 f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
@@ -457,7 +458,7 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
     assert np.allclose(rate[inside], expected[inside], rtol=1e-5, atol=0)
     assert rate.sum() == pytest.approx(expected.sum(), rel=2e-3)
     assert expected[inside].min() > 0
-    assert frame.settings["continuum"] and frame.settings["spectra"] == "band, continuum"
+    assert frame.settings["continuum"] and frame.settings["spectra"] == ["band", "continuum"]
 
 
 def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis, monkeypatch):

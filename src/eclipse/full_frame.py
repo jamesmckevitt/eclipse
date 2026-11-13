@@ -37,19 +37,6 @@ from .utils import (_bin_edges, _fwhm_to_sigma, _get_software_version, distance_
 CCDS = ("left", "right")
 
 
-def _on_the_grid(points: np.ndarray, grid: np.ndarray) -> Optional[np.ndarray]:
-    """
-    Index of each synthesis density on the band's grid, or None if any is not on it.
-
-    A synthesis's density grid is the part of ECLIPSE's default grid that its
-    plasma needs, so lines computed on the default grid serve any synthesis
-    whose densities it covers.
-    """
-    grid = np.asarray(grid, dtype=float)
-    index = np.abs(np.asarray(points, dtype=float)[:, np.newaxis] - grid).argmin(axis=1)
-    return index if np.allclose(grid[index], points, rtol=0.0, atol=1e-6) else None
-
-
 def _angle(edges: u.Quantity) -> np.ndarray:
     """Edges on the Sun, given as lengths or angles, in arcsec seen from 1 AU."""
     edges = u.Quantity(edges)
@@ -168,7 +155,8 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
     measure a synthesis file from ECLIPSE keeps, for the deprecated `lines`
     and `continuum` arguments of `full_ccd_frame`.
     """
-    from .band import BAND_STEP, band_spectra, band_wavelengths
+    from .band import (BAND_STEP, band_spectra, band_wavelengths, densities_on_grid,
+                       same_temperatures)
     from .continuum import continuum_spectra
     from .synthesis import _temperature_bins
     from .synthesis_file import read_synthesis_products
@@ -194,10 +182,10 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
         logN = products["logN_grid"][()]
         velocity = u.Quantity(products["vel_grid"][()],
                               products["vel_grid"].attrs.get("unit", "cm / s"))
-    if not np.array_equal(logT, lines.logT_grid):
+    if not same_temperatures(logT, lines.logT_grid):
         raise ValueError("The band's lines are on another grid of temperature than the "
                          "synthesis; work them out on the synthesis's own.")
-    if _on_the_grid(logN, lines.logN_grid) is None:
+    if not densities_on_grid(logN, lines.logN_grid):
         raise ValueError(
             f"The synthesis takes the contribution functions at densities, log10 n_e "
             f"{logN[0]:.2f} to {logN[-1]:.2f}, that are not all on the "
@@ -209,9 +197,9 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
         raise ValueError(f"The synthesis used the abundances {abundance} and the band's lines "
                          f"{lines.abundance}; work the lines out with the synthesis's.")
     wavelength = band_wavelengths(lines.band, BAND_STEP)
-    spectra = band_spectra(lines, em, density, velocity, wavelength * u.Angstrom, n_workers)
-    names, edges = ["band"], [_bin_edges(wavelength)]
-    radiance = [np.tensordot(weights, spectra.value, axes=(0, 1))]
+    spectra = band_spectra(lines, em, density, velocity, wavelength * u.Angstrom, n_workers,
+                           column_weights=weights)
+    names, edges, radiance = ["band"], [_bin_edges(wavelength)], [spectra.value]
     if continuum is not None:
         grid, free, two_photon = continuum
         expected = (lines.logN_grid.size, lines.logT_grid.size, u.Quantity(grid).size)
@@ -224,11 +212,14 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
             raise ValueError("The continuum's wavelengths must be finite and increase.")
         # The DEM is per unit log T, and also holds plasma faster than the
         # velocity grid, which the continuum, not Doppler shifted, needs.
-        under = continuum_spectra(dem * _temperature_bins(logT)[0], density, lines.logN_grid,
-                                  np.asarray(free), np.asarray(two_photon))
+        total = dem * _temperature_bins(logT)[0]
         names.append("continuum")
         edges.append(_bin_edges(grid))
-        radiance.append(np.tensordot(weights, under, axes=(0, 1)))
+        # One column at a time, to hold one column's spectrum.
+        radiance.append(sum(
+            weight * continuum_spectra(total[:, [k]], density[:, [k]], lines.logN_grid,
+                                       np.asarray(free), np.asarray(two_photon))[:, 0]
+            for k, weight in enumerate(weights)))
     return _Scene(y_edges=_centred(y_edges), names=names, edges=edges, radiance=radiance)
 
 
@@ -697,7 +688,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
                                "continuum": any(is_continuum(name) or name == "continuum"
                                                 for name in scene.names),
-                               "spectra": ", ".join(scene.names),
+                               "spectra": list(scene.names),
                                "serial_prescan": det.serial_prescan,
                                "serial_overscan": det.serial_overscan,
                                "parallel_overscan_rows": det.parallel_overscan_rows})
@@ -713,9 +704,10 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     The root holds the settings as attributes, including the prescan and
     overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
     `parallel_overscan_rows`), and the version of ECLIPSE and the git commit
-    that wrote the file (`software_version` and `git_commit_id`). A group
-    for each CCD, `left` and `right`, holds these datasets, each with its
-    unit:
+    that wrote the file (`software_version` and `git_commit_id`). The
+    dataset `spectra` names the entries of the synthesis file the frame
+    holds. A group for each CCD, `left` and `right`, holds these datasets,
+    each with its unit:
 
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.
@@ -749,7 +741,11 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
             f.attrs[name] = value.value
             f.attrs[f"{name}_unit"] = str(value.unit)
         for key, value in frame.settings.items():
-            f.attrs[key] = value
+            if key != "spectra":
+                f.attrs[key] = value
+        # A file can hold more entries than an attribute has room for.
+        f.create_dataset("spectra", data=list(frame.settings.get("spectra", [])),
+                         dtype=h5py.string_dtype())
         for ccd in CCDS:
             group = f.create_group(ccd)
             for name, data, unit in (("dn", frame.dn[ccd], "DN"),

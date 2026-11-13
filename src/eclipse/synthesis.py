@@ -21,7 +21,8 @@ from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, 
                              write_synthesis)
 from .emission_measure import EmissionMeasure, read_emission_measure
 from .band import BAND_STEP, band_lines_for, band_spectra, band_wavelengths
-from .continuum import compute_continuum_fiasco, continuum_spectra, continuum_windows
+from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
+                        continuum_windows)
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
 
@@ -1099,6 +1100,20 @@ def density_grid(
         return _LOGN_MIN, _LOGN_MAX, _N_N
     first, last = points
     return _density_point(first), _density_point(last), last - first + 1
+
+
+def band_density_grid(logN_min: float, logN_max: float) -> np.ndarray:
+    """
+    Densities, as log10 n_e, on which to work out a band's lines for a synthesis.
+
+    The default grid, extended to `logN_min` and `logN_max` if they lie
+    beyond it. A band's lines take hours to work out, and on this grid they
+    serve every later synthesis whose densities the default grid covers.
+    """
+    step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+    first = min(0, int(round((logN_min - _LOGN_MIN) / step)))
+    last = max(_N_N - 1, int(round((logN_max - _LOGN_MIN) / step)))
+    return np.array([_density_point(index) for index in range(first, last + 1)])
 
 
 def _density_point(index: int) -> float:
@@ -2756,13 +2771,14 @@ def main(args=None) -> None:
             next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
         )
     else:
-        # Every line in the band, on the grids the lines above would be on.
+        # Every line in the band, on the temperatures the lines above would
+        # be on.
         logT_band = np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T)
         logN_band = np.linspace(logN_min, logN_max, nN)
         band_lines = band_lines_for(
             args.band_lines or Path(args.output_dir) / "band_lines.h5", band, logT_band,
-            logN_band, abundance=args.abundance, n_workers=args.n_workers,
-            hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None))
+            band_density_grid(logN_min, logN_max), abundance=args.abundance,
+            n_workers=args.n_workers, hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None))
         goft, logT_goft, logN_grid = {}, logT_band.astype(precision), logN_band.astype(precision)
         goft_dbase_root = band_lines.hdf5_dbase_root
     print(f"  CHIANTI database: {goft_dbase_root}")
@@ -2782,9 +2798,13 @@ def main(args=None) -> None:
     # wavelength, as in synthesise_spectra.
     continuum = None
     if getattr(args, "continuum", False):
-        windows = continuum_windows(
-            [(band_grid * u.Angstrom).to(u.cm)] if band is not None
-            else [(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs for info in goft.values()])
+        if band is not None:
+            # On the band's own wavelengths.
+            windows = {f"{CONTINUUM_PREFIX}_{band_grid[0]:.4f}-{band_grid[-1]:.4f}":
+                       (band_grid * u.Angstrom).to(u.cm)}
+        else:
+            windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+                                         for info in goft.values()])
         print(f"Computing the continuum over {len(windows)} window"
               f"{'' if len(windows) == 1 else 's'} via fiasco ({print_mem()})")
         wavelength = np.concatenate([grid.to_value(u.cm) for grid in windows.values()]) * u.cm

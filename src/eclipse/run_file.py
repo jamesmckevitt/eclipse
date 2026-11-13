@@ -26,11 +26,11 @@ from .utils import _parse_section, check_config_keys, load_yaml_config
 
 #: Keys of the `frame:` section.
 FRAME_KEYS = {"slit_position", "exposure", "slit_width", "band", "band_step", "band_lines",
-              "continuum", "n_workers", "output"}
+              "band_file", "continuum", "n_workers", "output"}
 
 # Keys of the `frame:` section that set how the band is synthesised from an
 # atmosphere.
-_BAND_KEYS = {"band", "band_step", "band_lines", "continuum", "n_workers"}
+_BAND_KEYS = {"band", "band_step", "band_lines", "band_file", "continuum", "n_workers"}
 
 # Keys of the `synthesis:` section the frame's own band synthesis sets itself.
 _FRAME_SYNTHESIS_KEYS = {"lines", "continuum", "band", "band_step", "band_lines", "image_x"}
@@ -462,7 +462,10 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
             raise FileNotFoundError(f"{key.replace('_', ' ').capitalize()} file not found: "
                                     f"{source}")
     if "frame" in config and "frame" in steps:
-        _frame_settings(config, name)
+        band = _frame_settings(config, name).get("band")
+        if (band is not None and not Path(band["atmosphere"]).is_file()
+                and not _made_already(band, name, warn=False)):
+            raise FileNotFoundError(f"Atmosphere file not found: {band['atmosphere']}")
     observed = observation_config(config, name)
     if "observe" in steps:
         _validate_config_keys(observed, str(observed.get("instrument", "SWC")).upper())
@@ -572,10 +575,20 @@ def _frame_settings(config: dict, name: str) -> dict:
         settings["synthesis"] = Path(config.get("synthesis_file", ""))
         return settings
     band = frame.get("band", [f"{edge} Angstrom" for edge in _SW_BAND])
-    if not isinstance(band, (list, tuple)) or len(band) != 2:
-        raise ValueError(f"'frame.band' takes two wavelengths, such as [169 Angstrom, 213.5 "
-                         f"Angstrom], got {band!r}.")
-    settings["synthesis"] = Path(f"run/input/{name}_band.h5")
+    step = frame.get("band_step")
+    try:
+        if not isinstance(band, (list, tuple)) or len(band) != 2:
+            raise ValueError
+        low, high = (u.Quantity(edge).to_value(u.Angstrom) for edge in band)
+        if not low < high or (step is not None
+                              and not u.Quantity(step).to_value(u.Angstrom) > 0):
+            raise ValueError
+    except (TypeError, ValueError, u.UnitConversionError):
+        raise ValueError(
+            f"'frame.band' takes two wavelengths, the shorter first, such as [169 Angstrom, "
+            f"213.5 Angstrom], and 'frame.band_step' one, such as 0.002 Angstrom; got "
+            f"{band!r} and {step!r}.") from None
+    settings["synthesis"] = Path(frame.get("band_file", f"run/input/{name}_band.h5"))
     settings["band"] = _band_config(config, settings, frame, band)
     # Check the band's synthesis settings now, as a run's own are.
     synthesis_arguments(settings["band"], name)
@@ -729,6 +742,9 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
         results = _observe_one(config, name, source=source, debug=debug)
     if "frame" in steps and "frame" in config:
         frame = _first_rank(_frame_one, config, name)
+        if steps == ("frame",) and synthesises(config):
+            # The frame alone synthesises only the band it is made from.
+            synthesis = _frame_settings(config, name)["synthesis"]
     return RunOutput(name, synthesis, results, frame)
 
 
@@ -745,11 +761,19 @@ def _check_files_apart(found: list, steps: tuple) -> None:
                                  f"differently into {path}; give each its own "
                                  f"'synthesis_file'.")
         if "frame" in config and "frame" in steps:
-            path = _frame_settings(config, run_name)["output"].resolve()
+            settings = _frame_settings(config, run_name)
+            path = settings["output"].resolve()
             other = frames.setdefault(path, run_name)
             if other != run_name:
                 raise ValueError(f"The runs {other} and {run_name} would both write their "
                                  f"frame to {path}; give each its own 'frame.output'.")
+            if "band" in settings:
+                path, key = settings["synthesis"].resolve(), _settings_key(settings["band"])
+                other = syntheses.setdefault(path, (run_name, key))
+                if other[1] != key:
+                    raise ValueError(f"The runs {other[0]} and {run_name} would synthesise "
+                                     f"differently into {path}; give each its own "
+                                     f"'frame.band_file'.")
 
 
 def run_all(source, command: str, *, settings=(), only: Optional[str] = None,

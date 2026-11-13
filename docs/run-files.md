@@ -110,9 +110,10 @@ frame:
 | `band` | The wavelengths to synthesise between, as `[low, high]` | `[169 Angstrom, 213.5 Angstrom]` |
 | `band_step` | The spacing of the band's wavelengths | `0.002 Angstrom` |
 | `band_lines` | Where to keep the contribution functions of the band's lines, worked out once and reused | `run/input/band_lines.h5` |
+| `band_file` | Where the band's synthesis goes. Runs that synthesise the same band, such as runs that differ only in exposure, can name one file and share it. | `run/input/<run file name>_band.h5` |
 | `n_workers` | Processes working out the lines and the band's spectrum | one per CPU |
 
-The last five are for a run with an `atmosphere`, and are refused with a `synthesis_file`. The band is synthesised with the run's `synthesis:` settings, apart from its `lines` and `continuum`.
+The last six are for a run with an `atmosphere`, and are refused with a `synthesis_file`. The band is synthesised with the run's `synthesis:` settings, apart from its `lines` and `continuum`.
 
 The detector, telescope and filter are those of the run's `detector:`, `telescope:` and `filter:` sections, and `simulation:` sets `psf`, `spectral_psf`, `psf_boundary`, `noise` and `slit_mask`. A frame takes one value of each setting, so a swept setting is refused. A frame is of the SW camera, so the instrument is SWC.
 
