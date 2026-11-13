@@ -24,6 +24,8 @@ import numpy as np
 import astropy.constants as const
 import astropy.units as u
 
+from .continuum import bins_to_cover
+
 FORMAT_NAME = "eclipse-band-lines"
 FORMAT_VERSION = 1
 G_UNIT = u.erg * u.cm**3 / u.s
@@ -484,6 +486,26 @@ def read_band_lines(path: str | Path) -> BandLines:
                          hdf5_dbase_root=str(f.attrs["hdf5_dbase_root"]), ions=ions)
 
 
+def same_temperatures(first: np.ndarray, second: np.ndarray) -> bool:
+    """
+    Whether two grids of log10 T are the same, to the rounding of a float32 grid.
+    """
+    first, second = np.asarray(first, dtype=float), np.asarray(second, dtype=float)
+    return first.shape == second.shape and bool(np.allclose(first, second, rtol=0.0, atol=1e-6))
+
+
+def densities_on_grid(densities: np.ndarray, grid: np.ndarray) -> bool:
+    """
+    Whether every one of `densities` is a point of `grid`, both as log10 n_e.
+
+    A synthesis's densities are points of ECLIPSE's default grid, so lines
+    worked out on a wider run of those points serve it.
+    """
+    densities, grid = np.asarray(densities, dtype=float), np.asarray(grid, dtype=float)
+    nearest = np.abs(densities[:, np.newaxis] - grid).argmin(axis=1)
+    return bool(np.allclose(grid[nearest], densities, rtol=0.0, atol=1e-6))
+
+
 def _serves(path: Path, band, logT_grid, logN_grid, abundance, dbase_root) -> Optional[str]:
     """Why the band's lines in the file at `path` do not serve a synthesis, or None if they do."""
     with h5py.File(path, "r") as f:
@@ -496,13 +518,10 @@ def _serves(path: Path, band, logT_grid, logN_grid, abundance, dbase_root) -> Op
             return f"was worked out with the abundances {f.attrs['abundance']}"
         if dbase_root is not None and str(f.attrs["hdf5_dbase_root"]) != str(dbase_root):
             return f"was worked out from the CHIANTI database at {f.attrs['hdf5_dbase_root']}"
-        held = f["logT_grid"][()]
-        if held.shape != np.shape(logT_grid) or not np.allclose(held, logT_grid, rtol=0.0,
-                                                                 atol=1e-6):
+        if not same_temperatures(f["logT_grid"][()], logT_grid):
             return "is on another grid of temperature"
         held = f["logN_grid"][()]
-        nearest = np.abs(np.asarray(logN_grid, dtype=float)[:, np.newaxis] - held).argmin(axis=1)
-        if not np.allclose(held[nearest], logN_grid, rtol=0.0, atol=1e-6):
+        if not densities_on_grid(logN_grid, held):
             return (f"is on densities, log10 n_e {held[0]:.2f} to {held[-1]:.2f}, that do not "
                     f"have all of this synthesis's, {logN_grid[0]:.2f} to {logN_grid[-1]:.2f}")
     return None
@@ -589,7 +608,7 @@ def band_wavelengths(band: Sequence[float], step: float) -> np.ndarray:
                          f"got {band}.")
     if not (np.isfinite(step) and step > 0):
         raise ValueError(f"The wavelength step must be above zero, got {step}.")
-    return low + (np.arange(int(np.ceil((high - low) / step * (1 - 1e-12)))) + 0.5) * step
+    return low + (np.arange(bins_to_cover(low, high, step)) + 0.5) * step
 
 
 def _density_shares(log_density: np.ndarray, logN_grid: np.ndarray):
@@ -676,12 +695,16 @@ def _add_temperature(light: np.ndarray, t: int, templates: np.ndarray, context: 
             low_share[block, np.newaxis] * em)
         weight[pixel, :, np.searchsorted(densities, upper[block])] += (
             high_share[block, np.newaxis] * em)
-        light[block] += weight.reshape(block.size, -1) @ flat
+        part = weight.reshape(block.size, -1) @ flat
+        if context["across"] is None:
+            light[block] += part
+        else:
+            light += context["across"][:, block] @ part
 
 
 def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_density: np.ndarray,
                  velocity: u.Quantity, wavelength: u.Quantity,
-                 n_workers: int = 0) -> u.Quantity:
+                 n_workers: int = 0, column_weights: Optional[np.ndarray] = None) -> u.Quantity:
     """
     Spectrum of every line in a band in every pixel, from the emission measure EM(T, v).
 
@@ -713,15 +736,23 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
         Number of processes to compute the temperatures with. Default 0 uses
         every CPU this process may use. Where processes cannot be forked, as
         on Windows, one process is used.
+    column_weights : np.ndarray, optional
+        Weight of each column, to give each row the weighted sum of its
+        columns' spectra, such as the light a slit takes from them, without
+        holding every column's spectrum. Default None, for every pixel's
+        own spectrum.
 
     Returns
     -------
     u.Quantity
         Spectral radiance, the mean over each wavelength's bin, in
-        erg / (s cm2 sr cm), shape (rows, columns, n_wavelength).
+        erg / (s cm2 sr cm), shape (rows, columns, n_wavelength), or
+        (rows, n_wavelength) with `column_weights`.
     """
     import multiprocessing as mp
     import warnings
+
+    from scipy import sparse
 
     from .utils import _bin_edges
 
@@ -747,7 +778,18 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
     log_density = np.log10(np.where(density > 0, density, np.nan))
     shares = tuple(part.reshape(rows * columns, n_t)
                    for part in _density_shares(log_density, lines.logN_grid))
-    context = {"lines": lines, "edges": edges, "velocity": velocity,
+    across = None
+    if column_weights is not None:
+        column_weights = np.asarray(column_weights, dtype=float)
+        if column_weights.shape != (columns,):
+            raise ValueError(f"The emission measure has {columns} columns, but "
+                             f"{column_weights.size} weights were given.")
+        # Each row's pixels, with their columns' weights.
+        across = sparse.csr_matrix(
+            (np.tile(column_weights, rows),
+             (np.repeat(np.arange(rows), columns), np.arange(rows * columns))),
+            shape=(rows, rows * columns))
+    context = {"lines": lines, "edges": edges, "velocity": velocity, "across": across,
                "emission_measure": em.reshape(rows * columns, n_t, n_v), "shares": shares}
     # The velocity bins and grid densities with plasma at each temperature,
     # among pixels at a density on the grid.
@@ -767,7 +809,7 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
         warnings.warn("Processes cannot be forked here, so the temperatures are computed in "
                       "one process.", stacklevel=2)
         n_workers = 1
-    light = np.zeros((rows * columns, centres.size))
+    light = np.zeros((rows if across is not None else rows * columns, centres.size))
     if n_workers > 1:
         # Fork, so the workers share the lines rather than being sent them.
         # The temperatures are added in order, so the spectra do not depend
@@ -783,4 +825,6 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
     # G times the emission measure is the light over the whole sphere; the
     # radiance is per steradian and per unit wavelength.
     light /= 4.0 * np.pi * np.diff(edges) * 1e-8
-    return light.reshape(rows, columns, -1) * (u.erg / (u.s * u.cm**2 * u.sr * u.cm))
+    if across is None:
+        light = light.reshape(rows, columns, -1)
+    return light * (u.erg / (u.s * u.cm**2 * u.sr * u.cm))

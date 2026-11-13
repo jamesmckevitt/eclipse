@@ -260,6 +260,7 @@ def test_a_frame_from_an_atmosphere_synthesises_the_band_under_the_slit(
     [output] = eclipse.make_frame(job, name="job")
     # Only the band is synthesised, with the run's settings, into the frame's own file.
     [args] = fake_synthesis
+    assert output.synthesis == Path("run/input/job_band.h5") and output.results is None
     assert Path(args.output_dir, args.output_name).name.endswith(".h5")
     assert output.frame == Path("run/result/job_frame.h5")
     assert taken["args"] == (Path("run/input/job_band.h5"),)
@@ -281,9 +282,36 @@ def test_a_frame_from_an_atmosphere_synthesises_the_band_under_the_slit(
     args = fake_synthesis[-1]
     assert args.band == ["190 Angstrom", "200 Angstrom"] and args.band_step == "0.004 Angstrom"
     assert args.band_lines == "kept/lines.h5"
-    with pytest.raises(ValueError, match="'frame.band' takes two wavelengths"):
-        eclipse.make_frame(job, name="job", frame={"slit_position": "0 arcsec",
-                                                   "band": "190 Angstrom"})
+    # A mistake in the band is found before anything is synthesised.
+    made = len(fake_synthesis)
+    for mistake in ({"band": "190 Angstrom"}, {"band": [190, 200]},
+                    {"band": ["200 Angstrom", "190 Angstrom"]}, {"band_step": 0.002},
+                    {"band_step": "0 Angstrom"}):
+        with pytest.raises(ValueError, match="'frame.band' takes two wavelengths"):
+            eclipse.run(job, name="job", frame=mistake)
+    with pytest.raises(FileNotFoundError, match="Atmosphere file not found"):
+        eclipse.make_frame(job, name="job", atmosphere="gone.h5")
+    assert len(fake_synthesis) == made
+
+
+def test_runs_share_a_band_file_they_would_synthesise_alike(tmp_path, monkeypatch, atmosphere,
+                                                            fake_synthesis):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(full_frame, "full_ccd_frame", lambda *args, **kwargs: None)
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"instrument": "SWC", "atmosphere": str(atmosphere),
+           "simulation": {"psf": False},
+           "frame": {"slit_position": "0 arcsec", "band_file": "run/input/shared.h5"},
+           "runs": [{"name": "short", "frame": {"exposure": "5 s"}},
+                    {"name": "long", "frame": {"exposure": "60 s"}}]}
+    outputs = eclipse.make_frame(job, name="job")
+    assert [output.synthesis for output in outputs] == [Path("run/input/shared.h5")] * 2
+    assert len(fake_synthesis) == 1
+    job["runs"][1]["frame"]["slit_position"] = "0.5 arcsec"
+    with pytest.raises(ValueError, match="give each its own 'frame.band_file'"):
+        eclipse.make_frame(job, name="job")
 
 
 def test_a_frame_needs_no_lines_and_widens_the_strip_by_the_blur_across_the_slit(

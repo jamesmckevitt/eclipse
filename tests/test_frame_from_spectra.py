@@ -57,7 +57,7 @@ def test_a_smooth_spectrum_lands_on_the_rows_as_photons_from_spectrum_lays_it(tm
     inside = (_rows() > 180.3) & (_rows() < 183.7)
     assert expected[inside].min() > 0
     assert np.allclose(_middle_rate(frame)[inside], expected[inside], rtol=1e-5, atol=0)
-    assert frame.settings["spectra"] == "window"
+    assert frame.settings["spectra"] == ["window"]
 
 
 def test_a_line_keeps_its_light_whatever_its_sampling(tmp_path):
@@ -95,7 +95,7 @@ def test_a_frame_adds_every_entry_of_the_file(tmp_path):
                        rtol=1e-12, atol=0)
     assert np.allclose(frames["all"].rate["right"], frames["right"].rate["right"],
                        rtol=1e-12, atol=0)
-    assert frames["all"].settings["spectra"] == "a, b, c"
+    assert frames["all"].settings["spectra"] == ["a", "b", "c"]
 
 
 def test_a_frame_takes_any_unit_of_spectral_radiance_and_uneven_wavelengths(tmp_path):
@@ -185,6 +185,16 @@ def test_the_bands_spectrum_holds_each_lines_light_at_its_doppler_shift():
     # A density off the lines' grid gives no light, as the contribution functions are zero there.
     off = band_spectra(lines, em, 1e12, velocity, wavelength, n_workers=1)
     assert not off.value.any()
+    # Weights give each row the weighted sum of its columns' spectra.
+    wide = np.concatenate([em, 3 * em], axis=1)
+    both = np.concatenate([density, density], axis=1)
+    each = band_spectra(lines, wide, both, velocity, wavelength, n_workers=1)
+    summed = band_spectra(lines, wide, both, velocity, wavelength, n_workers=1,
+                          column_weights=[0.25, 0.5])
+    assert summed.shape == (2, wavelength.size)
+    assert np.allclose(summed, 0.25 * each[:, 0] + 0.5 * each[:, 1], rtol=1e-12, atol=0)
+    with pytest.raises(ValueError, match="2 columns, but 3 weights"):
+        band_spectra(lines, wide, both, velocity, wavelength, column_weights=[1, 1, 1])
     with pytest.raises(ValueError, match="temperatures"):
         band_spectra(lines, em[:, :, :2], density[..., :2], velocity, wavelength, n_workers=1)
     with pytest.raises(ValueError, match="velocity bins"):
@@ -305,7 +315,14 @@ def test_the_deprecated_lines_give_the_frame_of_the_band_synthesised_into_a_file
     # The file's wavelengths are the band's to rounding.
     assert np.allclose(worked_out.rate["left"], held.rate["left"], rtol=1e-6,
                        atol=1e-9 * held.rate["left"].max())
-    assert held.settings["spectra"] == "band_194.0010-196.4990"
+    assert held.settings["spectra"] == ["band_194.0010-196.4990"]
+    # Lines on the same temperatures to a float32 file's rounding serve too.
+    rounded = BandLines(band=lines.band, logT_grid=lines.logT_grid.astype(np.float32),
+                        logN_grid=lines.logN_grid, abundance=lines.abundance,
+                        hdf5_dbase_root="test", ions=lines.ions)
+    with pytest.warns(FutureWarning):
+        again = full_ccd_frame(band, rounded, n_workers=1, **settings)
+    assert np.array_equal(again.rate["left"], worked_out.rate["left"])
     # A file from another code keeps no emission measure to work a band out from.
     other = _write(tmp_path / "other.h5", {"line": (np.linspace(195.0, 195.2, 51) * u.AA,
                                                     np.ones(51) * RADIANCE)})
@@ -358,7 +375,7 @@ def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_pa
     assert 20 < strip.shape[1] < nx
     with h5py.File(output.frame) as f:
         rate = f["left/rate"][()]
-        assert f.attrs["spectra"] == "band_194.0010-196.4990"
+        assert [name.decode() for name in f["spectra"][()]] == ["band_194.0010-196.4990"]
     monkeypatch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", "box.h5", "--output-dir", "whole",
         "--output-name", "band.h5", "--band", "194 Angstrom", "196.5 Angstrom",
