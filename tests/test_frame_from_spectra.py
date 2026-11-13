@@ -125,7 +125,9 @@ def test_a_frame_takes_any_unit_of_spectral_radiance_and_uneven_wavelengths(tmp_
     solid_angle = pixel_solid_angle(FocalPlane_SWC.from_detector(det), 0.2 * u.arcsec)
     light = (spectrum * np.diff(edges) * u.AA * solid_angle
              * photons_per_energy(tel, wavelength)).to_value(1 / u.s)
-    assert rates[0].sum() == pytest.approx(light.sum(), rel=1e-9)
+    # The frame takes the throughput at the middle of each bin, which is not quite its
+    # wavelength where the spacing changes.
+    assert rates[0].sum() == pytest.approx(light.sum(), rel=1e-6)
 
 
 def test_wavelengths_outside_the_throughput_tables_give_no_light(tmp_path):
