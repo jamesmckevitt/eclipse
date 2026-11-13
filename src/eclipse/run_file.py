@@ -243,7 +243,8 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
         that is not a synthesis option.
     """
     if not synthesises(config):
-        raise ValueError("A run synthesises the 'atmosphere' it names; this one names none.")
+        raise ValueError("A run synthesises the 'atmosphere' or the 'emission_measure' it "
+                         "names; this one names neither.")
     section = config.get("synthesis") or {}
     if not isinstance(section, dict):
         raise ValueError("The 'synthesis:' section must be a mapping of settings to values.")
@@ -263,6 +264,13 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
     for key, value in section.items():
         words += _option_words(key, options[key], value)
     return words
+
+
+def _check_synthesis(config: dict, name: str) -> None:
+    """Check a run's synthesis settings, before anything is synthesised."""
+    from .synthesis import check_source_options, parse_arguments
+
+    check_source_options(parse_arguments(synthesis_arguments(config, name)))
 
 
 # Synthesis settings that change how it is computed, not what it gives.
@@ -455,7 +463,7 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     if synthesises(config):
         # A frame synthesises its own band, so it needs no lines.
         if "synthesise" in steps or "observe" in steps:
-            synthesis_arguments(config, name)
+            _check_synthesis(config, name)
         key, source = synthesised_from(config)
         if ("synthesise" in steps and not Path(source).is_file()
                 and not _made_already(config, name, warn=False)):
@@ -593,7 +601,7 @@ def _frame_settings(config: dict, name: str) -> dict:
     settings["synthesis"] = Path(frame.get("band_file", f"run/input/{name}_band.h5"))
     settings["band"] = _band_config(config, settings, frame, band)
     # Check the band's synthesis settings now, as a run's own are.
-    synthesis_arguments(settings["band"], name)
+    _check_synthesis(settings["band"], name)
     return settings
 
 

@@ -63,8 +63,8 @@ class EmissionMeasure:
         Pixel boundaries, evenly spaced, as lengths on the Sun or angles seen
         from 1 AU. x runs across the slit and y along it.
     velocity : u.Quantity, optional
-        Velocity bin centres of a VDEM, increasing and evenly spaced. A
-        positive velocity is away from the observer, a redshift. It holds
+        Velocity bin centres of a VDEM, increasing. A positive velocity is
+        away from the observer, a redshift. It holds
         the bulk motion only: the thermal width is added in the synthesis.
     electron_density : u.Quantity, optional
         Electron density the contribution functions are taken at: one value,
@@ -110,8 +110,8 @@ class EmissionMeasure:
             if velocity.size != em.shape[3]:
                 raise ValueError(f"emission_measure has {em.shape[3]} velocity bins, but "
                                  f"velocity has {velocity.size} values.")
-            if velocity.size > 1:
-                require_uniform_grid(velocity.value, "velocity")
+            if np.any(np.diff(velocity.value) <= 0):
+                raise ValueError("velocity must increase.")
         if self.electron_density is not None:
             density = _checked(self.electron_density, "electron_density", (u.cm**-3,))
             if density.shape not in ((), shape[:2], shape):

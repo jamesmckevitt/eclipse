@@ -98,7 +98,7 @@ synthesise-spectra \
 
 **Abundance.** `abundance` chooses the element abundances, which set how bright the low-FIP lines are compared with the high-FIP ones. For FIP studies, synthesise once with each set, for example `sun_coronal_2021_chianti` and `sun_photospheric_2021_asplund`. The ratio of a line's intensity in the two is the FIP bias you are trying to measure.
 
-**The velocity range sets the wavelength window.** Each line's wavelengths are a velocity grid converted with `lambda_0 (1 + v/c)`. For a DEM the grid is that of `vel_res` and `vel_lim`, +/- 300 km/s by default, which is wide for coronal lines.
+**The wavelength window.** Each line's wavelengths are a velocity grid converted with `lambda_0 (1 + v/c)`: that of `vel_res` and `vel_lim` in the `synthesis:` section, +/- 300 km/s every 5 km/s by default. Each line is integrated over the wavelength bins, so all of its light is kept.
 
 ## With velocities: a VDEM
 
@@ -143,9 +143,7 @@ It is synthesised and observed like a DEM, with `emission_measure: vdem.h5` in t
 
 **Bin centres.** Both `temperature` and `velocity` hold the centres of the bins, not their edges.
 
-**An even velocity grid.** The velocity bins must be evenly spaced and increasing. ECLIPSE refuses any others.
-
-**The velocity range sets the wavelength window.** A VDEM is synthesised on its own velocity bins, and `vel_res` and `vel_lim` are not used. A line near the end of the velocity range loses the far side of its profile, so leave room for the fastest motion you need, plus several thermal widths.
+**The wavelength window.** Each line's wavelengths are those of `vel_res` and `vel_lim`, as for a DEM, whatever the VDEM's own velocity bins. Set `vel_lim` wide enough for the fastest plasma, plus several thermal widths. ECLIPSE warns if the VDEM has plasma beyond it.
 
 ## A full-CCD frame
 

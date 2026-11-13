@@ -106,6 +106,8 @@ def test_an_emission_measure_file_reads_back_as_written(tmp_path):
           velocity=np.arange(4) * 10 * u.km / u.s), "5 velocity bins"),
     (dict(electron_density=np.ones(4) / u.cm**3), "one value, or shaped"),
     (dict(electron_density=0 / u.cm**3), "above zero"),
+    (dict(emission_measure=np.ones((3, 4, 21, 3)) / u.cm**5,
+          velocity=[0, 20, 10] * u.km / u.s), "velocity must increase"),
 ])
 def test_an_emission_measure_is_checked(change, message):
     fields = dict(emission_measure=np.ones((3, 4, 21)) / u.cm**5, temperature=10 ** LOGT * u.K,
@@ -127,7 +129,11 @@ def test_a_dem_gives_each_line_its_emission_measure_times_g_at_rest(tmp_path, mo
     products = read_synthesis_products(path)
     assert np.allclose(products["logT_grid"], LOGT)
     assert np.allclose(products["electron_density"], 1e9)
-    assert products["em_tv"].shape == (3, 4, 21, 121)
+    # A DEM's emission is in one velocity bin, at rest, and each line's wavelengths are
+    # those of the default velocity grid.
+    assert products["em_tv"].shape == (3, 4, 21, 1)
+    assert products["vel_grid"].to_value(u.km / u.s) == pytest.approx([0.0])
+    assert held.lines[LINE].wavelength.size == 121
     # The DEM is per unit log T, as the synthesis of an atmosphere keeps it.
     assert np.allclose(products["dem_map"].sum(axis=2) * 0.05, em[None, :])
     assert products["config"]["emission_measure"].endswith("measure.h5")
@@ -154,8 +160,13 @@ def test_the_density_is_the_files_a_density_given_or_one_from_a_pressure(tmp_pat
         total(_dem())
     with pytest.raises(ValueError, match="not both"):
         total(_dem(), "--electron-density", "1e9 cm-3", "--pressure", "1e15 K cm-3")
-    with pytest.raises(ValueError, match="one value such as"):
-        total(_dem(), "--electron-density", "1e9 K")
+    for words in (("--electron-density", "1e9 K"), ("--pressure", "0 K cm-3"),
+                  ("--electron-density", "[1e9, 2e9] cm-3")):
+        with pytest.raises(ValueError, match="takes one value above zero"):
+            total(_dem(), *words)
+    with pytest.raises(ValueError, match="name ending in .h5"):
+        _synthesise(tmp_path, _dem(), "--lines", LINE, "--electron-density", "1e9 cm-3",
+                    name="synthesis.pkl", monkeypatch=monkeypatch)
 
 
 def test_a_vdem_shifts_each_line_by_its_velocities(tmp_path, monkeypatch, chianti_free):
@@ -173,6 +184,35 @@ def test_a_vdem_shifts_each_line_by_its_velocities(tmp_path, monkeypatch, chiant
     assert centre[0] == pytest.approx([REST, shifted], abs=1e-6)
     assert np.allclose(read_synthesis_products(path)["vel_grid"].to_value(u.km / u.s),
                        velocity.value)
+
+
+@pytest.mark.parametrize("words", [(), ("--precision", "float32")])
+def test_a_vdem_keeps_its_light_whatever_its_velocity_bins(tmp_path, monkeypatch, chianti_free,
+                                                           words):
+    """Bins 40 km/s apart are three thermal widths of the line at 1 MK, and one bin alone is
+    a VDEM too. Each line is integrated over its wavelengths, so its light is kept."""
+    for velocity in (np.array([-80.0, -40.0, 0.0, 40.0, 80.0]), np.array([40.0])):
+        em = np.zeros((1, 1, LOGT.size, velocity.size))
+        em[0, 0, [0, 8, 20], -1] = 1e27      # at the first and last temperatures too
+        measure = EmissionMeasure(emission_measure=em / u.cm**5, temperature=10 ** LOGT * u.K,
+                                  x_edges=_edges(1), y_edges=_edges(1),
+                                  velocity=velocity * u.km / u.s, electron_density=1e9 / u.cm**3)
+        path = _synthesise(tmp_path, measure, "--lines", LINE, *words, monkeypatch=monkeypatch)
+        total, centre = _light(read_synthesis(path).lines[LINE])
+        assert total[0, 0] == pytest.approx(3e27 * _g_at(9.0) / (4 * np.pi), rel=1e-5)
+        shifted = REST * (1 + (velocity[-1] * u.km / u.s / const.c).to_value(""))
+        assert centre[0, 0] == pytest.approx(shifted, abs=1e-5)
+
+
+def test_plasma_beyond_the_lines_wavelengths_is_warned_of(tmp_path, monkeypatch, chianti_free):
+    velocity = np.array([0.0, 400.0]) * u.km / u.s
+    em = np.zeros((1, 1, LOGT.size, 2))
+    em[0, 0, 8] = 1e27
+    measure = EmissionMeasure(emission_measure=em / u.cm**5, temperature=10 ** LOGT * u.K,
+                              x_edges=_edges(1), y_edges=_edges(1), velocity=velocity,
+                              electron_density=1e9 / u.cm**3)
+    with pytest.warns(UserWarning, match="plasma at up to 400 km/s, beyond the 300 km/s"):
+        _synthesise(tmp_path, measure, "--lines", LINE, monkeypatch=monkeypatch)
 
 
 def test_a_dem_is_synthesised_over_a_band_and_a_strip_of_the_image(tmp_path, monkeypatch,
@@ -244,6 +284,14 @@ def test_a_run_synthesises_its_emission_measure_then_observes_it(tmp_path, monke
         eclipse.run(_job(measure, atmosphere="box.h5"), name="job")
     with pytest.raises(FileNotFoundError, match="Emission measure file not found"):
         eclipse.synthesise(_job(tmp_path / "gone.h5"), name="gone")
+    # A mistake in the synthesis settings is found before anything is synthesised.
+    for synthesis_section, message in (
+            ({"lines": [LINE]}, "need an electron density"),
+            ({"lines": [LINE], "electron_density": "1e9 cm-3", "crop_x": ["0 Mm", "1 Mm"]},
+             "--crop-x would not be used")):
+        with pytest.raises(ValueError, match=message):
+            eclipse.run(_job(measure, synthesis=synthesis_section), name="mistake")
+    assert not Path("run/input/mistake.h5").exists()
 
 
 def test_a_run_makes_a_frame_from_an_emission_measure(tmp_path, monkeypatch, chianti_free):

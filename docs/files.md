@@ -78,7 +78,7 @@ The root has a `format` attribute of `eclipse-emission-measure`, a `version` of 
 | `emission_measure` | `(ny, nx, n_temperatures)`, or `(ny, nx, n_temperatures, n_velocities)` for a VDEM | The emission measure n_e^2 dh in each bin, such as in `cm-5`. It is not per kelvin or per km/s. |
 | `temperature` | `(n_temperatures,)` | The centres of the temperature bins, evenly spaced in log10(T). |
 | `x_edges`, `y_edges` | `(nx + 1,)`, `(ny + 1,)` | The pixel boundaries across and along the slit, evenly spaced, as lengths on the Sun or angles seen from 1 AU. |
-| `velocity` | `(n_velocities,)` | The centres of a VDEM's velocity bins, evenly spaced. A positive velocity is a redshift. A DEM has none. |
+| `velocity` | `(n_velocities,)` | The centres of a VDEM's velocity bins, increasing. A positive velocity is a redshift. A DEM has none. |
 | `electron_density` | scalar, `(ny, nx)` or `(ny, nx, n_temperatures)` | The electron density the contribution functions are taken at (optional). |
 | `time` | scalar | Time of the snapshot (optional). |
 
