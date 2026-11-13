@@ -20,7 +20,8 @@ from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, write_line_cubes,
                              write_synthesis)
-from .emission_measure import EmissionMeasure, read_emission_measure
+from .emission_measure import (EmissionMeasure, is_emission_measure_file,
+                               read_emission_measure, read_emission_measure_layout)
 from .band import (BAND_STEP, BandLines, IonLines, band_lines_for, band_spectra,
                    band_wavelengths, same_temperatures)
 from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
@@ -1760,7 +1761,7 @@ def continuum_tables(windows: Dict[str, u.Quantity], logT_grid: np.ndarray,
 
 # Options that describe an atmosphere, which an emission measure does not have.
 ATMOSPHERE_ONLY_OPTIONS = ("integration_axis", "crop_x", "crop_y", "crop_z", "downsample",
-                           "mass_per_electron", "slit_rest_time")
+                           "mass_per_electron")
 
 
 def check_source_options(args) -> None:
@@ -1779,11 +1780,13 @@ def check_source_options(args) -> None:
                                  f"given with --emission-measure. An atmosphere has its own "
                                  f"densities.")
         return
+    # The parser notes each of these options that appeared on the command
+    # line, so one typed at its default value is caught too.
     noted = getattr(args, "given_options", ())
-    given = [name for name in MURAM_LAYOUT_OPTIONS + DYNAMIC_OPTIONS if name in noted]
-    defaults = build_parser()
-    given += [name for name in ATMOSPHERE_ONLY_OPTIONS
-              if getattr(args, name, None) != defaults.get_default(name)]
+    given = [name for name in ATMOSPHERE_ONLY_OPTIONS + MURAM_LAYOUT_OPTIONS + DYNAMIC_OPTIONS
+             if name in noted]
+    if args.slit_rest_time is not None:
+        given.insert(0, "slit_rest_time")
     if args.atmosphere:
         given.insert(0, "atmosphere")
     if given:
@@ -1809,8 +1812,9 @@ def check_source_options(args) -> None:
         if value is None or np.ndim(value) != 0 or not (np.isfinite(value) and value > 0):
             raise ValueError(f"--{name.replace('_', '-')} takes one value above zero, such as "
                              f"'{example}', got {getattr(args, name)!r}.")
+    # A file of another kind is reported when it is read.
     if (args.electron_density is None and args.pressure is None
-            and Path(args.emission_measure).is_file()):
+            and is_emission_measure_file(args.emission_measure)):
         with h5py.File(args.emission_measure, "r") as f:
             if "electron_density" not in f:
                 raise ValueError(
@@ -1889,7 +1893,14 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
     intensity_unit = u.erg / u.s / u.cm**2 / u.sr / u.cm
     print("Synthesis from an emission measure file")
     print(f"  Emission measure: {args.emission_measure}")
-    measure = read_emission_measure(args.emission_measure)
+    # Only the columns asked for are read, as a VDEM of a whole image is large.
+    layout = read_emission_measure_layout(args.emission_measure)
+    columns = None
+    if getattr(args, "image_x", None):
+        columns = image_columns_between(_to_length(layout["x_edges"]), args.image_x)
+        print(f"  Image columns {columns.start} to {columns.stop - 1} of "
+              f"{layout['x_edges'].size - 1} kept")
+    measure = read_emission_measure(args.emission_measure, columns=columns)
     logT_grid = np.log10(measure.temperature.to_value(u.K))
     em_tv = measure.emission_measure.to_value(u.cm**-5).astype(float)
     if measure.velocity is None:
@@ -1904,7 +1915,7 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
           f"{'a DEM' if measure.velocity is None else f'a VDEM with {velocity.size} velocities'}")
 
     # The default density grid's points, as far as just past the densities
-    # of the whole image, so one file of a band's lines serves every strip.
+    # of the plasma.
     logN_min, logN_max, nN = _LOGN_MIN, _LOGN_MAX, _N_N
     occupied = em_t > 0
     if occupied.any():
@@ -1912,14 +1923,6 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
                                         np.log10(density[occupied].max()))
         logN_min, logN_max, nN = _density_point(first), _density_point(last), last - first + 1
     logN_grid = np.linspace(logN_min, logN_max, nN)
-
-    x_edges = measure.x_edges
-    if getattr(args, "image_x", None):
-        columns = image_columns_between(_to_length(x_edges), args.image_x)
-        em_tv, em_t, density = em_tv[:, columns], em_t[:, columns], density[:, columns]
-        x_edges = x_edges[columns.start:columns.stop + 1]
-        print(f"  Image columns {columns.start} to {columns.stop - 1} of "
-              f"{measure.shape[1]} kept")
 
     dbase_root = getattr(args, "hdf5_dbase_root", None)
     lines, goft = {}, {}
@@ -1947,15 +1950,25 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
                 UserWarning, stacklevel=2)
         for name, info in goft.items():
             grid = (window * info["wl0"] / const.c + info["wl0"]).cgs
+            # One line needs no workers.
             spectra = band_spectra(_line_as_band(info, logT_grid, logN_grid, args.abundance),
-                                   em_tv, density, velocity, grid, n_workers=args.n_workers)
+                                   em_tv, density, velocity, grid, n_workers=1)
             lines[name] = {"si": spectra.to_value(intensity_unit), "wl_grid": grid,
                            "wl0": info["wl0"], "atom": info["atom"], "ion": info["ion"]}
     else:
+        # A band's lines are worked out on the densities of the whole image,
+        # so one file of them serves every strip of it. The file is named
+        # for its temperatures, which are the emission measure's own.
+        whole = density
+        if (args.electron_density is None and args.pressure is None
+                and layout["electron_density"] is not None):
+            whole = layout["electron_density"].to_value(u.cm**-3)
+        first, last = _points_just_past(np.log10(whole.min()), np.log10(whole.max()))
+        name = f"band_lines_logT_{logT_grid[0]:.2f}-{logT_grid[-1]:.2f}_{logT_grid.size}.h5"
         band_lines = band_lines_for(
-            args.band_lines or Path(args.output_dir) / "band_lines.h5", band, logT_grid,
-            band_density_grid(logN_min, logN_max), abundance=args.abundance,
-            n_workers=args.n_workers, hdf5_dbase_root=dbase_root)
+            args.band_lines or Path(args.output_dir) / name, band, logT_grid, logN_grid,
+            abundance=args.abundance, n_workers=args.n_workers, hdf5_dbase_root=dbase_root,
+            wider_grid=band_density_grid(_density_point(first), _density_point(last)))
         dbase_root = band_lines.hdf5_dbase_root
         print(f"Calculating the spectrum of the band's {band_lines.n_lines} lines at "
               f"{band_grid.size} wavelengths")
@@ -1990,7 +2003,7 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
         rest_wavelength=info["wl0"],
         **{key: int(info[key]) for key in ("atom", "ion") if info.get(key) is not None})
         for name, info in lines.items()}
-    synthesis = Synthesis(lines=held, x_edges=x_edges, y_edges=measure.y_edges,
+    synthesis = Synthesis(lines=held, x_edges=measure.x_edges, y_edges=measure.y_edges,
                           source=measure.source, time=measure.time)
     products = {
         # Per unit log T, as the synthesis of an atmosphere keeps it.
@@ -2205,6 +2218,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "default for other work.")
     lines.add_argument("--mass-per-electron", "--mean-mol-wt",
                        dest="mass_per_electron", type=float, default=None,
+                       action=_NotedOption,
                        help="Mass of the plasma per free electron, in atomic mass "
                             "units, which turns a mass density into an electron "
                             "density. By default it is worked out from --abundance "
@@ -2215,16 +2229,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     view = parser.add_argument_group("The view and the part of the box")
     view.add_argument("--integration-axis", choices=["x", "y", "z", *SIGNED_VIEWS],
-                      default="z",
+                      default="z", action=_NotedOption,
                       help="The axis to look along, x, y or z, from +x, -y or above; or the "
                            "axis with a sign for the side to look from, such as -x")
-    view.add_argument("--crop-x", nargs=2, type=str, default=None,
+    view.add_argument("--crop-x", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in x direction: x_min x_max (e.g. '-50 Mm' '50 Mm')")
-    view.add_argument("--crop-y", nargs=2, type=str, default=None,
+    view.add_argument("--crop-y", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in y direction: y_min y_max (e.g. '-50 Mm' '50 Mm')")
-    view.add_argument("--crop-z", nargs=2, type=str, default=None,
+    view.add_argument("--crop-z", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
-    view.add_argument("--downsample", type=int, default=1,
+    view.add_argument("--downsample", type=int, default=1, action=_NotedOption,
                       help="Downsampling factor (1 = no downsampling)")
     view.add_argument("--image-x", nargs=2, type=str, default=None, metavar=("FROM", "TO"),
                       help="Synthesise only the part of the image between two positions "

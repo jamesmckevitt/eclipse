@@ -169,4 +169,4 @@ frame:
 eclipse frame dem.yaml
 ```
 
-The contribution functions of the band's lines are worked out on the DEM's own temperatures, which takes a few hours for the whole band, and kept in `run/input/band_lines.h5` for later frames of DEMs on those temperatures.
+The contribution functions of the band's lines are worked out on the DEM's own temperatures, which takes a few hours for the whole band, and kept in `run/input/`, in a file named for those temperatures, for later frames of DEMs on them.

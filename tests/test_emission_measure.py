@@ -224,6 +224,8 @@ def test_a_dem_is_synthesised_over_a_band_and_a_strip_of_the_image(tmp_path, mon
     total, centre = _light(whole.lines[name])
     assert np.allclose(total, 1.5e27 * (1 + np.arange(4)) * _g_at(9.0) / (4 * np.pi), rtol=1e-6)
     assert np.allclose(centre, REST, rtol=0, atol=1e-5)
+    # The band's lines are kept in a file named for the DEM's temperatures.
+    assert (tmp_path / "band_lines_logT_5.60-6.60_21.h5").is_file()
     strip = read_synthesis(_synthesise(tmp_path, _dem(), *words, "--image-x", "-0.5 arcsec",
                                        "1.5 arcsec", name="strip.h5", monkeypatch=monkeypatch))
     assert np.allclose(strip.x_edges.to_value(u.arcsec), [-1, 0, 1, 2])
@@ -234,6 +236,8 @@ def test_a_dem_is_synthesised_over_a_band_and_a_strip_of_the_image(tmp_path, mon
     (("--integration-axis=x",), "--integration-axis would not be used"),
     (("--crop-x", "0 Mm", "1 Mm", "--downsample", "2"), "--crop-x, --downsample"),
     (("--mass-per-electron", "1.2"), "--mass-per-electron"),
+    # One given at its default is not used either.
+    (("--downsample", "1"), "--downsample would not be used"),
     (("--atmosphere", "box.h5"), "--atmosphere"),
 ])
 def test_an_emission_measure_takes_no_options_of_an_atmosphere(tmp_path, monkeypatch,
@@ -241,6 +245,34 @@ def test_an_emission_measure_takes_no_options_of_an_atmosphere(tmp_path, monkeyp
     with pytest.raises(ValueError, match=message):
         _synthesise(tmp_path, _dem(), "--lines", LINE, "--electron-density", "1e9 cm-3", *words,
                     monkeypatch=monkeypatch)
+
+
+def test_a_file_of_another_kind_is_not_an_emission_measure(tmp_path, monkeypatch, chianti_free):
+    from eclipse.atmosphere import Atmosphere, write_atmosphere
+
+    box = write_atmosphere(Atmosphere(
+        temperature=np.full((2, 2, 2), 1e6) * u.K, electron_density=np.full((2, 2, 2), 1e9) / u.cm**3,
+        velocity_z=np.zeros((2, 2, 2)) * u.km / u.s, x_edges=np.arange(3) * u.Mm,
+        y_edges=np.arange(3) * u.Mm, z_edges=np.arange(3) * u.Mm), tmp_path / "box.h5")
+    text = tmp_path / "dem.txt"
+    text.write_text("not a file of this kind")
+    for path in (box, text):
+        monkeypatch.setattr(sys, "argv", ["synthesise-spectra", "--emission-measure", str(path),
+                                          "--lines", LINE])
+        with pytest.raises(ValueError, match="emission measure file"):
+            synthesis.main()
+
+
+def test_only_the_columns_asked_for_are_read(tmp_path):
+    measure = _dem(electron_density=np.arange(12.0).reshape(3, 4) * 1e8 / u.cm**3 + 1e9 / u.cm**3)
+    path = write_emission_measure(measure, tmp_path / "dem.h5")
+    strip = read_emission_measure(path, columns=slice(1, 3))
+    assert strip.shape == (3, 2)
+    assert np.array_equal(strip.emission_measure, measure.emission_measure[:, 1:3])
+    assert np.array_equal(strip.electron_density, measure.electron_density[:, 1:3])
+    assert np.array_equal(strip.x_edges, measure.x_edges[1:4])
+    with pytest.raises(ValueError, match="neighbouring pixels"):
+        read_emission_measure(path, columns=slice(3, 9))
 
 
 def test_a_density_or_pressure_is_refused_with_an_atmosphere(monkeypatch):

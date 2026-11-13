@@ -20,7 +20,8 @@ from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing
 from .utils import require_uniform_grid
 
 __all__ = ["FORMAT_NAME", "FORMAT_VERSION", "EmissionMeasure", "read_emission_measure",
-           "write_emission_measure", "is_emission_measure_file"]
+           "read_emission_measure_layout", "write_emission_measure",
+           "is_emission_measure_file"]
 
 FORMAT_NAME = "eclipse-emission-measure"
 FORMAT_VERSION = 1
@@ -169,7 +170,25 @@ def write_emission_measure(emission_measure: EmissionMeasure, path: str | Path) 
     return path
 
 
-def read_emission_measure(path: str | Path) -> EmissionMeasure:
+def read_emission_measure_layout(path: str | Path) -> dict:
+    """
+    Contents of an emission measure file, without its emission measure.
+
+    Returns a dict of `x_edges`, `y_edges`, `temperature`, `velocity` (None
+    for a DEM) and `electron_density` (None if absent), each as in the file.
+    """
+    path = Path(path)
+    with _open_to_read(path, "emission measure") as f:
+        _check_format(f, path, kind="emission measure", format_name=FORMAT_NAME,
+                      format_version=FORMAT_VERSION)
+        for name in ("emission_measure", "temperature", *EDGES):
+            if name not in f:
+                raise ValueError(f"{path} has no '{name}' dataset.")
+        return {name: _read_dataset(f, name, units=UNITS) if name in f else None
+                for name in (*EDGES, "temperature", "velocity", "electron_density")}
+
+
+def read_emission_measure(path: str | Path, columns: Optional[slice] = None) -> EmissionMeasure:
     """
     Read an emission measure file.
 
@@ -177,23 +196,35 @@ def read_emission_measure(path: str | Path) -> EmissionMeasure:
     ----------
     path : str or Path
         File written by `write_emission_measure`.
+    columns : slice, optional
+        Contiguous slice of pixels along x to read. Default None reads the
+        whole image.
 
     Returns
     -------
     EmissionMeasure
     """
     path = Path(path)
+    layout = read_emission_measure_layout(path)
+    if columns is not None:
+        nx = layout["x_edges"].size - 1
+        first = 0 if columns.start is None else columns.start
+        last = nx if columns.stop is None else columns.stop
+        if columns.step not in (None, 1) or not 0 <= first < last <= nx:
+            raise ValueError(f"columns must be a slice of neighbouring pixels among the "
+                             f"{nx} along x, got {columns}.")
+        columns = slice(first, last)
+        layout["x_edges"] = layout["x_edges"][first:last + 1]
     with _open_to_read(path, "emission measure") as f:
-        _check_format(f, path, kind="emission measure", format_name=FORMAT_NAME,
-                      format_version=FORMAT_VERSION)
-        fields = {name: _read_dataset(f, name, units=UNITS)
-                  for name in ("emission_measure", "temperature", *EDGES, "velocity",
-                               "electron_density", "time") if name in f}
+        fields = {"emission_measure": _read_dataset(f, "emission_measure", columns,
+                                                    units=UNITS, axis=1)}
+        density = layout.pop("electron_density")
+        if density is not None and density.ndim >= 2 and columns is not None:
+            density = density[:, columns]
+        if "time" in f:
+            fields["time"] = _read_dataset(f, "time", units=UNITS)
         source = str(_text_attribute(f.attrs, "source", ""))
-    for name in ("emission_measure", "temperature", *EDGES):
-        if name not in fields:
-            raise ValueError(f"{path} has no '{name}' dataset.")
     try:
-        return EmissionMeasure(source=source, **fields)
+        return EmissionMeasure(source=source, electron_density=density, **fields, **layout)
     except (TypeError, ValueError) as error:
         raise type(error)(f"{path}: {error}") from None
