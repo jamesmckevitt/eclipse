@@ -29,8 +29,8 @@ from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, 
                              read_synthesis, read_synthesis_products, write_line_cubes,
                              write_synthesis)
 from .results_file import convert_results_pickle
-from .band import (BandLines, IonLines, band_contribution_functions, read_band_lines,
-                   write_band_lines)
+from .band import (BandLines, IonLines, band_contribution_functions, band_spectra,
+                   read_band_lines, write_band_lines)
 from .readout import FocalPlane_SWC, ReadoutSequence
 from .full_frame import FullFrame, full_ccd_frame, write_full_frame
 from .run_file import RunOutput, make_frame, observe, run, synthesise
@@ -83,6 +83,7 @@ __all__ = [
     "BandLines",
     "IonLines",
     "band_contribution_functions",
+    "band_spectra",
     "read_band_lines",
     "write_band_lines",
     "FocalPlane_SWC",

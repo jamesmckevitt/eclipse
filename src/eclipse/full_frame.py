@@ -1,65 +1,40 @@
 """
-Full-CCD frames of the SW camera: every line in the band, at one slit position.
+Full-CCD frames of the SW camera: the spectra of a synthesis file at one slit position.
 
-A frame is made from a synthesis file, which must hold each pixel's
-emission measure by temperature and line-of-sight velocity and the electron
-density at each temperature, and from the contribution functions of every
-line in the band (`eclipse.band`).
+A frame holds what the synthesis file holds. Every entry of the file is
+taken as a spectral radiance on its own wavelengths, and the entries are
+added, so a file with three lines gives three lines on the CCDs, and a
+file synthesised over the whole band (`eclipse.band`) gives every line in
+it.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import inspect
-import multiprocessing as mp
-import os
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
-import astropy.constants as const
 import astropy.units as u
 
 from .band import BandLines
 from .config import Simulation
-from .frame import (_REACH_IN_SIGMA, _cells, _photons_per_energy, _response, _sorted_rows,
-                    detect, digitise, expose_serial_overscan_with_wavelengths,
-                    expose_with_wavelengths, pixel_solid_angle)
+from .frame import (_response, _sorted_rows, detect, digitise,
+                    expose_serial_overscan_with_wavelengths, expose_with_wavelengths,
+                    pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
 from .config import _FOCAL_PLANE_SETTINGS, _same_setting
 from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
-from .sampling import (light_onto_pixels, pixel_weights, pixel_weights_through,
-                       points_onto_pixels)
-from .utils import _fwhm_to_sigma, _get_software_version, distance_to_angle, get_git_commit_id
+from .sampling import light_onto_pixels, pixel_weights, pixel_weights_through
+from .utils import (_bin_edges, _fwhm_to_sigma, _get_software_version, distance_to_angle,
+                    get_git_commit_id)
 
 CCDS = ("left", "right")
-C_CM_S = const.c.to_value(u.cm / u.s)
-K_B = const.k_B.cgs.value
-AMU_G = const.u.cgs.value
-
-
-def _density_shares(log_density: np.ndarray, logN_grid: np.ndarray):
-    """
-    Indices of the grid densities either side of each density, and the share
-    of its emission measure each takes.
-
-    The shares are linear in log10 n_e, as the contribution functions are
-    interpolated. Off the grid both shares are zero, as are the contribution
-    functions.
-    """
-    grid = np.asarray(logN_grid, dtype=float)
-    finite = np.isfinite(log_density)
-    inside = finite & (log_density >= grid[0]) & (log_density <= grid[-1])
-    position = np.interp(np.where(inside, log_density, grid[0]), grid,
-                         np.arange(grid.size, dtype=float))
-    lower = np.floor(position).astype(int)
-    upper = np.minimum(lower + 1, grid.size - 1)
-    fraction = position - lower
-    return lower, upper, np.where(inside, 1.0 - fraction, 0.0), np.where(inside, fraction, 0.0)
 
 
 def _on_the_grid(points: np.ndarray, grid: np.ndarray) -> Optional[np.ndarray]:
@@ -106,33 +81,55 @@ def _scene_weights(cell_edges: np.ndarray, pixel_edges: np.ndarray, sigma: float
 
 @dataclass
 class _Scene:
-    """Scene under the slit, read from a synthesis file."""
+    """Spectra under the slit, read from a synthesis file."""
 
-    logT_grid: np.ndarray
-    logN_grid: np.ndarray
-    velocity: np.ndarray            # bin centres, cm/s
-    emission_measure: np.ndarray    # (image rows, nT, nN, nv), under the slit
-    total_emission_measure: np.ndarray  # (image rows, nT, nN), from the DEM
     y_edges: np.ndarray             # arcsec along the slit, from the image centre
+    names: List[str]                # entries of the file the spectra came from
+    edges: List[np.ndarray]         # each entry's wavelength bin edges, in Angstrom
+    radiance: List[np.ndarray]      # each entry's (image rows, n_wavelength), erg / (s cm2 sr cm)
 
 
-def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Quantity,
-                    psf_across_slit: Optional[u.Quantity] = None,
-                    extend: bool = False) -> _Scene:
+def _slit_columns(x_edges: u.Quantity, slit_position: u.Quantity, slit_width: u.Quantity,
+                  psf_across_slit: Optional[u.Quantity], extend: bool):
     """
-    Emission measure under the slit from a synthesis file, by temperature, density and velocity.
+    Image columns the slit takes light from, as a slice, and the weight of each.
 
-    The emission measure by velocity (`em_tv`) holds only plasma within the
-    velocity grid. The total at each temperature, from the DEM, also holds
-    plasma moving faster, and is kept for the continuum, which is not
-    Doppler shifted.
+    Raises ValueError if the slit is off the image.
+    """
+    slit_position = u.Quantity(slit_position)
+    if not slit_position.isscalar:
+        raise ValueError(f"slit_position must be one position, got {slit_position}.")
+    x = _angle(x_edges)
+    centre = _angle(slit_position[np.newaxis])[0]
+    width = u.Quantity(slit_width).to_value(u.arcsec)
+    sigma = (0.0 if psf_across_slit is None
+             else _fwhm_to_sigma(u.Quantity(psf_across_slit).to_value(u.arcsec)))
+    slit = np.array([centre - width / 2, centre + width / 2])
+    across = _scene_weights(x, slit, sigma, extend)[0]
+    columns = np.flatnonzero(across > 0)
+    if columns.size == 0:
+        raise ValueError(f"The slit at {slit_position} is off the image, which runs from "
+                         f"{x_edges[0]} to {x_edges[-1]}.")
+    columns = slice(columns[0], columns[-1] + 1)
+    return columns, across[columns]
+
+
+def _centred(y_edges: u.Quantity) -> np.ndarray:
+    """Edges along the slit in arcsec, from the middle of the image."""
+    y = _angle(y_edges)
+    return y - 0.5 * (y[0] + y[-1])
+
+
+def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u.Quantity,
+                      psf_across_slit: Optional[u.Quantity] = None,
+                      extend: bool = False) -> _Scene:
+    """
+    Spectra under the slit from a synthesis file, one for each entry of the file.
 
     Parameters
     ----------
     path : str or Path
-        Synthesis file from ECLIPSE's own synthesis, with the emission
-        measure (`em_tv`), the DEM and the electron density at each
-        temperature.
+        Synthesis file, from ECLIPSE or another code.
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates.
@@ -146,303 +143,139 @@ def read_slit_scene(path: str | Path, slit_position: u.Quantity, slit_width: u.Q
         blur to bring in, and the slit's light only from its part inside
         them. Default False, for dark.
     """
-    from .synthesis import _temperature_bins
+    from .synthesis_file import read_synthesis, read_synthesis_layout
 
-    slit_position = u.Quantity(slit_position)
-    if not slit_position.isscalar:
-        raise ValueError(f"slit_position must be one position, got {slit_position}.")
+    path = Path(path).expanduser()
+    layout = read_synthesis_layout(path)
+    columns, weights = _slit_columns(layout["x_edges"], slit_position, slit_width,
+                                     psf_across_slit, extend)
+    # One column at a time, as a band's spectrum is large.
+    edges, radiance = {}, {}
+    for column, weight in zip(range(columns.start, columns.stop), weights):
+        for name, line in read_synthesis(path, columns=slice(column, column + 1)).lines.items():
+            part = weight * line.radiance().value[:, 0, :]
+            radiance[name] = radiance[name] + part if name in radiance else part
+            edges[name] = _bin_edges(line.wavelength.to_value(u.Angstrom))
+    return _Scene(y_edges=_centred(layout["y_edges"]), names=list(radiance),
+                  edges=list(edges.values()), radiance=list(radiance.values()))
+
+
+def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
+                slit_position: u.Quantity, slit_width: u.Quantity,
+                psf_across_slit: Optional[u.Quantity], extend: bool, n_workers: int) -> _Scene:
+    """
+    Spectrum of every line in a band under the slit, from the emission
+    measure a synthesis file from ECLIPSE keeps, for the deprecated `lines`
+    and `continuum` arguments of `full_ccd_frame`.
+    """
+    from .band import BAND_STEP, band_spectra, band_wavelengths
+    from .continuum import continuum_spectra
+    from .synthesis import _temperature_bins
+    from .synthesis_file import read_synthesis_products
+
     path = Path(path).expanduser()
     with h5py.File(path, "r") as f:
         x_edges = u.Quantity(f["x_edges"][()], f["x_edges"].attrs["unit"])
         y_edges = u.Quantity(f["y_edges"][()], f["y_edges"].attrs["unit"])
-        products = f["synthesis"]
+        products = f.get("synthesis", {})
         missing = [key for key in ("em_tv", "dem_map", "electron_density", "logT_grid",
                                    "logN_grid", "vel_grid") if key not in products]
         if missing:
             raise ValueError(
-                f"{path} has no {', '.join(missing)}, which a full-CCD frame needs: it was "
-                f"not made by this version of ECLIPSE's synthesis. Synthesise it again.")
-        x = _angle(x_edges)
-        centre = _angle(slit_position[np.newaxis])[0]
-        width = u.Quantity(slit_width).to_value(u.arcsec)
-        sigma = (0.0 if psf_across_slit is None
-                 else _fwhm_to_sigma(u.Quantity(psf_across_slit).to_value(u.arcsec)))
-        slit = np.array([centre - width / 2, centre + width / 2])
-        across = _scene_weights(x, slit, sigma, extend)[0]
-        columns = np.flatnonzero(across > 0)
-        if columns.size == 0:
-            raise ValueError(f"The slit at {slit_position} is off the image, which runs from "
-                             f"{x_edges[0]} to {x_edges[-1]}.")
-        first, last = columns[0], columns[-1] + 1
-        em = products["em_tv"][:, first:last, :, :].astype(float)
-        dem = products["dem_map"][:, first:last, :].astype(float)
-        density = products["electron_density"][:, first:last, :].astype(float)
+                f"{path} has no {', '.join(missing)}, which the spectrum of a band's lines "
+                f"is worked out from: it was not made by ECLIPSE's synthesis. Leave out "
+                f"lines for a frame of the spectra the file holds.")
+        columns, weights = _slit_columns(x_edges, slit_position, slit_width, psf_across_slit,
+                                         extend)
+        em = products["em_tv"][:, columns, :, :].astype(float)
+        dem = products["dem_map"][:, columns, :].astype(float)
+        density = products["electron_density"][:, columns, :].astype(float)
         logT = products["logT_grid"][()]
         logN = products["logN_grid"][()]
         velocity = u.Quantity(products["vel_grid"][()],
-                              products["vel_grid"].attrs.get("unit", "cm / s")).to_value(u.cm / u.s)
-    weights = across[first:last]
-    lower, upper, low_share, high_share = _density_shares(
-        np.log10(np.where(density > 0, density, np.nan)), logN)
-    ny, _, n_t, n_v = em.shape
-    scene = np.zeros((ny, n_t, logN.size, n_v))
-    total = np.zeros((ny, n_t, logN.size))
-    # The DEM is per unit log T, as the synthesis's continuum takes it.
-    total_em = dem * _temperature_bins(logT)[0]
-    for k, weight in enumerate(weights):
-        for share, index in ((low_share, lower), (high_share, upper)):
-            part = weight * share[:, k, :, np.newaxis] * em[:, k, :, :]
-            rows, temperatures = np.indices(index[:, k, :].shape)
-            np.add.at(scene, (rows, temperatures, index[:, k, :]), part)
-            np.add.at(total, (rows, temperatures, index[:, k, :]),
-                      weight * share[:, k, :] * total_em[:, k, :])
-    y = _angle(y_edges)
-    return _Scene(logT_grid=logT, logN_grid=logN, velocity=velocity, emission_measure=scene,
-                  total_emission_measure=total, y_edges=y - 0.5 * (y[0] + y[-1]))
+                              products["vel_grid"].attrs.get("unit", "cm / s"))
+    if not np.array_equal(logT, lines.logT_grid):
+        raise ValueError("The band's lines are on another grid of temperature than the "
+                         "synthesis; work them out on the synthesis's own.")
+    if _on_the_grid(logN, lines.logN_grid) is None:
+        raise ValueError(
+            f"The synthesis takes the contribution functions at densities, log10 n_e "
+            f"{logN[0]:.2f} to {logN[-1]:.2f}, that are not all on the "
+            f"band's grid, {lines.logN_grid[0]:.2f} to {lines.logN_grid[-1]:.2f}; work the "
+            f"lines out on a grid that has them.")
+    abundance = (read_synthesis_products(path, keys=["config"]).get("config")
+                 or {}).get("abundance")
+    if abundance is not None and abundance != lines.abundance:
+        raise ValueError(f"The synthesis used the abundances {abundance} and the band's lines "
+                         f"{lines.abundance}; work the lines out with the synthesis's.")
+    wavelength = band_wavelengths(lines.band, BAND_STEP)
+    spectra = band_spectra(lines, em, density, velocity, wavelength * u.Angstrom, n_workers)
+    names, edges = ["band"], [_bin_edges(wavelength)]
+    radiance = [np.tensordot(weights, spectra.value, axes=(0, 1))]
+    if continuum is not None:
+        grid, free, two_photon = continuum
+        expected = (lines.logN_grid.size, lines.logT_grid.size, u.Quantity(grid).size)
+        if np.shape(two_photon) != expected or np.shape(free) != expected[1:]:
+            raise ValueError(
+                f"The continuum is shaped {np.shape(free)} and {np.shape(two_photon)}, not "
+                f"{expected[1:]} and {expected}: work it out on the band's grids.")
+        grid = u.Quantity(grid).to_value(u.Angstrom)
+        if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
+            raise ValueError("The continuum's wavelengths must be finite and increase.")
+        # The DEM is per unit log T, and also holds plasma faster than the
+        # velocity grid, which the continuum, not Doppler shifted, needs.
+        under = continuum_spectra(dem * _temperature_bins(logT)[0], density, lines.logN_grid,
+                                  np.asarray(free), np.asarray(two_photon))
+        names.append("continuum")
+        edges.append(_bin_edges(grid))
+        radiance.append(np.tensordot(weights, under, axes=(0, 1)))
+    return _Scene(y_edges=_centred(y_edges), names=names, edges=edges, radiance=radiance)
 
 
-@dataclass
-class _Layout:
+def _rates(scene: _Scene, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
+           slit_width: u.Quantity, blur: Optional[str],
+           solid_angle: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Mapping of light onto one CCD's rows, computed once for all temperatures.
+    Photons per second in each row of one CCD from each image row under the slit.
 
-    A line is laid onto the rows by exact integrals of its Gaussian, with the
-    telescope throughput and photon energy at its centre. It is then
-    corrected cell by cell for how those change across the line (see
-    :func:`eclipse.frame.photons_from_lines`). The cells are fixed in
-    the plasma's rest frame and move and stretch with the Doppler shift, so
-    each velocity bin has its own mapping onto the rows.
+    Each wavelength of a spectrum covers the bin halfway to its neighbours,
+    and holds the radiance over that bin. The bin's light is spread evenly
+    over it, blurred by the spectral response and integrated over the rows,
+    in photons at the bin's own wavelength, with the telescope's throughput
+    there. Wavelengths outside the throughput tables give no light.
+
+    Returns
+    -------
+    photons, per_wavelength, per_square : np.ndarray
+        `(n_image_rows, n_rows)`: photons per second per pixel, and the same
+        with each photon divided by its wavelength in Angstrom and by its
+        square. These give the mean and root mean square energies of a
+        pixel's photons.
     """
-
-    edges: np.ndarray                 # row edges, increasing, in Angstrom
-    order: np.ndarray                 # sorts the rows into that order
-    lit: Tuple[int, int]              # first and last lit row
-    cells: np.ndarray                 # cell edges at rest, in Angstrom
-    onto_rows: list                   # each velocity bin's cells onto the rows, (rows, cells)
-    collected: np.ndarray             # photons per erg at each bin's cells, (nv, cells)
-    cell_wavelength: np.ndarray       # cell middles in each bin, (nv, cells)
-    continuum: Optional[tuple] = None  # intervals onto the rows, photons per unit radiance
-
-
-def _layout(focal_plane: FocalPlane_SWC, ccd: str, telescope, det, slit_width: u.Quantity,
-            blur: Optional[str], velocity: np.ndarray, solid_angle: float,
-            continuum_wavelength: Optional[np.ndarray]) -> _Layout:
-    """`_Layout` of one CCD's rows, for `full_ccd_frame`."""
-    edges, order = _sorted_rows(focal_plane, ccd)
-    if blur is None:
-        reach = 0.0
-    else:
-        sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
-                               edges[[0, -1]])
-        reach = _REACH_IN_SIGMA * sigma.max() + box.max()
-    # Extend the cells at rest as far as the largest Doppler shift can bring
-    # light onto the rows from.
-    shift = (1.0 + velocity / C_CM_S)
-    reach += np.abs(edges[[0, -1]]).max() * np.abs(shift - 1.0).max()
-    cells = _cells(focal_plane, ccd, None, edges, reach)
-    onto_rows, collected, cell_wavelength = [], [], []
-    for factor in shift:
-        low, high = cells[:-1] * factor, cells[1:] * factor
+    row_edges, order = _sorted_rows(focal_plane, ccd)
+    shape = (scene.y_edges.size - 1, focal_plane.n_rows)
+    totals = tuple(np.zeros(shape) for _ in range(3))
+    for edges, radiance in zip(scene.edges, scene.radiance):
+        low, high = edges[:-1], edges[1:]
         middle = (low + high) / 2
         if blur is None:
             sigma = box = 0.0
         else:
             sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
                                    middle)
-        onto_rows.append(light_onto_pixels(low, high, edges, sigma, box))
-        # Photons per second per pixel per unit of G times emission measure:
-        # radiance G EM / 4 pi through the pixel's solid angle, in photons at
-        # the cell's own wavelength. Zero beyond the throughput tables.
-        collected.append(solid_angle / (4.0 * np.pi) * np.nan_to_num(
-            photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg)))
-        cell_wavelength.append(middle)
-    continuum = None
-    if continuum_wavelength is not None:
-        # The continuum is not Doppler shifted. It is laid like a spectrum:
-        # each interval between samples holds its trapezium-rule light, in
-        # photons at its own wavelengths.
-        low, high = continuum_wavelength[:-1], continuum_wavelength[1:]
-        if blur is None:
-            sigma = box = 0.0
-        else:
-            sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
-                                   (low + high) / 2)
-        # The continuum is a radiance already, per steradian.
-        at_samples = solid_angle * _photons_per_energy(
-            telescope, continuum_wavelength * u.Angstrom).to_value(u.cm**2 / u.erg)
-        continuum = (light_onto_pixels(low, high, edges, sigma, box), at_samples)
-    return _Layout(edges=edges, order=order, lit=focal_plane.lit_rows(ccd), cells=cells,
-                   onto_rows=onto_rows, collected=np.array(collected),
-                   cell_wavelength=np.array(cell_wavelength), continuum=continuum)
-
-
-def _lines_on_rows(layout: _Layout, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
-                   slit_width: u.Quantity, blur: Optional[str], wavelength: np.ndarray,
-                   thermal: np.ndarray, g: np.ndarray, velocity: np.ndarray,
-                   bins: np.ndarray, solid_angle: float) -> Tuple[np.ndarray, ...]:
-    """
-    Photons per second in each row of one CCD per unit emission measure, at one temperature.
-
-    Parameters
-    ----------
-    wavelength, thermal : np.ndarray
-        Rest wavelength and thermal width of each line, in Angstrom.
-    g : np.ndarray
-        Contribution function of each line at this temperature, at the
-        densities to compute, (n_lines, n_densities).
-    velocity : np.ndarray
-        Velocity bin centres, in cm/s.
-    bins : np.ndarray
-        Indices of the velocity bins to compute.
-
-    Returns
-    -------
-    photons, per_wavelength, per_square : np.ndarray
-        `(n_densities, bins.size, n_rows)`: photons per second per pixel per
-        cm^-5, and the same with each photon divided by its wavelength in
-        Angstrom and by its square. These give the mean and root mean square
-        energies of a pixel's photons.
-    """
-    n_rows = layout.edges.size - 1
-    photons = np.zeros((g.shape[1], bins.size, n_rows))
-    per_wavelength = np.zeros_like(photons)
-    per_square = np.zeros_like(photons)
-    masses = points_onto_pixels(wavelength, layout.cells, thermal)          # (cells, lines)
-    at_rest = masses @ g                                                     # (cells, densities)
-    for i, v in enumerate(bins):
-        factor = 1.0 + velocity[v] / C_CM_S
-        centre = wavelength * factor
-        at_centre = solid_angle / (4.0 * np.pi) * np.nan_to_num(
-            photons_per_energy(telescope, centre * u.Angstrom).to_value(u.cm**2 / u.erg))
-        if blur is None:
-            psf_sigma = box = np.zeros(centre.size)
-        else:
-            psf_sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width,
-                                       blur, centre)
-        # Lay each line, its Gaussian blurred by the response, onto the rows
-        # by exact integrals, in photons at the line centre's wavelength.
-        exact = points_onto_pixels(centre, layout.edges,
-                                   np.hypot(thermal * factor, psf_sigma), box)
-        weighted = g * at_centre[:, np.newaxis]
-        per_centre = weighted / centre[:, np.newaxis]
-        per_centre_square = per_centre / centre[:, np.newaxis]
-        rows = exact @ weighted
-        rows_per = exact @ per_centre
-        rows_square = exact @ per_centre_square
-        # Then correct, cell by cell across each line, for photons at the
-        # cell's own wavelength rather than the centre's.
-        collected = layout.collected[v][:, np.newaxis]
-        own = layout.cell_wavelength[v][:, np.newaxis]
-        change = collected * at_rest - masses @ weighted
-        change_per = collected / own * at_rest - masses @ per_centre
-        change_square = collected / own**2 * at_rest - masses @ per_centre_square
-        rows += layout.onto_rows[v] @ change
-        rows_per += layout.onto_rows[v] @ change_per
-        rows_square += layout.onto_rows[v] @ change_square
-        photons[:, i, layout.order] = rows.T
-        per_wavelength[:, i, layout.order] = rows_per.T
-        per_square[:, i, layout.order] = rows_square.T
-    first, last = layout.lit
-    for array in (photons, per_wavelength, per_square):
-        array[..., :first] = 0.0
-        array[..., last + 1:] = 0.0
-    return photons, per_wavelength, per_square
-
-
-# Data shared by the workers of one `full_ccd_frame` call, set in each worker
-# as it starts.
-_WORKER_CONTEXT: Optional[dict] = None
-
-
-def _set_worker_context(context: dict) -> None:
-    global _WORKER_CONTEXT
-    _WORKER_CONTEXT = context
-
-
-def _rates_in_worker(t: int):
-    return _rates_at(t, _WORKER_CONTEXT)
-
-
-def _rates_at(t: int, context: dict):
-    """
-    Photons per second in each pixel of both CCDs from the plasma at one
-    temperature (an index into the temperature grid).
-
-    Returns three dicts by CCD, each array (n_columns, n_rows): the photons,
-    and the same with each photon divided by its wavelength in Angstrom and
-    by its square.
-    """
-    scene, lines, along = context["scene"], context["lines"], context["along"]
-    focal_plane, telescope, det = context["focal_plane"], context["telescope"], context["det"]
-    slit_width, blur, continuum = context["slit_width"], context["blur"], context["continuum"]
-    density_index, layouts = context["density_index"], context["layouts"]
-    solid_angle = context["solid_angle"]
-    n_n, n_v = scene.logN_grid.size, scene.velocity.size
-    shape = (focal_plane.n_columns, focal_plane.n_rows)
-    rate = {ccd: np.zeros(shape) for ccd in CCDS}
-    per_wavelength = {ccd: np.zeros(shape) for ccd in CCDS}
-    per_square = {ccd: np.zeros(shape) for ccd in CCDS}
-    em = scene.emission_measure[:, t]                                  # (image rows, nN, nv)
-    em_columns = (along @ em.reshape(em.shape[0], -1)).reshape(-1, n_n, n_v)
-    # Only the densities and velocity bins with emission measure are computed.
-    densities = np.flatnonzero(em_columns.any(axis=(0, 2)))
-    bins = np.flatnonzero(em_columns.any(axis=(0, 1)))
-    present = [ion for ion in lines.ions if t in ion.temperatures]
-    if present and bins.size:
-        g = np.concatenate([ion.g[:, density_index[densities],
-                                  np.searchsorted(ion.temperatures, t)] for ion in present])
-        wavelength = np.concatenate([ion.wavelength for ion in present])
-        mass = np.concatenate([np.full(ion.wavelength.size, ion.mass) for ion in present])
-        thermal = (wavelength * np.sqrt(K_B * 10.0 ** scene.logT_grid[t] / (mass * AMU_G))
-                   / C_CM_S)
-        em_used = em_columns[:, densities][:, :, bins].reshape(shape[0], -1)
-        for ccd in CCDS:
-            layout = layouts[ccd]
-            # Lines whose light can reach the cells.
-            near = ((wavelength + _REACH_IN_SIGMA * thermal >= layout.cells[0])
-                    & (wavelength - _REACH_IN_SIGMA * thermal <= layout.cells[-1]))
-            if not near.any():
-                continue
-            photons, per, square = _lines_on_rows(
-                layout, focal_plane, ccd, telescope, det, slit_width, blur,
-                wavelength[near], thermal[near], g[near], scene.velocity, bins, solid_angle)
-            rate[ccd] += em_used @ photons.reshape(em_used.shape[1], -1)
-            per_wavelength[ccd] += em_used @ per.reshape(em_used.shape[1], -1)
-            per_square[ccd] += em_used @ square.reshape(em_used.shape[1], -1)
-    if continuum is not None:
-        wavelength, free, two_photon = continuum
-        # The continuum takes the total emission measure, which also holds
-        # plasma faster than the velocity grid.
-        total = along @ scene.total_emission_measure[:, t]             # (columns, nN)
-        densities = np.flatnonzero(total.any(axis=0))
-        em_density = total[:, densities]
-        for ccd in CCDS:
-            onto_rows, at_samples = layouts[ccd].continuum
-            order = layouts[ccd].order
-            # Photons per second per pixel per Angstrom at each sample, per
-            # unit emission measure at each density.
-            spectrum = (free[t][np.newaxis, :] + two_photon[density_index[densities], t]) * 1e-8
-            density = spectrum * at_samples
-            step = np.diff(wavelength)
-            light = step * (density[:, 1:] + density[:, :-1]) / 2
-            per_sample = density / wavelength
-            light_per = step * (per_sample[:, 1:] + per_sample[:, :-1]) / 2
-            square_sample = per_sample / wavelength
-            light_square = step * (square_sample[:, 1:] + square_sample[:, :-1]) / 2
-            rows = np.zeros((densities.size, focal_plane.n_rows))
-            rows_per = np.zeros_like(rows)
-            rows_square = np.zeros_like(rows)
-            rows[:, order] = (onto_rows @ light.T).T
-            rows_per[:, order] = (onto_rows @ light_per.T).T
-            rows_square[:, order] = (onto_rows @ light_square.T).T
-            first, last = layouts[ccd].lit
-            for array in (rows, rows_per, rows_square):
-                array[:, :first] = 0.0
-                array[:, last + 1:] = 0.0
-            rate[ccd] += em_density @ rows
-            per_wavelength[ccd] += em_density @ rows_per
-            per_square[ccd] += em_density @ rows_square
-    return rate, per_wavelength, per_square
+        onto_rows = light_onto_pixels(low, high, row_edges, sigma, box)   # (rows, bins)
+        # Photons per second per pixel per unit radiance in each bin: its
+        # width in cm, through the pixel's solid angle.
+        collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
+            photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
+        light = radiance * collected
+        for total, power in zip(totals, (0, 1, 2)):
+            total[:, order] += (onto_rows @ (light / middle**power).T).T
+    first, last = focal_plane.lit_rows(ccd)
+    for total in totals:
+        total[:, :first] = 0.0
+        total[:, last + 1:] = 0.0
+    return totals
 
 
 @dataclass
@@ -616,8 +449,10 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     return {name: getattr(sim, name) for name in _FROM_SIMULATION}
 
 
-def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: u.Quantity,
-                   exposure: u.Quantity, *, slit_width: u.Quantity = 0.2 * u.arcsec,
+def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None,
+                   slit_position: Optional[u.Quantity] = None,
+                   exposure: Optional[u.Quantity] = None, *,
+                   slit_width: u.Quantity = 0.2 * u.arcsec,
                    det=None, telescope=None, focal_plane: Optional[FocalPlane_SWC] = None,
                    psf: bool = True, spectral_psf: str = "quadrature",
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
@@ -625,17 +460,22 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                    sim: Optional[Simulation] = None,
                    psf_boundary: str = "replicate", slit_mask: bool = False) -> FullFrame:
     """
-    Full-CCD frame of the SW camera from a synthesis and every line in the band.
+    Full-CCD frame of the SW camera from the spectra of a synthesis file.
+
+    The frame holds what the file holds: every entry of the file is laid
+    onto both CCDs, and the entries are added. Give `slit_position` and
+    `exposure` by name.
 
     Parameters
     ----------
     synthesis_path : str or Path
-        Synthesis file from ECLIPSE's synthesis.
-    lines : BandLines
-        Every line in the band, from
-        `eclipse.band.band_contribution_functions`. Must be on the
-        synthesis's temperatures, with its abundances, and on a density grid
-        that has the synthesis's densities, such as the default one.
+        Synthesis file, from ECLIPSE or another code.
+    lines : BandLines, optional
+        Deprecated. Every line in the band, from
+        `eclipse.band.band_contribution_functions`, to work the band's
+        spectrum out from the emission measure a synthesis file from
+        ECLIPSE keeps, in place of the file's own spectra. Synthesise the
+        band into the file instead, with `synthesise-spectra --band`.
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates. Along the slit, the image centre is at the slit centre.
@@ -655,18 +495,17 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     spectral_psf : str, optional
         `"quadrature"` (default) or `"convolution"`, as in the configuration.
     continuum : tuple, optional
-        Continuum per unit emission measure: wavelengths, free-free and
-        free-bound emission (nT, n_wavelength) and two-photon emission (nN,
-        nT, n_wavelength). As returned by
-        `eclipse.continuum.compute_continuum_fiasco` on the grids of
-        `lines`, within the telescope's throughput tables. Default None, for
-        no continuum.
+        Deprecated, and only with `lines`. Continuum per unit emission
+        measure: wavelengths, free-free and free-bound emission (nT,
+        n_wavelength) and two-photon emission (nN, nT, n_wavelength), as
+        returned by `eclipse.continuum.compute_continuum_fiasco` on the
+        grids of `lines`. Synthesise the continuum into the file instead,
+        with `synthesise-spectra --continuum`.
     noise : bool, optional
         If False, every random draw is replaced by its mean. Default True.
     n_workers : int, optional
-        Number of processes to compute the temperatures with. Default 0 uses
-        every CPU this process may use. Where processes cannot be forked, as
-        on Windows, one process is used.
+        Only with `lines`: number of processes to work the band's spectrum
+        out with. Default 0 uses every CPU this process may use.
     sim : Simulation, optional
         Settings to take `slit_width`, `psf`, `spectral_psf`, `noise`,
         `psf_boundary` and `slit_mask` from. Where one of these arguments
@@ -702,28 +541,45 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     Raises
     ------
     TypeError
-        If `sim` is not a `Simulation`.
+        If `slit_position` or `exposure` is missing, or `sim` is not a
+        `Simulation`.
     ValueError
         Among others: if `exposure` or `slit_width` is not above zero,
         `psf_boundary` is not `"replicate"` or `"zero"`, `slit_mask` is on
         and the telescope does not give the slit's openings for this slit
-        width, the slit is off the synthesis, `lines` or `continuum` are
-        not on the synthesis's grids, or `focal_plane` does not match `det`
-        or has a tilted slit image. With `sim`, if an argument differs from
-        both its default and the `Simulation`, or the `Simulation` asks for
-        something the frame does not model: an instrument other than SWC,
-        pinholes, visible stray light, or a field a subclass adds. One
-        error lists every such setting.
+        width, the slit is off the synthesis, or `focal_plane` does not
+        match `det` or has a tilted slit image. With `sim`, if an argument
+        differs from both its default and the `Simulation`, or the
+        `Simulation` asks for something the frame does not model: an
+        instrument other than SWC, pinholes, visible stray light, or a
+        field a subclass adds. One error lists every such setting.
 
     Warns
     -----
+    FutureWarning
+        If `lines` is given.
     UserWarning
         If `sim.expos` differs from both 1 s, its default, and `exposure`,
         which is used.
     """
-    from . import frame as frame_module
     from .config import Detector_SWC, Telescope_EUVST
+    from .continuum import is_continuum
 
+    if lines is not None and not isinstance(lines, BandLines):
+        raise TypeError("Give slit_position and exposure by name, as in "
+                        "full_ccd_frame(path, slit_position=..., exposure=...).")
+    if slit_position is None or exposure is None:
+        raise TypeError("full_ccd_frame needs a slit_position and an exposure.")
+    if continuum is not None and lines is None:
+        raise ValueError("continuum goes with lines, and both are deprecated: a frame holds "
+                         "the spectra in the synthesis file, so synthesise the continuum "
+                         "into it with synthesise-spectra --continuum.")
+    if lines is not None:
+        warnings.warn(
+            "The lines and continuum arguments of full_ccd_frame are deprecated and will be "
+            "removed in a future release. A frame holds the spectra in the synthesis file: "
+            "synthesise the band into it with synthesise-spectra --band, or make the frame "
+            "from a run file, and leave these arguments out.", FutureWarning, stacklevel=2)
     if sim is not None:
         given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
                  "noise": noise, "psf_boundary": psf_boundary, "slit_mask": slit_mask}
@@ -761,34 +617,11 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
             f"the detector, Detector_SWC, and leave out focal_plane, or make it with "
             f"FocalPlane_SWC.from_detector(det).")
     across = across_slit_fwhm(telescope) if psf else None
-    scene = read_slit_scene(synthesis_path, slit_position, slit_width, across, extend)
-    if not np.array_equal(scene.logT_grid, lines.logT_grid):
-        raise ValueError("The band's lines are on another grid of temperature than the "
-                         "synthesis; work them out on the synthesis's own.")
-    density_index = _on_the_grid(scene.logN_grid, lines.logN_grid)
-    if density_index is None:
-        raise ValueError(
-            f"The synthesis takes the contribution functions at densities, log10 n_e "
-            f"{scene.logN_grid[0]:.2f} to {scene.logN_grid[-1]:.2f}, that are not all on the "
-            f"band's grid, {lines.logN_grid[0]:.2f} to {lines.logN_grid[-1]:.2f}; work the "
-            f"lines out on a grid that has them.")
-    from .synthesis_file import read_synthesis_products
-
-    abundance = (read_synthesis_products(synthesis_path, keys=["config"]).get("config")
-                 or {}).get("abundance")
-    if abundance is not None and abundance != lines.abundance:
-        raise ValueError(f"The synthesis used the abundances {abundance} and the band's lines "
-                         f"{lines.abundance}; work the lines out with the synthesis's.")
-    if continuum is not None:
-        wavelength, free, two_photon = continuum
-        expected = (lines.logN_grid.size, lines.logT_grid.size, u.Quantity(wavelength).size)
-        if np.shape(two_photon) != expected or np.shape(free) != expected[1:]:
-            raise ValueError(
-                f"The continuum is shaped {np.shape(free)} and {np.shape(two_photon)}, not "
-                f"{expected[1:]} and {expected}: work it out on the band's grids.")
-        grid = u.Quantity(wavelength).to_value(u.Angstrom)
-        if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
-            raise ValueError("The continuum's wavelengths must be finite and increase.")
+    if lines is None:
+        scene = read_slit_spectra(synthesis_path, slit_position, slit_width, across, extend)
+    else:
+        scene = _band_scene(synthesis_path, lines, continuum, slit_position, slit_width,
+                            across, extend, n_workers)
 
     # Along the slit: weight of each image row in each detector column. The
     # middle column, the middle of the scene and the slit's centre are at 0.
@@ -800,51 +633,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                            openings)                                # (columns, image rows)
 
     blur = spectral_psf if psf else None
-    temperatures = [t for t in range(scene.logT_grid.size)
-                    if np.any(scene.emission_measure[:, t])
-                    or (continuum is not None and np.any(scene.total_emission_measure[:, t]))]
     solid_angle = pixel_solid_angle(focal_plane, slit_width).to_value(u.sr)
-    if continuum is not None:
-        wavelength, free, two_photon = continuum
-        continuum = (u.Quantity(wavelength).to_value(u.Angstrom), free, two_photon)
-    # The row layouts are the same at every temperature, so they are computed
-    # once, before the workers share them.
-    layouts = {ccd: _layout(focal_plane, ccd, telescope, det, u.Quantity(slit_width), blur,
-                            scene.velocity, solid_angle,
-                            None if continuum is None else continuum[0])
-               for ccd in CCDS}
-    context = {"scene": scene, "lines": lines, "along": along, "focal_plane": focal_plane,
-               "telescope": telescope, "det": det, "slit_width": u.Quantity(slit_width),
-               "blur": blur, "continuum": continuum, "density_index": density_index,
-               "layouts": layouts, "solid_angle": solid_angle}
-    if n_workers <= 0:
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
-    n_workers = max(1, min(n_workers, len(temperatures)))
-    if n_workers > 1 and "fork" not in mp.get_all_start_methods():
-        warnings.warn("Processes cannot be forked here, so the temperatures are computed in "
-                      "one process.", stacklevel=2)
-        n_workers = 1
-    shape = (focal_plane.n_columns, focal_plane.n_rows)
-    totals = tuple({ccd: np.zeros(shape) for ccd in CCDS} for _ in range(3))
-
-    def add(part):
-        for total, rates in zip(totals, part):
-            for ccd in CCDS:
-                total[ccd] += rates[ccd]
-
-    if n_workers > 1:
-        # Fork, so the workers share the scene and lines rather than being
-        # sent them. Each worker takes the next temperature when it is free,
-        # and the temperatures are added in order, so the frame does not
-        # depend on the number of workers.
-        with mp.get_context("fork").Pool(n_workers, initializer=_set_worker_context,
-                                         initargs=(context,)) as pool:
-            for part in pool.imap(_rates_in_worker, temperatures):
-                add(part)
-    else:
-        for t in temperatures:
-            add(_rates_at(t, context))
+    totals = tuple({} for _ in range(3))
+    for ccd in CCDS:
+        parts = _rates(scene, focal_plane, ccd, telescope, det, u.Quantity(slit_width), blur,
+                       solid_angle)
+        for total, part in zip(totals, parts):
+            total[ccd] = along @ part                               # (columns, rows)
     rate, per_wavelength, per_square = totals
     # Count each CCD's columns from its left output, as the camera reads them.
     for ccd in CCDS:
@@ -861,10 +656,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}, "field_angle": {}}
     for ccd in CCDS:
-        # Far from a line, the exact part and the correction nearly cancel and
-        # can leave a rate slightly below zero. Clip at zero, as a run does
-        # before its Poisson draw.
-        image_rate = np.maximum(rate[ccd], 0.0, out=rate[ccd]).T          # (rows, columns)
+        image_rate = rate[ccd].T                                          # (rows, columns)
         wavelength = focal_plane.wavelength(rows, ccd)
         # Wavelengths of the mean and root mean square energies of the
         # photons reaching each pixel. A pixel no photons reach keeps its
@@ -903,8 +695,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: BandLines, slit_position: 
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
                      settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
                                "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
-                               "continuum": continuum is not None,
-                               "cells_per_row": frame_module.CELLS_PER_ROW,
+                               "continuum": any(is_continuum(name) or name == "continuum"
+                                                for name in scene.names),
+                               "spectra": ", ".join(scene.names),
                                "serial_prescan": det.serial_prescan,
                                "serial_overscan": det.serial_overscan,
                                "parallel_overscan_rows": det.parallel_overscan_rows})

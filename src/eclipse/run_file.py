@@ -25,8 +25,15 @@ import yaml
 from .utils import _parse_section, check_config_keys, load_yaml_config
 
 #: Keys of the `frame:` section.
-FRAME_KEYS = {"slit_position", "exposure", "slit_width", "band", "band_lines", "continuum",
-              "n_workers", "output"}
+FRAME_KEYS = {"slit_position", "exposure", "slit_width", "band", "band_step", "band_lines",
+              "continuum", "n_workers", "output"}
+
+# Keys of the `frame:` section that set how the band is synthesised from an
+# atmosphere.
+_BAND_KEYS = {"band", "band_step", "band_lines", "continuum", "n_workers"}
+
+# Keys of the `synthesis:` section the frame's own band synthesis sets itself.
+_FRAME_SYNTHESIS_KEYS = {"lines", "continuum", "band", "band_step", "band_lines", "image_x"}
 
 # Synthesis options a run file gives elsewhere: the atmosphere at the top
 # level, and where the synthesis goes with `synthesis_file`.
@@ -34,10 +41,6 @@ _NOT_SYNTHESIS_KEYS = {"help", "config", "atmosphere", "output_dir", "output_nam
 
 # The band of the SW detectors, for a frame's lines, in Angstrom.
 _SW_BAND = (169.0, 213.5)
-
-# Wavelengths of the continuum under a frame, finer than a detector row,
-# inside the telescope's throughput tables.
-_CONTINUUM_WAVELENGTHS = (170.0, 214.0, 10481)
 
 
 class RunOutput(NamedTuple):
@@ -232,9 +235,9 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
         raise ValueError("The 'synthesis:' section must be a mapping of settings to values.")
     options = synthesis_options()
     check_config_keys(section, options, "'synthesis' section")
-    if not section.get("lines"):
+    if not section.get("lines") and not section.get("band"):
         raise ValueError("The 'synthesis:' section names the 'lines' to synthesise, such as "
-                         "lines: [Fe12_195.1190].")
+                         "lines: [Fe12_195.1190], or a 'band'.")
     path = synthesis_path(config, name)
     if path.suffix.lower() != ".h5":
         raise ValueError(f"A run writes its synthesis to an HDF5 file ending in .h5, not "
@@ -248,7 +251,7 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
 
 
 # Synthesis settings that change how it is computed, not what it gives.
-_COMPUTING_KEYS = ("n_workers", "goft_temperature_chunk")
+_COMPUTING_KEYS = ("n_workers", "goft_temperature_chunk", "band_lines")
 
 
 def _hash(made_from: dict) -> str:
@@ -430,7 +433,9 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     from .main import _validate_config_keys
 
     if synthesises(config):
-        synthesis_arguments(config, name)
+        # A frame synthesises its own band, so it needs no lines.
+        if "synthesise" in steps or "observe" in steps:
+            synthesis_arguments(config, name)
         if ("synthesise" in steps and not Path(config["atmosphere"]).is_file()
                 and not _made_already(config, name, warn=False)):
             raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
@@ -495,6 +500,8 @@ def _frame_settings(config: dict, name: str) -> dict:
     The instrument's settings come from the run's `simulation:`,
     `detector:`, `telescope:` and `filter:` sections, each with one value,
     and the frame's exposure and slit width from `frame:` if it gives them.
+    A run with an atmosphere synthesises the band under the slit for its
+    frame; one with a `synthesis_file` makes its frame from that file.
     """
     frame = config.get("frame")
     if not isinstance(frame, dict):
@@ -520,10 +527,7 @@ def _frame_settings(config: dict, name: str) -> dict:
         exposure = exposure[0]
     exposure = u.Quantity(exposure)
     slit_width = u.Quantity(frame.get("slit_width", used.pop("slit_width", 0.2 * u.arcsec)))
-    band = frame.get("band")
-    return {
-        "synthesis": (synthesis_path(config, name) if synthesises(config)
-                      else Path(config.get("synthesis_file", ""))),
+    settings = {
         "slit_position": u.Quantity(frame["slit_position"]),
         "exposure": exposure,
         "slit_width": slit_width,
@@ -531,37 +535,64 @@ def _frame_settings(config: dict, name: str) -> dict:
         "detector": _one_value("detector", config.get("detector") or {}),
         "telescope": _one_value("telescope", config.get("telescope") or {}),
         "filter": _one_value("filter", config.get("filter") or {}),
-        "n_workers": int(frame.get("n_workers", 0)),
-        "band": (_SW_BAND if band is None
-                 else tuple(u.Quantity(edge).to_value(u.AA) for edge in band)),
-        "band_lines": Path(frame.get("band_lines", "run/input/band_lines.h5")),
-        "continuum": bool(frame.get("continuum", False)),
         "output": Path(frame.get("output", f"run/result/{name}_frame.h5")),
     }
+    if not synthesises(config):
+        # The frame holds what the synthesis file holds.
+        ignored = sorted(_BAND_KEYS & set(frame))
+        if ignored:
+            raise ValueError(
+                f"'frame.{ignored[0]}' is for a run with an 'atmosphere', whose band is "
+                f"synthesised for the frame. This run's frame holds the spectra in its "
+                f"'synthesis_file' as they are.")
+        settings["synthesis"] = Path(config.get("synthesis_file", ""))
+        return settings
+    band = frame.get("band", [f"{edge} Angstrom" for edge in _SW_BAND])
+    if not isinstance(band, (list, tuple)) or len(band) != 2:
+        raise ValueError(f"'frame.band' takes two wavelengths, such as [169 Angstrom, 213.5 "
+                         f"Angstrom], got {band!r}.")
+    settings["synthesis"] = Path(f"run/input/{name}_band.h5")
+    settings["band"] = _band_config(config, settings, frame, band)
+    # Check the band's synthesis settings now, as a run's own are.
+    synthesis_arguments(settings["band"], name)
+    return settings
 
 
-def _band_lines(settings: dict):
-    """Every line in the band, worked out or read back."""
-    from . import __version__
-    from .band import band_contribution_functions, read_band_lines, write_band_lines
-    from .synthesis_file import read_synthesis_products
+def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
+    """
+    The run with its synthesis replaced by that of the band under the slit.
 
-    products = read_synthesis_products(settings["synthesis"],
-                                       keys=["logT_grid", "logN_grid", "config"])
-    abundance = products["config"].get("abundance", "sun_coronal_2021_chianti")
-    database = products["config"].get("hdf5_dbase_root")
-    made_from = {"band": settings["band"], "abundance": abundance, "database": database,
-                 "logT": np.asarray(products["logT_grid"]).tolist(),
-                 "logN": np.asarray(products["logN_grid"]).tolist(), "eclipse": __version__}
-    key = _hash(made_from)
-    path = settings["band_lines"]
-    if not _reusable(path, key, "band's lines"):
-        lines = band_contribution_functions(
-            settings["band"], products["logT_grid"], products["logN_grid"],
-            abundance=abundance, n_workers=settings["n_workers"], hdf5_dbase_root=database)
-        _write_with_key(path, {"run_key": key}, lambda partial: write_band_lines(lines, partial))
-        return lines
-    return read_band_lines(path)
+    The band is synthesised with the run's own synthesis settings, over the
+    image columns the slit takes light from, into the frame's own synthesis
+    file.
+    """
+    from .config import AluminiumFilter, Telescope_EUVST
+    from .full_frame import _angle
+    from .radiometric import across_slit_fwhm
+    from .sampling import _REACH_IN_SIGMA
+    from .utils import _fwhm_to_sigma
+
+    # The slit, and as far either side as the blur across it reaches.
+    reach = settings["slit_width"].to_value(u.arcsec) / 2
+    if settings["options"].get("psf", True):
+        telescope = Telescope_EUVST(filter=AluminiumFilter(**settings["filter"]),
+                                    **settings["telescope"])
+        across = across_slit_fwhm(telescope)
+        if across is not None:
+            reach += _REACH_IN_SIGMA * _fwhm_to_sigma(across.to_value(u.arcsec))
+    centre = float(_angle(settings["slit_position"][np.newaxis])[0])
+    reach = float(reach)
+    section = {key: value for key, value in (config.get("synthesis") or {}).items()
+               if key not in _FRAME_SYNTHESIS_KEYS}
+    section.update(band=[str(edge) for edge in band],
+                   band_lines=str(frame.get("band_lines", "run/input/band_lines.h5")),
+                   continuum=bool(frame.get("continuum", False)),
+                   image_x=[f"{centre - reach!r} arcsec", f"{centre + reach!r} arcsec"])
+    if "band_step" in frame:
+        section["band_step"] = str(frame["band_step"])
+    if "n_workers" in frame:
+        section["n_workers"] = int(frame["n_workers"])
+    return {**config, "synthesis": section, "synthesis_file": str(settings["synthesis"])}
 
 
 def _frame_one(config: dict, name: str) -> Path:
@@ -574,29 +605,21 @@ def _frame_one(config: dict, name: str) -> Path:
         The frame file, `frame.output` or `run/result/<name>_frame.h5`.
     """
     from .config import AluminiumFilter, Detector_SWC, Telescope_EUVST
-    from .continuum import compute_continuum_fiasco
     from .full_frame import full_ccd_frame, write_full_frame
 
     settings = _frame_settings(config, name)
-    if not settings["synthesis"].is_file():
+    if "band" in settings:
+        _synthesise_one(settings["band"], name)
+    elif not settings["synthesis"].is_file():
         raise FileNotFoundError(f"The synthesis {settings['synthesis']} is not there: a frame "
                                 f"is made from a synthesis, given with 'synthesis_file', or "
                                 f"made from the 'atmosphere'.")
     telescope = Telescope_EUVST(filter=AluminiumFilter(**settings["filter"]),
                                 **settings["telescope"])
     detector = Detector_SWC(**settings["detector"])
-    lines = _band_lines(settings)
-    continuum = None
-    if settings["continuum"]:
-        wavelength = np.linspace(*_CONTINUUM_WAVELENGTHS) * u.AA
-        free, two_photon = compute_continuum_fiasco(
-            wavelength, lines.logT_grid, lines.logN_grid, abundance=lines.abundance,
-            n_workers=settings["n_workers"])
-        continuum = (wavelength, free, two_photon)
-    made = full_ccd_frame(settings["synthesis"], lines, settings["slit_position"],
-                          settings["exposure"], slit_width=settings["slit_width"],
-                          det=detector, telescope=telescope, continuum=continuum,
-                          n_workers=settings["n_workers"], **settings["options"])
+    made = full_ccd_frame(settings["synthesis"], slit_position=settings["slit_position"],
+                          exposure=settings["exposure"], slit_width=settings["slit_width"],
+                          det=detector, telescope=telescope, **settings["options"])
     path = settings["output"]
     path.parent.mkdir(parents=True, exist_ok=True)
     write_full_frame(made, path)
@@ -659,7 +682,7 @@ def _first_rank(step, *args):
 #: Steps of each command. `run` makes a frame only for a run with a `frame:`
 #: section.
 STEPS = {"run": ("synthesise", "observe", "frame"), "synthesise": ("synthesise",),
-         "observe": ("observe",), "frame": ("synthesise", "frame")}
+         "observe": ("observe",), "frame": ("frame",)}
 
 
 def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = None,

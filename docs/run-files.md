@@ -25,7 +25,7 @@ simulation:
   psf: True
 ```
 
-The `synthesis:` section takes the options of [`synthesise-spectra`](synthesis.md), with underscores in place of the dashes: `lines`, `abundance`, `continuum`, `integration_axis`, `crop_x`, `crop_y`, `crop_z`, `downsample`, `vel_res`, `vel_lim`, `precision`, `mass_per_electron`, `hdf5_dbase_root`, `n_workers` and `goft_temperature_chunk`. An option that takes two values, such as `crop_z`, takes a list, and an option that is on or off, such as `continuum`, takes `True` or `False`. The [configuration reference](configuration.md) lists the rest of the file's settings.
+The `synthesis:` section takes the options of [`synthesise-spectra`](synthesis.md), with underscores in place of the dashes: `lines`, `band`, `band_step`, `band_lines`, `abundance`, `continuum`, `integration_axis`, `crop_x`, `crop_y`, `crop_z`, `image_x`, `downsample`, `vel_res`, `vel_lim`, `precision`, `mass_per_electron`, `hdf5_dbase_root`, `n_workers` and `goft_temperature_chunk`. An option that takes two values, such as `crop_z`, takes a list, and an option that is on or off, such as `continuum`, takes `True` or `False`. The [configuration reference](configuration.md) lists the rest of the file's settings.
 
 A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `uniform_intensity` or a [time series](time-series.md), as before.
 
@@ -36,7 +36,7 @@ A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `
 | `eclipse run job.yaml` | Every step: synthesises the atmosphere, unless the synthesis is made already, observes it, and makes the frame if the file has a `frame:` section |
 | `eclipse synthesise job.yaml` | Synthesises the atmosphere only |
 | `eclipse observe job.yaml` | Observes the synthesis only, which must be made already |
-| `eclipse frame job.yaml` | Makes the [full-CCD frame](#a-full-ccd-frame), synthesising the atmosphere first if needed |
+| `eclipse frame job.yaml` | Makes the [full-CCD frame](#a-full-ccd-frame), synthesising the band under the slit first if the file has an `atmosphere` |
 | `eclipse atmosphere ...` | Writes or inspects [atmosphere files](synthesis.md#atmosphere-files), as `eclipse-atmosphere` |
 | `eclipse science-cases ...` | Writes run files for the Concept Study Report's science cases, as `eclipse-science-cases` |
 
@@ -90,7 +90,7 @@ A setting given as a list of values is still [swept](instrument-response.md#the-
 
 ## A full-CCD frame
 
-A `frame:` section describes the [full-CCD frame](full-ccd-frame.md) to make from the run's synthesis:
+A `frame:` section describes the [full-CCD frame](full-ccd-frame.md) to make. A frame holds the spectra of a synthesis file. A run with an `atmosphere` synthesises every line in the band, in the part of the image under the slit, into `run/input/<run file name>_band.h5`, and makes the frame from that. A run with a `synthesis_file` makes the frame from the spectra in that file as they are.
 
 ```yaml
 frame:
@@ -103,11 +103,14 @@ frame:
 | `slit_position` | Where the slit's centre is across the slit, in the synthesis's x coordinates | required |
 | `exposure` | The exposure time | `simulation.expos`, if it has one value |
 | `slit_width` | The slit | `simulation.slit_width`, or 0.2 arcsec |
-| `continuum` | Whether to add the continuum under the lines | `False` |
-| `band` | The wavelengths of the lines to add, as `[low, high]` | `[169 AA, 213.5 AA]` |
-| `band_lines` | Where to keep every line in the band, worked out once and reused | `run/input/band_lines.h5` |
-| `n_workers` | Processes working out the lines and the frame | one per CPU |
 | `output` | The frame file | `run/result/<run file name>_frame.h5` |
+| `continuum` | Whether to synthesise the continuum under the band | `False` |
+| `band` | The wavelengths to synthesise between, as `[low, high]` | `[169 Angstrom, 213.5 Angstrom]` |
+| `band_step` | The spacing of the band's wavelengths | `0.002 Angstrom` |
+| `band_lines` | Where to keep the contribution functions of the band's lines, worked out once and reused | `run/input/band_lines.h5` |
+| `n_workers` | Processes working out the lines and the band's spectrum | one per CPU |
+
+The last five are for a run with an `atmosphere`, and are refused with a `synthesis_file`. The band is synthesised with the run's `synthesis:` settings, apart from its `lines` and `continuum`.
 
 The detector, telescope and filter are those of the run's `detector:`, `telescope:` and `filter:` sections, and `simulation:` sets `psf`, `spectral_psf`, `psf_boundary`, `noise` and `slit_mask`. A frame takes one value of each setting, so a swept setting is refused. A frame is of the SW camera, so the instrument is SWC.
 
