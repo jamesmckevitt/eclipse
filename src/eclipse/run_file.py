@@ -37,7 +37,12 @@ _FRAME_SYNTHESIS_KEYS = {"lines", "continuum", "band", "band_step", "band_lines"
 
 # Synthesis options a run file gives elsewhere: the atmosphere at the top
 # level, and where the synthesis goes with `synthesis_file`.
-_NOT_SYNTHESIS_KEYS = {"help", "config", "atmosphere", "output_dir", "output_name"}
+_NOT_SYNTHESIS_KEYS = {"help", "config", "atmosphere", "emission_measure", "output_dir",
+                       "output_name"}
+
+# What a run synthesises from: an atmosphere, or an emission measure (a DEM or
+# VDEM).
+_SOURCES = ("atmosphere", "emission_measure")
 
 # The band of the SW detectors, for a frame's lines, in Angstrom.
 _SW_BAND = (169.0, 213.5)
@@ -187,8 +192,17 @@ def synthesis_options() -> dict:
 
 
 def synthesises(config: dict) -> bool:
-    """Whether a run synthesises an atmosphere before observing it."""
-    return "atmosphere" in config
+    """Whether a run synthesises an atmosphere or an emission measure before observing it."""
+    return any(key in config for key in _SOURCES)
+
+
+def synthesised_from(config: dict) -> tuple[str, str]:
+    """The key naming what a run synthesises from, and the file it names."""
+    given = [key for key in _SOURCES if key in config]
+    if len(given) != 1:
+        raise ValueError("A run synthesises one 'atmosphere' or one 'emission_measure'; "
+                         f"this one names {' and '.join(given) or 'neither'}.")
+    return given[0], str(config[given[0]])
 
 
 def synthesis_path(config: dict, name: str) -> Path:
@@ -243,7 +257,8 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
         raise ValueError(f"A run writes its synthesis to an HDF5 file ending in .h5, not "
                          f"{path}.")
     output = path if output is None else Path(output)
-    words = [f"--atmosphere={config['atmosphere']}", f"--output-dir={output.parent}",
+    key, source = synthesised_from(config)
+    words = [f"--{key.replace('_', '-')}={source}", f"--output-dir={output.parent}",
              f"--output-name={output.name}"]
     for key, value in section.items():
         words += _option_words(key, options[key], value)
@@ -270,7 +285,8 @@ def _settings_key(config: dict) -> str:
 
     settings = {key: value for key, value in (config.get("synthesis") or {}).items()
                 if key not in _COMPUTING_KEYS}
-    return _hash({"atmosphere": os.path.abspath(config["atmosphere"]),
+    key, source = synthesised_from(config)
+    return _hash({key: os.path.abspath(source),
                   "synthesis": settings, "eclipse": __version__})
 
 
@@ -281,7 +297,7 @@ def _run_key(config: dict) -> str:
     The settings, and the atmosphere file's size and the time it was last
     changed.
     """
-    status = Path(config["atmosphere"]).resolve().stat()
+    status = Path(synthesised_from(config)[1]).resolve().stat()
     return _hash({"settings": _settings_key(config), "size": status.st_size,
                   "modified": status.st_mtime_ns})
 
@@ -310,14 +326,15 @@ def _made_already(config: dict, name: str, warn: bool = True) -> bool:
     warning says so, once for each file.
     """
     path = synthesis_path(config, name)
-    if Path(config["atmosphere"]).is_file():
+    key, source = synthesised_from(config)
+    if Path(source).is_file():
         return _stored_key(path) == _run_key(config)
     if _stored_key(path, "run_settings_key") != _settings_key(config):
         return False
     if not warn or path in _WARNED:
         return True
     _WARNED.add(path)
-    warnings.warn(f"The atmosphere {config['atmosphere']} is not there, so {path}, made from "
+    warnings.warn(f"The {key.replace('_', ' ')} {source} is not there, so {path}, made from "
                   f"it with these settings, is used as it is.", UserWarning, stacklevel=2)
     return True
 
@@ -384,10 +401,12 @@ def _synthesise_one(config: dict, name: str) -> Path:
 
     synthesis_arguments(config, name)
     path = synthesis_path(config, name)
-    if not Path(config["atmosphere"]).is_file():
+    key, source = synthesised_from(config)
+    if not Path(source).is_file():
         if _made_already(config, name):
             return path
-        raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
+        raise FileNotFoundError(f"{key.replace('_', ' ').capitalize()} file not found: "
+                                f"{source}")
     key = _run_key(config)
     if not _reusable(path, key, "synthesis"):
         keys = {"run_key": key, "run_settings_key": _settings_key(config)}
@@ -411,11 +430,12 @@ def observation_config(config: dict, name: str) -> dict:
     if synthesises(config):
         for key in ("atmosphere_series", "synthesis_series", "uniform_intensity"):
             if key in config:
-                raise ValueError(f"'atmosphere' and {key!r} cannot both be given: each says "
+                raise ValueError(f"{synthesised_from(config)[0]!r} and {key!r} cannot both be "
+                                 f"given: each says "
                                  f"what is observed.")
         lines = (config.get("synthesis") or {}).get("lines") or []
         lines = [lines] if isinstance(lines, str) else list(lines)
-        del observed["atmosphere"]
+        del observed[synthesised_from(config)[0]]
         observed.pop("synthesis", None)
         observed["synthesis_file"] = str(synthesis_path(config, name))
         if "reference_line" not in observed and lines:
@@ -436,9 +456,11 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
         # A frame synthesises its own band, so it needs no lines.
         if "synthesise" in steps or "observe" in steps:
             synthesis_arguments(config, name)
-        if ("synthesise" in steps and not Path(config["atmosphere"]).is_file()
+        key, source = synthesised_from(config)
+        if ("synthesise" in steps and not Path(source).is_file()
                 and not _made_already(config, name, warn=False)):
-            raise FileNotFoundError(f"Atmosphere file not found: {config['atmosphere']}")
+            raise FileNotFoundError(f"{key.replace('_', ' ').capitalize()} file not found: "
+                                    f"{source}")
     if "frame" in config and "frame" in steps:
         _frame_settings(config, name)
     observed = observation_config(config, name)
@@ -465,11 +487,13 @@ def _observe_one(config: dict, name: str, source: Optional[str] = None,
             raise FileNotFoundError(f"The synthesis {path} is not made yet: run 'eclipse "
                                     f"synthesise' first, or 'eclipse run'.")
         if not _made_already(config, name):
-            if not Path(config["atmosphere"]).is_file():
+            key, made_from = synthesised_from(config)
+            if not Path(made_from).is_file():
                 raise ValueError(f"The synthesis {path} was not made with these settings, and "
-                                 f"the atmosphere {config['atmosphere']} it would be made "
+                                 f"the {key.replace('_', ' ')} {made_from} it would be made "
                                  f"from again is not there.")
-            raise ValueError(f"The synthesis {path} was not made from this atmosphere with "
+            raise ValueError(f"The synthesis {path} was not made from this "
+                             f"{key.replace('_', ' ')} with "
                              f"these settings: run 'eclipse synthesise' or 'eclipse run' "
                              f"to make it again.")
     return run_config(observed, name, source=source, debug=debug)
@@ -542,9 +566,9 @@ def _frame_settings(config: dict, name: str) -> dict:
         ignored = sorted(_BAND_KEYS & set(frame))
         if ignored:
             raise ValueError(
-                f"'frame.{ignored[0]}' is for a run with an 'atmosphere', whose band is "
-                f"synthesised for the frame. This run's frame holds the spectra in its "
-                f"'synthesis_file' as they are.")
+                f"'frame.{ignored[0]}' is for a run with an 'atmosphere' or an "
+                f"'emission_measure', whose band is synthesised for the frame. This run's "
+                f"frame holds the spectra in its 'synthesis_file' as they are.")
         settings["synthesis"] = Path(config.get("synthesis_file", ""))
         return settings
     band = frame.get("band", [f"{edge} Angstrom" for edge in _SW_BAND])
