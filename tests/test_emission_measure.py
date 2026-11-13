@@ -310,5 +310,5 @@ def test_a_run_makes_a_frame_from_an_emission_measure(tmp_path, monkeypatch, chi
     assert np.allclose(strip.x_edges.to_value(u.arcsec), [5, 6])
     with h5py.File(output.frame) as f:
         rate = f["left/rate"][()]
-        assert f.attrs["spectra"] == "band_194.0010-196.4990"
+        assert [name.decode() for name in f["spectra"][()]] == ["band_194.0010-196.4990"]
     assert rate.any()
