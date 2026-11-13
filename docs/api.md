@@ -110,6 +110,16 @@ These are the steps `simulate_once` takes, in order.
 
 ::: eclipse.edges_from_centres
 
+## Emission measure files
+
+A DEM or VDEM over an image, which `synthesise-spectra --emission-measure` synthesises. [From a DEM or VDEM](dem-synthesis.md) shows how to write and use one.
+
+::: eclipse.EmissionMeasure
+
+::: eclipse.write_emission_measure
+
+::: eclipse.read_emission_measure
+
 ## Synthesis files
 
 ::: eclipse.Synthesis

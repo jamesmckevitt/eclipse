@@ -18,7 +18,7 @@ from eclipse.synthesis_file import read_synthesis, read_synthesis_products
 
 LINE, REST = "Fe12_195.1190", 195.119
 LOGT = np.linspace(5.6, 6.6, 21)
-G0 = 1e-24  # erg cm3 / s at 1e7 cm^-3, doubling with each decade of density
+G0 = 1e-24  # erg cm3 / s at 1e7 cm^-3, and that much more with each decade of density
 RADIANCE = u.erg / (u.s * u.cm**2 * u.sr)
 
 
@@ -36,7 +36,8 @@ def _dem(ny=3, nx=4, **fields):
 
 
 def _g_at(log_density):
-    return G0 * 2.0 ** (log_density - 7.0)
+    # Linear in log10 n_e, as G is interpolated between the grid densities.
+    return G0 * (1.0 + (log_density - 7.0))
 
 
 def _flat_goft(lines, logT_min, logT_max, nT, logN_min, logN_max, nN, **kwargs):
@@ -158,10 +159,10 @@ def test_the_density_is_the_files_a_density_given_or_one_from_a_pressure(tmp_pat
 
 
 def test_a_vdem_shifts_each_line_by_its_velocities(tmp_path, monkeypatch, chianti_free):
-    velocity = np.arange(-30, 31) * 5.0 * u.km / u.s
+    velocity = np.arange(-60, 61) * 5.0 * u.km / u.s
     em = np.zeros((1, 2, LOGT.size, velocity.size))
-    em[0, 0, 8, 30] = 1e27           # at rest
-    em[0, 1, 8, 50] = 2e27           # receding at 100 km/s
+    em[0, 0, 8, 60] = 1e27           # at rest
+    em[0, 1, 8, 80] = 2e27           # receding at 100 km/s
     measure = EmissionMeasure(emission_measure=em / u.cm**5, temperature=10 ** LOGT * u.K,
                               x_edges=_edges(2), y_edges=_edges(1), velocity=velocity,
                               electron_density=1e9 / u.cm**3)

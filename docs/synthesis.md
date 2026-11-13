@@ -152,6 +152,7 @@ synthesise-spectra --help
 
 - `--config`: A [run file](run-files.md), whose `atmosphere`, `synthesis_file` and `synthesis:` section give the settings. Options given as well override the file's
 - `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in the deprecated modes on [Older versions](older-versions.md))
+- `--emission-measure`: In place of `--atmosphere`, an [emission measure file](dem-synthesis.md) to synthesise from, a DEM or a VDEM. The options for the view, cropping and `--mass-per-electron` describe an atmosphere, and are refused with it.
 - `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
 - `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
 
@@ -162,6 +163,8 @@ synthesise-spectra --help
 - `--band-step`: The spacing of the band's wavelengths (default: `"0.002 Angstrom"`)
 - `--band-lines`: The file that keeps the contribution functions of the band's lines, which take hours to work out. It is read back if it is there already (default: `band_lines.h5` in the output directory).
 - `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
+- `--electron-density`: With `--emission-measure`, the electron density the contribution functions are taken at, for example `--electron-density "1e9 cm-3"`
+- `--pressure`: With `--emission-measure`, the electron pressure, for example `--pressure "1e15 K cm-3"`, which gives each temperature its own density, in place of `--electron-density`
 - `--continuum`: Also synthesise the continuum under the lines' windows, or under the band (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
 - `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
 - `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.

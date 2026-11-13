@@ -27,6 +27,8 @@ simulation:
 
 The `synthesis:` section takes the options of [`synthesise-spectra`](synthesis.md), with underscores in place of the dashes: `lines`, `band`, `band_step`, `band_lines`, `abundance`, `continuum`, `integration_axis`, `crop_x`, `crop_y`, `crop_z`, `image_x`, `downsample`, `vel_res`, `vel_lim`, `precision`, `mass_per_electron`, `hdf5_dbase_root`, `n_workers` and `goft_temperature_chunk`. An option that takes two values, such as `crop_z`, takes a list, and an option that is on or off, such as `continuum`, takes `True` or `False`. The [configuration reference](configuration.md) lists the rest of the file's settings.
 
+A run file can name an `emission_measure`, a [DEM or VDEM](dem-synthesis.md), in place of the `atmosphere`. Its `synthesis:` section then also takes `electron_density` and `pressure`, and does not take the options that describe an atmosphere: `integration_axis`, the crops, `downsample` and `mass_per_electron`.
+
 A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `uniform_intensity` or a [time series](time-series.md), as before.
 
 ## The commands

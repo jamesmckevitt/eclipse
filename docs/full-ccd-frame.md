@@ -44,6 +44,8 @@ This does three things:
 
 The band is synthesised with the run's `synthesis:` settings, such as its abundances and its view, if it has any. A run's own `lines` are not used.
 
+A run file with an `emission_measure` in place of the `atmosphere` makes a frame from a [DEM or VDEM](dem-synthesis.md#a-full-ccd-frame) the same way.
+
 `slit_position` is where the middle of the slit is, across it, in the image's x coordinates. Along the slit, the middle of the image is at the middle of the slit, which is the middle column of the CCDs.
 
 ## From your own spectra

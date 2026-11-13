@@ -1,8 +1,9 @@
 # Files
 
-ECLIPSE works with five kinds of file, all of them HDF5:
+ECLIPSE works with six kinds of file, all of them HDF5:
 
 - An **atmosphere file** holds one snapshot of a simulation. `synthesise-spectra`, and a [time series](time-series.md), read it.
+- An **emission measure file** holds a DEM or VDEM over an image. `synthesise-spectra` reads it in place of an atmosphere file.
 - A **synthesis file** holds the spectra an atmosphere emits. `synthesise-spectra` writes one, or you can write one from [another code's spectra](other-codes.md), and `eclipse` observes it.
 - A **results file** holds what `eclipse` measured. It is written to `run/result/<config name>.h5`.
 - A **band lines file** holds the contribution functions of every line in a band, for a [full-CCD frame](full-ccd-frame.md). `write_band_lines` writes one and `read_band_lines` reads it.
@@ -65,6 +66,23 @@ Fortran stores arrays column by column, so an array declared `(nx, ny, nz)` in F
 ```bash
 eclipse-atmosphere info atmosphere.h5
 ```
+
+## Emission measure files
+
+[From a DEM or VDEM](dem-synthesis.md#writing-an-emission-measure-file) shows how to write one in Python, with `write_emission_measure`. This is the layout, for writing one with any HDF5 library.
+
+The root has a `format` attribute of `eclipse-emission-measure`, a `version` of `1`, and optionally a `source` saying where the emission measure came from. Each dataset needs a `unit` attribute that astropy can read.
+
+| Dataset | Shape | Description |
+| --- | --- | --- |
+| `emission_measure` | `(ny, nx, n_temperatures)`, or `(ny, nx, n_temperatures, n_velocities)` for a VDEM | The emission measure n_e^2 dh in each bin, such as in `cm-5`. It is not per kelvin or per km/s. |
+| `temperature` | `(n_temperatures,)` | The centres of the temperature bins, evenly spaced in log10(T). |
+| `x_edges`, `y_edges` | `(nx + 1,)`, `(ny + 1,)` | The pixel boundaries across and along the slit, evenly spaced, as lengths on the Sun or angles seen from 1 AU. |
+| `velocity` | `(n_velocities,)` | The centres of a VDEM's velocity bins, evenly spaced. A positive velocity is a redshift. A DEM has none. |
+| `electron_density` | scalar, `(ny, nx)` or `(ny, nx, n_temperatures)` | The electron density the contribution functions are taken at (optional). |
+| `time` | scalar | Time of the snapshot (optional). |
+
+`read_emission_measure` reads one back.
 
 ## Synthesis files
 
