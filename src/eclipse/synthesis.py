@@ -1854,8 +1854,8 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
         logN_grid = np.linspace(logN_min, logN_max, nN)
         band_lines = band_lines_for(
             args.band_lines or Path(args.output_dir) / "band_lines.h5", band, logT_grid,
-            logN_grid, abundance=args.abundance, n_workers=args.n_workers,
-            hdf5_dbase_root=dbase_root)
+            band_density_grid(logN_min, logN_max), abundance=args.abundance,
+            n_workers=args.n_workers, hdf5_dbase_root=dbase_root)
         dbase_root = band_lines.hdf5_dbase_root
         print(f"Calculating the spectrum of the band's {band_lines.n_lines} lines at "
               f"{band_grid.size} wavelengths")
@@ -1869,7 +1869,12 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
     spectral = set(lines)
 
     if getattr(args, "continuum", False):
-        windows = continuum_windows([info["wl_grid"] for info in lines.values()])
+        if band is not None:
+            # On the band's own wavelengths.
+            windows = {f"{CONTINUUM_PREFIX}_{band_grid[0]:.4f}-{band_grid[-1]:.4f}":
+                       (band_grid * u.Angstrom).to(u.cm)}
+        else:
+            windows = continuum_windows([info["wl_grid"] for info in lines.values()])
         print(f"Computing the continuum over {len(windows)} window"
               f"{'' if len(windows) == 1 else 's'} via fiasco")
         for name, grid in windows.items():

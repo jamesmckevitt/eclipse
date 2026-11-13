@@ -463,9 +463,11 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
                                     f"{source}")
     if "frame" in config and "frame" in steps:
         band = _frame_settings(config, name).get("band")
-        if (band is not None and not Path(band["atmosphere"]).is_file()
-                and not _made_already(band, name, warn=False)):
-            raise FileNotFoundError(f"Atmosphere file not found: {band['atmosphere']}")
+        if band is not None:
+            key, source = synthesised_from(band)
+            if not Path(source).is_file() and not _made_already(band, name, warn=False):
+                raise FileNotFoundError(
+                    f"{key.replace('_', ' ').capitalize()} file not found: {source}")
     observed = observation_config(config, name)
     if "observe" in steps:
         _validate_config_keys(observed, str(observed.get("instrument", "SWC")).upper())
