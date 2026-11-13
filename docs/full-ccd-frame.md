@@ -157,6 +157,8 @@ For each CCD, `"left"` and `"right"`:
 
 `dn` holds each row as the two outputs read it: the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The parallel overscan rows follow the image's rows.
 
+`settings["spectra"]`, and the `spectra` dataset of a frame file, name the entries of the synthesis file that the frame holds.
+
 ## How a frame differs from a run
 
 A frame and an `eclipse` run share the instrument's throughput, PSF and detector settings, but they do not yet model all the same effects:
