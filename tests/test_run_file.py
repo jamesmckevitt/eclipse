@@ -266,7 +266,8 @@ def test_a_frame_from_an_atmosphere_synthesises_the_band_under_the_slit(
     assert taken["args"] == (Path("run/input/job_band.h5"),)
     assert args.lines is None and args.band == ["169.0 Angstrom", "213.5 Angstrom"]
     assert args.abundance == "sun_coronal_1992_feldman" and args.continuum is True
-    assert args.n_workers == 2 and args.band_lines == "run/input/band_lines.h5"
+    # The band's lines are kept beside the band, unless the frame names a file for them.
+    assert args.n_workers == 2 and args.band_lines is None
     # The slit is 0.4 arcsec wide at 0.3 arcsec, and the PSF is off.
     assert [u.Quantity(edge).to_value(u.arcsec) for edge in args.image_x] == pytest.approx(
         [0.1, 0.5])

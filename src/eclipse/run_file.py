@@ -598,11 +598,11 @@ def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
     section = {key: value for key, value in (config.get("synthesis") or {}).items()
                if key not in _FRAME_SYNTHESIS_KEYS}
     section.update(band=[str(edge) for edge in band],
-                   band_lines=str(frame.get("band_lines", "run/input/band_lines.h5")),
                    continuum=bool(frame.get("continuum", False)),
                    image_x=[f"{centre - reach!r} arcsec", f"{centre + reach!r} arcsec"])
-    if "band_step" in frame:
-        section["band_step"] = str(frame["band_step"])
+    for key in ("band_step", "band_lines"):
+        if key in frame:
+            section[key] = str(frame[key])
     if "n_workers" in frame:
         section["n_workers"] = int(frame["n_workers"])
     return {**config, "synthesis": section, "synthesis_file": str(settings["synthesis"])}

@@ -529,21 +529,26 @@ def _serves(path: Path, band, logT_grid, logN_grid, abundance, dbase_root) -> Op
 
 def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarray,
                    logN_grid: np.ndarray, abundance: str = "sun_coronal_2021_chianti",
-                   n_workers: int = 0, hdf5_dbase_root=None) -> BandLines:
+                   n_workers: int = 0, hdf5_dbase_root=None,
+                   wider_grid: Optional[np.ndarray] = None) -> BandLines:
     """
     A band's lines, read back from a file if it holds them and worked out and written there if not.
 
     A file serves if it covers the band, is on the same temperatures and
-    abundances, and has every density of `logN_grid` on its grid. Lines are
-    worked out on `logN_grid`, so a grid wider than one synthesis needs
-    serves later ones too.
+    abundances, and has every density of `logN_grid` on its grid.
 
     Parameters
     ----------
     path : str or Path
         File of the band's lines, as written by `write_band_lines`.
-    band, logT_grid, logN_grid, abundance, n_workers, hdf5_dbase_root
+    band, logT_grid, abundance, n_workers, hdf5_dbase_root
         As for `band_contribution_functions`.
+    logN_grid : np.ndarray
+        Densities the synthesis needs, as log10(n_e / cm-3).
+    wider_grid : np.ndarray, optional
+        Densities to work the lines out on, if the file is not there, so
+        that they serve later syntheses too. It must have those of
+        `logN_grid`. Default None, for `logN_grid` itself.
 
     Returns
     -------
@@ -565,8 +570,11 @@ def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarra
         print(f"Reading the band's lines from {path}")
         return read_band_lines(path)
     print(f"Working out every line from {band[0]:g} to {band[1]:g} Angstrom, kept in {path}")
-    lines = band_contribution_functions(band, logT_grid, logN_grid, abundance=abundance,
-                                        n_workers=n_workers, hdf5_dbase_root=hdf5_dbase_root)
+    if wider_grid is not None and not densities_on_grid(logN_grid, wider_grid):
+        raise ValueError("wider_grid must have every density of logN_grid.")
+    lines = band_contribution_functions(
+        band, logT_grid, logN_grid if wider_grid is None else wider_grid, abundance=abundance,
+        n_workers=n_workers, hdf5_dbase_root=hdf5_dbase_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_band_lines(lines, path)
     return lines

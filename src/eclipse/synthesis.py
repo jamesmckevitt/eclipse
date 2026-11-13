@@ -2549,8 +2549,9 @@ def main(args=None) -> None:
         logN_band = np.linspace(logN_min, logN_max, nN)
         band_lines = band_lines_for(
             args.band_lines or Path(args.output_dir) / "band_lines.h5", band, logT_band,
-            band_density_grid(logN_min, logN_max), abundance=args.abundance,
-            n_workers=args.n_workers, hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None))
+            logN_band, abundance=args.abundance, n_workers=args.n_workers,
+            hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
+            wider_grid=band_density_grid(logN_min, logN_max))
         goft, logT_goft, logN_grid = {}, logT_band.astype(precision), logN_band.astype(precision)
         goft_dbase_root = band_lines.hdf5_dbase_root
     print(f"  CHIANTI database: {goft_dbase_root}")
