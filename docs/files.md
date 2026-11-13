@@ -132,10 +132,11 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 | --- | --- |
 | `exposure`, `slit_position`, `slit_width` | Each with its unit in `exposure_unit`, `slit_position_unit` and `slit_width_unit` |
 | `psf`, `spectral_psf`, `noise`, `psf_boundary`, `slit_mask`, `continuum` | The options the frame was made with |
-| `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
 | `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
 | `parallel_overscan_rows` | The overscan rows read after the image |
 | `software_version`, `git_commit_id` | The version of ECLIPSE and the git commit that wrote the file |
+
+The root's `spectra` dataset names the entries of the synthesis file that the frame holds.
 
 A group for each CCD, `left` and `right`, holds these datasets, each with a `unit` attribute:
 
