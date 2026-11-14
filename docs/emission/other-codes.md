@@ -23,9 +23,7 @@ A [synthesis file](../files/synthesis.md)
 </div>
 </div>
 
-If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](../observe/simulate.md), or, with one file per snapshot, as a [time series](../observe/rasters.md#from-synthesis-files). A [full-CCD frame](../observe/full-ccd-frames.md#from-your-own-spectra) can be made from it too.
-
-A synthesis file holds the spectral radiance at each pixel and wavelength, for each line or spectral window, with its wavelengths, the rest wavelength that Doppler shifts are measured from, and the edges of the pixels. [Synthesis files](../files/synthesis.md) gives the layout in full.
+Write your code's spectra as a [synthesis file](../files/synthesis.md). ECLIPSE then observes it as a [single snapshot](../observe/simulate.md), as a [time series](../observe/rasters.md#from-synthesis-files) with one file per snapshot, or in a [full-CCD frame](../observe/full-ccd-frames.md#from-your-own-spectra).
 
 ## Writing one
 
@@ -48,11 +46,7 @@ synthesis = Synthesis(
 write_synthesis(synthesis, "my_code.h5")
 ```
 
-The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons. The wavelengths don't have to be evenly spaced, so you can use a grid that is finer in the line cores. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
-
-x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`.
-
-A line can also be a whole spectral window with its blends, as most codes give it. The blends are then fitted as in [Fitting blended lines](../observe/fitting.md).
+The intensity can be in any unit of spectral radiance, and the wavelengths need not be evenly spaced. x runs across the slit and y along it, as lengths on the Sun or angles from 1 AU. An entry can be a whole window with its blends, [fitted](../observe/fitting.md) together.
 
 ## Worked example: FoMo
 
@@ -131,11 +125,11 @@ synthesis = fomo_synthesis("fomo-output.txt", x_pixel=128, y_pixel=128, lambda_p
 write_synthesis(synthesis, "fomo.h5")
 ```
 
-FoMo writes text by default, or binary with `setwriteoutbinary()`, as its own example does. `read_fomo` reads either, compressed with gzip or not. The file then goes into the instrument configuration as `synthesis_file: ./fomo.h5`.
+`read_fomo` reads FoMo's text or binary output, gzipped or not. Observe it with `synthesis_file: ./fomo.h5`.
 
 ## Worked example: PINTofALE
 
-[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a synthesis file.
+[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) gives one intensity per line for a DEM. To observe a DEM with ECLIPSE's own atomic data, use the [DEM route](dem.md) instead. To keep PINTofALE's, turn its lines into a synthesis file.
 
 In IDL, with PINTofALE set up as usual:
 
@@ -151,7 +145,7 @@ flx = lineflx(ff, 10d^logT, abs(wvl), Z, DEM=dem, /temp, abund=getabund('schmelz
 save, file='pintofale_lines.sav', wvl, flx, Z, logT, ff, dem
 ```
 
-Give the DEM per kelvin with `/temp`, as here. Without it, LINEFLX takes the DEM per unit natural log of T, which is T times the DEM per kelvin.
+`/temp` gives the DEM per kelvin; without it LINEFLX takes it per unit natural log of T.
 
 Then in Python:
 
@@ -209,4 +203,4 @@ synthesis = Synthesis(
 write_synthesis(synthesis, "pintofale.h5")
 ```
 
-The file then goes into the instrument configuration as `synthesis_file: ./pintofale.h5`.
+Observe it with `synthesis_file: ./pintofale.h5`.

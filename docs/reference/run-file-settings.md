@@ -1,154 +1,140 @@
 # Run file settings
 
-This page lists every setting of the run file that `eclipse run` and `eclipse observe` read, with its default. [Simulating an observation](../observe/simulate.md#the-run-file) explains how the file works: its sections, and how giving a list of values sweeps a setting.
-
-[Instrument sources](../background/instrument-sources.md) gives the source of each instrument default, where one is known.
-
-A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60 Celsius` or `5000 erg / (s cm2 sr)`. Any unit of the right kind will do.
+Every setting of a run file, with its default. A value with units is a number and a unit, such as `0.4 arcsec`. A list of values sweeps a setting; see [The run file](../observe/simulate.md#the-run-file). [Instrument sources](../background/instrument-sources.md) gives where each instrument default comes from.
 
 ## Top level
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `instrument` | The instrument, `SWC` or `EIS`; see [Instruments](../background/instrument-model.md#the-instruments) | `SWC` |
+| `instrument` | `SWC` or `EIS`; see [The instruments](../background/instrument-model.md#the-instruments) | `SWC` |
 | `synthesis_file` | The synthesis file to observe | `./run/input/synthesised_spectra.h5` |
-| `reference_line` | The line whose spectral window is observed, named as in [Naming spectral lines](line-names.md). Every line in the file that falls in that window is added in, so blends are included. To observe several windows, run once for each. | The file's only line. A file with several must hold `Fe12_195.1190`, or say which to observe. |
-| `n_iter` | How many Monte Carlo iterations to run | `25` |
-| `ncpu` | How many CPU cores to use; `-1` for all of them | `-1` |
-| `offchip_bin_slit` | How many pixels along the slit to add together after read-out; see [Off-chip slit binning](../observe/simulate.md#off-chip-slit-binning) | `1` |
-| `fit_signals` | Which signals to fit: `dn`, `photon` or `both`; see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted) | `both` |
-| `uniform_intensity` | A single line of this total intensity, in place of a synthesis file; see [From a single intensity](../emission/single-intensity.md) | none |
+| `reference_line` | The line whose window is observed, named as in [Naming spectral lines](line-names.md); blends in the window are included | the file's only line, or `Fe12_195.1190` |
+| `n_iter` | Monte Carlo iterations | `25` |
+| `ncpu` | CPU cores; `-1` for all | `-1` |
+| `offchip_bin_slit` | Pixels along the slit added after read-out; see [Off-chip slit binning](../observe/simulate.md#off-chip-slit-binning) | `1` |
+| `fit_signals` | `dn`, `photon` or `both`; see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted) | `both` |
+| `uniform_intensity` | A single line of this total intensity; see [From a single intensity](../emission/single-intensity.md) | none |
 | `rest_wavelength` | That line's rest wavelength | `195.119 AA` |
-| `thermal_width` | That line's width, as a 1-sigma velocity | `20 km/s` |
-| `pinhole_sizes` | The diameters of pinholes in the filter, one per pinhole (SWC only); see [Pinholes](#pinholes) | none |
-| `pinhole_positions` | Where each pinhole is along the slit, as a fraction from 0 to 1 | none |
-| `pinhole_positions_spectral` | Where each pinhole is along the spectral axis, as a fraction from 0 to 1 | the middle |
-| `atmosphere_series` | A time series of atmosphere files, in place of a synthesis file; see [Rasters and sit-and-stares](../observe/rasters.md) | none |
-| `synthesis_series` | A time series of synthesis files, in place of a synthesis file; see [Rasters and sit-and-stares](../observe/rasters.md#from-synthesis-files) | none |
-| `atmosphere` | An atmosphere file to synthesise and then observe, in place of a synthesis file; see [Run files](../run-files.md) | none |
-| `runs` | Several runs from one file, each a `name` and the settings it changes; see [Several runs in one file](../run-files.md#several-runs-in-one-file) | none |
-
-The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are described below. A time series also has a `raster` section, the observing plan, and for atmosphere files a `synthesis` section; [Rasters and sit-and-stares](../observe/rasters.md) lists their settings. A run with an `atmosphere` has a `synthesis` section too, and may have a `frame` section; [Run files](../run-files.md) lists their settings.
+| `thermal_width` | That line's 1-sigma width, as a velocity | `20 km/s` |
+| `pinhole_sizes` | Pinhole diameters (SWC); see [Pinholes](#pinholes) | none |
+| `pinhole_positions` | Each pinhole's place along the slit, from 0 to 1 | none |
+| `pinhole_positions_spectral` | Each pinhole's place along the spectral axis, from 0 to 1 | the middle |
+| `atmosphere_series` | A time series of atmosphere files; see [Rasters and sit-and-stares](../observe/rasters.md) | none |
+| `synthesis_series` | A time series of synthesis files; see [Rasters and sit-and-stares](../observe/rasters.md#from-synthesis-files) | none |
+| `atmosphere` | An atmosphere file to synthesise first; see [Run files](../run-files.md) | none |
+| `runs` | Several runs from one file; see [Several runs in one file](../run-files.md#several-runs-in-one-file) | none |
 
 ## simulation
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `slit_width` | The slit: 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec`, so EIS needs one |
-| `expos` | The exposure time | `1 s` |
-| `vis_sl` | Visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS | `0 photon / (s cm2)` |
-| `psf` | Whether to blur the spectra with the PSF; see [The point spread function](../background/instrument-model.md#the-point-spread-function) | `False` |
-| `psf_boundary` | What the PSF brings in from beyond the edges of the atmosphere: `replicate` or `zero` | `replicate` |
-| `spectral_psf` | How the slit is added to the optics' blur: `quadrature` or `convolution` | `quadrature` |
-| `slit_mask` | Whether the slit's ends and fiducials block the light (SWC only); see [The slit's fiducials](../background/instrument-model.md#the-slits-fiducials) | `False` |
-| `focal_plane_dispersion` | Whether the pixels' width in wavelength is the SW focal plane's where the line lands, rather than `detector.wvl_res` (SWC only); see [The pixels' width in wavelength](../background/instrument-model.md#the-pixels-width-in-wavelength) | `False` |
-| `noise` | With `False`, every random draw in the detector is replaced by its mean; see [Turning the noise off](../observe/simulate.md#turning-the-noise-off) | `True` |
-| `readout_dark_current` | Whether dark current is also collected while the CCD is cleared and read out, not only over the exposure (SWC only); see [Dark current](../background/instrument-model.md#dark-current) | `True` |
-| `enable_pinholes` | Whether to model the pinholes (SWC only) | `False` |
-| `pinhole_visible_wavelength` | The wavelength of the visible light through the pinholes, which sets how it diffracts (SWC only) | `600 nm` |
+| `slit_width` | 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec` |
+| `expos` | Exposure time | `1 s` |
+| `vis_sl` | Visible stray light, in photons per second per cm2, before the filter for SWC and at the CCD for EIS | `0 photon / (s cm2)` |
+| `psf` | Blur with the [PSF](../background/instrument-model.md#the-point-spread-function) | `False` |
+| `psf_boundary` | What the PSF brings in from beyond the atmosphere: `replicate` or `zero` | `replicate` |
+| `spectral_psf` | How the slit adds to the optics' blur: `quadrature` or `convolution` | `quadrature` |
+| `slit_mask` | Block the light at the [slit's ends and fiducials](../background/instrument-model.md#the-slits-fiducials) (SWC) | `False` |
+| `focal_plane_dispersion` | Take [each pixel's width in wavelength](../background/instrument-model.md#the-pixels-width-in-wavelength) from the focal plane (SWC) | `False` |
+| `noise` | `False` replaces every random draw by its mean; see [Turning the noise off](../observe/simulate.md#turning-the-noise-off) | `True` |
+| `readout_dark_current` | Also collect [dark current](../background/instrument-model.md#dark-current) while the CCD is cleared and read (SWC) | `True` |
+| `enable_pinholes` | Model the pinholes (SWC) | `False` |
+| `pinhole_visible_wavelength` | Wavelength of the visible light through the pinholes (SWC) | `600 nm` |
 
 ## detector
 
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
-| `ccd_temperature` | The CCD's temperature, from which ECLIPSE works out the dark current. Below 198 K (-75.15 Celsius) the dark current is taken as it is at 198 K, and above 300 K (26.85 Celsius) the temperature is refused. | `-60 Celsius` | `-60 Celsius` |
-| `dark_current_293k` | The dark current at 293 K. ECLIPSE scales it to `ccd_temperature`, by the law for non-inverted mode CCDs for SWC and for advanced inverted mode CCDs for EIS. | `20000 electron / (pix s)` | `250 electron / (pix s)` |
-| `qe_euv` | The quantum efficiency for EUV: the fraction of photons detected | `0.76` | `0.64` |
-| `qe_vis` | The quantum efficiency for the visible stray light | `1.0` | `0.65` |
-| `read_noise_rms` | The read noise | `10 electron / pix` | `5 electron / pix` |
+| `ccd_temperature` | CCD temperature, for the dark current; from 198 K to 300 K | `-60 Celsius` | `-60 Celsius` |
+| `dark_current_293k` | Dark current at 293 K | `20000 electron / (pix s)` | `250 electron / (pix s)` |
+| `qe_euv` | Quantum efficiency for EUV | `0.76` | `0.64` |
+| `qe_vis` | Quantum efficiency for visible light | `1.0` | `0.65` |
+| `read_noise_rms` | Read noise | `10 electron / pix` | `5 electron / pix` |
 | `gain_e_per_dn` | Electrons per DN | `2.78 electron / DN` | `6.3 electron / DN` |
-| `max_dn` | The digitiser's maximum, where DN are clipped | `65535 DN / pix` | `65535 DN / pix` |
-| `full_well` | The CCD's full well. Nothing is clipped at it: it is there to compare with, to see which pixels would saturate. | `150000 electron / pix` | - |
-| `pix_size` | The size of a pixel | `13.5 um / pix` | `13.5 um / pix` |
-| `wvl_res` | The wavelength step from one pixel to the next | `16.9 mAA / pix` | `22.3 mAA / pix` |
-| `plate_scale_angle` | The angle on the sky of one pixel along the slit | `0.159 arcsec / pix` | `1 arcsec / pix` |
-| `material` | The detector's material; only `silicon` is modelled | `silicon` | `silicon` |
-| `fano_factor` | The Fano factor, which sets the spread in the electrons each photon frees | the material's, `0.115` for silicon | the material's |
-| `pair_energy_300k` | The energy to free one electron-hole pair at 300 K | the material's, `3.71 eV` for silicon | the material's |
-| `pair_energy_slope` | The change in that energy per kelvin. The energy at the CCD's temperature T is `pair_energy_300k + pair_energy_slope * (T - 300 K)`. | the material's, `-0.0006 eV / K` for silicon | the material's |
-| `filter_distance` | The distance from the filter to the detector, for the pinholes' diffraction | `250 mm` | - |
-| `shutter` | Whether frames are taken with the mechanical shutter, which keeps the CCDs dark while a frame is cleared and read. A run models frames taken with it, so `false` is refused. | `true` | - |
-| `n_rows` | The pixels of each CCD along the dispersion | `2048` | - |
-| `n_columns` | The pixels of each CCD along the slit | `2048` | - |
-| `ccd_gap` | The space between the two CCDs' imaging areas | `1 mm` | - |
-| `row_transfer_time` | The time to move every row of a CCD one step towards its serial register | `15 us` | - |
-| `pixel_period` | The time to move one pixel along the serial register and digitise it | `500 ns` | - |
-| `serial_prescan` | The samples each output digitises before the image pixels of a row it reads | `50` | - |
-| `serial_overscan` | The samples each output digitises after them | `20` | - |
-| `parallel_overscan_rows` | The rows clocked and read after the last image row | `20` | - |
-| `cte_parallel` | The charge transfer efficiency of a row transfer: the fraction of a packet's charge that moves with it. A run does not model charge transfer, so a value below 1 is refused. | `1` | - |
-| `cte_serial` | The same for a transfer along the serial register | `1` | - |
-| `dispersion` | The wavelength in Angstrom against the position along the dispersion in mm from the middle of the gap between the CCDs: polynomial coefficients, lowest order first. | `[198.885944, 1.2516577, -1.361114e-4]` | - |
-| `wavelength_offset` | A shift added to every row's wavelength, for a wavelength calibration of the camera. | `0 Angstrom` | - |
-| `lit_band` | The wavelengths between which light reaches the CCDs; a baffle blocks the light outside them. | `[170.0 Angstrom, 212.3 Angstrom]` | - |
-| `slit_image_tilt` | How far a line moves along the dispersion, in rows, between the middle of the slit and 140 arcsec from it: a linear and a quadratic term. Measured from the ray-traced spots in the SW footprint figure of the optical design summary, RSC-2022021C, it is about `[0.991, 0.605]`; no document gives it. | `[0, 0]`, a line on the same row all along the slit | - |
+| `max_dn` | Where DN are clipped | `65535 DN / pix` | `65535 DN / pix` |
+| `full_well` | Full well, for comparison only; nothing is clipped at it | `150000 electron / pix` | - |
+| `pix_size` | Pixel size | `13.5 um / pix` | `13.5 um / pix` |
+| `wvl_res` | Wavelength step per pixel | `16.9 mAA / pix` | `22.3 mAA / pix` |
+| `plate_scale_angle` | Angle per pixel along the slit | `0.159 arcsec / pix` | `1 arcsec / pix` |
+| `material` | Only `silicon` | `silicon` | `silicon` |
+| `fano_factor` | Fano factor | `0.115` | `0.115` |
+| `pair_energy_300k` | Energy per electron-hole pair at 300 K | `3.71 eV` | `3.71 eV` |
+| `pair_energy_slope` | Change in that energy per kelvin | `-0.0006 eV / K` | `-0.0006 eV / K` |
+| `filter_distance` | Filter to detector, for the pinholes' diffraction | `250 mm` | - |
+| `shutter` | Frames taken with the shutter; `false` is refused | `true` | - |
+| `n_rows`, `n_columns` | Pixels of each CCD along the dispersion and along the slit | `2048` | - |
+| `ccd_gap` | Space between the two CCDs | `1 mm` | - |
+| `row_transfer_time` | Time per row transfer | `15 us` | - |
+| `pixel_period` | Time per pixel along the serial register | `500 ns` | - |
+| `serial_prescan`, `serial_overscan` | Samples read before and after a row's image pixels | `50`, `20` | - |
+| `parallel_overscan_rows` | Rows read after the last image row | `20` | - |
+| `cte_parallel`, `cte_serial` | Charge transfer efficiency; a run refuses values below 1 | `1` | - |
+| `dispersion` | Wavelength in Angstrom against mm from the middle of the CCD gap, as polynomial coefficients | `[198.885944, 1.2516577, -1.361114e-4]` | - |
+| `wavelength_offset` | Shift added to every row's wavelength | `0 Angstrom` | - |
+| `lit_band` | Wavelengths that reach the CCDs | `[170.0 Angstrom, 212.3 Angstrom]` | - |
+| `slit_image_tilt` | Rows a line moves between the slit's middle and 140 arcsec from it: linear and quadratic terms | `[0, 0]` | - |
 
-The last four settings describe the SW focal plane. A run takes each pixel's wavelength from `wvl_res`, not from the focal plane. It uses the focal plane only to find the row that records each wavelength, for the [dark current](../background/instrument-model.md#dark-current), and, with `simulation.focal_plane_dispersion`, the width of its pixels. It refuses values other than the defaults, which would make these disagree with its wavelengths. [Full-CCD frames](../observe/full-ccd-frames.md) use the first three, and refuse a `slit_image_tilt` other than zero, as they do not yet model a tilted image of the slit.
+A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane settings other than the defaults. [Full-CCD frames](../observe/full-ccd-frames.md) use the focal plane, but not `slit_image_tilt`.
 
 ## telescope
 
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
-| `D_ap` | The aperture's diameter. Half of its area feeds the SW channel. | `0.28 m` | - |
-| `microroughness_sigma` | The RMS roughness of the primary mirror | `0.3 nm` | - |
-| `psf_type` | The shape of the PSF; only `gaussian` is modelled | `gaussian` | `gaussian` |
-| `psf_params` | The FWHMs in pixels of the optical design's PSF, along the slit and in wavelength. This is one value, not a sweep. | from `field_of_view` | `[3 pix, 3 pix]` |
-| `field_of_view` | The field the optical design's PSF is the worst case over, in arcsec: `280x280` (the full scan), `100x100` or `70x70`. It sets `psf_params` when that is not given. See [The SW PSF along the slit](../background/instrument-model.md#the-sw-psf-along-the-slit). | `280x280` | - |
-| `resolution_budget` | The blur added to the optical design's from the resolution budget: `current_estimate`, `allocation` or `none` | `current_estimate` | - |
-| `pointing_jitter` | The FWHM of the spacecraft's pointing jitter, in place of the budget's. It is added even with `resolution_budget: none`. | the budget's, `0.110 arcsec` | - |
-| `psf_slit_width` | The slit the FWHM in wavelength was measured with. The FWHM for other slits is worked out from it. Without it, the FWHM is the same for every slit. This is one value, not a sweep. | `0.2 arcsec` | none |
-| `psf_across_slit` | The FWHM of the telescope optics' blur across the slit, which brings in light from either side of it. For SWC the resolution budget's blur before the slit is added to it. | none | none |
-| `slit_length` | The length of the slits | `280 arcsec` | - |
-| `fiducial_centres` | Where the middle of each fiducial is along the slit, from its centre. Positive is towards increasing y of the synthesis, which is solar north in nominal observations. This is one value, not a sweep. | `[-70 arcsec, 25 arcsec]` | - |
-| `fiducial_lengths` | The length of the fiducials of the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that order. This is one value, not a sweep. | `[0.8 arcsec, 0.8 arcsec, 0.8 arcsec, 1.6 arcsec]` | - |
-| `pm_table` | A table of the primary mirror's reflectance | packaged | - |
-| `grating_table` | A table of the grating's efficiency | packaged | - |
-| `calibration` | The EIS effective area: `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](../background/instrument-model.md#eis-effective-area) | - | `ground` |
-| `date` | The date of the observation, for the in-flight EIS calibrations, such as `"2012-06-03"` | - | none |
+| `D_ap` | Aperture diameter; half its area feeds SW | `0.28 m` | - |
+| `microroughness_sigma` | RMS roughness of the primary mirror | `0.3 nm` | - |
+| `psf_type` | Only `gaussian` | `gaussian` | `gaussian` |
+| `psf_params` | PSF FWHMs in pixels, along the slit and in wavelength | from `field_of_view` | `[3 pix, 3 pix]` |
+| `field_of_view` | `280x280`, `100x100` or `70x70` arcsec; sets `psf_params`; see [The SW PSF along the slit](../background/instrument-model.md#the-sw-psf-along-the-slit) | `280x280` | - |
+| `resolution_budget` | `current_estimate`, `allocation` or `none` | `current_estimate` | - |
+| `pointing_jitter` | Pointing jitter FWHM, in place of the budget's | `0.110 arcsec` | - |
+| `psf_slit_width` | Slit the wavelength FWHM was measured with | `0.2 arcsec` | none |
+| `psf_across_slit` | FWHM of the blur across the slit | none | none |
+| `slit_length` | Slit length | `280 arcsec` | - |
+| `fiducial_centres` | Middle of each fiducial along the slit, positive towards solar north | `[-70 arcsec, 25 arcsec]` | - |
+| `fiducial_lengths` | Fiducial lengths for the 0.2, 0.4, 0.8 and 1.6 arcsec slits | `[0.8, 0.8, 0.8, 1.6] arcsec` | - |
+| `pm_table`, `grating_table` | Primary mirror reflectance and grating efficiency tables | packaged | - |
+| `calibration` | `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](../background/instrument-model.md#eis-effective-area) | - | `ground` |
+| `date` | Date of the observation, for in-flight calibrations | - | none |
 
-A table has two columns: the wavelength in nm, and the throughput, from 0 to 1. Lines starting with `#`, and any lines before the data, are skipped.
-
-The PSF widths each `field_of_view` gives, and the rows of the resolution budget, are fixed: they come from the optical design summary RSC-2022021C and the resolution budget RSC-2022033B, and cannot be set here. Give `psf_params` to use other widths, or `resolution_budget: none` to leave out the budget. They are set in `Telescope_EUVST.FIELDS_OF_VIEW` in [`config.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/config.py) and in [`resolution_budget.py`](https://github.com/jamesmckevitt/eclipse/blob/master/src/eclipse/resolution_budget.py).
+`psf_params`, `psf_slit_width`, `fiducial_centres` and `fiducial_lengths` each take one value, not a sweep. A table has two columns, wavelength in nm and throughput from 0 to 1, and lines starting with `#` are skipped.
 
 ## filter
 
-The filter is SWC's; for EIS the section is ignored, with a warning.
+SWC's filter; ignored, with a warning, for EIS.
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `al_thickness` | The thickness of the aluminium | `1485 angstrom` |
-| `oxide_thickness` | The thickness of the aluminium oxide | `95 angstrom` |
-| `c_thickness` | The thickness of the carbon | `0 angstrom` |
-| `mesh_throughput` | The fraction of light the filter's supporting mesh lets through | `0.8` |
-| `al_table`, `oxide_table`, `c_table` | Tables of the transmission of a layer `table_thickness` thick, in the format above | packaged |
-| `table_thickness` | The thickness the tables are for | `1000 angstrom` |
-| `visible_decade_thickness` | The thickness of aluminium that cuts visible light by a factor of 10 | `170 angstrom` |
-
-For visible light, the filter's transmission is 10^(-t / `visible_decade_thickness`) for a thickness t of aluminium, times `mesh_throughput`.
+| `al_thickness` | Aluminium thickness | `1485 angstrom` |
+| `oxide_thickness` | Aluminium oxide thickness | `95 angstrom` |
+| `c_thickness` | Carbon thickness | `0 angstrom` |
+| `mesh_throughput` | Fraction the mesh lets through | `0.8` |
+| `al_table`, `oxide_table`, `c_table` | Transmission tables of a layer `table_thickness` thick | packaged |
+| `table_thickness` | Thickness the tables are for | `1000 angstrom` |
+| `visible_decade_thickness` | Aluminium that cuts visible light tenfold | `170 angstrom` |
 
 ## fitting
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `components` | The Gaussians to fit to a blend; see [Fitting blended lines](../observe/fitting.md) | one Gaussian |
+| `components` | The Gaussians to fit; see [Fitting the lines](../observe/fitting.md) | one Gaussian |
 | `primary_component` | The component whose velocity is reported | `0` |
-| `constrain_positive_intensity` | Whether to keep every component's amplitude at zero or above | `False` |
-| `backend` | The optimiser: `scipy` or `mpfit` | `scipy` |
-| `max_iter` | How many iterations the optimiser may take on one spectrum | `1000` |
-| `bessel_correction` | Whether the standard deviations over the iterations use n - 1 in place of n (Bessel's correction) | `False` |
-| `save_iterations` | Whether to keep every iteration's fit in the results | `False` |
-| `weighted` | Whether to weight each pixel of the DN spectra by its uncertainty, worked out from its own signal, and fit the photon spectra by their Poisson likelihood | `True` |
-| `start` | Where each fit of a blend starts: `search`, where the components best match the spectrum, or `rest`, at their rest wavelengths; see [A faint blend](../observe/fitting.md#a-faint-blend) | `search` |
+| `constrain_positive_intensity` | Keep amplitudes at zero or above | `False` |
+| `backend` | `scipy` or `mpfit` | `scipy` |
+| `max_iter` | Optimiser iterations per spectrum | `1000` |
+| `bessel_correction` | Use n - 1 in standard deviations | `False` |
+| `save_iterations` | Keep every iteration's fit | `False` |
+| `weighted` | Weight DN fits by each pixel's uncertainty, and fit photons by their Poisson likelihood | `True` |
+| `start` | `search` or `rest`; see [A faint blend](../observe/fitting.md#a-faint-blend) | `search` |
 
-Each entry of `components` takes `wavelength`, `tie_center`, `tie_width`, `amplitude_greater_than` and `name`, described on [Fitting blended lines](../observe/fitting.md), and `velocity_limits` and `width_limits`. `velocity_limits` are the lowest and highest velocity the fit may give the line, from its own rest wavelength, and `width_limits` the lowest and highest Gaussian sigma. A line beyond the limits is fitted at a limit, and still counts in the mean and standard deviation. A component with `tie_center` follows the other's velocity limits and cannot have its own, and one with `tie_width` the other's width limits.
+Each component also takes `velocity_limits` and `width_limits`, the lowest and highest velocity and Gaussian sigma the fit may give it.
 
 ## Pinholes
 
-`pinhole_sizes` and `pinhole_positions` have one entry per pinhole, so they must be the same length. `pinhole_positions_spectral` can be left out, which puts every pinhole in the middle of the spectral window; if given, it needs an entry per pinhole too. `simulation.enable_pinholes` switches the pinholes on. They model defects in SWC's filter, which let through visible light and unattenuated EUV. They are for filter engineering rather than for science runs.
+`pinhole_sizes` and `pinhole_positions` have one entry per pinhole, as does `pinhole_positions_spectral` if given. `simulation.enable_pinholes` switches them on. They model defects in SWC's filter, for filter engineering.
 
 ## atmosphere and synthesis { data-routes="mhd dem" }
 
-`atmosphere` names the [atmosphere file](../files/atmosphere.md) to synthesise. The `synthesis:` section takes the options of `synthesise-spectra`, with underscores in place of the dashes: `lines`, `abundance`, `continuum`, `integration_axis`, `position`, `rotation`, `projection`, `curvature`, `no_wrap`, `crop_x`, `crop_y`, `crop_z`, `downsample`, `vel_res`, `vel_lim`, `precision`, `mass_per_electron`, `hdf5_dbase_root`, `n_workers` and `goft_temperature_chunk`. An option that takes two values, such as `crop_z`, takes a list, and an option that is on or off, such as `continuum`, takes `True` or `False`. [From an MHD simulation](../emission/mhd.md#command-line-options) describes each.
+`atmosphere` names the [atmosphere file](../files/atmosphere.md) to synthesise. The `synthesis:` section takes the [options of `synthesise-spectra`](../emission/mhd.md#command-line-options), with underscores in place of dashes. Two values go in a list, and an on-or-off option takes `True` or `False`.
 
 ## raster { data-routes="mhd spectra" }
 

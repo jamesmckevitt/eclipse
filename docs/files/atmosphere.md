@@ -1,10 +1,8 @@
 # Atmosphere files
 
-An atmosphere file holds one snapshot of a simulation: its temperature, density and velocity on a grid of cells. [From an MHD simulation](../emission/mhd.md) synthesises the spectra it emits, and a [series of them](../observe/rasters.md) can be observed as the slit steps across.
+An atmosphere file holds one snapshot of a simulation: temperature, density and velocity on a grid of cells, for [synthesis](../emission/mhd.md) or a [raster](../observe/rasters.md).
 
 ## What one holds
-
-This is the layout, for writing one with any HDF5 library. [Writing one in Python](#writing-one-in-python) does it for you.
 
 Root attributes:
 
@@ -12,22 +10,20 @@ Root attributes:
 | --- | --- |
 | `format` | `eclipse-atmosphere` |
 | `version` | `1` |
-| `source` | A description of the simulation (optional). It is copied into the synthesis file. |
+| `source` | A description of the simulation (optional) |
 
-Datasets. Each one needs a `unit` attribute that astropy can read, such as `K`, `g / cm3`, `kg / m3`, `cm / s`, `km / s`, `Mm` or `km`. Any unit of the right kind will do.
+Datasets, each with a `unit` attribute astropy can read, such as `K`, `g / cm3` or `km / s`:
 
 | Dataset | Shape | Description |
 | --- | --- | --- |
-| `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | Positions of the cell boundaries along each axis, in increasing order. |
+| `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | Cell boundaries, increasing |
 | `temperature` | `(nz, ny, nx)` | |
-| `mass_density` | `(nz, ny, nx)` | At least one of `mass_density` and `electron_density` is needed. |
+| `mass_density` | `(nz, ny, nx)` | This or `electron_density` is needed |
 | `electron_density` | `(nz, ny, nx)` | |
-| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Velocity along each axis of the box, positive towards increasing coordinate. Only the component along `--integration-axis` is read: `velocity_z` for a view from above, `velocity_x` or `velocity_y` for a side view. |
-| `time` | scalar | Time of the snapshot (optional). |
+| `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Positive towards increasing coordinate; only those along the line of sight are needed |
+| `time` | scalar | Time of the snapshot (optional) |
 
-The cubes are stored in C order with z first, so `cube[k]` is a horizontal slice indexed `[y, x]`, and z points up. If your code stores its arrays in a different order, transpose them before writing.
-
-The two axes that become the image must be evenly spaced. The axis along the line of sight can have cells of different sizes.
+z points up. The two image axes must be evenly spaced; the line of sight need not be.
 
 ## Writing one in Python
 
@@ -49,11 +45,11 @@ atmosphere = Atmosphere(
 write_atmosphere(atmosphere, "atmosphere.h5")
 ```
 
-`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres.
+`edges_from_centres` puts each edge halfway between two centres.
 
 ## Writing one from other languages
 
-Any HDF5 library can write the file, for example from Fortran or C inside the simulation code, or from IDL or Julia. Put the datasets and attributes listed above at the root of the file. A minimal file for a view from above looks like this in `h5dump`:
+Any HDF5 library can write it. A minimal file for a view from above, in `h5dump`:
 
 ```text
 HDF5 "atmosphere.h5" {
@@ -72,11 +68,11 @@ GROUP "/" {
 }
 ```
 
-Fortran stores arrays column by column, so an array declared `(nx, ny, nz)` in Fortran is written to HDF5 as `(nz, ny, nx)`, which is what ECLIPSE expects. The cubes can be float32, which halves the size of the file. The synthesis converts them to the precision set by `--precision`, float64 by default, when it reads them.
+A Fortran array `(nx, ny, nz)` is written as `(nz, ny, nx)`, as needed. float32 cubes halve the file.
 
 ## Reading one
 
-`read_atmosphere` reads a file back into an `Atmosphere`. To check what a file holds without loading the cubes, run
+`read_atmosphere` reads one into an `Atmosphere`. To see what a file holds:
 
 ```bash
 eclipse-atmosphere info atmosphere.h5

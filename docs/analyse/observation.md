@@ -18,9 +18,7 @@ Each line's precision, maps, and the exposure each pixel needs
 </div>
 </div>
 
-`eclipse` writes its results to `run/result/<config name>.h5`. ECLIPSE's analysis functions read them, and pick out the measurements you need.
-
-The examples on this page read the sweep from [Simulating an observation](../observe/simulate.md), which observed the active region of the [worked example](../worked-example.ipynb) with eight combinations of settings.
+The examples read the sweep from [Simulating an observation](../observe/simulate.md): the [worked example](../worked-example.ipynb)'s active region, with eight combinations of settings.
 
 ## Loading the results
 
@@ -31,11 +29,11 @@ results = load_instrument_response_results("run/result/muram_ar_sweep.h5")
 summary_table(results)
 ```
 
-`summary_table` prints the version of ECLIPSE and the git commit that made the results, the settings of every combination, which settings were swept, and the names of the fitted components.
+`summary_table` prints the settings of every combination and the fitted components.
 
 ## Picking a combination
 
-A run makes one set of results for each combination of the settings it swept through. `get_results_for_combination` picks one out, by the names `summary_table` prints: the section and key, such as `simulation.expos`. Python keyword arguments can't have a dot in them, so they are given as a dictionary:
+`get_results_for_combination` picks out one combination by its settings, named as `summary_table` prints them:
 
 ```python
 import astropy.units as u
@@ -48,7 +46,7 @@ combination = get_results_for_combination(results, **{
 })
 ```
 
-Values with units need their units. If what you give matches more than one combination, or none, it stops with an error saying so. `get_parameter_combinations(results)` lists the settings of every combination.
+`get_parameter_combinations(results)` lists every combination's settings.
 
 ## How precisely each line was measured
 
@@ -64,9 +62,7 @@ print(f"{np.nanmedian(stats['v_std']):.2f}")
 2.80 km / s
 ```
 
-This is the median over the whole field of the velocity's standard deviation.
-
-`analyse_fit_statistics` gives maps, with one value per pixel, of the fitted line's:
+`analyse_fit_statistics` gives a value per pixel of:
 
 | Key | What it is |
 | --- | --- |
@@ -77,13 +73,11 @@ This is the median over the whole field of the velocity's standard deviation.
 | `v_err` | The true velocity minus the mean measured velocity |
 | `failed_fits`, `n_iterations` | The number of fits that failed, and the number of iterations |
 
-The width is the Gaussian's sigma, and the intensity is the fitted line's counts. Failed fits are left out of the means and standard deviations.
-
-By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted)).
+The width is the Gaussian's sigma. `data_type="photon"` gives the [photon fits](../observe/fitting.md#which-signals-are-fitted) in place of the DN fits.
 
 ### Comparing combinations
 
-`get_parameter_combinations` makes it easy to go through a sweep:
+Going through a sweep:
 
 ```python
 from eclipse import get_parameter_combinations
@@ -108,7 +102,7 @@ for settings in get_parameter_combinations(results):
 
 ### Every component of a blend
 
-When a [blend](../observe/fitting.md) is fitted, the results hold every component. `list_fit_components` names them, and `component=` picks one; without it, `analyse_fit_statistics` gives the primary component:
+`list_fit_components` names the components of a [blend](../observe/fitting.md), and `component=` picks one:
 
 ```python
 from eclipse import list_fit_components
@@ -123,11 +117,9 @@ Fe XII 195.119 2436 DN
 Fe XII 195.179 71 DN
 ```
 
-For each component, the statistics also hold its name as `component`, its rest wavelength as `rest_wavelength`, and what it is tied to as `tied`.
-
 ## The truth
 
-The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no noise and no PSF. `v_true` and `w_true` come from that fit. `v_err` then says how far the measured velocity is off on average, where `v_std` says how much it scatters.
+`v_true` and `w_true` are fitted to the spectra on the detector's pixels with no noise and no PSF. `v_err` says how far the velocity is off on average, and `v_std` how much it scatters.
 
 ## Maps { data-routes="mhd spectra dem" }
 
@@ -140,7 +132,7 @@ maps = create_sunpy_maps_from_combo(combination, date_obs="2026-01-01T00:00:00")
 maps["velocity_std"].peek()
 ```
 
-A synthesised scene has no date of its own, so the maps need one from you, as `date_obs`. The only exception is an EIS run with a dated calibration, whose date is used. The maps are:
+The maps need a `date_obs`, except for an EIS run with a dated calibration. They are:
 
 | Map | What it is | Unit |
 | --- | --- | --- |
@@ -152,17 +144,11 @@ A synthesised scene has no date of its own, so the maps need one from you, as `d
 | `intensity_from_fit`, `intensity_mean`, `intensity_std` | The same for the intensity, the fitted line's counts | DN, or photons with `data_type="photon"` |
 | `failed_fits` | The number of fits that failed in each pixel | none |
 
-Each map also holds its unit, as `maps["velocity_std"].unit`.
-
-It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the combinations at each exposure time as `exposure_time_results`, it also makes an `exposure_time` map: the shortest of those exposures, in seconds, at which each pixel's velocity is measured to within `precision_requirement`, 2 km/s by default.
-
-These are `total_dn` and `velocity_std` of this combination:
+It takes `data_type` and `component` too. These are `total_dn` and `velocity_std`:
 
 ![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](../images/example-precision.png)
 
-The velocity is measured to about 1 km/s in the core, and to about 4 km/s in the quiet Sun. It is worst in the fans beside the core, where the line is faintest. The two thin lines are the slit's fiducials.
-
-An exposure sweep gives the `exposure_time` map. [This run](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml) observes the region with the 0.4 arcsec slit and two pixels binned, in exposures of 15, 30, 60, 120 and 240 s, with 30 iterations:
+Given the combinations at each exposure as `exposure_time_results`, it also makes an `exposure_time` map: the shortest exposure that measures each pixel's velocity to within `precision_requirement`. From [an exposure sweep](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml):
 
 ```python
 results = load_instrument_response_results("run/result/muram_ar_exposures.h5")
@@ -178,12 +164,8 @@ maps["exposure_time"].peek()
 
 ## Every iteration
 
-With `save_iterations: true` in the [fitting section](../observe/fitting.md#the-fit), the results also keep every iteration's fit. `combination["dn_fit_stats"]["iterations"]` holds `fit_data`, every fitted value of every iteration, and `failed`, which marks the fits that failed.
+With `save_iterations: true` in the [fitting section](../observe/fitting.md#the-fit), `combination["dn_fit_stats"]["iterations"]` holds every iteration's fit, as `fit_data` and `failed`.
 
 ## The synthesis behind the results { data-routes="mhd dem" }
 
-The DEM and the emission measure by temperature and velocity are in the synthesis file, not in the results. `read_synthesis_products` reads them; see [Synthesis files](../files/synthesis.md). A time series of atmosphere files is synthesised during the run and writes no synthesis file, so these are not kept for it.
-
-For a [time series](../observe/rasters.md), `results["raster"]` holds the observing plan, the files and their times, and the cube each combination observed. With more than one raster, `raster.repeat` picks one out like any other setting.
-
-Results files from ECLIPSE 0.11.0 and earlier were pickles; see [Older versions](../reference/older-versions.md).
+The DEM and emission measure are in the [synthesis file](../files/synthesis.md), read with `read_synthesis_products`. For a [raster](../observe/rasters.md), `results["raster"]` holds the observing plan and the cube observed.

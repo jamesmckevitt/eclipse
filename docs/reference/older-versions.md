@@ -1,44 +1,41 @@
 # Older versions
 
-Some things from older versions of ECLIPSE still work, with a warning, until a future release stops them. These include the package's former names, the pickles that ECLIPSE 0.11.0 and earlier wrote, and reading MURaM's own files directly. This page says how to move over.
+What older versions used still works, with a warning, until a future release. This page says how to move over.
 
 ## The name on PyPI
 
-ECLIPSE 0.12 and earlier were on PyPI as `solarc-eclipse`. It is now `eclipse`: install it with `pip install eclipse`. `pip install solarc-eclipse` now stops with a message saying to install `eclipse`. Older versions can still be installed by giving the version, such as `pip install solarc-eclipse==0.12.1`.
+ECLIPSE 0.12 and earlier were `solarc-eclipse` on PyPI (`pip install solarc-eclipse==0.12.1` still works). To move over:
 
-To move an installation over, run `pip uninstall solarc-eclipse`, then `pip install eclipse`. Uninstall first: uninstalling `solarc-eclipse` afterwards also removes the commands, such as `eclipse`, and `import euvst_response`. If that has happened, `pip install --force-reinstall --no-deps eclipse` puts them back.
+```bash
+pip uninstall solarc-eclipse
+pip install eclipse
+```
 
-The same goes for a clone installed with `pip install -e .`: run `pip uninstall solarc-eclipse` before installing it again. An install from git that names the package, such as `pip install "solarc-eclipse @ git+https://github.com/jamesmckevitt/eclipse@<commit>"`, still works for commits from before the change of name. For later commits, write `eclipse @ git+...` instead.
+Uninstall first, or the commands go too; `pip install --force-reinstall --no-deps eclipse` puts them back. A git install of a later commit is `eclipse @ git+...`.
 
 ## The package's name
 
-ECLIPSE 0.12 and earlier were imported as `euvst_response`. It is now `eclipse`: `import eclipse`, or `from eclipse import monte_carlo`. `import euvst_response` still works, with a warning, until a future release removes it. Its modules, such as `euvst_response.frame`, are the `eclipse` modules of the same name.
-
-The package's code is now in the `src` folder of the repository. If you installed ECLIPSE from a clone with `pip install -e .`, run that command in the clone again after updating it. If you use a clone without installing it, by putting the clone on `PYTHONPATH`, put `<clone>/src` on `PYTHONPATH` instead.
-
-A file of your own named `eclipse.py`, in the folder you run Python from or on `PYTHONPATH`, is now imported in place of the package. Rename the file if you have one.
+`import euvst_response` is now `import eclipse`. The code is in the clone's `src` folder: rerun `pip install -e .` after updating, or put `<clone>/src` on `PYTHONPATH`. Rename any `eclipse.py` of your own, or it is imported instead.
 
 ## Synthesis files
 
-ECLIPSE 0.11.0 and earlier wrote the synthesis as a pickle. `eclipse` still reads one, and `synthesise-spectra` still writes one if `--output-name` ends in `.pkl`, both with a warning, until a future release stops them. `eclipse.convert_synthesis_pickle("old.pkl", "new.h5")` rewrites a pickle as a synthesis file, keeping everything it held.
+ECLIPSE 0.11.0 and earlier wrote pickles. `eclipse.convert_synthesis_pickle("old.pkl", "new.h5")` converts one.
 
 ## Results files
 
-ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_response_results` still reads one, with a warning, until a future release stops it. Rerunning `run.yaml` writes a new `run.h5`, and renames the old `run.pkl` to `run.pkl.old`, or `run.pkl.old.1` and so on if that name is taken. A script that loads `run.pkl` with ECLIPSE's functions then reads `run.h5` instead, with a warning. `eclipse.convert_results_pickle("run.pkl")` converts an old pickle to the new format without rerunning. Some pickles name packaged tables inside an older installation's `euvst_response/data` folder. If such a table no longer exists, this installation's copy is used instead.
+ECLIPSE 0.11.0 and earlier wrote pickles. `eclipse.convert_results_pickle("run.pkl")` converts one; rerunning renames the old pickle to `run.pkl.old`.
 
 ## Frame files
 
-A frame file with no `field_angle` was written by ECLIPSE 0.13.0 to 0.14.0, and its columns count from the south end of the slit on both CCDs. Later versions count each CCD's columns from its left output, so the left CCD's run the other way, and `field_angle` gives each column's angle along the slit.
-
-Frame files from ECLIPSE 0.15.0 and earlier have a `cells_per_row` attribute in place of the `spectra` dataset.
+In frame files from ECLIPSE 0.13.0 to 0.14.0, with no `field_angle`, both CCDs' columns count from the slit's south end; later ones count from each CCD's left output. Frame files from 0.15.0 and earlier have no `spectra` dataset.
 
 ## Frames from a band's lines
 
-The `lines` and `continuum` arguments of `full_ccd_frame` still work, with a warning. A frame now holds the spectra in the synthesis file: synthesise the band into it with `synthesise-spectra --band`, or use a [run file](../observe/full-ccd-frames.md#from-an-mhd-simulation), and give `slit_position` and `exposure` by name.
+`full_ccd_frame`'s `lines` and `continuum` arguments are replaced by `synthesise-spectra --band`, or a [run file](../observe/full-ccd-frames.md#from-an-mhd-simulation).
 
 ## Reading MURaM's own files
 
-Command lines from ECLIPSE 0.11.0 and earlier, which read MURaM's binary files directly, still run without `--atmosphere`, with a warning, until a future release removes them:
+Command lines from ECLIPSE 0.11.0 and earlier that read MURaM's binary files still run:
 
 ```bash
 synthesise-spectra \
@@ -52,19 +49,11 @@ synthesise-spectra \
   --output-dir ./run/input
 ```
 
-- `--data-dir`: Directory the file names are relative to (default: `data/atmosphere`)
-- `--temp-file`, `--rho-file`: Temperature and density files (default: `temp/eosT.0270000`, `rho/result_prim_0.0270000`)
-- `--vx-file`, `--vy-file`, `--vz-file`: Velocity files; only the one along `--integration-axis` is read (default: `vx/result_prim_1.0270000`, `vy/result_prim_3.0270000`, `vz/result_prim_2.0270000`)
-- `--cube-shape`: Cube dimensions in the order the files store them, `(nx nz ny)` (default: `512 768 256`)
-- `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: Cell sizes (default: `"0.192 Mm"`, `"0.192 Mm"`, `"0.064 Mm"`)
-
-In this mode x and y are centred on zero, and z = 0 is the centre of the bottom cell. `--crop-x`, `--crop-y` and `--crop-z` are measured from there.
-
-To move over, write each snapshot as an [atmosphere file](../files/atmosphere.md), as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun).
+Here x and y are centred on zero, and z = 0 is the bottom cell's centre, for `--crop-x`, `--crop-y` and `--crop-z`. To move over, write each snapshot as an [atmosphere file](../files/atmosphere.md), as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun).
 
 ## Dynamic mode
 
-Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Rasters and sit-and-stares](../observe/rasters.md).
+Dynamic mode, a raster of MURaM snapshots made by `synthesise-spectra` with `--slit-rest-time`, still runs:
 
 ```bash
 synthesise-spectra \
@@ -77,18 +66,8 @@ synthesise-spectra \
   --output-dir ./run/input
 ```
 
-- `--slit-rest-time`: Time the slit rests at each position, which turns dynamic mode on
-- `--slit-width`: Slit width
-- `--temp-dir`, `--rho-dir`, `--vx-dir`, `--vy-dir`, `--vz-dir`, `--time-dir`: Directory of each quantity's files, relative to `--data-dir` (default: `temp`, `rho`, `vx`, `vy`, `vz` and `header`)
-- `--temp-filename`, `--rho-filename`, `--vx-filename`, `--vy-filename`, `--vz-filename`, `--time-filename`: File name before the snapshot suffix (default: `eosT`, `result_prim_0`, `result_prim_1`, `result_prim_3`, `result_prim_2` and `Header`)
-- `--cube-shape`, `--voxel-dx`, `--voxel-dy`, `--voxel-dz`: As for reading MURaM's own files above
-
-The instrument run on the synthesis file must have exactly one slit width, the one used in the synthesis, and exactly one exposure time, equal to `--slit-rest-time`.
-
-To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Rasters and sit-and-stares](../observe/rasters.md).
+The run on its output must use that slit width, and an exposure equal to `--slit-rest-time`. To move over, write each snapshot as an atmosphere file with its time and give them as `atmosphere_series`; see [Rasters and sit-and-stares](../observe/rasters.md).
 
 ## Renamed options
 
-`eclipse --config FILE` is now `eclipse run FILE`. The old form still works, with a warning.
-
-`--mass-per-electron` in `synthesise-spectra` was called `--mean-mol-wt`, and defaulted to 1.29 up to ECLIPSE 0.11.0. The old name still works. Its default is now worked out from the abundances; see [Electron density](../emission/mhd.md#electron-density).
+`eclipse --config FILE` is now `eclipse run FILE`. `--mean-mol-wt` is now `--mass-per-electron`, and its default, 1.29 up to 0.11.0, now comes from the [abundances](../emission/mhd.md#electron-density).

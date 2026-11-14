@@ -1,6 +1,6 @@
 # Fitting the lines
 
-ECLIPSE fits each measured spectrum as you would fit real data, with a Gaussian on a flat background, and reports the line's intensity, velocity and width. When other lines fall in the same spectral window, it can fit several Gaussians together instead. The settings go in a `fitting` section of the configuration file.
+Each spectrum is fitted with a Gaussian on a flat background, or several for a blend. The settings go in `fitting`.
 
 ## Several components
 
@@ -8,37 +8,33 @@ To fit a blend, list its lines under `components`:
 
 ```yaml
 fitting:
-  primary_component: 0           # index of the component the analysis reports by default
-  constrain_positive_intensity: true  # keep every amplitude at zero or above during the fit
-  backend: scipy                 # optimiser: "scipy" (default) or "mpfit"
-  max_iter: 1000                 # optimiser iterations before it gives up
+  primary_component: 0
+  constrain_positive_intensity: true
   components:
-    - wavelength: 195.119 angstrom     # component 0: free centre, width, amplitude
+    - wavelength: 195.119 angstrom
       name: Fe XII 195.119
-    - wavelength: 195.179 angstrom     # component 1: centre & width tied to component 0
+    - wavelength: 195.179 angstrom
       name: Fe XII 195.179
       tie_center: 0
       tie_width: 0
 ```
 
-Each entry in `components` is one Gaussian, and needs a `wavelength`, its rest wavelength. It can also have:
+Give at least two components, or leave `components` out for one Gaussian. Each needs its rest `wavelength`, and can have:
 
-- `tie_center: <i>`: fit this component at the same velocity as component *i*. Its centre is the other's scaled by the ratio of their rest wavelengths, so one velocity holds across the whole window.
-- `tie_width: <i>`: fit this component with the same line width as component *i*.
-- `amplitude_greater_than: <i>`: keep this component's amplitude above that of component *i*.
-- `name: <text>`: the component's name in the results. It defaults to its rest wavelength, such as `195.1190 Angstrom`.
+- `tie_center: <i>`: the same velocity as component *i*
+- `tie_width: <i>`: the same width as component *i*
+- `amplitude_greater_than: <i>`: a larger amplitude than component *i*
+- `name`: its name in the results (default: its rest wavelength)
 
-Without `components`, a single Gaussian is fitted. A `components` list needs at least two entries, since one on its own is not a blend.
-
-Here are the fits to Fe XII 195.119 and 195.179 in one pixel of the core of the [worked example](../worked-example.ipynb)'s active region, in a 60 s exposure with two pixels binned along the slit:
+The fits in one pixel of the active region's core:
 
 ![The measured spectrum of Fe XII in a pixel of the core, with the two fitted lines](../images/example-blend-fit.png)
 
-The results hold the intensity, velocity and width of every component, by its name. `primary_component` is the one the analysis functions give unless asked for another. Results files from older versions of ECLIPSE may hold the primary component alone, and `list_fit_components` then says so. [Every component of a blend](../analyse/observation.md#every-component-of-a-blend) shows how to get each.
+The results hold every component; `primary_component` is the one given by default. See [Every component of a blend](../analyse/observation.md#every-component-of-a-blend).
 
 ## A faint blend
 
-When one line of a blend is faint, more fitting options help to get good results. These settings follow the constraints [EISPAC](https://github.com/USNavalResearchLaboratory/eispac/blob/v0.99.4/eispac/data/templates/fe_12_195_119.2c.template.h5) uses to fit Fe XII 195.119 and the faint 195.179 beside it. The [run file settings](../reference/run-file-settings.md#fitting) describes `start` and the limits.
+These follow [EISPAC](https://github.com/USNavalResearchLaboratory/eispac/blob/v0.99.4/eispac/data/templates/fe_12_195_119.2c.template.h5)'s constraints for Fe XII 195.119 and the faint 195.179:
 
 ```yaml
 fitting:
@@ -53,26 +49,14 @@ fitting:
       tie_width: 0
 ```
 
-Here is the Doppler velocity of Fe XII 195.12 over the active region, as it is, as measured with the default start, and as measured with these settings, in a 60 s exposure with two pixels binned along the slit:
+The true velocity, and that measured with the default start and with these settings:
 
 ![The true Doppler velocity of Fe XII 195.12 over the active region, and the velocity measured with the default start and with these settings](../images/example-doppler.png)
 
 ## The fit
 
-`max_iter` limits how many iterations the optimiser may take on one spectrum. It defaults to 1000. A fit that runs out, or fails for any other reason, is left out of the mean and standard deviation, and the run prints how many fits failed and in how many pixels.
-
-`backend` chooses the optimiser, `scipy` or `mpfit`. Without it, ECLIPSE uses `scipy`.
-
-`bessel_correction: true` computes the standard deviation over the Monte Carlo iterations with n - 1 in place of n (Bessel's correction).
-
-`save_iterations: true` keeps every iteration's fitted values in the results, as well as their statistics. The results are then about `n_iter` times larger.
+A fit that fails, or runs past `max_iter` (default 1000), is left out of the statistics, and the run says how many failed. `backend` is `scipy` (default) or `mpfit`. `save_iterations: true` keeps every iteration, making the results about `n_iter` times larger.
 
 ## Which signals are fitted
 
-By default ECLIPSE fits two signals at every Monte Carlo iteration: the detector's output in DN, and the photons arriving at the detector. If you only need one, `fit_signals`, at the top level of the configuration file, saves time:
-
-```yaml
-fit_signals: dn   # "dn" fits only the DN signal
-                  # "photon" fits only the photon signal
-                  # "both" fits both, and is the default
-```
+Both the DN and the photons reaching the detector are fitted. `fit_signals: dn` or `photon`, at the top level, fits one and saves time.

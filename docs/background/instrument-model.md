@@ -1,41 +1,24 @@
 # The instrument model
 
-ECLIPSE follows the light from the Sun to the detector. For SWC, the telescope collects it with the throughput of the primary mirror, its roughness, the filter and the grating. For EIS, its calibration tables give the effective area. The point spread function (PSF) blurs it, and the slit selects a strip of the Sun. The detector turns the photons into electrons, with their noise, adds dark current and read noise, and digitises the result. This page describes the parts of that model that have settings of their own. The [run file settings](../reference/run-file-settings.md) lists every setting, and [Instrument sources](instrument-sources.md) gives the source of each default.
+ECLIPSE follows the light from the Sun through the telescope, the point spread function (PSF) and the slit, to the detector, which turns photons into electrons with their noise, adds dark current and read noise, and digitises them. This page covers the parts with settings of their own. [Run file settings](../reference/run-file-settings.md) lists every setting, and [Instrument sources](instrument-sources.md) where each default comes from.
 
 ## The instruments
 
-ECLIPSE models two instruments, chosen with the `instrument:` key at the top level of the configuration file:
-
-- `SWC` - SOLAR-C/EUVST-SW, the short wavelength channel. This is the default.
-- `EIS` - Hinode/EIS.
-
-The EUVST long wavelength channel (LW) is coming soon, and will complete EUVST.
+`instrument:` chooses `SWC`, SOLAR-C/EUVST's short wavelength channel (the default), or `EIS`, Hinode/EIS.
 
 ### EUVST-SW
 
-ECLIPSE's default settings describe EUVST-SW. [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000) describes the instrument model. It will be updated as EUVST is built, tested and commissioned.
-
-Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide. A raster steps across the region one slit width at a time, so a wider slit gives coarser pixels across the slit, in x, and leaves them the same along it, in y. Here is the core of the [worked example](../worked-example.ipynb)'s active region through each slit, without noise:
+The default settings describe EUVST-SW, as in [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000). Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide, and a wider slit gives coarser pixels across the slit:
 
 ![The core of the active region, 30 arcsec across, through the 0.2, 0.4, 0.8 and 1.6 arcsec slits](../images/example-slits.png)
 
-Its PSF is modelled, from simulations and some measurements of the mirror's roughness, and will be measured before launch; ECLIPSE prints a warning saying so whenever `psf: True` is set.
-
 ### Hinode/EIS
 
-Its slits are 1 and 2 arcsec wide. ECLIPSE does not model its 40 and 266 arcsec slots.
-
-Three settings apply to SWC only. Under `EIS`:
-
-- `filter:` describes EUVST-SW's aluminium filter. EIS's effective area comes from its own calibration tables, which already include its filters, so for EIS the whole section is ignored, with a warning. See [EIS effective area](#eis-effective-area) below.
-- `telescope.microroughness_sigma` is the roughness of EUVST's primary mirror. For EIS it is ignored, with a warning.
-- Pinholes in the filter are modelled for EUVST-SW only. Any pinhole setting, `enable_pinholes` or a `pinhole_*` list, stops an EIS run with an error.
-
-EIS's PSF is not well known. ECLIPSE uses a symmetrical Gaussian 3 pixels wide (FWHM), following Ugarte-Urra (2016), EIS Software Note 2, and prints a warning saying so whenever `psf: True` is set.
+Its slits are 1 and 2 arcsec wide; the slots are not modelled. The `filter:` section and `telescope.microroughness_sigma` are ignored for EIS, with a warning, and pinholes are refused. Its PSF is a Gaussian 3 pixels wide (Ugarte-Urra 2016, EIS Software Note 2).
 
 #### EIS effective area
 
-The EIS effective area comes from the instrument's own calibration tables, so it varies with wavelength and, for the in-flight calibrations, with the date of the observation:
+`telescope.calibration` chooses the EIS effective area. The in-flight calibrations need the observation's `date`:
 
 ```yaml
 instrument: EIS
@@ -44,32 +27,22 @@ telescope:
   date: "2012-06-03"    # quoted, so YAML keeps it a string
 ```
 
-| `calibration` | Source | Date |
-|---|---|---|
-| `ground` (default) | Pre-flight MSSL tables, `eis_ea.pro` | not used |
-| `dz2013` | Del Zanna (2013), `eis_ltds.pro` | required |
-| `warren2014` | Warren, Ugarte-Urra & Landi (2014) | required |
-| `dz2025` | Del Zanna et al. (2025), `interpol_eis_ea.pro` | required |
-
-The three in-flight calibrations need a `date`, and stop with an error without one. Both keys can be swept like any other setting:
-
-```yaml
-telescope:
-  calibration: dz2025
-  date: ["2008-01-01", "2013-01-01", "2018-01-01"]
-```
+| `calibration` | Source |
+|---|---|
+| `ground` (default) | Pre-flight MSSL tables, `eis_ea.pro` |
+| `dz2013` | Del Zanna (2013), `eis_ltds.pro` |
+| `warren2014` | Warren, Ugarte-Urra & Landi (2014) |
+| `dz2025` | Del Zanna et al. (2025), `interpol_eis_ea.pro` |
 
 ## The point spread function
 
-With `simulation.psf: True`, ECLIPSE blurs the spectra with the instrument's point spread function (PSF), along the slit and in wavelength, before they reach the detector's pixels. It is off by default.
-
-Here is Fe XII 195.12 from the core of the active region, 20 arcsec across, observed without noise in 60 s. The PSF smooths the thinnest threads:
+`simulation.psf: True` blurs the spectra along the slit and in wavelength. It is off by default.
 
 ![Fe XII 195.12 over 20 by 20 arcsec of the active region's core, without and with the PSF](../images/example-psf.png)
 
 ### The SW PSF along the slit
 
-The SW PSF varies with where you are along the slit. ECLIPSE uses the worst case over a field of view, which you choose with `telescope.field_of_view`: `280x280` (default, the full scan), `100x100` or `70x70` arcsec.
+The SW PSF is the worst case over `telescope.field_of_view`: `280x280` (default), `100x100` or `70x70` arcsec.
 
 ```yaml
 telescope:
@@ -80,12 +53,7 @@ simulation:
 
 ### The spectral PSF and the slit
 
-With `psf: True`, each line is blurred in wavelength by the optics and by the image of the slit, so the blur depends on the slit width. `telescope.psf_params` gives the optical design's FWHM in pixels, along the slit and in wavelength. For SWC, the one in wavelength is for the 0.2 arcsec slit.
-
-`simulation.spectral_psf` sets how the slit is added to the optics' blur:
-
-- `quadrature` (default): a Gaussian, whose FWHM is the optics' and the slit image's widths added in quadrature.
-- `convolution`: the optics' Gaussian convolved with the slit's rectangular image.
+In wavelength, the optics' blur is combined with the slit's image: added in quadrature (`spectral_psf: quadrature`, the default), or convolved with it (`convolution`, SWC only).
 
 ```yaml
 simulation:
@@ -94,26 +62,13 @@ simulation:
   spectral_psf: convolution
 ```
 
-The EIS PSF is not tied to a slit, so its width in wavelength is the same for every slit, and `convolution` is refused for it. Setting `telescope.psf_slit_width`, the slit that `psf_params` was measured with, changes both.
-
 ### The edges of the atmosphere
 
-With `psf: True`, the blur brings in light from beyond the edges of the atmosphere. `simulation.psf_boundary` sets what is there:
-
-- `replicate` (default): the Sun beyond each edge is taken to be like the cells at the edge, so the pixels there are as bright as they would be in the middle of a larger atmosphere.
-- `zero`: nothing is beyond the edges, so the light the blur carries out of the atmosphere is lost, and the pixels within a PSF width of an edge come out darker.
-
-```yaml
-simulation:
-  psf: True
-  psf_boundary: zero
-```
+`simulation.psf_boundary` sets what the blur brings in from beyond the atmosphere: more of the edge cells (`replicate`, the default), or nothing (`zero`), which darkens the pixels near the edges.
 
 ## The slit's fiducials
 
-Each SWC slit is 280 arcsec long and is interrupted in two places. These gaps, the fiducials, block the light over a short length of the slit, so they show as dark rows along the slit in every slit's data. They are there to line up observations made with different slits. In nominal observations they are 25 arcsec north and 70 arcsec south of the slit's centre.
-
-With `simulation.slit_mask: True`, no light reaches the pixels behind the fiducials or beyond the ends of the slit. A pixel partly behind one gets the part of the light that falls on its open part. It is off by default, which leaves the slit open along the whole atmosphere. With it on, the maps cover only the slit's length, and the fits are left blank, as NaN, in the rows behind a fiducial. A [full-CCD frame](../observe/full-ccd-frames.md) still holds every column of the CCD.
+Each SWC slit is 280 arcsec long, with two fiducials, 25 arcsec north and 70 arcsec south of its centre, that block the light. `simulation.slit_mask: True` darkens the pixels behind them and beyond the slit's ends, and leaves the fits there blank.
 
 ```yaml
 simulation:
@@ -122,38 +77,16 @@ simulation:
   slit_mask: True
 ```
 
-- With `psf: True`, the blur along the slit happens before the slit, so the edges of a fiducial are as sharp as the pixels allow.
-
-The active region fills the slit, so both fiducials cross it:
-
 ![The active region without and with the slit's mask, which cuts the map to the slit's length and adds two dark rows at the fiducials](../images/example-slit-mask.png)
 
 ## Visible light
 
-Visible light also reaches the CCD. `simulation.vis_sl` adds visible stray light, in photons per second per cm2, the same in every pixel. For SWC it is the light before the filter, which passes only a small part of it, and for EIS the light that reaches the CCD. Each visible photon is detected with the probability `detector.qe_vis` and frees one electron.
-
-Pinholes in SWC's filter let light past it, spread out by diffraction. `simulation.enable_pinholes` switches them on, and [Pinholes](../reference/run-file-settings.md#pinholes) describes their settings.
+`simulation.vis_sl` adds visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS. `simulation.enable_pinholes` adds light through pinholes in SWC's filter; see [Pinholes](../reference/run-file-settings.md#pinholes).
 
 ## Dark current
 
-The CCD collects dark current over the exposure. It also collects it while it is cleared before the exposure, and while each row waits to be read out afterwards. For SWC, ECLIPSE counts all of this, as a [full-CCD frame](../observe/full-ccd-frames.md) does. Each wavelength pixel takes the time of the CCD row that records its wavelength.
-
-The wait depends on which rows are read. A row that is read takes about 0.56 ms, and one that is not read is dumped in 15 us. A run takes only the rows of its own wavelengths to be read, as one window. With the default timing, a window of 32 rows adds 0.03 to 0.05 s to the exposure, wherever it is. The clear takes longest for the rows far from the gap between the CCDs, and the wait to be read takes longest for the rows near it. A real observation reads a window around each of its lines, so its rows wait longer than a run gives. A full-CCD frame reads every row, and its last row waits 1.15 s. A run also leaves out charge transfer, as the rest of a run does.
-
-```yaml
-simulation:
-  readout_dark_current: False   # dark current over the exposure only
-```
-
-With `readout_dark_current: False`, dark current is counted over the exposure only, as in ECLIPSE 0.12 and earlier. EIS runs count it over the exposure only.
+For SWC, dark current is counted over the clear before the exposure, the exposure, and the wait to be read out, for the CCD rows of the observed window. `readout_dark_current: False` counts it over the exposure only, as for EIS.
 
 ## The pixels' width in wavelength
 
-The grating does not spread the wavelengths quite evenly over the CCD, so the width in wavelength of a pixel changes slowly along it. It is 16.98 mA at 171 Angstrom, 16.91 mA at 195 Angstrom and 16.86 mA at 211 Angstrom. By default a run gives every pixel the same width, `detector.wvl_res`, 16.9 mA.
-
-```yaml
-simulation:
-  focal_plane_dispersion: True   # the focal plane's pixel width where the line lands
-```
-
-With `focal_plane_dispersion: True`, a run takes the width of the pixel the observed line lands on, from the SW focal plane, and gives it to every pixel of its window. The pixels then collect as much of the spectrum, and span as many km/s, as on the CCD. Across a window of 60 pixels the true width changes by about 2 parts in 10,000, which a run leaves out. A run does not place its pixels on the CCD's rows either, so a line sits at the same place within its pixel as without the setting. It cannot be combined with `detector.wvl_res`, and works for SWC, with synthesis files or a uniform intensity, for a line that reaches the CCDs within the lit band.
+A pixel's width in wavelength changes slowly along the CCD, from 16.98 mA at 171 Angstrom to 16.86 mA at 211 Angstrom. A run uses `detector.wvl_res`, 16.9 mA, unless `simulation.focal_plane_dispersion: True`, which takes the width where the line lands (SWC only).
