@@ -6,7 +6,7 @@ Lines are named `<Element><Stage>_<Wavelength>`, for example `Fe12_195.1190`:
 - `12` - ionisation stage as an **arabic** numeral, in spectroscopic notation, so `Fe12` is Fe XII, not Fe XI or Fe XIII.
 - `195.1190` - rest wavelength in Angstrom.
 
-The same names are used by `--lines` in `synthesise-spectra`, by `lines` in the `synthesis:` section of a [time series](time-series.md), by `reference_line` in the instrument configuration, and for the lines in a [synthesis file](files.md#synthesis-files).
+The same names are used by `--lines` in `synthesise-spectra`, by `lines` in the `synthesis:` section of a [time series](../observe/rasters.md), by `reference_line` in the instrument configuration, and for the lines in a [synthesis file](../files/synthesis.md).
 
 ## How a name is matched to a line
 

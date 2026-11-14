@@ -2131,10 +2131,10 @@ DYNAMIC_OPTIONS = ("slit_width", "temp_dir", "temp_filename", "rho_dir", "rho_fi
                    "vz_filename", "time_dir", "time_filename")
 
 # Documentation of the atmosphere file and how to write one.
-ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/synthesis/#atmosphere-files"
+ATMOSPHERE_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/files/atmosphere/"
 # Documentation of observing a time series of atmosphere files, which
 # replaces the deprecated dynamic mode.
-TIME_SERIES_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/time-series/"
+TIME_SERIES_DOCS = "https://solarc-eclipse.readthedocs.io/en/stable/observe/rasters/"
 
 
 class _NotedOption(argparse.Action):

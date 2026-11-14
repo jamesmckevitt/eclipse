@@ -1,10 +1,23 @@
-# Python
+# From Python
 
 Everything `synthesise-spectra` and `eclipse` do is available from Python, in the `eclipse` package. This page shows the parts most often used on their own, and the [API reference](api.md) describes every function and class.
 
+## Running a run file
+
+`eclipse.run`, `eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do what the commands do. They take a run file, or its settings as a dictionary, and keywords that lay top-level settings or sections over it:
+
+```python
+import eclipse
+
+[output] = eclipse.run("job.yaml", n_iter=10, simulation={"expos": "5 s"})
+print(output.synthesis, output.results)
+```
+
+Each returns one `RunOutput` for each run, with the files the run wrote. `settings` takes `key=value` texts as `--set` does, and `only` picks a run as `--only` does.
+
 ## The instrument
 
-The instrument is described by a few objects: `Telescope_EUVST`, which holds its `AluminiumFilter` as `filter`, `Detector_SWC`, and `Simulation`, or `Telescope_EIS` and `Detector_EIS` for Hinode/EIS. Their settings have the same names as in the [configuration file](configuration.md), and are given as keyword arguments, such as `Detector_SWC(ccd_temperature=-50 * u.deg_C)`. Left out, each takes its default.
+The instrument is described by a few objects: `Telescope_EUVST`, which holds its `AluminiumFilter` as `filter`, `Detector_SWC`, and `Simulation`, or `Telescope_EIS` and `Detector_EIS` for Hinode/EIS. Their settings have the same names as in the [configuration file](reference/run-file-settings.md), and are given as keyword arguments, such as `Detector_SWC(ccd_temperature=-50 * u.deg_C)`. Left out, each takes its default.
 
 ### Effective area
 
@@ -95,7 +108,7 @@ for temperature in [-70, -60, -50] * u.deg_C:
 -50.0 deg_C: 9.50 electron / (pix s)
 ```
 
-## Running the simulation from Python
+## Running one simulation
 
 `monte_carlo` runs the instrument simulation on a cube of spectra already on the detector's pixels, as `eclipse` does for each combination of settings. The simplest such cube is a single line of known intensity:
 
@@ -117,9 +130,9 @@ print(f"Velocity precision: {primary['velocity']['std'].squeeze():.2f}")
 
 Given the telescope and a simulation with `psf=True`, `create_uniform_intensity_cube` blurs the line by the spectral response before it lays the line onto the pixels, and sets `cube.meta["psf_applied"]`. `monte_carlo` and `simulate_once` do not blur such a cube again. The response depends on the slit width and `spectral_psf`, so make the cube again for each simulation that changes them; a cube made for another response is refused.
 
-A cube you make yourself is blurred on its pixels, unless `meta["psf_applied"]` is True. Blurring the pixels pulls a line narrower than a pixel toward the pixel's centre, which biases its fitted velocity, and a warning says so. To avoid this, blur your scene by the PSF, in wavelength and along the slit, before you average it onto the pixels, and set `meta["psf_applied"] = True`. The PSF's widths are `spatial_psf_fwhm` along the slit and `spectral_psf_fwhm` in wavelength; [the spectral PSF and the slit](instrument-model.md#the-spectral-psf-and-the-slit) describes the response for `spectral_psf: convolution`.
+A cube you make yourself is blurred on its pixels, unless `meta["psf_applied"]` is True. Blurring the pixels pulls a line narrower than a pixel toward the pixel's centre, which biases its fitted velocity, and a warning says so. To avoid this, blur your scene by the PSF, in wavelength and along the slit, before you average it onto the pixels, and set `meta["psf_applied"] = True`. The PSF's widths are `spatial_psf_fwhm` along the slit and `spectral_psf_fwhm` in wavelength; [the spectral PSF and the slit](background/instrument-model.md#the-spectral-psf-and-the-slit) describes the response for `spectral_psf: convolution`.
 
-To observe a synthesis file, or synthesise and observe an atmosphere, use a run file. `eclipse.run` does from Python what `eclipse run` does, and takes the settings as a dictionary as well as a file; see [Run files](run-files.md#from-python).
+To observe a synthesis file, or synthesise and observe an atmosphere, use a run file. `eclipse.run` does from Python what `eclipse run` does, and takes the settings as a dictionary as well as a file; see [Run files](python.md#running-a-run-file).
 
 ## Common random numbers
 
@@ -152,7 +165,7 @@ They can only be switched on from Python, not in a run file run with `eclipse ru
 
 | To | Use | See |
 | --- | --- | --- |
-| Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](synthesis.md#atmosphere-files), [Files](files.md#atmosphere-files) |
-| Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](dem-synthesis.md) |
-| Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [Spectra from another code](other-codes.md), [Files](files.md#synthesis-files) |
-| Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing the results](analysis.md) |
+| Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](files/atmosphere.md), [Atmosphere files](files/atmosphere.md) |
+| Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](emission/dem.md) |
+| Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [From another code](emission/other-codes.md), [Synthesis files](files/synthesis.md) |
+| Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing an observation](analyse/observation.md) |

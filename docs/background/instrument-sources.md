@@ -1,6 +1,6 @@
 # Instrument sources
 
-ECLIPSE's default instrument settings come from SOLAR-C design documents and EIS calibrations. This page lists each setting with its default and the document it comes from, so a result can be traced to the design it reflects. The settings themselves are described in the [configuration reference](configuration.md).
+ECLIPSE's default instrument settings come from SOLAR-C design documents and EIS calibrations. This page lists each setting with its default and the document it comes from, so a result can be traced to the design it reflects. The settings themselves are described in the [run file settings](../reference/run-file-settings.md).
 
 Documents are named as the project names them: RSC numbers are SOLAR-C documents, SOLC-EUVST-MSSL numbers are documents for the SW camera, and TASI-SCE-SSS-0001 and EUVST-CNR-REQ-001 are the requirements for the slit assembly. RSC-2022021C is the optical design summary of March 2025, which describes optical design version 20230909. Where no source is recorded, the page says so. Where a design document gives a different value, the page gives that value too.
 
@@ -62,7 +62,7 @@ Documents are named as the project names them: RSC numbers are SOLAR-C documents
 
 ## EUVST-SW focal plane
 
-These describe the focal plane, which the [full-CCD frame](full-ccd-frame.md) uses. A run uses them, at their defaults, only to find the row recording each wavelength, for the dark current, and, with `simulation.focal_plane_dispersion`, the width of its pixels. The frame does not yet take the slit image tilt.
+These describe the focal plane, which the [full-CCD frame](../observe/full-ccd-frames.md) uses. A run uses them, at their defaults, only to find the row recording each wavelength, for the dark current, and, with `simulation.focal_plane_dispersion`, the width of its pixels. The frame does not yet take the slit image tilt.
 
 <!-- SWC settings: sources and plain defaults are written by tools/update_instrument_sources.py; see CONTRIBUTING.md -->
 

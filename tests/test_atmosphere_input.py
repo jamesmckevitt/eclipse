@@ -756,7 +756,7 @@ def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_
         **_edges()), tmp_path / "as_written.h5")
     from_file = _synthesise(tmp_path, monkeypatch, "file", "--atmosphere",
                             str(as_written), *options)
-    with pytest.warns(FutureWarning, match="deprecated.*atmosphere-files.*--atmosphere"):
+    with pytest.warns(FutureWarning, match="deprecated.*files/atmosphere.*--atmosphere"):
         direct = _synthesise(tmp_path, monkeypatch, "direct", *layout, *options,
                              "--temp-file", "temp/eosT.0300000",
                              "--rho-file", "rho/result_prim_0.0300000",

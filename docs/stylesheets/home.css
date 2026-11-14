@@ -1,0 +1,305 @@
+/* The home page: the three steps as rows of boxes joined by lines, and
+   the strip of four facts at the top of each guide page. */
+.md-typeset .tier { display: grid; gap: 1.2rem; }
+.md-typeset .box { border: 0.12rem solid var(--md-primary-fg-color); border-radius: 0.6rem; padding: 0.4rem 1rem 0.9rem; background: var(--md-default-bg-color); }
+.md-typeset .box h3 { margin: 0.4rem 0 0.4rem; font-size: 1rem; }
+.md-typeset .box p { margin: 0.4rem 0; font-size: 0.75rem; }
+.md-typeset .box img { border-radius: 0.3rem; margin: 0.3rem 0; width: 100%; }
+.md-typeset .box .md-button { font-size: 0.65rem; padding: 0.35em 0.9em; margin: 0.2rem 0.2rem 0 0; }
+.md-typeset .box.own { border-color: #2e7d32; background: #f1f8f1; }
+.md-typeset .box.one { border-color: #757575; }
+.md-typeset .links { height: 3.2rem; margin: 0; }
+.md-typeset .links svg { width: 100%; height: 100%; display: block; }
+.md-typeset .links path { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.md-typeset .links .own { stroke: #2e7d32; }
+.md-typeset .links .one { stroke: #757575; stroke-dasharray: 6 4; }
+
+/* Each step's number and title in a column on the left, so the lines run
+   straight from one row of boxes to the next. */
+.md-typeset .rows { display: grid; grid-template-columns: 7.5rem 1fr; column-gap: 1rem; }
+.md-typeset .rows > .label { padding-top: 0.6rem; font-weight: 600; font-size: 0.85rem; line-height: 1.3; }
+.md-typeset .rows > .label .step { display: block; width: 2rem; height: 2rem; line-height: 2rem; text-align: center; border-radius: 50%; background: var(--md-primary-fg-color); color: #fff; margin-bottom: 0.4rem; font-size: 1rem; }
+.md-typeset .box img { height: 8.5rem; object-fit: contain; }
+
+/* Plain boxes until a route is picked; then the boxes on it are lit, and
+   the rest go faint. */
+.md-typeset .guide { --path: var(--md-primary-fg-color); }
+.md-typeset .guide[data-path="made"] { --path: #3f51b5; }
+.md-typeset .guide[data-path="own"] { --path: #2e7d32; }
+.md-typeset .guide[data-path="one"] { --path: #616161; }
+
+/* Plain boxes. */
+.md-typeset .guide .card { position: relative; border: 0.05rem solid var(--md-default-fg-color--lightest); border-radius: 0.4rem; background: var(--md-default-bg-color); transition: opacity 0.35s, transform 0.35s, filter 0.35s, box-shadow 0.35s, border-color 0.35s; }
+.md-typeset .guide .card.own { border-left: 0.3rem solid #2e7d32; background: #f1f8f1; }
+.md-typeset .guide:not(.guided) .card:hover { border-color: var(--md-default-fg-color--lighter); box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.1); }
+.md-typeset .guide:not(.guided) .card.own:hover { border-left-color: #2e7d32; }
+.md-typeset .guide .card-links { margin: 0.6rem 0 0; }
+.md-typeset .guide .card-links a { display: inline-block; margin: 0 0.9rem 0.2rem 0; font-weight: 700; font-size: 0.75rem; }
+.md-typeset .guide .card-links a::before { content: ""; display: inline-block; width: 0.32rem; height: 0.32rem; margin: 0 0.4rem 0.1rem 0; border: solid currentColor; border-width: 0.1rem 0.1rem 0 0; transform: rotate(45deg); }
+.md-typeset .guide .card .headerlink { display: none; }
+.md-typeset .guide .card .why { display: none; }
+.md-typeset .guide:not(.guided) .links { height: 1.2rem; }
+.md-typeset .guide .links { transition: height 0.4s; }
+.md-typeset .guide .links path { fill: none; stroke: #bdbdbd; stroke-width: 2; opacity: 0; vector-effect: non-scaling-stroke; transition: opacity 0.35s, stroke 0.35s, stroke-width 0.35s; }
+
+/* With a route picked, every box is faint until it is on the route. */
+.md-typeset .guide.guided .card { opacity: 0.35; transform: scale(0.93); filter: grayscale(1); cursor: default; }
+.md-typeset .guide.guided .card-links { display: none; }
+.md-typeset .guide.guided .card.is-open { opacity: 1; transform: none; filter: none; cursor: pointer; border: 0.12rem solid var(--md-primary-fg-color); animation: invite 2.4s ease-out infinite; }
+.md-typeset .guide.guided .card.own.is-open { border-color: #2e7d32; border-left-width: 0.3rem; }
+.md-typeset .guide.guided .card.one.is-open { border-color: #757575; }
+@keyframes invite { 0% { box-shadow: 0 0 0 0 rgba(63, 81, 181, 0.35); }
+70%, 100% { box-shadow: 0 0 0 0.6rem rgba(63, 81, 181, 0); }
+}
+.md-typeset .guide.guided .card.is-open:hover,
+.md-typeset .guide.guided .card.is-other:hover { opacity: 1; filter: none; transform: translateY(-0.15rem); box-shadow: 0 0.5rem 1.2rem rgba(0, 0, 0, 0.18); animation: none; }
+.md-typeset .guide.guided .card.is-other { opacity: 0.7; transform: scale(0.97); filter: grayscale(0.6); cursor: pointer; }
+.md-typeset .guide.guided .card.is-chosen { opacity: 1; transform: none; filter: none; cursor: pointer; border: 0.12rem solid var(--path); box-shadow: 0 0 0 0.15rem var(--path), 0 0.5rem 1.2rem rgba(0, 0, 0, 0.15); }
+
+/* A round mark in the corner: empty to pick, filled with a tick once picked. */
+.md-typeset .guide.guided .card::after { content: ""; position: absolute; top: 0.6rem; right: 0.6rem; width: 1.1rem; height: 1.1rem; border-radius: 50%; border: 0.12rem solid var(--md-default-fg-color--lighter); box-sizing: border-box; }
+.md-typeset .guide.guided .card.is-open::after,
+.md-typeset .guide.guided .card.is-other::after { border-color: var(--md-primary-fg-color); }
+.md-typeset .guide.guided .card.is-chosen::after { border-color: var(--path); background: var(--path); }
+.md-typeset .guide.guided .card.is-chosen::before { content: ""; position: absolute; top: 0.86rem; right: 0.98rem; width: 0.28rem; height: 0.5rem; border: solid #fff; border-width: 0 0.12rem 0.12rem 0; transform: rotate(45deg); z-index: 1; }
+
+/* Why a box does not fit what was picked: the box stays faint, the reason does not. */
+.md-typeset .guide.guided .card.is-blocked { opacity: 1; filter: none; cursor: not-allowed; border-color: var(--md-default-fg-color--lightest); }
+.md-typeset .guide.guided .card.is-blocked > :not(.why) { opacity: 0.3; filter: grayscale(1); }
+.md-typeset .guide.guided .card.is-blocked .why { display: block; position: absolute; left: 8%; right: 8%; top: 45%; margin: 0; padding: 0.5rem 0.7rem; background: var(--md-default-bg-color); border: 0.1rem solid var(--md-default-fg-color--light); border-radius: 0.4rem; font-size: 0.72rem; font-weight: 600; text-align: center; color: var(--md-default-fg-color); }
+@keyframes shake { 20%, 60% { translate: -0.3rem 0; }
+40%, 80% { translate: 0.3rem 0; }
+}
+
+/* With a route picked, the lines are faint until they lead from a picked box. */
+.md-typeset .guide.guided .links path { opacity: 0.35; }
+.md-typeset .guide.guided .links path.is-lit { stroke: var(--path); opacity: 0.9; stroke-dasharray: 7 5; animation: flow 0.9s linear infinite; }
+.md-typeset .guide.guided .links path.is-path { stroke: var(--path); stroke-width: 4; opacity: 1; }
+@keyframes flow { to { stroke-dashoffset: -12; }
+}
+
+/* Each step's number: grey until reached, pulsing while it is the one to
+   pick, filled once picked. */
+.md-typeset .guide.guided .rows > .label { color: var(--md-default-fg-color--light); }
+.md-typeset .guide.guided .rows > .label .step { background: #bdbdbd; transition: background 0.35s; }
+.md-typeset .guide.guided .rows > .label.is-active,
+.md-typeset .guide.guided .rows > .label.is-done { color: var(--md-default-fg-color); }
+.md-typeset .guide.guided .rows > .label.is-active .step { background: var(--md-primary-fg-color); animation: invite 2.4s ease-out infinite; }
+.md-typeset .guide.guided .rows > .label.is-done .step { background: var(--path); }
+
+/* On a phone the boxes stack, so the lines go, and with a route picked the
+   boxes off it lose their pictures. */
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .guide .bracket, .md-typeset .guide .links { display: none; }
+  .md-typeset .guide .rows { display: block; }
+  .md-typeset .guide .rows > .label { margin: 1.2rem 0 0.6rem; }
+  .md-typeset .guide .rows > .label .step { display: inline-block; margin: 0 0.5rem 0 0; }
+  .md-typeset .guide.guided .card:not(.is-open):not(.is-other):not(.is-chosen) img { display: none; }
+  .md-typeset .guide.guided .card.is-blocked .why { position: static; margin: 0.4rem 0; }
+}
+
+/* The files passed from one step to the next. */
+.md-typeset .install { margin: 1rem 0 0; padding: 0.6rem 1rem; border: 0.05rem solid var(--md-default-fg-color--lightest); border-radius: 0.5rem; font-size: 0.75rem; }
+.md-typeset .install p { margin: 0; }
+.md-typeset .guide .links.short, .md-typeset .guide:not(.guided) .links.short { height: 2rem; }
+.md-typeset .guide:not(.guided) .links.short path { opacity: 0.6; }
+.md-typeset .guide .files { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.2rem; }
+.md-typeset .guide .file { justify-self: center; width: 82%; box-sizing: border-box; padding: 0.35rem 0.7rem; border: 0.08rem dashed var(--md-default-fg-color--lighter); border-radius: 0.4rem; background: var(--md-code-bg-color); font-size: 0.68rem; line-height: 1.35; transition: opacity 0.35s, filter 0.35s, border-color 0.35s, box-shadow 0.35s; }
+.md-typeset .guide .file p { margin: 0; }
+.md-typeset .guide .file a { color: var(--md-default-fg-color); }
+.md-typeset .guide .file span:not(.twemoji) { display: block; color: var(--md-default-fg-color--light); }
+.md-typeset .guide .file .ficon { height: 1rem; vertical-align: -0.2rem; }
+.md-typeset .guide .file .ficon svg { height: 1rem; width: 1rem; max-height: none; fill: var(--md-default-fg-color--light); }
+.md-typeset .guide.guided .file { opacity: 0.35; filter: grayscale(1); }
+.md-typeset .guide.guided .file.is-lit { opacity: 1; filter: none; border-color: var(--path); }
+.md-typeset .guide.guided .file.is-chosen { opacity: 1; filter: none; border-style: solid; border-color: var(--path); box-shadow: 0 0 0 0.08rem var(--path); }
+.md-typeset .guide.guided .file.is-lit .ficon svg,
+.md-typeset .guide.guided .file.is-chosen .ficon svg { fill: var(--path); }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .guide .files { grid-template-columns: 1fr; gap: 0.5rem; }
+  .md-typeset .guide .file, .md-typeset .guide .file.wide,
+  .md-typeset .guide .file.wide + .file { grid-column: auto; width: auto; justify-self: stretch; }
+}
+
+/* The files and lines show only once a route is picked, in the theme's
+   colour. */
+.md-typeset .guide[data-v="2"][data-path] { --path: var(--md-primary-fg-color); }
+.md-typeset .guide[data-v="2"]:not(.guided) .files,
+.md-typeset .guide[data-v="2"]:not(.guided) .rows > .label.file-label { display: none; }
+.md-typeset .guide[data-v="2"]:not(.guided) .links.short { height: 0.6rem; }
+.md-typeset .guide[data-v="2"]:not(.guided) .links.short path { opacity: 0; }
+.md-typeset .guide.guided .card h3 { padding-right: 1.5rem; }
+
+/* Thin dividers between the steps until a route is picked; then the files
+   show with plain borders. */
+.md-typeset .guide[data-v="3"][data-path] { --path: var(--md-primary-fg-color); }
+.md-typeset .guide[data-v="3"]:not(.guided) .files { visibility: hidden; height: 0; overflow: hidden; }
+.md-typeset .guide[data-v="3"]:not(.guided) .links.short { height: 0.3rem; }
+.md-typeset .guide[data-v="3"]:not(.guided) .links.short path { opacity: 0; }
+.md-typeset .guide .rows > .divider { grid-column: 1 / -1; border-top: 0.05rem solid var(--md-default-fg-color--lightest); margin: 0.6rem 0 0.3rem; }
+.md-typeset .guide.guided .rows > .divider { display: none; }
+.md-typeset .guide[data-v="3"] .file { border-style: solid; }
+.md-typeset .guide[data-v="3"].guided .card.is-open,
+.md-typeset .guide[data-v="3"].guided .rows > .label.is-active .step { animation: none; }
+.md-typeset .guide[data-v="3"].guided .links path.is-lit { stroke-dasharray: none; animation: none; opacity: 0.6; stroke-width: 2; }
+.md-typeset .guide .files .links.pass { height: auto; align-self: stretch; }
+.md-typeset .guide[data-v="3"].guided .card.is-other { transform: none; }
+.md-typeset .guide[data-v="3"].guided .card.is-open:hover,
+.md-typeset .guide[data-v="3"].guided .card.is-other:hover { transform: none; }
+.md-typeset .guide .files .links.pass { position: relative; }
+.md-typeset .guide .files .links.pass svg { position: absolute; inset: 0; }
+
+/* The "What do you have?" buttons above the diagram. */
+.md-typeset .have-bar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1rem; margin: 1.2rem 0 0.6rem; padding: 0.8rem 1rem; border-radius: 0.5rem; background: var(--md-code-bg-color); }
+.md-typeset .have-bar .have-question { margin: 0; font-size: 1rem; font-weight: 700; }
+.md-typeset .have-bar .have-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; }
+.md-typeset .have-bar .have-buttons p { display: contents; }
+.md-typeset .have-bar .have-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.3rem; padding: 0.6rem 0.4rem; border: 0.1rem solid var(--md-primary-fg-color); border-radius: 0.5rem; background: var(--md-default-bg-color); color: var(--md-primary-fg-color); font-weight: 700; font-size: 0.75rem; text-align: center; line-height: 1.25; }
+.md-typeset .have-bar .have-button:hover { background: var(--md-accent-fg-color--transparent); }
+.md-typeset .have-bar .have-button .twemoji { height: 1.6rem; }
+.md-typeset .have-bar .have-button .twemoji svg { height: 1.6rem; width: 1.6rem; max-height: none; fill: currentColor; }
+.md-typeset .have-bar .have-button.is-active { background: var(--md-primary-fg-color); color: #fff; }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .have-bar { grid-template-columns: 1fr; }
+  .md-typeset .have-bar .have-buttons { grid-template-columns: 1fr 1fr; }
+}
+
+/* The buttons pick a route and clear it again. The boxes keep their links,
+   and a line for one route only shows on it. */
+.md-typeset .have-bar { grid-template-columns: auto 1fr; }
+.md-typeset .guide[data-v="3"].guided .card-links { display: block; }
+.md-typeset .guide .links path.is-hidden { opacity: 0; }
+
+/* The install box: one command, with the theme's copy button. */
+.md-typeset .install { display: flex; align-items: center; gap: 0.8rem; padding: 0.5rem 1rem; border: 0.05rem solid var(--md-default-fg-color--lightest); border-left: 0.3rem solid var(--md-primary-fg-color); border-radius: 0.4rem; background: var(--md-code-bg-color); }
+.md-typeset .install p { margin: 0; display: flex; align-items: center; gap: 0.5rem; white-space: nowrap; font-size: 0.85rem; }
+.md-typeset .install .highlight { flex: 1; margin: 0; }
+.md-typeset .install .highlight pre { margin: 0; }
+.md-typeset .install .highlight code { background: var(--md-default-bg-color); font-size: 0.85rem; }
+
+/* A slim install line and buttons, and boxes close to their text. */
+.md-typeset .install { padding: 0; border: none; background: none; gap: 0.6rem; margin: 1rem 0 0; }
+.md-typeset .install p { font-size: 0.75rem; font-weight: 400; }
+.md-typeset .install .highlight { flex: 0 1 18rem; }
+.md-typeset .install .highlight code { padding: 0.3rem 0.8rem; font-size: 0.75rem; background: var(--md-code-bg-color); }
+.md-typeset .have-bar { background: none; padding: 0; margin: 1.6rem 0 1.2rem; gap: 0.8rem; }
+.md-typeset .have-bar .have-question { font-size: 0.75rem; font-weight: 700; }
+.md-typeset .have-bar .have-buttons { gap: 0.5rem; }
+.md-typeset .have-bar .have-button { flex-direction: row; padding: 0.3rem 0.6rem; border-width: 0.05rem; border-radius: 1rem; font-size: 0.7rem; font-weight: 600; }
+.md-typeset .guide[data-v="3"] .card h3 { margin-top: 0.6rem; }
+.md-typeset .guide[data-v="3"] .rows > .label .step { width: 1.6rem; height: 1.6rem; line-height: 1.6rem; font-size: 0.8rem; }
+.md-typeset .guide[data-v="3"] .rows > .label { font-size: 0.8rem; }
+
+/* The logo beside the title, and small step numbers in line with their
+   names. */
+.md-typeset .guide.slim-steps .rows > .label { padding-top: 0.9rem; font-size: 0.8rem; }
+.md-typeset .guide.slim-steps .rows > .label .step { display: inline-block; width: 1.1rem; height: 1.1rem; line-height: 1.1rem; font-size: 0.6rem; margin: 0 0.4rem 0 0; vertical-align: 0.08rem; }
+.md-typeset .home-aside { float: right; width: 11rem; margin: 0 0 1rem 1.5rem; text-align: center; font-size: 0.65rem; line-height: 1.4; color: var(--md-default-fg-color--light); }
+.md-typeset .home-aside img { width: 7rem; display: block; margin: 0 auto 0.5rem; }
+.md-typeset .home-aside p { margin: 0 0 0.4rem; }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .home-aside { float: none; width: auto; margin: 0 0 1rem; }
+}
+
+/* Picking a route: the file rows and the lines grow in smoothly, and the
+   browser does not move the page to compensate. */
+.md-typeset .guide[data-v="3"] { overflow-anchor: none; }
+.md-typeset .guide[data-v="3"] .files { max-height: 12rem; padding: 0.15rem 0; overflow: hidden; transition: max-height 0.45s ease, opacity 0.45s ease, padding 0.45s ease; }
+.md-typeset .guide[data-v="3"]:not(.guided) .files { height: auto; max-height: 0; padding: 0; opacity: 0; }
+.md-typeset .guide[data-v="3"] .links.short { transition: height 0.45s ease; }
+.md-typeset .guide[data-v="3"].guided .rows > .divider { display: block; margin: 0; border-top-color: transparent; }
+.md-typeset .guide[data-v="3"] .rows > .divider { transition: margin 0.45s ease, border-top-color 0.3s ease; }
+
+/* Small icons on the buttons. */
+.md-typeset .have-bar .have-button { gap: 0.35rem; }
+.md-typeset .have-bar .have-button .twemoji { height: 0.95rem; }
+.md-typeset .have-bar .have-button .twemoji svg { height: 0.95rem; width: 0.95rem; }
+
+/* A picked box or file keeps the same thin outline as one you can pick. */
+.md-typeset .guide[data-v="3"].guided .card.is-chosen { box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.12); }
+.md-typeset .guide[data-v="3"].guided .file.is-chosen { box-shadow: none; }
+
+/* The boxes, files and lines share one grid with no gaps, and the boxes
+   keep their spacing with margins, so the lines meet the middle of each
+   box at any width. */
+.md-typeset .guide.slim-steps .rows > .tier,
+.md-typeset .guide.slim-steps .rows > .files,
+.md-typeset .guide.slim-steps .rows > .links { margin-left: -0.6rem; margin-right: -0.6rem; }
+.md-typeset .guide.slim-steps .tier, .md-typeset .guide.slim-steps .files { column-gap: 0; }
+.md-typeset .guide.slim-steps .tier > .card { margin: 0 0.6rem; }
+.md-typeset .guide.slim-steps.guided .files { padding: 0; }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .guide.slim-steps .rows > .tier, .md-typeset .guide.slim-steps .rows > .files,
+  .md-typeset .guide.slim-steps .rows > .links { margin-left: 0; margin-right: 0; }
+  .md-typeset .guide.slim-steps .tier { row-gap: 0.8rem; }
+  .md-typeset .guide.slim-steps .tier > .card { margin: 0; }
+}
+
+/* A step name that wraps lines up under its own first word, not the number. */
+.md-typeset .guide.slim-steps .rows > .label[data-tier] { display: flex; align-items: flex-start; gap: 0.4rem; }
+.md-typeset .guide.slim-steps .rows > .label[data-tier] .step { flex: none; margin: 0.08rem 0 0; }
+
+/* A link that does not suit the route picked goes faint. */
+.md-typeset .guide.guided a.is-off-route { opacity: 0.35; filter: grayscale(1); pointer-events: none; }
+
+/* The route picker in the header, and the menu entries, notes and sections
+   for other routes. */
+.route-picker { display: flex; align-items: center; gap: 0.3rem; margin: 0 0.6rem; font-size: 0.6rem; }
+.route-picker[hidden] { display: none; }
+.route-picker .route-label { margin-right: 0.2rem; white-space: nowrap; opacity: 0.85; }
+.route-picker button { font: inherit; color: var(--md-primary-bg-color); background: none; cursor: pointer; }
+.route-picker .route-option { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.15rem 0.5rem; white-space: nowrap; border: 0.05rem solid rgba(255, 255, 255, 0.5); border-radius: 1rem; }
+.route-picker .route-option:hover { background: rgba(255, 255, 255, 0.12); }
+.route-picker .route-option.is-active { background: var(--md-primary-bg-color); color: var(--md-primary-fg-color); border-color: transparent; }
+.route-picker .route-icon svg { display: block; width: 0.8rem; height: 0.8rem; fill: currentColor; }
+.route-picker .route-clear { border: none; padding: 0 0.2rem; font-size: 0.9rem; line-height: 1; opacity: 0.85; }
+@media screen and (max-width: 76.1875em) {
+  .route-picker .route-text, .route-picker .route-label { display: none; }
+}
+.md-nav__link.route-off { opacity: 0.4; }
+.md-typeset .route-off { opacity: 0.35; }
+.md-typeset .route-note { padding: 0.4rem 0.8rem; border-left: 0.2rem solid var(--md-primary-fg-color); background: var(--md-code-bg-color); font-size: 0.75rem; }
+.md-typeset.route-page-off > :not(.route-note):not(h1) { opacity: 0.5; }
+
+/* Keep the site's name in the header beside the picker. */
+.md-header__title { min-width: 6rem; }
+.route-picker { flex: none; }
+
+/* Only the route picked shows its name in the header; the others show their
+   icon, with the name on hover. */
+.route-picker .route-option:not(.is-active) .route-text { display: none; }
+.route-picker .route-option:not(.is-active) { padding: 0.15rem 0.35rem; }
+
+/* Four ways to make the emission, in four columns, with the boxes below
+   spanning two. */
+.md-typeset .guide.four .tier.four, .md-typeset .guide.four .files.four { grid-template-columns: repeat(4, 1fr); }
+.md-typeset .guide.four .c12 { grid-column: 1 / span 2; }
+.md-typeset .guide.four .c34 { grid-column: 3 / span 2; }
+.md-typeset .guide.four .c3 { grid-column: 3; }
+.md-typeset .guide.four .file.c12, .md-typeset .guide.four .file.c34 { width: 44%; }
+.md-typeset .guide.four .file { width: 88%; }
+.md-typeset .guide.four .card h3 { font-size: 0.9rem; }
+.md-typeset .guide.four .card-links a { display: block; margin: 0 0 0.3rem; position: relative; padding-left: 0.75rem; }
+.md-typeset .guide.four .card-links a::before { position: absolute; left: 0; top: 0.42em; margin: 0; }
+.md-typeset .guide .also { margin: 1.4rem 0 0; padding-top: 0.8rem; border-top: 0.05rem solid var(--md-default-fg-color--lightest); font-size: 0.75rem; }
+.md-typeset .guide .also p { margin: 0.2rem 0; }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .guide.four .tier.four, .md-typeset .guide.four .files.four { grid-template-columns: 1fr; }
+  .md-typeset .guide.four .c12, .md-typeset .guide.four .c34, .md-typeset .guide.four .c3 { grid-column: auto; }
+  .md-typeset .guide.four .file, .md-typeset .guide.four .file.c12, .md-typeset .guide.four .file.c34 { width: auto; }
+}
+
+/* The four facts at the top of each guide page. */
+.md-typeset .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: 0.3rem 0.8rem; margin: 0.8rem 0 1.2rem; padding: 0.6rem 0.9rem; border: 0.05rem solid var(--md-default-fg-color--lightest); border-radius: 0.4rem; font-size: 0.7rem; line-height: 1.45; }
+.md-typeset .glance p { margin: 0 0 0.15rem; }
+.md-typeset .glance strong { color: var(--md-default-fg-color--light); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* One synthesis file under the three boxes that make one. */
+.md-typeset .guide.four .c2 { grid-column: 2; }
+.md-typeset .guide.four .c4 { grid-column: 4; }
+.md-typeset .guide.four .c234 { grid-column: 2 / span 3; }
+.md-typeset .guide.four .file.c234 { width: 29.33%; }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .guide.four .c2, .md-typeset .guide.four .c4, .md-typeset .guide.four .c234 { grid-column: auto; }
+  .md-typeset .guide.four .file.c234 { width: auto; }
+}

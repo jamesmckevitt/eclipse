@@ -1,8 +1,31 @@
-# Spectra from another code
+# From another code
 
-If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](instrument-response.md), or, with one file per snapshot, as a [time series](time-series.md#from-synthesis-files). A [full-CCD frame](full-ccd-frame.md#from-your-own-spectra) can be made from it too.
+<div class="glance" markdown>
+<div markdown>
+**You need**
 
-A synthesis file holds the spectral radiance at each pixel and wavelength, for each line or spectral window, with its wavelengths, the rest wavelength that Doppler shifts are measured from, and the edges of the pixels. [Files](files.md#synthesis-files) gives the layout in full.
+Your code's spectra: the intensity at each wavelength, in each pixel
+</div>
+<div markdown>
+**You run**
+
+A short Python script, with `write_synthesis`
+</div>
+<div markdown>
+**You get**
+
+A [synthesis file](../files/synthesis.md)
+</div>
+<div markdown>
+**Next**
+
+[Simulating an observation](../observe/simulate.md) or [Full-CCD frames](../observe/full-ccd-frames.md)
+</div>
+</div>
+
+If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](../observe/simulate.md), or, with one file per snapshot, as a [time series](../observe/rasters.md#from-synthesis-files). A [full-CCD frame](../observe/full-ccd-frames.md#from-your-own-spectra) can be made from it too.
+
+A synthesis file holds the spectral radiance at each pixel and wavelength, for each line or spectral window, with its wavelengths, the rest wavelength that Doppler shifts are measured from, and the edges of the pixels. [Synthesis files](../files/synthesis.md) gives the layout in full.
 
 ## Writing one
 
@@ -29,9 +52,9 @@ The intensity can be in any unit of spectral radiance, per wavelength or per fre
 
 x runs across the slit, the direction a raster steps in, and y runs along it. The edges can be lengths on the Sun, such as `Mm`, or angles as seen from 1 AU, such as `arcsec`.
 
-A line can also be a whole spectral window with its blends, as most codes give it. The blends are then fitted as in [Fitting blended lines](fitting.md).
+A line can also be a whole spectral window with its blends, as most codes give it. The blends are then fitted as in [Fitting blended lines](../observe/fitting.md).
 
-A [full-CCD frame](full-ccd-frame.md#from-your-own-spectra) holds every entry of the file, each at its own wavelengths, so a file can also hold the spectrum of the whole band as one entry.
+A [full-CCD frame](../observe/full-ccd-frames.md#from-your-own-spectra) holds every entry of the file, each at its own wavelengths, so a file can also hold the spectrum of the whole band as one entry.
 
 ## Worked example: FoMo
 
@@ -114,7 +137,7 @@ FoMo writes text by default, or binary with `setwriteoutbinary()`, as its own ex
 
 ## Worked example: PINTofALE
 
-[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem-synthesis.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a synthesis file.
+[PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) computes line intensities for a DEM. It gives one intensity per line, with no line profile and nothing on the sky. If you just want your DEM observed, the [DEM route](dem.md) does that with ECLIPSE's own atomic data, and is simpler. To keep PINTofALE's line list and atomic data, turn its lines into a synthesis file.
 
 In IDL, with PINTofALE set up as usual:
 

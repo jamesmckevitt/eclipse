@@ -1,8 +1,26 @@
-# Analysing the results
+# Analysing an observation
+
+<div class="glance" markdown>
+<div markdown>
+**You need**
+
+A [results file](../files/results.md)
+</div>
+<div markdown>
+**You run**
+
+Python, with ECLIPSE's analysis functions
+</div>
+<div markdown>
+**You get**
+
+Each line's precision, maps, and the exposure each pixel needs
+</div>
+</div>
 
 `eclipse` writes its results to `run/result/<config name>.h5`. ECLIPSE's analysis functions read them, and pick out the measurements you need.
 
-The examples on this page read the sweep from [Running a simulation](instrument-response.md), which observed the active region of the [worked example](worked-example.ipynb) with eight combinations of settings.
+The examples on this page read the sweep from [Simulating an observation](../observe/simulate.md), which observed the active region of the [worked example](../worked-example.ipynb) with eight combinations of settings.
 
 ## Loading the results
 
@@ -61,7 +79,7 @@ This is the median over the whole field of the velocity's standard deviation.
 
 The width is the Gaussian's sigma, and the intensity is the fitted line's counts. Failed fits are left out of the means and standard deviations.
 
-By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](fitting.md#which-signals-are-fitted)).
+By default these are the fits to the signal in DN. `data_type="photon"` gives the fits to the photons arriving at the detector instead, if the run fitted them (see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted)).
 
 ### Comparing combinations
 
@@ -90,7 +108,7 @@ for settings in get_parameter_combinations(results):
 
 ### Every component of a blend
 
-When a [blend](fitting.md) is fitted, the results hold every component. `list_fit_components` names them, and `component=` picks one; without it, `analyse_fit_statistics` gives the primary component:
+When a [blend](../observe/fitting.md) is fitted, the results hold every component. `list_fit_components` names them, and `component=` picks one; without it, `analyse_fit_statistics` gives the primary component:
 
 ```python
 from eclipse import list_fit_components
@@ -111,7 +129,7 @@ For each component, the statistics also hold its name as `component`, its rest w
 
 The truth is what ECLIPSE fits to the spectra on the detector's pixels, with no noise and no PSF. `v_true` and `w_true` come from that fit. `v_err` then says how far the measured velocity is off on average, where `v_std` says how much it scatters.
 
-## Maps
+## Maps { data-routes="mhd spectra dem" }
 
 `create_sunpy_maps_from_combo` makes SunPy maps of a combination's results:
 
@@ -140,7 +158,7 @@ It takes `data_type` and `component` as `analyse_fit_statistics` does. Given the
 
 These are `total_dn` and `velocity_std` of this combination:
 
-![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](images/example-precision.png)
+![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](../images/example-precision.png)
 
 The velocity is measured to about 1 km/s in the core, and to about 4 km/s in the quiet Sun. It is worst in the fans beside the core, where the line is faintest. The two thin lines are the slit's fiducials.
 
@@ -156,16 +174,16 @@ maps = create_sunpy_maps_from_combo(exposures[0], exposure_time_results=exposure
 maps["exposure_time"].peek()
 ```
 
-![The shortest exposure that measures each pixel's velocity to within 5 km/s](images/example-exposure-time.png)
+![The shortest exposure that measures each pixel's velocity to within 5 km/s](../images/example-exposure-time.png)
 
 ## Every iteration
 
-With `save_iterations: true` in the [fitting section](fitting.md#the-fit), the results also keep every iteration's fit. `combination["dn_fit_stats"]["iterations"]` holds `fit_data`, every fitted value of every iteration, and `failed`, which marks the fits that failed.
+With `save_iterations: true` in the [fitting section](../observe/fitting.md#the-fit), the results also keep every iteration's fit. `combination["dn_fit_stats"]["iterations"]` holds `fit_data`, every fitted value of every iteration, and `failed`, which marks the fits that failed.
 
-## The synthesis behind the results
+## The synthesis behind the results { data-routes="mhd dem" }
 
-The DEM and the emission measure by temperature and velocity are in the synthesis file, not in the results. `read_synthesis_products` reads them; see [Files](files.md#synthesis-files). A time series of atmosphere files is synthesised during the run and writes no synthesis file, so these are not kept for it.
+The DEM and the emission measure by temperature and velocity are in the synthesis file, not in the results. `read_synthesis_products` reads them; see [Synthesis files](../files/synthesis.md). A time series of atmosphere files is synthesised during the run and writes no synthesis file, so these are not kept for it.
 
-For a [time series](time-series.md), `results["raster"]` holds the observing plan, the files and their times, and the cube each combination observed. With more than one raster, `raster.repeat` picks one out like any other setting.
+For a [time series](../observe/rasters.md), `results["raster"]` holds the observing plan, the files and their times, and the cube each combination observed. With more than one raster, `raster.repeat` picks one out like any other setting.
 
-Results files from ECLIPSE 0.11.0 and earlier were pickles; see [Older versions](older-versions.md).
+Results files from ECLIPSE 0.11.0 and earlier were pickles; see [Older versions](../reference/older-versions.md).

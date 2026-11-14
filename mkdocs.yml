@@ -6,6 +6,8 @@ repo_name: jamesmckevitt/eclipse
 theme:
   name: material
   custom_dir: overrides
+  logo: images/logo/favicon-transparent.svg
+  favicon: images/logo/favicon-transparent.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -26,30 +28,39 @@ theme:
 
 nav:
   - Home: index.md
-  - Getting started: quickstart.md
   - Worked example: worked-example.ipynb
-  - 1. Synthesising the spectra:
-      - From an MHD simulation: synthesis.md
-      - From a DEM or VDEM: dem-synthesis.md
-      - Spectra from another code: other-codes.md
-  - 2. Simulating the instrument:
-      - Running a simulation: instrument-response.md
+  - Using ECLIPSE:
       - Run files: run-files.md
-      - The instrument model: instrument-model.md
-      - Fitting blended lines: fitting.md
-      - A single line of known intensity: uniform-intensity.md
-      - Time series: time-series.md
-      - A full-CCD frame: full-ccd-frame.md
-  - 3. Analysing the results: analysis.md
-  - Python:
-      - Using ECLIPSE from Python: python.md
-      - API reference: api.md
+      - On a cluster: cluster.md
+      - From Python: python.md
+  - 1. Make the emission:
+      - From another code: emission/other-codes.md
+      - From a single intensity: emission/single-intensity.md
+      - From an MHD simulation: emission/mhd.md
+      - From a DEM or VDEM: emission/dem.md
+  - 2. Observe it:
+      - Simulating an observation: observe/simulate.md
+      - Rasters and sit-and-stares: observe/rasters.md
+      - Fitting the lines: observe/fitting.md
+      - Full-CCD frames: observe/full-ccd-frames.md
+  - 3. Analyse your measurements:
+      - Analysing an observation: analyse/observation.md
+      - Analysing a full-CCD frame: analyse/frame.md
+  - Files:
+      - Atmosphere files: files/atmosphere.md
+      - Emission measure files: files/emission-measure.md
+      - Synthesis files: files/synthesis.md
+      - Results files: files/results.md
+      - Frame files: files/frame.md
+  - Background:
+      - The instrument model: background/instrument-model.md
+      - Instrument sources: background/instrument-sources.md
   - Reference:
-      - Configuration reference: configuration.md
-      - Instrument sources: instrument-sources.md
-      - Files: files.md
-      - Naming spectral lines: line-names.md
-      - Older versions: older-versions.md
+      - Run file settings: reference/run-file-settings.md
+      - Commands: reference/commands.md
+      - Naming spectral lines: reference/line-names.md
+      - API reference: api.md
+      - Older versions: reference/older-versions.md
   - Acknowledgements: acknowledgements.md
 
 # docs/internal/ holds pages for the instrument team, reached only by a link.
@@ -65,10 +76,20 @@ exclude_docs: |
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/home.css
+
+extra_javascript:
+  - javascripts/guide3.js
+  - javascripts/route.js
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -78,8 +99,7 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - tables
-  - toc:
-      permalink: true
+  - toc
 
 plugins:
   - search
@@ -90,11 +110,28 @@ plugins:
   - mkdocs-jupyter:
       ignore: ["*.md"]
       include_source: true
-  # Pages that were merged into others, so that links to them still land.
+  # Pages that were moved or merged into others, so that links to them still
+  # land.
   - redirects:
       redirect_maps:
-        vdem-synthesis.md: dem-synthesis.md#with-velocities-a-vdem
-        instruments.md: instrument-model.md#the-instruments
+        vdem-synthesis.md: emission/dem.md#with-velocities-a-vdem
+        instruments.md: background/instrument-model.md#the-instruments
+        quickstart.md: run-files.md#installing
+        synthesis.md: emission/mhd.md
+        dem-synthesis.md: emission/dem.md
+        other-codes.md: emission/other-codes.md
+        uniform-intensity.md: emission/single-intensity.md
+        instrument-response.md: observe/simulate.md
+        fitting.md: observe/fitting.md
+        time-series.md: observe/rasters.md
+        full-ccd-frame.md: observe/full-ccd-frames.md
+        analysis.md: analyse/observation.md
+        instrument-model.md: background/instrument-model.md
+        instrument-sources.md: background/instrument-sources.md
+        configuration.md: reference/run-file-settings.md
+        files.md: files/synthesis.md
+        line-names.md: reference/line-names.md
+        older-versions.md: reference/older-versions.md
   - mkdocstrings:
       handlers:
         python:

@@ -36,7 +36,7 @@ A frame file with a `cells_per_row` attribute was written by ECLIPSE 0.15.0 or e
 
 Up to ECLIPSE 0.15, `full_ccd_frame` took every line in the band as its second argument, `lines`, and the continuum as `continuum`, and worked the band's spectrum out from the emission measure in the synthesis file. Both still work, with a warning, until a future release stops them.
 
-A frame now holds the spectra in the synthesis file. Synthesise the band into the file with `synthesise-spectra --band`, or make the frame from a [run file](full-ccd-frame.md#from-an-mhd-simulation), and call `full_ccd_frame` with `slit_position` and `exposure` given by name.
+A frame now holds the spectra in the synthesis file. Synthesise the band into the file with `synthesise-spectra --band`, or make the frame from a [run file](../observe/full-ccd-frames.md#from-an-mhd-simulation), and call `full_ccd_frame` with `slit_position` and `exposure` given by name.
 
 ## Reading MURaM's own files
 
@@ -62,11 +62,11 @@ synthesise-spectra \
 
 In this mode x and y are centred on zero, and z = 0 is the centre of the bottom cell. `--crop-x`, `--crop-y` and `--crop-z` are measured from there.
 
-To move over, write each snapshot as an [atmosphere file](synthesis.md#atmosphere-files), as in the [Bifrost example](synthesis.md#worked-example-bifrost-quiet-sun).
+To move over, write each snapshot as an [atmosphere file](../files/atmosphere.md), as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun).
 
 ## Dynamic mode
 
-Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Simulating a time series](time-series.md).
+Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Simulating a time series](../observe/rasters.md).
 
 ```bash
 synthesise-spectra \
@@ -87,8 +87,8 @@ synthesise-spectra \
 
 The instrument run on the synthesis file must have exactly one slit width, the one used in the synthesis, and exactly one exposure time, equal to `--slit-rest-time`.
 
-To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](synthesis.md#worked-example-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Time series](time-series.md).
+To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Time series](../observe/rasters.md).
 
 ## Renamed options
 
-`--mass-per-electron` in `synthesise-spectra` was called `--mean-mol-wt`, and defaulted to 1.29 up to ECLIPSE 0.11.0. The old name still works. Its default is now worked out from the abundances; see [Electron density](synthesis.md#electron-density).
+`--mass-per-electron` in `synthesise-spectra` was called `--mean-mol-wt`, and defaulted to 1.29 up to ECLIPSE 0.11.0. The old name still works. Its default is now worked out from the abundances; see [Electron density](../emission/mhd.md#electron-density).

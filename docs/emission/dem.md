@@ -1,4 +1,27 @@
-# Synthesising from a DEM or VDEM
+# From a DEM or VDEM
+
+<div class="glance" markdown>
+<div markdown>
+**You need**
+
+An [emission measure file](../files/emission-measure.md), written from your DEM or VDEM
+</div>
+<div markdown>
+**You run**
+
+`eclipse run`, or `eclipse synthesise` for this step alone
+</div>
+<div markdown>
+**You get**
+
+A [synthesis file](../files/synthesis.md) in `run/input/`
+</div>
+<div markdown>
+**Next**
+
+[Simulating an observation](../observe/simulate.md) or [Full-CCD frames](../observe/full-ccd-frames.md)
+</div>
+</div>
 
 A differential emission measure (DEM) says how much emitting plasma there is at each temperature. You might have one from an inversion of real observations. A velocity differential emission measure (VDEM) also splits the plasma by its velocity along the line of sight, and is made from an MHD simulation. From either, ECLIPSE can synthesise the lines the plasma emits and simulate how the instrument would measure them.
 
@@ -44,11 +67,11 @@ measure = EmissionMeasure(
 write_emission_measure(measure, "dem.h5")
 ```
 
-[Files](files.md#emission-measure-files) gives the file's layout.
+[Files](../files/emission-measure.md) gives the file's layout.
 
 ## Synthesising and observing it
 
-A [run file](run-files.md) with `emission_measure` in place of `atmosphere` synthesises the file and observes the result. This one synthesises Si X 258.374 (low FIP) and S X 264.230 (high FIP), and observes the Si X window with EIS:
+A [run file](../run-files.md) with `emission_measure` in place of `atmosphere` synthesises the file and observes the result. This one synthesises Si X 258.374 (low FIP) and S X 264.230 (high FIP), and observes the Si X window with EIS:
 
 ```yaml
 # dem.yaml
@@ -73,7 +96,7 @@ simulation:
 eclipse run dem.yaml
 ```
 
-The synthesis is an ordinary synthesis file, `run/input/dem.h5`, and the results can be analysed as in the [worked example](worked-example.ipynb). `synthesise-spectra` makes the same synthesis on its own, with `--emission-measure` in place of `--atmosphere`:
+The synthesis is an ordinary synthesis file, `run/input/dem.h5`, and the results can be analysed as in the [worked example](../worked-example.ipynb). `synthesise-spectra` makes the same synthesis on its own, with `--emission-measure` in place of `--atmosphere`:
 
 ```bash
 synthesise-spectra \
@@ -90,7 +113,7 @@ synthesise-spectra \
 
 **Density.** `electron_density` in the `synthesis:` section is the density G(T, n_e) is taken at. `pressure`, such as `1e15 K cm-3`, gives each temperature the density at that electron pressure instead. A density that differs between pixels, or between the temperatures of each pixel, goes in the file, as the `electron_density` of the `EmissionMeasure`, shaped `(y, x)` or `(y, x, temperature)`. A density or pressure in the `synthesis:` section replaces one in the file.
 
-**Line names.** Lines are named as in the MHD route: see [Naming spectral lines](line-names.md).
+**Line names.** Lines are named as in the MHD route: see [Naming spectral lines](../reference/line-names.md).
 
 **Scene size.** A scene can be as small as one pixel, `nx, ny = 1, 1`, for a single DEM.
 
@@ -102,7 +125,7 @@ synthesise-spectra \
 
 ## With velocities: a VDEM
 
-A VDEM is made from an MHD simulation by sorting every cell along the line of sight by its temperature and velocity. The [MHD route](synthesis.md) makes one itself on the way to the spectra. Giving ECLIPSE a VDEM skips that step. That is worth doing when you already have one: a VDEM is far smaller than the simulation it came from.
+A VDEM is made from an MHD simulation by sorting every cell along the line of sight by its temperature and velocity. The [MHD route](mhd.md) makes one itself on the way to the spectra. Giving ECLIPSE a VDEM skips that step. That is worth doing when you already have one: a VDEM is far smaller than the simulation it came from.
 
 A VDEM fills the velocity bins in, so the lines come out Doppler shifted and broadened by the motions along the line of sight, as well as thermally.
 
@@ -147,7 +170,7 @@ It is synthesised and observed like a DEM, with `emission_measure: vdem.h5` in t
 
 ## A full-CCD frame
 
-A run file with an `emission_measure` and a `frame:` section makes a [full-CCD frame](full-ccd-frame.md#from-an-mhd-simulation) as one with an `atmosphere` does: every line in the band is synthesised from the DEM or VDEM under the slit, and the frame is made from that.
+A run file with an `emission_measure` and a `frame:` section makes a [full-CCD frame](../observe/full-ccd-frames.md#from-an-mhd-simulation) as one with an `atmosphere` does: every line in the band is synthesised from the DEM or VDEM under the slit, and the frame is made from that.
 
 ```yaml
 instrument: SWC

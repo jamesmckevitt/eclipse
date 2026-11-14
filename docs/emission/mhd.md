@@ -1,10 +1,52 @@
-# Synthesising from an MHD simulation
+# From an MHD simulation
+
+<div class="glance" markdown>
+<div markdown>
+**You need**
+
+An [atmosphere file](../files/atmosphere.md), written from your simulation
+</div>
+<div markdown>
+**You run**
+
+`eclipse run`, or `eclipse synthesise` for this step alone
+</div>
+<div markdown>
+**You get**
+
+A [synthesis file](../files/synthesis.md) in `run/input/`
+</div>
+<div markdown>
+**Next**
+
+[Simulating an observation](../observe/simulate.md) or [Full-CCD frames](../observe/full-ccd-frames.md)
+</div>
+</div>
 
 `synthesise-spectra` turns a 3D MHD simulation into the spectra it emits, taking the plasma to be optically thin. For each pixel of the image, it adds up the emission measure of the cells along the line of sight by their temperature and velocity. It then multiplies that by each line's contribution function, G(T, n_e), which says how much the line emits at each temperature and density. The contribution functions come from the CHIANTI atomic database, through [fiasco](https://fiasco.readthedocs.io/).
 
-The spectra are written to a [synthesis file](files.md#synthesis-files), which `eclipse` then observes (see [Running a simulation](instrument-response.md)). A [run file](run-files.md) can do both steps with one command, `eclipse run`: its `synthesis:` section takes the options on this page, with underscores in place of the dashes.
+The spectra are written to a [synthesis file](../files/synthesis.md), which `eclipse` then observes (see [Simulating an observation](../observe/simulate.md)). A [run file](../run-files.md) can do both steps with one command, `eclipse run`: its `synthesis:` section takes the options on this page, with underscores in place of the dashes.
 
-## Atmosphere files
+## A minimal run
+
+Name the atmosphere file and the lines in a [run file](../run-files.md):
+
+```yaml
+instrument: SWC
+atmosphere: ./data/muram_ar.h5        # the simulation to synthesise
+
+synthesis:
+  lines: [Fe12_195.1190]              # the first is the reference line, unless one is given
+  crop_z: [0 Mm, 20 Mm]
+```
+
+```bash
+eclipse synthesise job.yaml
+```
+
+The synthesis is written to `run/input/job.h5`. `eclipse run job.yaml` goes on to observe it, once the file says how. The `synthesis:` section takes the [options below](#command-line-options), with underscores in place of the dashes.
+
+## The atmosphere file
 
 `synthesise-spectra` reads the simulation from an atmosphere file, an HDF5 file that you write from your simulation's output, and you pass it with `--atmosphere`:
 
@@ -12,35 +54,7 @@ The spectra are written to a [synthesis file](files.md#synthesis-files), which `
 synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
 ```
 
-An atmosphere file holds the simulation's temperature, its mass density or electron density or both, the velocity along the line of sight, and the edges of its cells, each with its unit. It can also hold the snapshot's time. The cubes are indexed `[z, y, x]`, with z pointing up. The two axes that become the image must be evenly spaced, but the axis along the line of sight can have cells of different sizes. [Files](files.md#atmosphere-files) gives the full layout, for writing one with any HDF5 library, from Fortran, C, IDL or Julia.
-
-### Writing a file from Python
-
-```python
-import astropy.units as u
-import numpy as np
-from eclipse import Atmosphere, write_atmosphere, edges_from_centres
-
-atmosphere = Atmosphere(
-    temperature=temperature * u.K,                # (nz, ny, nx)
-    mass_density=density * u.g / u.cm**3,         # or electron_density=n_e / u.cm**3
-    velocity_z=vz * u.km / u.s,                   # the component along the line of sight
-    x_edges=np.arange(nx + 1) * 0.192 * u.Mm,     # an even grid
-    y_edges=np.arange(ny + 1) * 0.192 * u.Mm,
-    z_edges=edges_from_centres(z_centres * u.km), # an uneven one, from cell centres
-    time=1250.0 * u.s,
-    source="my simulation, snapshot 385",
-)
-write_atmosphere(atmosphere, "atmosphere.h5")
-```
-
-`Atmosphere` checks the shapes, units and edges when it is created. If your code only gives the cell centres, `edges_from_centres` puts each edge halfway between two neighbouring centres.
-
-`read_atmosphere` reads a file back into an `Atmosphere`. To check what a file holds without loading the cubes, run
-
-```bash
-eclipse-atmosphere info atmosphere.h5
-```
+An atmosphere file holds the simulation's temperature, its mass density or electron density or both, the velocity along the line of sight, and the edges of its cells, each with its unit. It can also hold the snapshot's time. The cubes are indexed `[z, y, x]`, with z pointing up. The two axes that become the image must be evenly spaced, but the axis along the line of sight can have cells of different sizes. [Atmosphere files](../files/atmosphere.md) gives the full layout, for writing one with any HDF5 library, from Fortran, C, IDL or Julia.
 
 ### Electron density
 
@@ -50,17 +64,107 @@ If the file only has `mass_density`, ECLIPSE divides it by the mass per free ele
 
 The contribution functions are computed on a grid of densities, 0.3 apart in log10 n_e, that covers the densities of the plasma between 10^4 and 10^9 K. An atmosphere with a wide range of densities therefore takes longer and needs more memory.
 
-### Cropping and downsampling
+## Cropping and downsampling
 
 `--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and makes each one as big as the N cells it replaces, so the box keeps its size.
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
-### Worked example: a MURaM active region
+## From the command line
 
-The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
+```bash
+# The shortest run
+synthesise-spectra \
+  --atmosphere ./data/atmosphere.h5 \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --output-dir ./run/input
 
-### Worked example: Bifrost quiet Sun
+# The same, with more of the options, most at their defaults
+synthesise-spectra \
+  --atmosphere ./data/atmosphere.h5 \
+  --lines Fe12_195.1190 Fe12_195.1790 \
+  --abundance sun_coronal_2021_chianti \
+  --n-workers 4 \
+  --output-dir ./run/input \
+  --output-name synthesised_spectra.h5 \
+  --vel-res "5.0 km/s" \
+  --vel-lim "300.0 km/s" \
+  --integration-axis z \
+  --crop-x "-50 Mm" "50 Mm" \
+  --crop-y "-50 Mm" "50 Mm" \
+  --crop-z "0 Mm" "20 Mm" \
+  --downsample 1 \
+  --precision float64 \
+  --mass-per-electron 1.16
+
+# Show all available options
+synthesise-spectra --help
+```
+
+### Command line options
+
+**Input and output:**
+
+- `--config`: A [run file](../run-files.md), whose `atmosphere`, `synthesis_file` and `synthesis:` section give the settings. Options given as well override the file's
+- `--atmosphere`: The [atmosphere file](../files/atmosphere.md) to synthesise from (required, except in the deprecated modes on [Older versions](../reference/older-versions.md))
+- `--emission-measure`: In place of `--atmosphere`, an [emission measure file](dem.md) to synthesise from, a DEM or a VDEM. The options for the view, cropping and `--mass-per-electron` describe an atmosphere, and are refused with it.
+- `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
+- `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
+
+**Lines and abundances:**
+
+- `--lines`: The lines to synthesise, for example `--lines Fe12_195.1190 Fe12_195.1790`, named as in [Naming spectral lines](../reference/line-names.md) (required, unless `--band` is given)
+- `--band`: In place of `--lines`, synthesise every CHIANTI line between two wavelengths as one spectrum, for example `--band "169 Angstrom" "213.5 Angstrom"`, for a [full-CCD frame](../observe/full-ccd-frames.md#the-bands-spectrum). The file gets one entry, named `band_<from>-<to>`, in Angstrom.
+- `--band-step`: The spacing of the band's wavelengths (default: `"0.002 Angstrom"`)
+- `--band-lines`: The file that keeps the contribution functions of the band's lines, which take hours to work out. It is read back if it is there already (default: `band_lines.h5` in the output directory).
+- `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
+- `--electron-density`: With `--emission-measure`, the electron density the contribution functions are taken at, for example `--electron-density "1e9 cm-3"`
+- `--pressure`: With `--emission-measure`, the electron pressure, for example `--pressure "1e15 K cm-3"`, which gives each temperature its own density, in place of `--electron-density`
+- `--continuum`: Also synthesise the continuum under the lines' windows, or under the band (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
+- `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
+- `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.
+- `--goft-temperature-chunk`: Compute the contribution functions for this many temperatures at a time, rather than the whole grid at once, to use less memory (default: the whole grid). With several ions and `--n-workers`, every worker needs that memory at the same time.
+
+**Velocity grid:**
+
+- `--vel-res`: The spacing of the velocity bins, with units (default: `"5.0 km/s"`). Each cell's emission is split between the two velocity bins either side of its velocity, and the two temperature bins either side of its temperature, so the emission's mean velocity is right at any spacing. A cell less than half a bin beyond the last bin goes into that bin.
+- `--vel-lim`: How far the velocity grid reaches either side of zero, with units (default: `"300.0 km/s"`). Plasma faster than this is left out of the spectra, with a warning saying how much of the emission measure that is.
+
+**Viewing direction:**
+
+- `--integration-axis`: The axis to look along, and the side of the box to look from (default: `z`)
+    - `z`: The view from above (+z), looking down through the height
+    - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
+    - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+
+**Cropping, in the file's coordinates, with units:**
+
+- `--crop-x`: The range of x to keep, for example `--crop-x "-50 Mm" "50 Mm"`
+- `--crop-y`: The range of y to keep, for example `--crop-y "-50 Mm" "50 Mm"`
+- `--crop-z`: The range of z to keep, for example `--crop-z "0 Mm" "20 Mm"`
+- Leave out a crop option to keep the whole range along that axis
+- `--image-x`: Synthesise only the part of the image between two positions across the slit, in the image's own x coordinates, for example `--image-x "-1 Mm" "1 Mm"`. Unlike a crop, this keeps the whole line of sight in every view.
+
+**Processing:**
+
+- `--downsample`: Keep every N-th cell along each axis. N must divide every dimension of the atmosphere (default: `1`, no downsampling)
+- `--precision`: `float32` or `float64` (default: `float64`)
+- `--mass-per-electron`: The mass per free electron in atomic mass units, used to get the electron density from the mass density (default: worked out from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](#electron-density)). Not used if the atmosphere file has an electron density. `--mean-mol-wt` is the old name for this option, which defaulted to 1.29 up to ECLIPSE 0.11.0.
+
+## Running it faster
+
+- Use `--downsample 2` or `--downsample 4` for a first test
+- Use `--precision float32` to use less memory, at some cost in accuracy
+- Crop to the region you need, to save time
+- Side views (`--integration-axis x`, `-x`, `y` or `+y`) need the atmosphere file to hold the velocity along that axis
+
+## Worked examples
+
+### A MURaM active region
+
+The [worked example](../worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
+
+### A Bifrost quiet Sun
 
 The [Hinode SDC Europe](https://sdc.uio.no/search/simulations) hosts snapshots of several Bifrost simulations as FITS files, one file per variable. The values are in SI units, variables whose names start with `lg` are base-10 logarithms, and the heights of the cell centres are in the first FITS extension ([Carlsson et al. 2016](https://doi.org/10.1051/0004-6361/201527226), Sect. 5).
 
@@ -114,91 +218,3 @@ synthesise-spectra --atmosphere bifrost_385.h5 \
   --crop-z "0 Mm" "20 Mm" \
   --output-dir ./run/input
 ```
-
-## Basic usage
-
-```bash
-# The shortest run
-synthesise-spectra \
-  --atmosphere ./data/atmosphere.h5 \
-  --lines Fe12_195.1190 Fe12_195.1790 \
-  --output-dir ./run/input
-
-# The same, with more of the options, most at their defaults
-synthesise-spectra \
-  --atmosphere ./data/atmosphere.h5 \
-  --lines Fe12_195.1190 Fe12_195.1790 \
-  --abundance sun_coronal_2021_chianti \
-  --n-workers 4 \
-  --output-dir ./run/input \
-  --output-name synthesised_spectra.h5 \
-  --vel-res "5.0 km/s" \
-  --vel-lim "300.0 km/s" \
-  --integration-axis z \
-  --crop-x "-50 Mm" "50 Mm" \
-  --crop-y "-50 Mm" "50 Mm" \
-  --crop-z "0 Mm" "20 Mm" \
-  --downsample 1 \
-  --precision float64 \
-  --mass-per-electron 1.16
-
-# Show all available options
-synthesise-spectra --help
-```
-
-## Command line options
-
-**Input and output:**
-
-- `--config`: A [run file](run-files.md), whose `atmosphere`, `synthesis_file` and `synthesis:` section give the settings. Options given as well override the file's
-- `--atmosphere`: The [atmosphere file](#atmosphere-files) to synthesise from (required, except in the deprecated modes on [Older versions](older-versions.md))
-- `--emission-measure`: In place of `--atmosphere`, an [emission measure file](dem-synthesis.md) to synthesise from, a DEM or a VDEM. The options for the view, cropping and `--mass-per-electron` describe an atmosphere, and are refused with it.
-- `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
-- `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
-
-**Lines and abundances:**
-
-- `--lines`: The lines to synthesise, for example `--lines Fe12_195.1190 Fe12_195.1790`, named as in [Naming spectral lines](line-names.md) (required, unless `--band` is given)
-- `--band`: In place of `--lines`, synthesise every CHIANTI line between two wavelengths as one spectrum, for example `--band "169 Angstrom" "213.5 Angstrom"`, for a [full-CCD frame](full-ccd-frame.md#the-bands-spectrum). The file gets one entry, named `band_<from>-<to>`, in Angstrom.
-- `--band-step`: The spacing of the band's wavelengths (default: `"0.002 Angstrom"`)
-- `--band-lines`: The file that keeps the contribution functions of the band's lines, which take hours to work out. It is read back if it is there already (default: `band_lines.h5` in the output directory).
-- `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
-- `--electron-density`: With `--emission-measure`, the electron density the contribution functions are taken at, for example `--electron-density "1e9 cm-3"`
-- `--pressure`: With `--emission-measure`, the electron pressure, for example `--pressure "1e15 K cm-3"`, which gives each temperature its own density, in place of `--electron-density`
-- `--continuum`: Also synthesise the continuum under the lines' windows, or under the band (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
-- `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
-- `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.
-- `--goft-temperature-chunk`: Compute the contribution functions for this many temperatures at a time, rather than the whole grid at once, to use less memory (default: the whole grid). With several ions and `--n-workers`, every worker needs that memory at the same time.
-
-**Velocity grid:**
-
-- `--vel-res`: The spacing of the velocity bins, with units (default: `"5.0 km/s"`). Each cell's emission is split between the two velocity bins either side of its velocity, and the two temperature bins either side of its temperature, so the emission's mean velocity is right at any spacing. A cell less than half a bin beyond the last bin goes into that bin.
-- `--vel-lim`: How far the velocity grid reaches either side of zero, with units (default: `"300.0 km/s"`). Plasma faster than this is left out of the spectra, with a warning saying how much of the emission measure that is.
-
-**Viewing direction:**
-
-- `--integration-axis`: The axis to look along, and the side of the box to look from (default: `z`)
-    - `z`: The view from above (+z), looking down through the height
-    - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
-    - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
-
-**Cropping, in the file's coordinates, with units:**
-
-- `--crop-x`: The range of x to keep, for example `--crop-x "-50 Mm" "50 Mm"`
-- `--crop-y`: The range of y to keep, for example `--crop-y "-50 Mm" "50 Mm"`
-- `--crop-z`: The range of z to keep, for example `--crop-z "0 Mm" "20 Mm"`
-- Leave out a crop option to keep the whole range along that axis
-- `--image-x`: Synthesise only the part of the image between two positions across the slit, in the image's own x coordinates, for example `--image-x "-1 Mm" "1 Mm"`. Unlike a crop, this keeps the whole line of sight in every view.
-
-**Processing:**
-
-- `--downsample`: Keep every N-th cell along each axis. N must divide every dimension of the atmosphere (default: `1`, no downsampling)
-- `--precision`: `float32` or `float64` (default: `float64`)
-- `--mass-per-electron`: The mass per free electron in atomic mass units, used to get the electron density from the mass density (default: worked out from `--abundance` for a fully ionised plasma, about 1.16 for coronal abundances; see [Electron density](#electron-density)). Not used if the atmosphere file has an electron density. `--mean-mol-wt` is the old name for this option, which defaulted to 1.29 up to ECLIPSE 0.11.0.
-
-## Performance tips
-
-- Use `--downsample 2` or `--downsample 4` for a first test
-- Use `--precision float32` to use less memory, at some cost in accuracy
-- Crop to the region you need, to save time
-- Side views (`--integration-axis x`, `-x`, `y` or `+y`) need the atmosphere file to hold the velocity along that axis
