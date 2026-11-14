@@ -59,6 +59,10 @@ nav:
 not_in_nav: |
   /internal/
 
+# The notes beside the logo files are for the repository, not the site.
+exclude_docs: |
+  /images/logo/README.md
+
 extra_css:
   - stylesheets/extra.css
 
