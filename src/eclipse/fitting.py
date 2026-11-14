@@ -11,7 +11,7 @@ import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, effective_n_jobs
 from tqdm import tqdm
 from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
@@ -1393,11 +1393,18 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     min_pixels = _n_free_params(fit_config)
 
-    def _rows():
-        """Each row along the slit, with its uncertainties and the pixels kept."""
+    # With few rows for the workers, each row is fitted in several pieces, so
+    # that no worker is left waiting long for the last pieces to finish.
+    pieces = min(n_scan, max(1, -(-8 * effective_n_jobs(n_jobs) // n_slit)))
+    edges = np.linspace(0, n_scan, pieces + 1).astype(int)
+
+    def _pieces():
+        """Each piece of each row along the slit, with its uncertainties and the pixels kept."""
         for i in range(n_slit):
-            yield (signal_cube.data[i], None if uncertainty is None else uncertainty[i],
-                   kept[i])
+            for first, last in zip(edges[:-1], edges[1:]):
+                yield (signal_cube.data[i, first:last],
+                       None if uncertainty is None else uncertainty[i, first:last],
+                       kept[i, first:last])
 
     if fit_config is None or fit_config.is_single:
         # One Gaussian on a background, with its own fast fit.
@@ -1456,13 +1463,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 _start)
         return results, succeeded
 
-    with tqdm_joblib(tqdm(total=n_slit, desc=description, leave=False)):
+    with tqdm_joblib(tqdm(total=n_slit * pieces, desc=description, leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block)(*row) for row in _rows()
+            delayed(_fit_block)(*piece) for piece in _pieces()
         )
 
-    data_array = np.stack([r[0] for r in results], axis=0)
-    failed = ~np.stack([r[1] for r in results], axis=0)
+    rows = [results[i * pieces:(i + 1) * pieces] for i in range(n_slit)]
+    data_array = np.stack([np.concatenate([r[0] for r in row]) for row in rows], axis=0)
+    failed = ~np.stack([np.concatenate([r[1] for r in row]) for row in rows], axis=0)
     failed |= _unmeasurable(data_array, signal_cube.data, wv.value, n_components, kept)
 
     # Amplitude, centre and width of each component, then the background.
