@@ -619,7 +619,7 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
 
     - `dem_map`: DEM in each pixel, on the temperatures `logT_grid`.
     - `em_tv`: emission measure in each pixel by temperature and velocity,
-      on the velocities `vel_grid`.
+      on the velocities `vel_grid`, only if synthesised with `--keep-vdem`.
     - `electron_density`: electron density in cm^-3 at which the
       contribution functions were evaluated, at each temperature of each
       pixel, same shape as `dem_map`. It is the mean over the cells,
@@ -637,13 +637,18 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
     path : str or Path
         Synthesis file.
     keys : iterable of str, optional
-        Products to read. Leaving out `em_tv`, often the largest part of the
-        file, saves time. Default None reads everything.
+        Products to read. Default None reads everything.
 
     Returns
     -------
     dict
         Products keyed by name.
+
+    Raises
+    ------
+    KeyError
+        If `em_tv` is asked for and the file was synthesised without
+        `--keep-vdem`.
     """
     path = Path(path)
     with _open_to_read(path, "synthesis") as f:
@@ -653,6 +658,8 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
             return {}
         if isinstance(keys, str):
             keys = [keys]
+        if keys is not None and "em_tv" in keys and "em_tv" not in f["synthesis"]:
+            raise KeyError(f"{path} has no em_tv: synthesise with --keep-vdem to keep it.")
         return _read_tree(f["synthesis"], None if keys is None else set(keys))
 
 

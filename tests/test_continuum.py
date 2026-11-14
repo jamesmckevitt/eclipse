@@ -135,7 +135,8 @@ def _synthesise(tmp_path, monkeypatch, lines, continuum):
         z_edges=np.arange(nz + 1) * 0.1 * u.Mm)
     path = write_atmosphere(atmosphere, tmp_path / "atmosphere.h5")
     argv = ["synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
-            "--output-name", "out.h5", "--mass-per-electron", "1.2", "--lines", *lines]
+            "--output-name", "out.h5", "--mass-per-electron", "1.2", "--keep-vdem",
+            "--lines", *lines]
     if continuum:
         argv.append("--continuum")
     monkeypatch.setattr(sys, "argv", argv)
@@ -217,7 +218,7 @@ def test_the_continuum_counts_plasma_moving_faster_than_the_velocity_grid(tmp_pa
     monkeypatch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
         "--output-name", "out.h5", "--mass-per-electron", "1.2", "--vel-lim", "100 km/s",
-        "--lines", "Fe12_195.1190", "--continuum"])
+        "--keep-vdem", "--lines", "Fe12_195.1190", "--continuum"])
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     monkeypatch.setattr(synthesis, "compute_continuum_fiasco", _flat_continuum)
     with pytest.warns(UserWarning, match="faster"):

@@ -88,7 +88,8 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     DEM data held in the results, which no version of ECLIPSE has written there.
 
     Deprecated since 0.12.0. The DEM and emission measure are in the
-    synthesis file. Read them with
+    synthesis file, the emission measure only if synthesised with
+    `--keep-vdem`. Read them with
     `read_synthesis_products(path, keys=["dem_map", "em_tv"])`.
 
     Parameters

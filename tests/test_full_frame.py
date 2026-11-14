@@ -33,7 +33,7 @@ def _flat_goft_at(rest):
     return flat_goft
 
 
-def _synthesise(tmp_path, temperature, velocity=0.0, rest=REST):
+def _synthesise(tmp_path, temperature, velocity=0.0, rest=REST, keep_vdem=True):
     """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, moving at `velocity` km/s.
 
     It holds one line, at `rest` Angstrom, with the contribution function `G0`.
@@ -50,8 +50,8 @@ def _synthesise(tmp_path, temperature, velocity=0.0, rest=REST):
     patch = pytest.MonkeyPatch()
     patch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
-        "--output-name", "synthesis.h5", "--mass-per-electron", "1.2", "--lines",
-        f"Fe12_{rest:.4f}"])
+        "--output-name", "synthesis.h5", "--mass-per-electron", "1.2",
+        *(["--keep-vdem"] if keep_vdem else []), "--lines", f"Fe12_{rest:.4f}"])
     patch.setattr(synthesis, "compute_goft_fiasco", _flat_goft_at(rest))
     synthesis.main()
     patch.undo()
@@ -338,6 +338,21 @@ def test_the_band_from_lines_needs_the_synthesis_grids_and_abundances(uniform_sy
             full_ccd_frame(uniform_synthesis, lines, continuum=descending, **settings)
     with pytest.raises(ValueError, match="continuum goes with lines"):
         full_ccd_frame(uniform_synthesis, continuum=continuum, **settings)
+
+
+def test_a_synthesis_keeps_its_vdem_only_when_asked(tmp_path, uniform_synthesis):
+    path = _synthesise(tmp_path, np.full(4, 1e6), keep_vdem=False)
+    products = read_synthesis_products(path)
+    assert "em_tv" not in products and "dem_map" in products
+    assert products["config"]["keep_vdem"] is False
+    with pytest.raises(KeyError, match="--keep-vdem"):
+        read_synthesis_products(path, keys=["dem_map", "em_tv"])
+    assert "em_tv" in read_synthesis_products(uniform_synthesis)
+    lines = _one_line(products)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        with pytest.raises(ValueError, match="--keep-vdem"):
+            full_ccd_frame(path, lines, slit_position=0.3 * u.Mm, exposure=1 * u.s,
+                           n_workers=1)
 
 
 def test_a_frame_needs_a_slit_position_an_exposure_and_a_matching_focal_plane(

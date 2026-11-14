@@ -2086,7 +2086,7 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
     products = {
         # Per unit log T, as the synthesis of an atmosphere keeps it.
         "dem_map": em_t / _temperature_bins(logT_grid)[0],
-        "em_tv": em_tv,
+        **({"em_tv": em_tv} if getattr(args, "keep_vdem", False) else {}),
         "electron_density": density,
         "logT_grid": logT_grid,
         "vel_grid": velocity,
@@ -2095,6 +2095,7 @@ def _synthesise_emission_measure(args, precision: type, band, band_grid, band_st
         "dynamic_mode": {"enabled": False},
         "config": {
             "precision": precision.__name__,
+            "keep_vdem": bool(getattr(args, "keep_vdem", False)),
             "emission_measure": args.emission_measure,
             "electron_density": args.electron_density,
             "pressure": args.pressure,
@@ -2261,6 +2262,10 @@ def build_parser() -> argparse.ArgumentParser:
     files.add_argument("--output-name", type=str, default="synthesised_spectra.h5",
                        help="Output filename, an HDF5 synthesis file; a name ending in .pkl "
                             "writes the deprecated pickle instead")
+    files.add_argument("--keep-vdem", action="store_true",
+                       help="Also keep each pixel's emission measure by temperature and "
+                            "velocity (its VDEM) in the synthesis file. It is often larger "
+                            "than the spectra.")
 
     lines = parser.add_argument_group("Lines and atomic data")
     lines.add_argument("--lines", nargs="+", default=None,
@@ -3155,7 +3160,7 @@ def main(args=None) -> None:
     # saved with them, so the file holds the whole synthesis.
     products = {
         "dem_map": dem_map,
-        "em_tv": em_tv,
+        **({"em_tv": em_tv} if getattr(args, "keep_vdem", False) else {}),
         # Electron density at each temperature of each pixel (mean over its
         # cells weighted by emission measure), at which G was taken.
         "electron_density": electron_density,
@@ -3173,6 +3178,7 @@ def main(args=None) -> None:
         "atmosphere": atmosphere_metadata,
         "config": {
             "precision": precision.__name__,
+            "keep_vdem": bool(getattr(args, "keep_vdem", False)),
             "downsample": downsample,
             "vel_res": vel_res,
             "vel_lim": vel_lim,
@@ -3207,9 +3213,10 @@ def main(args=None) -> None:
     }
     
     if write_pickle:
-        # The old pickle format, including the full contribution functions.
+        # The old pickle format, including the full contribution functions and
+        # the emission measure.
         with open(output_file, "wb") as f:
-            dill.dump({"line_cubes": line_cubes, **products,
+            dill.dump({"line_cubes": line_cubes, "dem_map": dem_map, "em_tv": em_tv, **products,
                        "goft": {name: info for name, info in goft.items()
                                 if name not in (continuum or {}) and name != band_name}}, f)
     else:

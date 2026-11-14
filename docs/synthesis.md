@@ -175,6 +175,7 @@ synthesise-spectra --help
 - `--emission-measure`: In place of `--atmosphere`, an [emission measure file](dem-synthesis.md) to synthesise from, a DEM or a VDEM. The options for the view, cropping and `--mass-per-electron` describe an atmosphere, and are refused with it.
 - `--output-dir`: The directory to write the synthesis file to (default: `./run/input`)
 - `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
+- `--keep-vdem`: Also keep each pixel's emission measure by temperature and velocity in the synthesis file (default: off). It is often larger than the spectra.
 
 **Lines and abundances:**
 
