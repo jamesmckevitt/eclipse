@@ -83,4 +83,6 @@ To move a dynamic-mode run over, write each snapshot as an atmosphere file with 
 
 ## Renamed options
 
+`eclipse --config FILE` is now `eclipse run FILE`. The old form still works, with a warning.
+
 `--mass-per-electron` in `synthesise-spectra` was called `--mean-mol-wt`, and defaulted to 1.29 up to ECLIPSE 0.11.0. The old name still works. Its default is now worked out from the abundances; see [Electron density](synthesis.md#electron-density).

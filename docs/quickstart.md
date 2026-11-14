@@ -66,7 +66,7 @@ Your numbers will differ a little, since the noise is random. [A single line of 
 
 ## A full run
 
-With a simulation, a run has two steps. ECLIPSE first synthesises the spectra the simulation emits. It then passes them through the instrument, adds noise, and fits the lines as you would fit real data. A run file gives the settings of both steps. Write this to `fe12.yaml`:
+With a simulation, ECLIPSE first synthesises the spectra it emits, then observes them. A run file gives the settings of both steps. Write this to `fe12.yaml`:
 
 ```yaml
 instrument: SWC                    # EUVST's short wavelength channel
@@ -86,8 +86,8 @@ and run it:
 eclipse run fe12.yaml
 ```
 
-An atmosphere file holds a simulation's temperature, density and velocity. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write one from your simulation's output. The spectra are written to `run/input/fe12.h5`, and the results to `run/result/fe12.h5`. Running the file again reuses the spectra, unless the atmosphere or the `synthesis:` section has changed, so changing the exposure times only observes again.
+The spectra go to `run/input/fe12.h5` and the results to `run/result/fe12.h5`. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write an atmosphere file.
 
-`eclipse --help` lists the commands. [Run files](run-files.md) explains them, [Running a simulation](instrument-response.md) explains the instrument's settings, and the [configuration reference](configuration.md) lists every setting.
+[Run files](run-files.md) explains the commands, and the [configuration reference](configuration.md) lists every setting.
 
 The [worked example](worked-example.ipynb) goes through a full run with a real simulation, from downloading it to maps of the measured intensity and Doppler velocity. [Where to start](index.md#where-to-start) lists the other starting points.

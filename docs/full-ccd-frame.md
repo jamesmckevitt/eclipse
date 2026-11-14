@@ -114,7 +114,7 @@ The lines come only from plasma within the synthesis's velocity grid, so set `--
 
 ## From a run file
 
-The same frame can be made with one command. A [run file](run-files.md#a-full-ccd-frame)'s `frame:` section says where the slit is and whether to add the continuum, and its other sections set the instrument as in a run. Write this to `slit_core.yaml`:
+A [run file](run-files.md#a-full-ccd-frame) with a `frame:` section makes the same frame. Write this to `slit_core.yaml`:
 
 ```yaml
 instrument: SWC
@@ -138,7 +138,7 @@ and make the frame with:
 eclipse frame slit_core.yaml
 ```
 
-This works out every line in the band, keeps them in `run/input/band_lines.h5` for later frames, and writes the frame to `run/result/slit_core_frame.h5`. A run file with an `atmosphere` in place of the `synthesis_file` synthesises it first.
+The frame goes to `run/result/slit_core_frame.h5`, and the band's lines are kept in `run/input/band_lines.h5` for later frames.
 
 ## What a frame holds
 
