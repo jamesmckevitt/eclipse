@@ -48,6 +48,7 @@ mpi = [
 ]
 dev = [
     "pytest",
+    "pytest-xdist",
     "black",
     "flake8",
     "mypy",
