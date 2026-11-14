@@ -8,7 +8,7 @@ Every step the run file describes: it synthesises the atmosphere, unless the syn
 
 ## eclipse synthesise { data-routes="mhd dem" }
 
-Synthesises the atmosphere only; see [From an MHD simulation](../emission/mhd.md).
+Synthesises the atmosphere or emission measure only; see [From an MHD simulation](../emission/mhd.md).
 
 ## eclipse observe
 
@@ -30,6 +30,4 @@ Writes run files for the Concept Study Report's science cases, as `eclipse-scien
 
 ## synthesise-spectra { data-routes="mhd dem" }
 
-`synthesise-spectra --config job.yaml` reads the atmosphere, the `synthesis:` section and `synthesis_file` of a run file. Options given on the command line override the file's.
-
-[From an MHD simulation](../emission/mhd.md#command-line-options) lists its options.
+Synthesises without observing. `--config job.yaml` reads a run file's synthesis settings. [From an MHD simulation](../emission/mhd.md#command-line-options) lists its options.

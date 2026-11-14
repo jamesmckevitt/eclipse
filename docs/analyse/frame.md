@@ -24,17 +24,14 @@ The spectrum of the whole band, as the camera records it
 
 For each CCD, `"left"` and `"right"`:
 
-- `rate`: the photons per second reaching each image pixel;
-- `photons`: the photons in each pixel over the exposure;
-- `dn`: the frame as it is read out, in DN;
-- `wavelength`: the wavelength each row records;
-- `field_angle`: the angle along the slit of each column, from the slit's centre, positive towards solar north in nominal observations;
-- `photon_wavelength`: the wavelength of the mean energy of each pixel's photons;
-- `photon_rms_wavelength`: the wavelength of the root mean square energy of each pixel's photons, which sets how far their electrons spread.
+- `rate`: photons per second reaching each image pixel
+- `photons`: photons in each pixel over the exposure
+- `dn`: the frame as read out, in DN, with the prescan and overscan of each output
+- `wavelength`: the wavelength each row records
+- `field_angle`: each column's angle along the slit, positive towards solar north
+- `photon_wavelength`, `photon_rms_wavelength`: the wavelengths of the mean and root mean square energies of each pixel's photons
 
-`dn` holds each row as the two outputs read it: the left output's prescan, the first half of the image, the left output's overscan, the right output's overscan, the second half of the image and the right output's prescan. The parallel overscan rows follow the image's rows.
-
-`settings["spectra"]`, and the `spectra` dataset of a frame file, name the entries of the synthesis file that the frame holds.
+Each CCD's columns count from its left output: from the north end of the slit on the left CCD, and the south end on the right. `settings["spectra"]` names the entries of the synthesis file the frame holds.
 
 ## The spectrum of the band
 

@@ -4,8 +4,6 @@ Everything `synthesise-spectra` and `eclipse` do is available from Python, in th
 
 ## Running a run file
 
-`eclipse.run`, `eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do what the commands do. They take a run file, or its settings as a dictionary, and keywords that lay top-level settings or sections over it:
-
 ```python
 import eclipse
 
@@ -13,7 +11,7 @@ import eclipse
 print(output.synthesis, output.results)
 ```
 
-Each returns one `RunOutput` for each run, with the files the run wrote. `settings` takes `key=value` texts as `--set` does, and `only` picks a run as `--only` does.
+`eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do one step each.
 
 ## The instrument
 

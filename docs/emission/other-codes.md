@@ -54,8 +54,6 @@ x runs across the slit, the direction a raster steps in, and y runs along it. Th
 
 A line can also be a whole spectral window with its blends, as most codes give it. The blends are then fitted as in [Fitting blended lines](../observe/fitting.md).
 
-A [full-CCD frame](../observe/full-ccd-frames.md#from-your-own-spectra) holds every entry of the file, each at its own wavelengths, so a file can also hold the spectrum of the whole band as one entry.
-
 ## Worked example: FoMo
 
 [FoMo](https://github.com/TomVeeDee/FoMo) ([Van Doorsselaere et al. 2016](https://doi.org/10.3389/fspas.2016.00004)) synthesises optically thin lines from an MHD simulation, from any viewing angle.

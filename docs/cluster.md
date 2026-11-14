@@ -1,13 +1,9 @@
 # On a cluster
 
-The synthesis and the observation suit different nodes: the synthesis needs memory, and the observation runs its Monte Carlo iterations across MPI ranks. They can be run one after the other from the same file:
-
 ```bash
 eclipse synthesise job.yaml
 srun --mpi=pmi2 --kill-on-bad-exit=1 eclipse observe job.yaml
 ```
-
-`eclipse run` under MPI synthesises on the first rank while the others wait, then observes across all of them.
 
 ## Many cores with MPI
 

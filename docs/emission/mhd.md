@@ -44,7 +44,7 @@ synthesis:
 eclipse synthesise job.yaml
 ```
 
-The synthesis is written to `run/input/job.h5`. `eclipse run job.yaml` goes on to observe it, once the file says how. The `synthesis:` section takes the [options below](#command-line-options), with underscores in place of the dashes.
+The synthesis goes to `run/input/job.h5`. The `synthesis:` section takes the [options below](#command-line-options), with underscores in place of dashes.
 
 ## The atmosphere file
 
@@ -69,6 +69,26 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 `--crop-x`, `--crop-y` and `--crop-z` are given in the coordinates of the file. A cell is kept if any part of it is inside the range. `--downsample N` keeps every N-th cell along each axis, and makes each one as big as the N cells it replaces, so the box keeps its size.
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
+
+## Seen from a position on the disk
+
+`--position` puts the box's centre at a helioprojective x and y, instead of seeing it from straight above. `--rotation` turns it about the vertical.
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec"
+```
+
+The line of sight is then slanted, so the atmosphere file needs the velocity along each axis it leans along. The box is taken to repeat sideways unless `--no-wrap` is given.
+
+### The curved surface
+
+`--curvature` lays the box on the curved surface, each column along its own vertical. It needs `velocity_x`, `velocity_y` and `velocity_z`.
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec" --curvature
+```
 
 ## From the command line
 
@@ -114,13 +134,13 @@ synthesise-spectra --help
 **Lines and abundances:**
 
 - `--lines`: The lines to synthesise, for example `--lines Fe12_195.1190 Fe12_195.1790`, named as in [Naming spectral lines](../reference/line-names.md) (required, unless `--band` is given)
-- `--band`: In place of `--lines`, synthesise every CHIANTI line between two wavelengths as one spectrum, for example `--band "169 Angstrom" "213.5 Angstrom"`, for a [full-CCD frame](../observe/full-ccd-frames.md#the-bands-spectrum). The file gets one entry, named `band_<from>-<to>`, in Angstrom.
+- `--band`: In place of `--lines`, every CHIANTI line between two wavelengths, as one spectrum, for a [full-CCD frame](../observe/full-ccd-frames.md#the-bands-spectrum), for example `--band "169 Angstrom" "213.5 Angstrom"`
 - `--band-step`: The spacing of the band's wavelengths (default: `"0.002 Angstrom"`)
-- `--band-lines`: The file that keeps the contribution functions of the band's lines, which take hours to work out. It is read back if it is there already (default: `band_lines.h5` in the output directory).
+- `--band-lines`: Where to keep the band's lines for later syntheses (default: `band_lines.h5` in the output directory)
 - `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
-- `--electron-density`: With `--emission-measure`, the electron density the contribution functions are taken at, for example `--electron-density "1e9 cm-3"`
-- `--pressure`: With `--emission-measure`, the electron pressure, for example `--pressure "1e15 K cm-3"`, which gives each temperature its own density, in place of `--electron-density`
-- `--continuum`: Also synthesise the continuum under the lines' windows, or under the band (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
+- `--electron-density`: With `--emission-measure`, the density to take the contribution functions at, for example `--electron-density "1e9 cm-3"`
+- `--pressure`: With `--emission-measure`, an electron pressure in place of a density, for example `--pressure "1e15 K cm-3"`
+- `--continuum`: Also synthesise the continuum under the lines' windows, or the band (default: off). Each group of overlapping windows gets one more entry in the synthesis file, named `continuum_<from>-<to>`, in Angstrom, and `eclipse` adds it to the window it falls in.
 - `--n-workers`: How many processes compute the contribution functions, each taking one ion at a time, so there are never more than there are ions. `0`, the default, uses every CPU the job may use, as SLURM allocates them. `1` computes them one after another.
 - `--hdf5-dbase-root`: The CHIANTI database for fiasco to read. The default is the one set in `~/.fiasco/fiascorc`. Use this to run with another CHIANTI version without changing that default.
 - `--goft-temperature-chunk`: Compute the contribution functions for this many temperatures at a time, rather than the whole grid at once, to use less memory (default: the whole grid). With several ions and `--n-workers`, every worker needs that memory at the same time.
@@ -136,6 +156,11 @@ synthesise-spectra --help
     - `z`: The view from above (+z), looking down through the height
     - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
     - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+- `--position`: The helioprojective x and y of the box's centre, for example `--position "600 arcsec" "-200 arcsec"`; see [Seen from a position on the disk](#seen-from-a-position-on-the-disk). Not with `--integration-axis`
+- `--rotation`: With `--position`, turn the box about the vertical, from x pointing west towards north, for example `--rotation "30 deg"`
+- `--projection`: With `--position`, `two-step` (default) or `exact`, which shares cells between pixels exactly and is slower
+- `--curvature`: With `--position`, lay the box on the curved solar surface; see [The curved surface](#the-curved-surface)
+- `--no-wrap`: With `--position`, do not take the box to repeat sideways
 
 **Cropping, in the file's coordinates, with units:**
 
@@ -143,7 +168,7 @@ synthesise-spectra --help
 - `--crop-y`: The range of y to keep, for example `--crop-y "-50 Mm" "50 Mm"`
 - `--crop-z`: The range of z to keep, for example `--crop-z "0 Mm" "20 Mm"`
 - Leave out a crop option to keep the whole range along that axis
-- `--image-x`: Synthesise only the part of the image between two positions across the slit, in the image's own x coordinates, for example `--image-x "-1 Mm" "1 Mm"`. Unlike a crop, this keeps the whole line of sight in every view.
+- `--image-x`: Synthesise only the image between two positions across the slit, for example `--image-x "-1 Mm" "1 Mm"`
 
 **Processing:**
 
