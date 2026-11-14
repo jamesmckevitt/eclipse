@@ -163,7 +163,14 @@ They can only be switched on from Python, not in a run file run with `eclipse ru
 
 | To | Use | See |
 | --- | --- | --- |
+<<<<<<< HEAD
 | Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](emission/mhd.md), [Atmosphere files](files/atmosphere.md) |
 | Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](emission/dem.md) |
 | Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [From another code](emission/other-codes.md), [Synthesis files](files/synthesis.md) |
 | Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing an observation](analyse/observation.md) |
+=======
+| Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](synthesis.md#atmosphere-files), [Files](files.md#atmosphere-files) |
+| Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](dem-synthesis.md) |
+| Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [Spectra from another code](other-codes.md), [Files](files.md#synthesis-files) |
+| Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing the results](analysis.md) |
+>>>>>>> origin/master

@@ -112,7 +112,11 @@ These are the steps `simulate_once` takes, in order.
 
 ## Emission measure files
 
+<<<<<<< HEAD
 A DEM or VDEM over an image, which `synthesise-spectra --emission-measure` synthesises. [From a DEM or VDEM](emission/dem.md) shows how to write and use one.
+=======
+A DEM or VDEM over an image, which `synthesise-spectra --emission-measure` synthesises. [From a DEM or VDEM](dem-synthesis.md) shows how to write and use one.
+>>>>>>> origin/master
 
 ::: eclipse.EmissionMeasure
 
