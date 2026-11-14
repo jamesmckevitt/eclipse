@@ -26,6 +26,8 @@ pip install eclipse
 
 </div>
 
+## Where to start
+
 <div class="guide slim-steps four" data-v="3" data-fade-links data-global-route markdown>
 
 <div class="have-bar" markdown>
