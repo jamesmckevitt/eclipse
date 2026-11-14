@@ -92,6 +92,7 @@ synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 \
 - `--emission-measure`: In place of `--atmosphere`, an [emission measure file](dem.md)
 - `--output-dir`: Where to write the synthesis file (default: `./run/input`)
 - `--output-name`: The synthesis file's name (default: `synthesised_spectra.h5`)
+- `--keep-vdem`: Also keep each pixel's emission measure by temperature and velocity, which is often larger than the spectra (default: off)
 
 **Lines and abundances:**
 

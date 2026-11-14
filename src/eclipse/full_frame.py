@@ -168,6 +168,11 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
         products = f.get("synthesis", {})
         missing = [key for key in ("em_tv", "dem_map", "electron_density", "logT_grid",
                                    "logN_grid", "vel_grid") if key not in products]
+        if missing == ["em_tv"]:
+            raise ValueError(
+                f"{path} has no em_tv, which the spectrum of a band's lines is worked out "
+                f"from. Synthesise with --keep-vdem to keep it, or leave out lines for a "
+                f"frame of the spectra the file holds.")
         if missing:
             raise ValueError(
                 f"{path} has no {', '.join(missing)}, which the spectrum of a band's lines "

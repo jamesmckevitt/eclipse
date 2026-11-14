@@ -92,6 +92,7 @@ def _synthesise(tmp_path, monkeypatch, axis, extra=()):
         "--lines", LINE,
         "--mean-mol-wt", str(MEAN_MOL_WT),
         "--integration-axis", axis,
+        "--keep-vdem",
         *extra,
     ]
     if "--slit-rest-time" in extra:

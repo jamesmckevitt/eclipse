@@ -119,7 +119,7 @@ def test_an_emission_measure_is_checked(change, message):
 def test_a_dem_gives_each_line_its_emission_measure_times_g_at_rest(tmp_path, monkeypatch,
                                                                     chianti_free):
     path = _synthesise(tmp_path, _dem(), "--lines", LINE, "--electron-density", "1e9 cm-3",
-                       monkeypatch=monkeypatch)
+                       "--keep-vdem", monkeypatch=monkeypatch)
     held = read_synthesis(path)
     assert held.x_edges.unit == u.arcsec and held.shape == (3, 4)
     total, centre = _light(held.lines[LINE])

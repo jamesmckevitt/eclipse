@@ -168,4 +168,4 @@ With `save_iterations: true` in the [fitting section](../observe/fitting.md#the-
 
 ## The synthesis behind the results { data-routes="mhd dem" }
 
-The DEM and emission measure are in the [synthesis file](../files/synthesis.md), read with `read_synthesis_products`. For a [raster](../observe/rasters.md), `results["raster"]` holds the observing plan and the cube observed.
+The DEM, and with `--keep-vdem` the emission measure by temperature and velocity, are in the [synthesis file](../files/synthesis.md), read with `read_synthesis_products`. For a [raster](../observe/rasters.md), `results["raster"]` holds the observing plan and the cube observed.
