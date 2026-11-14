@@ -398,3 +398,12 @@ def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_pa
     assert read_synthesis("whole/band.h5").shape[1] == nx
     assert rate.any()
     assert np.allclose(rate, whole.rate["left"], rtol=1e-9, atol=0)
+
+
+def test_a_strip_of_the_image_is_refused_with_a_position(monkeypatch):
+    """Seen from a position on the disk, the box's columns are not the image's."""
+    monkeypatch.setattr(sys, "argv", [
+        "synthesise-spectra", "--atmosphere", "box.h5", "--lines", "Fe12_195.1190",
+        "--position", "600 arcsec", "0 arcsec", "--image-x", "-1 Mm", "1 Mm"])
+    with pytest.raises(ValueError, match="--image-x keeps columns of the box"):
+        synthesis.main()

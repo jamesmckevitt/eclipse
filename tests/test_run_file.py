@@ -503,3 +503,19 @@ def test_a_runs_setting_replaces_the_list(tmp_path, monkeypatch, atmosphere, fak
     job = _job(atmosphere, runs=[{"name": "fe12"}, {"name": "fe09"}])
     outputs = eclipse.synthesise(job, name="job", settings=["runs=[{name: fe11}]"])
     assert [output.name for output in outputs] == ["job_fe11"]
+
+
+def test_a_frame_seen_from_a_position_synthesises_the_whole_image(tmp_path, monkeypatch,
+                                                                  atmosphere, fake_synthesis):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(full_frame, "full_ccd_frame", lambda *args, **kwargs: None)
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"instrument": "SWC", "atmosphere": str(atmosphere),
+           "synthesis": {"position": ["600 arcsec", "0 arcsec"]},
+           "simulation": {"expos": "5 s", "psf": False},
+           "frame": {"slit_position": "0 arcsec"}}
+    eclipse.make_frame(job, name="job")
+    args = fake_synthesis[-1]
+    assert args.position == ["600 arcsec", "0 arcsec"] and args.image_x is None
