@@ -1590,6 +1590,8 @@ def synthesise_cubes(
                         sky=sky)
 
     synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+    for name in goft:
+        lines[name]["si"] = lines[name]["si"].astype(precision, copy=False)
 
     # The continuum uses the emission measure in each temperature bin from
     # the DEM, and each pixel's density at that temperature. The DEM keeps
