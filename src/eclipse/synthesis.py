@@ -18,7 +18,7 @@ from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import write_line_cubes
-from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_frame, disk_geometry
+from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
 from .continuum import compute_continuum_fiasco, continuum_spectra, continuum_windows
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
@@ -1812,8 +1812,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    # Input/Output paths
-    parser.add_argument("--atmosphere", type=str, default=None,
+    files = parser.add_argument_group("Input and output")
+    files.add_argument("--config", type=str, default=None,
+                       help="A run file, whose 'atmosphere', 'synthesis_file' and "
+                            "'synthesis:' section give the settings. Options given here "
+                            "override it.")
+    files.add_argument("--atmosphere", type=str, default=None,
                        help="The ECLIPSE atmosphere file (HDF5) to synthesise "
                             f"from; see {ATMOSPHERE_DOCS} for how to write one. "
                             "Required, except in dynamic mode.")
@@ -1825,92 +1829,29 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--vx-file", "vx/result_prim_1.0270000"),
                           ("--vy-file", "vy/result_prim_3.0270000"),
                           ("--vz-file", "vz/result_prim_2.0270000")):
-        parser.add_argument(flag, type=str, default=default, action=_NotedOption,
-                            help=argparse.SUPPRESS)
-    parser.add_argument("--output-dir", type=str, default="./run/input",
+        files.add_argument(flag, type=str, default=default, action=_NotedOption,
+                           help=argparse.SUPPRESS)
+    files.add_argument("--output-dir", type=str, default="./run/input",
                        help="Output directory for results")
-    parser.add_argument("--output-name", type=str, default="synthesised_spectra.h5",
+    files.add_argument("--output-name", type=str, default="synthesised_spectra.h5",
                        help="Output filename, an HDF5 synthesis file; a name ending in .pkl "
                             "writes the deprecated pickle instead")
-    
-    # Line / abundance specification (fiasco)
-    parser.add_argument("--lines", nargs="+", required=True,
+
+    lines = parser.add_argument_group("Lines and atomic data")
+    lines.add_argument("--lines", nargs="+", required=True,
                        help="Line specifications (e.g. Fe12_195.1190 Fe09_171.073)")
-    parser.add_argument("--abundance", type=str, default="sun_coronal_2021_chianti",
+    lines.add_argument("--abundance", type=str, default="sun_coronal_2021_chianti",
                        help="CHIANTI abundance dataset name for fiasco")
-    parser.add_argument("--continuum", action="store_true",
+    lines.add_argument("--continuum", action="store_true",
                        help="Also synthesise the free-free, free-bound and two-photon "
                             "continuum under the lines' windows, as entries of its own "
                             "beside the lines")
-    parser.add_argument("--n-workers", type=int, default=0,
-                       help="Number of parallel workers for fiasco G(T,N) "
-                            "computation (0 = all CPUs, default: 0)")
-    parser.add_argument("--hdf5-dbase-root", type=str, default=None,
+    lines.add_argument("--hdf5-dbase-root", type=str, default=None,
                        help="CHIANTI HDF5 database to use, overriding the one "
                             "in ~/.fiasco/fiascorc. Use this to run against a "
                             "second CHIANTI version without changing the "
                             "default for other work.")
-    parser.add_argument("--goft-temperature-chunk", type=int, default=None,
-                       help="Compute G(T,N) this many temperatures at a time "
-                            "rather than the whole grid at once. This lowers "
-                            "fiasco's peak memory, which for an ion with many "
-                            "levels can be several GB, at the cost of reading "
-                            "the atomic data again for each chunk. The result "
-                            "is the same.")
-
-    # Integration direction
-    parser.add_argument("--integration-axis", choices=["x", "y", "z", *SIGNED_VIEWS],
-                       action=_NotedOption,
-                       default="z",
-                       help="The axis to look along, x, y or z, from +x, -y or above; or the "
-                            "axis with a sign for the side to look from, such as -x")
-    
-    # A position on the disk, for a line of sight slanted through the box
-    parser.add_argument("--position", nargs=2, type=str, default=None,
-                       help="See the box from this position on the solar disk: the "
-                            "helioprojective x and y of its centre, west and north of disk "
-                            "centre (e.g. '600 arcsec' '-200 arcsec'). The box's x is taken "
-                            "to point west, y north and z up, unless turned by --rotation. "
-                            "The atmosphere file needs the velocity along each axis the line "
-                            "of sight leans along")
-    parser.add_argument("--rotation", type=str, default=None,
-                       help="With --position, turn the box about the vertical by this angle, "
-                            "from its x pointing west towards north (e.g. '30 deg'). "
-                            "Default 0 deg")
-    parser.add_argument("--projection", choices=PROJECTIONS, default=None,
-                       help="With --position, how cells are shared between sky pixels: "
-                            "'two-step' (default) along the line of sight onto the box's "
-                            "base, then onto the sky by area; or 'exact', each cell straight "
-                            "onto the sky, which is slower")
-    parser.add_argument("--curvature", action="store_true",
-                       help="With --position, lay the box on the curved solar surface, each "
-                            "column along its own vertical, and share its cells between sky "
-                            "pixels exactly. The atmosphere file needs the velocity along x, "
-                            "y and z")
-    parser.add_argument("--no-wrap", action="store_true",
-                       help="With --position, end lines of sight at the box's sides, rather "
-                            "than taking the box to repeat sideways")
-
-    # Cropping parameters (in Heliocentric coordinates)
-    parser.add_argument("--crop-x", nargs=2, type=str, default=None,
-                       help="Crop in x direction: x_min x_max (e.g. '-50 Mm' '50 Mm')")
-    parser.add_argument("--crop-y", nargs=2, type=str, default=None,
-                       help="Crop in y direction: y_min y_max (e.g. '-50 Mm' '50 Mm')")
-    parser.add_argument("--crop-z", nargs=2, type=str, default=None,
-                       help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
-    
-    # Velocity grid
-    parser.add_argument("--vel-res", type=str, default="5.0 km/s",
-                       help="Velocity resolution (e.g. '5.0 km/s')")
-    parser.add_argument("--vel-lim", type=str, default="300.0 km/s",
-                       help="Velocity limit +/- (e.g. '300.0 km/s')")
-    
-    # Processing options
-    parser.add_argument("--downsample", type=int, default=1,
-                       help="Downsampling factor (1 = no downsampling)")
-    parser.add_argument("--precision", choices=["float32", "float64"], default="float64",
-                       help="Numerical precision")
-    parser.add_argument("--mass-per-electron", "--mean-mol-wt",
+    lines.add_argument("--mass-per-electron", "--mean-mol-wt",
                        dest="mass_per_electron", type=float, default=None,
                        help="Mass of the plasma per free electron, in atomic mass "
                             "units, which turns a mass density into an electron "
@@ -1919,13 +1860,69 @@ def build_parser() -> argparse.ArgumentParser:
                             "abundances. --mean-mol-wt is the old name; ECLIPSE "
                             "0.11.0 and earlier used 1.29, the value for a neutral gas. "
                             "Not used when the atmosphere gives an electron density.")
-    
-    # Dynamic atmosphere mode (time-varying synthesis). It reads MURaM's own
-    # files, so it carries the options describing their layout.
-    dynamic_group = parser.add_argument_group("Dynamic atmosphere mode (deprecated)",
-        "Options for synthesising with time-varying atmosphere (raster scanning). "
-        "Deprecated: observe a time series of atmosphere files with the "
-        "instrument run instead.")
+
+    view = parser.add_argument_group("The view and the part of the box")
+    view.add_argument("--integration-axis", choices=["x", "y", "z", *SIGNED_VIEWS],
+                      default="z", action=_NotedOption,
+                      help="The axis to look along, x, y or z, from +x, -y or above; or the "
+                           "axis with a sign for the side to look from, such as -x")
+    view.add_argument("--position", nargs=2, type=str, default=None,
+                      help="See the box from this position on the solar disk: the "
+                           "helioprojective x and y of its centre, west and north of disk "
+                           "centre (e.g. '600 arcsec' '-200 arcsec'). The box's x is taken "
+                           "to point west, y north and z up, unless turned by --rotation. "
+                           "The atmosphere file needs the velocity along each axis the line "
+                           "of sight leans along")
+    view.add_argument("--rotation", type=str, default=None,
+                      help="With --position, turn the box about the vertical by this angle, "
+                           "from its x pointing west towards north (e.g. '30 deg'). "
+                           "Default 0 deg")
+    view.add_argument("--projection", choices=PROJECTIONS, default=None,
+                      help="With --position, how cells are shared between sky pixels: "
+                           "'two-step' (default) along the line of sight onto the box's "
+                           "base, then onto the sky by area; or 'exact', each cell straight "
+                           "onto the sky, which is slower")
+    view.add_argument("--curvature", action="store_true",
+                      help="With --position, lay the box on the curved solar surface, each "
+                           "column along its own vertical, and share its cells between sky "
+                           "pixels exactly. The atmosphere file needs the velocity along x, "
+                           "y and z")
+    view.add_argument("--no-wrap", action="store_true",
+                      help="With --position, end lines of sight at the box's sides, rather "
+                           "than taking the box to repeat sideways")
+    view.add_argument("--crop-x", nargs=2, type=str, default=None,
+                      help="Crop in x direction: x_min x_max (e.g. '-50 Mm' '50 Mm')")
+    view.add_argument("--crop-y", nargs=2, type=str, default=None,
+                      help="Crop in y direction: y_min y_max (e.g. '-50 Mm' '50 Mm')")
+    view.add_argument("--crop-z", nargs=2, type=str, default=None,
+                      help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
+    view.add_argument("--downsample", type=int, default=1,
+                      help="Downsampling factor (1 = no downsampling)")
+
+    grids = parser.add_argument_group("Grids and precision")
+    grids.add_argument("--vel-res", type=str, default="5.0 km/s",
+                       help="Velocity resolution (e.g. '5.0 km/s')")
+    grids.add_argument("--vel-lim", type=str, default="300.0 km/s",
+                       help="Velocity limit +/- (e.g. '300.0 km/s')")
+    grids.add_argument("--precision", choices=["float32", "float64"], default="float64",
+                       help="Numerical precision")
+
+    computing = parser.add_argument_group("Computing")
+    computing.add_argument("--n-workers", type=int, default=0,
+                           help="Number of parallel workers for fiasco G(T,N) "
+                                "computation (0 = all CPUs, default: 0)")
+    computing.add_argument("--goft-temperature-chunk", type=int, default=None,
+                           help="Compute G(T,N) this many temperatures at a time "
+                                "rather than the whole grid at once. This lowers "
+                                "fiasco's peak memory, which for an ion with many "
+                                "levels can be several GB, at the cost of reading "
+                                "the atomic data again for each chunk. The result "
+                                "is the same.")
+
+    # Dynamic atmosphere mode (time-varying synthesis), deprecated. It reads
+    # MURaM's own files, so it carries the options describing their layout.
+    # They are hidden from the help, and still run, with a warning.
+    dynamic_group = parser.add_argument_group()
     dynamic_group.add_argument("--slit-rest-time", type=str, default=None,
                        help="Slit rest time per position (e.g. '40 s'). "
                             "Enables dynamic mode when specified.")
@@ -1986,12 +1983,35 @@ def build_parser() -> argparse.ArgumentParser:
                        action=_NotedOption,
                        help="Header filename prefix before timestep suffix")
 
+    for action in dynamic_group._group_actions:
+        action.help = argparse.SUPPRESS
+
     return parser
+
+
+def _config_option(words: list) -> Optional[str]:
+    """The run file given with --config among command-line words, or None."""
+    for index, word in enumerate(words):
+        if word == "--config" and index + 1 < len(words):
+            return words[index + 1]
+        if word.startswith("--config="):
+            return word.split("=", 1)[1]
+    return None
 
 
 def parse_arguments(argv=None):
     """Parse command line arguments for spectrum synthesis."""
     words = list(sys.argv[1:] if argv is None else argv)
+    # A run file's settings go first, so options given here override them.
+    config = _config_option(words)
+    if config is not None:
+        from .run_file import load, runs, synthesis_arguments
+
+        found = runs(*load(config)[:2])
+        if len(found) != 1:
+            raise ValueError(f"{config} has several runs; synthesise them with "
+                             f"'eclipse synthesise {config}', which takes --only to pick one.")
+        words = synthesis_arguments(found[0][1], found[0][0]) + words
     # argparse takes a value starting with a dash, such as the -x in
     # "--integration-axis -x", for an option and stops. Joined into
     # "--integration-axis=-x", it is read as the value.

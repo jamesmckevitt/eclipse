@@ -36,7 +36,7 @@ simulation:
 and run it:
 
 ```bash
-eclipse --config first_run.yaml
+eclipse run first_run.yaml
 ```
 
 This observes the line in exposures of 5 s and 20 s, and writes the results to `run/result/first_run.h5`. Then, in Python:
@@ -66,30 +66,28 @@ Your numbers will differ a little, since the noise is random. [A single line of 
 
 ## A full run
 
-With a simulation, a run has two steps. First `synthesise-spectra` turns the simulation into the spectra it emits. Then `eclipse` passes those spectra through the instrument, adds noise, and fits the lines as you would fit real data:
-
-```bash
-# Make the spectrum of Fe XII 195.119 Angstrom from an atmosphere file
-synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 --output-dir ./run/input
-
-# Pass it through the instrument
-eclipse --config ./run/input/config.yaml
-```
-
-An atmosphere file holds a simulation's temperature, density and velocity. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write one from your simulation's output. `synthesise-spectra` writes the spectra to `./run/input/synthesised_spectra.h5`.
-
-`eclipse` reads its settings from a configuration file. There is no default one, so write `config.yaml` yourself before running it:
+With a simulation, ECLIPSE first synthesises the spectra it emits, then observes them. A run file gives the settings of both steps. Write this to `fe12.yaml`:
 
 ```yaml
-instrument: SWC                                      # EUVST's short wavelength channel
-synthesis_file: ./run/input/synthesised_spectra.h5
-reference_line: Fe12_195.1190                        # observe the window around this line
-n_iter: 100                                          # repeat each exposure 100 times, each with new noise
+instrument: SWC                    # EUVST's short wavelength channel
+atmosphere: ./data/atmosphere.h5   # the simulation to synthesise
+n_iter: 100                        # repeat each exposure 100 times, each with new noise
+
+synthesis:
+  lines: [Fe12_195.1190]           # the lines to synthesise; the first is observed
 
 simulation:
-  expos: [10 s, 40 s]                                # exposure times
+  expos: [10 s, 40 s]              # exposure times
 ```
 
-Both commands list their options with `--help`. [Running a simulation](instrument-response.md) explains the configuration file, and the [configuration reference](configuration.md) lists every setting.
+and run it:
+
+```bash
+eclipse run fe12.yaml
+```
+
+The spectra go to `run/input/fe12.h5` and the results to `run/result/fe12.h5`. [From an MHD simulation](synthesis.md#atmosphere-files) explains how to write an atmosphere file.
+
+[Run files](run-files.md) explains the commands, and the [configuration reference](configuration.md) lists every setting.
 
 The [worked example](worked-example.ipynb) goes through a full run with a real simulation, from downloading it to maps of the measured intensity and Doppler velocity. [Where to start](index.md#where-to-start) lists the other starting points.

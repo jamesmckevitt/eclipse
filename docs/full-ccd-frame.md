@@ -112,6 +112,34 @@ Every part of each line, and of the continuum, is counted in photons at its own 
 
 The lines come only from plasma within the synthesis's velocity grid, so set `--vel-lim` wide enough for the fastest flows. The continuum is not Doppler shifted, and comes from all the plasma.
 
+## From a run file
+
+A [run file](run-files.md#a-full-ccd-frame) with a `frame:` section makes the same frame. Write this to `slit_core.yaml`:
+
+```yaml
+instrument: SWC
+synthesis_file: run/input/muram_ar_fe12.h5
+
+simulation:
+  slit_width: 0.4 arcsec
+  expos: 60 s
+  psf: True
+  slit_mask: True
+
+frame:
+  slit_position: 0 arcsec
+  continuum: True
+  n_workers: 16
+```
+
+and make the frame with:
+
+```bash
+eclipse frame slit_core.yaml
+```
+
+The frame goes to `run/result/slit_core_frame.h5`, and the band's lines are kept in `run/input/band_lines.h5` for later frames.
+
 ## What a frame holds
 
 For each CCD, `"left"` and `"right"`:

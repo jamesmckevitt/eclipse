@@ -9,7 +9,7 @@ ECLIPSE includes the science cases from the Concept Study Report (CSR), with eve
 
 ```bash
 eclipse-science-cases --out run/input
-eclipse --config run/input/1.1.1-nanoflares_events_fe12_195119.yaml
+eclipse run run/input/1.1.1-nanoflares_events_fe12_195119.yaml
 ```
 
 That writes one configuration for each case and line that ECLIPSE can simulate, each as a [single intensity](../uniform-intensity.md). The intensity is the line's intensity in that case times the case's filling factor. The line's width is its thermal width at its formation temperature. The case sets the exposure time and slit width. Every configuration has the PSF on, runs 512 Monte Carlo iterations, and compares off-chip binning of 1 and 2 slit pixels. The instrument has ECLIPSE's default settings.
@@ -34,6 +34,8 @@ filter:
 ```
 
 Its settings replace the defaults. A `simulation` section in it can also replace a case's exposure time or slit width, for example to sweep exposure times.
+
+`--one-file` writes every configuration into one run file, `science_cases.yaml`, with a [run](../run-files.md#several-runs-in-one-file) for each case and line. `eclipse run run/input/science_cases.yaml` then runs them all, and `--only` one of them.
 
 | Case | Science | Target | Slit (arcsec) | Exposure (s) | Filling factor |
 |---|---|---|---|---|---|

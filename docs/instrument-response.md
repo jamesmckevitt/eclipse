@@ -9,13 +9,10 @@ This page covers a run on a synthesis file. The same settings apply to [a single
 Run the simulation with:
 
 ```bash
-eclipse --config ./run/input/muram_ar_sweep.yaml
+eclipse run ./run/input/muram_ar_sweep.yaml
 ```
 
-**Command-line options:**
-
-- `--config`: the configuration file (required)
-- `--debug`: when an error happens, open an IPython debugger where it happened in ECLIPSE's code (optional)
+`eclipse observe` runs this step alone. [Run files](run-files.md) explains the other commands.
 
 The results are written to `run/result/<config name>.h5`, named after the configuration file. [Analysing the results](analysis.md) shows how to read them.
 
@@ -144,7 +141,7 @@ export I_MPI_PIN_DOMAIN=auto
 export LOKY_MAX_CPU_COUNT=$SLURM_CPUS_PER_TASK
 source /path/to/venv/bin/activate
 
-srun --mpi=pmi2 --kill-on-bad-exit=1 eclipse --config ./run/input/my_run.yaml
+srun --mpi=pmi2 --kill-on-bad-exit=1 eclipse run ./run/input/my_run.yaml
 ```
 
 MPI shares the iterations between the nodes, and joblib shares each rank's iterations between its cores. `--kill-on-bad-exit=1` stops every rank when one fails, rather than leaving the others waiting until the time limit. `I_MPI_PIN_DOMAIN=auto` lets each rank use its whole node, and `LOKY_MAX_CPU_COUNT` stops joblib starting more processes than that. Setting `ncpu` in the configuration is optional. Under MPI it is capped at `SLURM_CPUS_PER_TASK`, and `ncpu: -1` lets joblib find the CPUs it may use by itself.

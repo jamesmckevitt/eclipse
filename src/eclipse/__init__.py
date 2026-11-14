@@ -33,6 +33,7 @@ from .band import (BandLines, IonLines, band_contribution_functions, read_band_l
                    write_band_lines)
 from .readout import FocalPlane_SWC, ReadoutSequence
 from .full_frame import FullFrame, full_ccd_frame, write_full_frame
+from .run_file import RunOutput, make_frame, observe, run, synthesise
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -58,6 +59,11 @@ __all__ = [
     "FitConfig", "FitComponent",
     "simulate_once", "monte_carlo",
     "main",
+    "run",
+    "synthesise",
+    "observe",
+    "make_frame",
+    "RunOutput",
     "load_atmosphere",
     "create_uniform_intensity_cube",
     "Atmosphere",

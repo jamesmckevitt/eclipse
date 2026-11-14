@@ -68,7 +68,7 @@ eclipse-atmosphere info atmosphere.h5
 
 ## Synthesis files
 
-A synthesis file is laid out much like an atmosphere file. Its root has a `format` attribute of `eclipse-synthesis`, a `version` of `1`, and optionally a `source` saying where the spectra came from. Each dataset has a `unit` attribute that astropy can read.
+A synthesis file is laid out much like an atmosphere file. Its root has a `format` attribute of `eclipse-synthesis`, a `version` of `1`, and optionally a `source` saying where the spectra came from. Each dataset has a `unit` attribute that astropy can read. A synthesis made by a [run file](run-files.md#reusing-the-synthesis) also has a `run_key` attribute, which records what it was made from so that later runs can reuse it.
 
 | Dataset | Shape | What it holds |
 | --- | --- | --- |

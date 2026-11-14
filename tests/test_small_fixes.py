@@ -32,11 +32,13 @@ def _cli(monkeypatch, tmp_path, error):
     config = tmp_path / "run.yaml"
     config.write_text("instrument: SWC\n")
 
-    def run():
+    from eclipse import run_file
+
+    def run(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(cli, "run_simulation", run)
-    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.setattr(run_file, "run_all", run)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "run", str(config)])
     with pytest.raises(SystemExit):
         cli.main()
 
@@ -44,12 +46,12 @@ def _cli(monkeypatch, tmp_path, error):
 def test_an_unexpected_error_says_what_it_was_and_where(monkeypatch, tmp_path, capsys):
     _cli(monkeypatch, tmp_path, TypeError("boom"))
     captured = capsys.readouterr()
-    assert "Error during simulation: TypeError: boom" in captured.out
+    assert "Error during run: TypeError: boom" in captured.out
     assert "Traceback" in captured.err
     # A refusal (ValueError) explains itself, so it gets no traceback.
     _cli(monkeypatch, tmp_path, ValueError("slit_width must be 0.2"))
     captured = capsys.readouterr()
-    assert "Error during simulation: ValueError: slit_width must be 0.2" in captured.out
+    assert "Error during run: ValueError: slit_width must be 0.2" in captured.out
     assert "Traceback" not in captured.err
 
 

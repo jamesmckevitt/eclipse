@@ -311,6 +311,73 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
     return paths, skipped
 
 
+def _shared(configs: list[dict]) -> dict:
+    """Settings every configuration has, section by section."""
+    shared = {}
+    for key, value in configs[0].items():
+        if not all(key in config for config in configs):
+            continue
+        if all(config[key] == value for config in configs):
+            shared[key] = copy.deepcopy(value)
+        elif all(isinstance(config[key], dict) for config in configs):
+            inner = _shared([config[key] for config in configs])
+            if inner:
+                shared[key] = inner
+    return shared
+
+
+def _own(config: dict, shared: dict) -> dict:
+    """Settings of a configuration that are not among the shared ones."""
+    own = {}
+    for key, value in config.items():
+        if key not in shared:
+            own[key] = copy.deepcopy(value)
+        elif isinstance(value, dict) and isinstance(shared[key], dict):
+            inner = _own(value, shared[key])
+            if inner:
+                own[key] = inner
+        elif value != shared[key]:
+            own[key] = copy.deepcopy(value)
+    return own
+
+
+def write_science_case_run_file(path: str | Path, **kwargs) -> tuple[Path, list[str]]:
+    """
+    Write the configurations from :func:`science_case_configs` as one run file.
+
+    The settings every configuration shares are at the top level, and each
+    line is one entry of `runs:`, named after its case and line, with its
+    own settings.
+
+    Parameters
+    ----------
+    path : str or Path
+        File to write.
+    **kwargs
+        Passed to :func:`science_case_configs`.
+
+    Returns
+    -------
+    path : Path
+        File written.
+    skipped : list of str
+        Chosen lines ECLIPSE cannot simulate yet.
+    """
+    configs, skipped = science_case_configs(**kwargs)
+    if not configs:
+        raise ValueError("None of the chosen lines can be simulated yet, so there is no run "
+                         "to write.")
+    shared = _shared([item.config for item in configs])
+    entries = [{"name": item.name, **_own(item.config, shared)} for item in configs]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = ("# Science cases from the Concept Study Report, one run per line.\n"
+              "# Written by eclipse-science-cases from the science case table\n\n")
+    path.write_text(header + yaml.safe_dump({**shared, "runs": entries}, sort_keys=False,
+                                            default_flow_style=None))
+    return path, skipped
+
+
 def main(argv: list[str] | None = None) -> None:
     """Command line entry point for `eclipse-science-cases`."""
     parser = argparse.ArgumentParser(
@@ -332,6 +399,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--base", metavar="YAML",
                         help="a configuration file whose settings go into every "
                              "configuration, e.g. a detector section or n_iter")
+    parser.add_argument("--one-file", action="store_true",
+                        help="write one run file, science_cases.yaml, with a run for "
+                             "each line, instead of a file for each")
     parser.add_argument("--list", action="store_true",
                         help="list the chosen cases and lines instead of "
                              "writing anything")
@@ -353,11 +423,17 @@ def main(argv: list[str] | None = None) -> None:
         if not isinstance(base, dict):
             raise ValueError(f"{args.base} has to hold a mapping of settings.")
 
-    paths, skipped = write_science_case_configs(
-        args.out, cases=args.cases, lines=args.lines, base=base)
     low, high = short_wavelength_range()
-    print(f"Wrote {len(paths)} configuration{'' if len(paths) == 1 else 's'} "
-          f"to {args.out}")
+    if args.one_file:
+        path, skipped = write_science_case_run_file(
+            Path(args.out) / "science_cases.yaml", cases=args.cases, lines=args.lines,
+            base=base)
+        print(f"Wrote {path}")
+    else:
+        paths, skipped = write_science_case_configs(
+            args.out, cases=args.cases, lines=args.lines, base=base)
+        print(f"Wrote {len(paths)} configuration{'' if len(paths) == 1 else 's'} "
+              f"to {args.out}")
     if skipped:
         print(f"Skipped {len(skipped)} line{'' if len(skipped) == 1 else 's'} "
               f"outside the {low.value:g} to {high.value:g} Angstrom ECLIPSE can "

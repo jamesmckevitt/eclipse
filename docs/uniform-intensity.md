@@ -20,7 +20,7 @@ simulation:
 ```
 
 ```bash
-eclipse --config configs/uniform.yaml
+eclipse run configs/uniform.yaml
 ```
 
 The line fills a single pixel on the sky, and is laid onto the detector's wavelength pixels directly.

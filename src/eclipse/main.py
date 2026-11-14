@@ -501,6 +501,46 @@ def main() -> None:
     `eclipse` command checks its arguments and handles errors before calling
     this.
     """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, help="YAML config file", required=True)
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    args = parser.parse_args()
+
+    config_path = Path(args.config)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Config file not found: {args.config}")
+    config = load_yaml_config(config_path.read_text())
+    run_config(config, config_path.stem, source=args.config, debug=args.debug)
+
+
+def run_config(config: dict, name: str, *, source: str | None = None,
+               debug: bool = False) -> Path:
+    """
+    Observe what a configuration describes, and write the results.
+
+    Runs every combination of the configuration's settings, as `eclipse
+    observe` does for a run file.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration, as read from its YAML file.
+    name : str
+        Name of the run; the results are written to `run/result/<name>.h5`.
+    source : str, optional
+        Where the configuration came from, for error messages. Default
+        `name`.
+    debug : bool, optional
+        Open an IPython debugger where an error happens. Default False.
+
+    Returns
+    -------
+    Path
+        The results file.
+    """
+    global _STARTING_STDERR
+    source = name if source is None else source
+    results_path = Path(f"run/result/{name}.h5")
 
     # Suppress noisy astropy WCS warnings
     for msg in [
@@ -511,13 +551,8 @@ def main() -> None:
         warnings.filterwarnings("ignore", message=msg, category=UserWarning)
     warnings.filterwarnings("ignore", module="astropy.wcs.wcsapi.fitswcs", category=UserWarning)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, help="YAML config file", required=True)
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    args = parser.parse_args()
-
-    set_debug_mode(args.debug)
-    if args.debug:
+    set_debug_mode(debug)
+    if debug:
         print("Debug mode enabled - will break to IPython on errors")
 
     # MPI auto-detection: when launched by srun or mpirun with several tasks,
@@ -537,13 +572,13 @@ def main() -> None:
         if _mpi_rank == 0:
             print(f"MPI distributed mode: {_mpi_size} processes "
                   f"(MC iterations will be split across ranks)")
-        else:
+        elif _STARTING_STDERR is None:
             # Silence stdout and stderr on non-root ranks to avoid duplicated
             # output. Redirect the OS file descriptors, not just the Python
             # objects, because SLURM captures fd 1/2 directly and tqdm can
             # bypass sys.stderr. The original stderr is kept for an error that
-            # must be reported before the run is aborted.
-            global _STARTING_STDERR
+            # must be reported before the run is aborted. A later run of the
+            # same run file finds them silenced already.
             _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
             os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
@@ -555,20 +590,14 @@ def main() -> None:
             sys.stdout = open(1, "w", closefd=False)
             sys.stderr = open(2, "w", closefd=False)
 
-    config_path = Path(args.config)
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {args.config}")
-
-    config = load_yaml_config(config_path.read_text())
-
     # An empty file parses to None, which would otherwise fail later with an
     # AttributeError.
     if config is None:
-        raise ValueError(f"Config file is empty: {args.config}")
+        raise ValueError(f"Config file is empty: {source}")
     if not isinstance(config, dict):
         raise ValueError(
             f"Config file must be a mapping of keys to values, got "
-            f"{type(config).__name__}: {args.config}"
+            f"{type(config).__name__}: {source}"
         )
     # The config is saved with the results, so a value the results file
     # cannot hold, such as a YAML alias that refers to itself, is refused now
@@ -577,7 +606,7 @@ def main() -> None:
         _to_json(config)
     except (TypeError, RecursionError) as error:
         reason = "a value holds itself" if isinstance(error, RecursionError) else error
-        raise ValueError(f"{args.config} cannot be saved with the results: {reason}") from None
+        raise ValueError(f"{source} cannot be saved with the results: {reason}") from None
 
     # Top-level scalar settings. A 'simulation:' that is not a mapping is left
     # for _validate_config_keys to report.
@@ -1607,7 +1636,7 @@ def main() -> None:
         git_commit_id = get_git_commit_id()
         software_version = _get_software_version()
 
-        output_file = Path(f"run/result/{Path(args.config).stem}.h5")
+        output_file = results_path
 
         print(f"\nSaving results to {output_file}")
         save_data = {
@@ -1653,6 +1682,7 @@ def main() -> None:
                       f"the results are {output_file}, not it")
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
+    return results_path
 
 
 if __name__ == "__main__":
