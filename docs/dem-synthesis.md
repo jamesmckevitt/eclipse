@@ -58,8 +58,9 @@ The contribution functions are taken at `electron_density`, or at each temperatu
 A VDEM has a `velocity`, the centres of its velocity bins, and an emission measure with one more axis:
 
 ```python
+# vdem: your emission measure in cm^-5, shaped (y, x, temperature, velocity)
 measure = EmissionMeasure(
-    emission_measure=vdem / u.cm**5,                     # (y, x, temperature, velocity)
+    emission_measure=vdem / u.cm**5,
     temperature=10.0 ** logT * u.K,
     velocity=np.arange(-300.0, 305.0, 5.0) * u.km / u.s,
     x_edges=np.arange(3) * u.arcsec,
