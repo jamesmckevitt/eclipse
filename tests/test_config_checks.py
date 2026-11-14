@@ -367,17 +367,19 @@ def test_a_line_name_is_read_as_its_element_stage_and_wavelength():
 
 
 def test_each_element_is_read_from_mendeleev_once(monkeypatch):
+    import mendeleev
+
     from eclipse import utils
     from eclipse.synthesis import _parse_line_name
 
     looked_up = []
-    real_element = utils.element
+    real_element = mendeleev.element
 
     def counting_element(symbol_or_number):
         looked_up.append(symbol_or_number)
         return real_element(symbol_or_number)
 
-    monkeypatch.setattr(utils, "element", counting_element)
+    monkeypatch.setattr(mendeleev, "element", counting_element)
     monkeypatch.setattr(utils, "_ELEMENTS", {})
     for _ in range(3):
         _parse_line_name("Fe12_195.1190")

@@ -16,8 +16,6 @@ from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 from ndcube import NDCube
 from scipy import sparse
-from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, Helioprojective
-from sunpy.util.exceptions import SunpyUserWarning
 
 #: Ways of sharing a box's cells between sky pixels; the first is the default.
 PROJECTIONS = ("two-step", "exact")
@@ -63,6 +61,10 @@ def disk_geometry(x: u.Quantity, y: u.Quantity,
     ValueError
         If the position is not on the disk.
     """
+    # Imported here, as sunpy is only needed for a view from a position.
+    from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, Helioprojective
+    from sunpy.util.exceptions import SunpyUserWarning
+
     observer = HeliographicStonyhurst(0 * u.deg, 0 * u.deg, const.au)
     sky = Helioprojective(observer=observer)
     # Heliocentric coordinates: x west, y north and z towards the observer,
