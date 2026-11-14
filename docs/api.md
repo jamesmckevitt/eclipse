@@ -158,7 +158,7 @@ A DEM or VDEM over an image, which `synthesise-spectra --emission-measure` synth
 
 ## Every line in a band
 
-A full-CCD frame of the whole band needs every line in it, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, keep them in a file, and synthesise their spectrum from an emission measure. `synthesise-spectra --band` uses them.
+Every line in a band, for a full-CCD frame of the whole band: their contribution functions, kept in a file, and their spectrum from an emission measure.
 
 ::: eclipse.band_contribution_functions
 

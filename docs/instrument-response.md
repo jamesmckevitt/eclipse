@@ -12,7 +12,7 @@ Run the simulation with:
 eclipse run ./run/input/muram_ar_sweep.yaml
 ```
 
-`eclipse run` does every step the configuration file describes, and `eclipse observe` does only this one. A configuration file can also name an atmosphere to synthesise first; [Run files](run-files.md) explains this and the commands' options, such as `--set`, which changes a setting without editing the file. `eclipse --config FILE`, the old form, still works for now.
+`eclipse observe` runs this step alone. [Run files](run-files.md) explains the other commands.
 
 The results are written to `run/result/<config name>.h5`, named after the configuration file. [Analysing the results](analysis.md) shows how to read them.
 

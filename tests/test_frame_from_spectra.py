@@ -229,7 +229,8 @@ def _synthesise(tmp_path, name, *words, view="z", monkeypatch=None):
         _atmosphere(tmp_path, view)
     patch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(atmosphere), "--output-dir", str(tmp_path),
-        "--output-name", name, "--mass-per-electron", "1.2", f"--integration-axis={view}",
+        "--output-name", name, "--mass-per-electron", "1.2",
+        *([] if "--position" in words else [f"--integration-axis={view}"]),
         *words])
     patch.setattr(band_module, "band_contribution_functions",
                   lambda band, logT, logN, **kwargs: _band_lines(logT, logN, band, **kwargs))
@@ -398,3 +399,19 @@ def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_pa
     assert read_synthesis("whole/band.h5").shape[1] == nx
     assert rate.any()
     assert np.allclose(rate, whole.rate["left"], rtol=1e-9, atol=0)
+
+
+def test_a_strip_of_a_view_from_a_position_holds_the_whole_images_columns(tmp_path):
+    """Seen from a position, the image is cut once it is made, so the strip is the whole
+    image's columns, as for a view from above."""
+    words = ("--position", "300 arcsec", "100 arcsec")
+    whole = read_synthesis(_synthesise(tmp_path, "whole.h5", *BAND, *words))
+    edges = whole.x_edges.to_value(u.Mm)
+    limits = (f"{edges[1] + 0.01} Mm", f"{edges[4] - 0.01} Mm")
+    strip = read_synthesis(_synthesise(tmp_path, "strip.h5", *BAND, *words, "--image-x",
+                                       *limits))
+    assert np.allclose(strip.x_edges.to_value(u.Mm), edges[1:5], rtol=0, atol=1e-9)
+    (name,) = whole.lines
+    full, part = whole.lines[name].intensity.value, strip.lines[name].intensity.value
+    assert full[:, 1:4].any()
+    assert np.allclose(part, full[:, 1:4], rtol=1e-12, atol=0)

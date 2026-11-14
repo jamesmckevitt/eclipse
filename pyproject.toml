@@ -39,6 +39,7 @@ dependencies = [
     "mendeleev",
     "h5py>=3.11",
     "fiasco>=0.5",
+    "numba>=0.63",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ mpi = [
 ]
 dev = [
     "pytest",
+    "pytest-xdist",
     "black",
     "flake8",
     "mypy",

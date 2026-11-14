@@ -30,13 +30,11 @@ ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_respo
 
 A frame file with no `field_angle` was written by ECLIPSE 0.13.0 to 0.14.0, and its columns count from the south end of the slit on both CCDs. Later versions count each CCD's columns from its left output, so the left CCD's run the other way, and `field_angle` gives each column's angle along the slit.
 
-A frame file with a `cells_per_row` attribute was written by ECLIPSE 0.15.0 or earlier. Later frame files have a `spectra` dataset instead, which names the entries of the synthesis file they hold.
+Frame files from ECLIPSE 0.15.0 and earlier have a `cells_per_row` attribute in place of the `spectra` dataset.
 
 ## Frames from a band's lines
 
-Up to ECLIPSE 0.15, `full_ccd_frame` took every line in the band as its second argument, `lines`, and the continuum as `continuum`, and worked the band's spectrum out from the emission measure in the synthesis file. Both still work, with a warning, until a future release stops them.
-
-A frame now holds the spectra in the synthesis file. Synthesise the band into the file with `synthesise-spectra --band`, or make the frame from a [run file](full-ccd-frame.md#from-an-mhd-simulation), and call `full_ccd_frame` with `slit_position` and `exposure` given by name.
+The `lines` and `continuum` arguments of `full_ccd_frame` still work, with a warning. A frame now holds the spectra in the synthesis file: synthesise the band into it with `synthesise-spectra --band`, or use a [run file](full-ccd-frame.md#from-an-mhd-simulation), and give `slit_position` and `exposure` by name.
 
 ## Reading MURaM's own files
 
@@ -90,5 +88,7 @@ The instrument run on the synthesis file must have exactly one slit width, the o
 To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](synthesis.md#worked-example-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Time series](time-series.md).
 
 ## Renamed options
+
+`eclipse --config FILE` is now `eclipse run FILE`. The old form still works, with a warning.
 
 `--mass-per-electron` in `synthesise-spectra` was called `--mean-mol-wt`, and defaulted to 1.29 up to ECLIPSE 0.11.0. The old name still works. Its default is now worked out from the abundances; see [Electron density](synthesis.md#electron-density).
