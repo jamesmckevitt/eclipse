@@ -30,6 +30,12 @@ ECLIPSE 0.11.0 and earlier wrote the results as a pickle. `load_instrument_respo
 
 A frame file with no `field_angle` was written by ECLIPSE 0.13.0 to 0.14.0, and its columns count from the south end of the slit on both CCDs. Later versions count each CCD's columns from its left output, so the left CCD's run the other way, and `field_angle` gives each column's angle along the slit.
 
+Frame files from ECLIPSE 0.15.0 and earlier have a `cells_per_row` attribute in place of the `spectra` dataset.
+
+## Frames from a band's lines
+
+The `lines` and `continuum` arguments of `full_ccd_frame` still work, with a warning. A frame now holds the spectra in the synthesis file: synthesise the band into it with `synthesise-spectra --band`, or use a [run file](full-ccd-frame.md#from-an-mhd-simulation), and give `slit_position` and `exposure` by name.
+
 ## Reading MURaM's own files
 
 Command lines from ECLIPSE 0.11.0 and earlier, which read MURaM's binary files directly, still run without `--atmosphere`, with a warning, until a future release removes them:

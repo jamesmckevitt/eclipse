@@ -1,6 +1,6 @@
 # Spectra from another code
 
-If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](instrument-response.md), or, with one file per snapshot, as a [time series](time-series.md#from-synthesis-files).
+If another code has synthesised your spectra, ECLIPSE can simulate the instrument observing them. Write the spectra as a synthesis file first. It can then be observed as a [single snapshot](instrument-response.md), or, with one file per snapshot, as a [time series](time-series.md#from-synthesis-files). A [full-CCD frame](full-ccd-frame.md#from-your-own-spectra) can be made from it too.
 
 A synthesis file holds the spectral radiance at each pixel and wavelength, for each line or spectral window, with its wavelengths, the rest wavelength that Doppler shifts are measured from, and the edges of the pixels. [Files](files.md#synthesis-files) gives the layout in full.
 

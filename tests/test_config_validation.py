@@ -346,7 +346,10 @@ def test_every_config_example_in_the_docs_is_valid():
         # and what each run observes as below.
         observed = []
         for name, run in runs(config, "example"):
-            if "atmosphere" in run:
+            # A run with a frame and no lines is for `eclipse frame`, which
+            # synthesises the band itself.
+            lines = (run.get("synthesis") or {}).get("lines")
+            if "atmosphere" in run and (lines or "frame" not in run):
                 synthesis_arguments(run, name)
             if "frame" in run:
                 check_config_keys(run["frame"], FRAME_KEYS, f"'frame' section in docs/{page}")

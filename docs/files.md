@@ -81,7 +81,7 @@ A synthesis file is laid out much like an atmosphere file. Its root has a `forma
 
 Each group under `lines` holds one line, under the name that `reference_line` uses for it in the instrument configuration. A group can also hold a whole spectral window with its blends, as most codes give it. The blends are then fitted with a `fitting` block, as in [Fitting blended lines](fitting.md).
 
-Files that ECLIPSE writes itself hold more: each line's `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the view, which is the axis it looked along, with a sign such as `-x` if it looked from the other side of the box, and a `synthesis` group of intermediate results. A file from another code can leave all of these out. A file synthesised with `--continuum` also holds the continuum under its windows, as groups of their own named `continuum_<from>-<to>`, in Angstrom, each covering a set of overlapping windows.
+Files that ECLIPSE writes itself hold more: each line's `atom` and `ion` as attributes, an `integration_axis` attribute on the root for the view, which is the axis it looked along, with a sign such as `-x` if it looked from the other side of the box, and a `synthesis` group of intermediate results. A file from another code can leave all of these out. A file synthesised with `--continuum` also holds the continuum under its windows, as groups of their own named `continuum_<from>-<to>`, in Angstrom, each covering a set of overlapping windows. A file synthesised with `--band` holds every line between two wavelengths as one group, named `band_<from>-<to>`, in place of the lines.
 
 The intensity can be in any unit of spectral radiance, per wavelength or per frequency, in energy or in photons, for example `erg / (s cm2 sr Angstrom)`, `W / (m2 sr Hz)` or `ph / (s cm2 sr nm)`. The wavelengths don't have to be evenly spaced, so you can use a grid that is finer in the line cores. Each wavelength stands for the interval halfway to its neighbours, so the spacing should change gradually.
 
@@ -132,10 +132,11 @@ Read them with `load_instrument_response_results`, as described in [Analysing th
 | --- | --- |
 | `exposure`, `slit_position`, `slit_width` | Each with its unit in `exposure_unit`, `slit_position_unit` and `slit_width_unit` |
 | `psf`, `spectral_psf`, `noise`, `psf_boundary`, `slit_mask`, `continuum` | The options the frame was made with |
-| `cells_per_row` | The cells each row is split into, to take the throughput and photon energy across each line |
 | `serial_prescan`, `serial_overscan` | The prescan and overscan samples each output reads in a row |
 | `parallel_overscan_rows` | The overscan rows read after the image |
 | `software_version`, `git_commit_id` | The version of ECLIPSE and the git commit that wrote the file |
+
+The root's `spectra` dataset names the entries of the synthesis file that the frame holds.
 
 A group for each CCD, `left` and `right`, holds these datasets, each with a `unit` attribute:
 

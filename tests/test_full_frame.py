@@ -1,4 +1,4 @@
-"""The full-CCD frame of the SW camera, from a synthesis and every line in the band."""
+"""The full-CCD frame of the SW camera, from the spectra of a synthesis file."""
 import inspect
 import sys
 import warnings
@@ -11,11 +11,11 @@ import pytest
 import eclipse
 from eclipse import synthesis
 from eclipse.atmosphere import Atmosphere, write_atmosphere
-from eclipse.band import BandLines, IonLines
+from eclipse.band import BandLines, IonLines, _density_shares
 from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 from eclipse.frame import photons_from_lines
-from eclipse.full_frame import (FullFrame, _density_shares, _settings_from_simulation,
-                                full_ccd_frame, lay_out_register, write_full_frame)
+from eclipse.full_frame import (FullFrame, _settings_from_simulation, full_ccd_frame,
+                                lay_out_register, read_slit_spectra, write_full_frame)
 from eclipse.readout import FocalPlane_SWC
 from eclipse.synthesis_file import read_synthesis_products
 
@@ -23,16 +23,21 @@ REST = 195.119
 G0 = 1e-24  # erg cm3 / s, at every temperature and density
 
 
-def _flat_goft(lines, **kwargs):
-    logT_grid, logN_grid = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
-    return ({"Fe12_195.1190": {"wl0": (REST * u.AA).to(u.cm),
-                               "g_tn": np.ones((logN_grid.size, logT_grid.size)),
-                               "atom": 26, "ion": 12, "hdf5_dbase_root": None}},
-            logT_grid, logN_grid)
+def _flat_goft_at(rest):
+    def flat_goft(lines, **kwargs):
+        logT_grid, logN_grid = np.linspace(5.0, 7.0, 21), np.linspace(8.0, 10.0, 21)
+        return ({lines[0]: {"wl0": (rest * u.AA).to(u.cm),
+                            "g_tn": np.full((logN_grid.size, logT_grid.size), G0),
+                            "atom": 26, "ion": 12, "hdf5_dbase_root": None}},
+                logT_grid, logN_grid)
+    return flat_goft
 
 
-def _synthesise(tmp_path, temperature, velocity=0.0):
-    """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, moving at `velocity` km/s."""
+def _synthesise(tmp_path, temperature, velocity=0.0, rest=REST):
+    """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, moving at `velocity` km/s.
+
+    It holds one line, at `rest` Angstrom, with the contribution function `G0`.
+    """
     nz, ny, nx = temperature.size, 44, 6
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
     atmosphere = Atmosphere(
@@ -46,8 +51,8 @@ def _synthesise(tmp_path, temperature, velocity=0.0):
     patch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(path), "--output-dir", str(tmp_path),
         "--output-name", "synthesis.h5", "--mass-per-electron", "1.2", "--lines",
-        "Fe12_195.1190"])
-    patch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
+        f"Fe12_{rest:.4f}"])
+    patch.setattr(synthesis, "compute_goft_fiasco", _flat_goft_at(rest))
     synthesis.main()
     patch.undo()
     return tmp_path / "synthesis.h5"
@@ -66,6 +71,12 @@ def fast_synthesis(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def right_synthesis(tmp_path_factory):
+    """Uniform corona at 1 MK, with its line at 203.8 Angstrom, on the right CCD."""
+    return _synthesise(tmp_path_factory.mktemp("right"), np.full(4, 1e6), rest=203.8)
+
+
+@pytest.fixture(scope="module")
 def two_temperature_synthesis(tmp_path_factory):
     """Corona at 1 MK in front and 2 MK behind, so the workers have temperatures to share."""
     return _synthesise(tmp_path_factory.mktemp("frame2"), np.array([1e6, 1e6, 2e6, 2e6]))
@@ -74,8 +85,7 @@ def two_temperature_synthesis(tmp_path_factory):
 @pytest.fixture(scope="module")
 def sharp_frame(uniform_synthesis):
     """Frame of the uniform corona for 1 s, without the PSF or noise. Tests must not change it."""
-    products = read_synthesis_products(uniform_synthesis)
-    return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+    return full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                           telescope=Telescope_EUVST(resolution_budget="none"), psf=False,
                           noise=False, n_workers=1)
 
@@ -88,8 +98,7 @@ def blurred_frame(uniform_synthesis):
     telescope leaves out the resolution budget, whose blur across the slit would
     carry light past the edges of this small scene.
     """
-    products = read_synthesis_products(uniform_synthesis)
-    return full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+    return full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                           telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
                           n_workers=1)
 
@@ -111,7 +120,11 @@ def _one_line(products, logN=None, g_off_the_synthesis=None, rest=REST):
 
 
 @pytest.mark.parametrize("psf", [False, True])
-def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesis, psf, request):
+def test_a_line_lands_on_the_rows_close_to_where_photons_from_lines_lays_it(uniform_synthesis,
+                                                                           psf, request):
+    """The synthesis samples the line every 5 km/s, 3.3 mA, and each sample's light is spread
+    over its bin, so the rows agree with the line's exact integrals to a part in a hundred of
+    its peak, and hold the same light in all."""
     products = read_synthesis_products(uniform_synthesis)
     # The rate does not depend on the exposure, so the 1000 s frame serves.
     frame = request.getfixturevalue("blurred_frame" if psf else "sharp_frame")
@@ -130,9 +143,9 @@ def test_a_line_lands_on_the_rows_as_photons_from_lines_lays_it(uniform_synthesi
                            spectral_psf="quadrature" if psf else None).to_value(1 / u.s)
         for t in range(temperature.size) if em[t].sum() > 0)
     middle = focal_plane.n_columns // 2
-    # atol allows for the far wings, where one integral gives 1e-20 and the other 0.
-    assert np.allclose(frame.rate["left"][:, middle], expected, rtol=1e-9,
-                       atol=1e-12 * expected.max())
+    rate = frame.rate["left"][:, middle]
+    assert np.allclose(rate, expected, rtol=0, atol=1e-2 * expected.max())
+    assert rate.sum() == pytest.approx(expected.sum(), rel=1e-4)
     assert expected.sum() > 0
     # The right CCD does not reach 195 Angstrom, and the scene does not reach
     # the columns at the ends of the slit.
@@ -153,7 +166,8 @@ def test_the_frame_is_read_out_with_its_prescan_and_overscan(sharp_frame, tmp_pa
         assert f["left/dn"].shape == (rows, samples) and f.attrs["noise"] == np.False_
         assert f["left/photon_wavelength"].shape == (rows, det.n_columns)
         assert f["left/photon_rms_wavelength"].shape == (rows, det.n_columns)
-        assert f.attrs["cells_per_row"] == 16
+        assert [name.decode() for name in f["spectra"][()]] == ["Fe12_195.1190"]
+        assert f.attrs["continuum"] == np.False_
         assert f.attrs["psf_boundary"] == "replicate" and f.attrs["slit_mask"] == np.False_
         assert (f.attrs["serial_prescan"], f.attrs["serial_overscan"],
                 f.attrs["parallel_overscan_rows"]) == (det.serial_prescan, det.serial_overscan,
@@ -179,18 +193,17 @@ def test_each_ccds_columns_count_from_its_left_output():
         focal_plane.field_angle(columns, "middle")
 
 
-@pytest.mark.parametrize("ccd, rest, other", [("left", REST, "right"),
-                                               ("right", 203.8, "left")])
-def test_each_ccds_columns_run_from_its_left_output(uniform_synthesis, ccd, rest, other):
+@pytest.mark.parametrize("ccd, other", [("left", "right"), ("right", "left")])
+def test_each_ccds_columns_run_from_its_left_output(uniform_synthesis, right_synthesis, ccd,
+                                                    other):
     """With fiducials at uneven places along a short slit, a line's rate in each column
     follows the open part of the slit at that column's angle counted from the CCD's left
     output: the north end on the left CCD, the south end on the right CCD."""
-    products = read_synthesis_products(uniform_synthesis)
+    path = uniform_synthesis if ccd == "left" else right_synthesis
     telescope = Telescope_EUVST(resolution_budget="none", slit_length=5 * u.arcsec,
                                 fiducial_centres=[-1.5 * u.arcsec, 0.8 * u.arcsec])
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products, rest=rest), 0.3 * u.Mm,
-                           1000 * u.s, telescope=telescope, psf=False, noise=False,
-                           n_workers=1, slit_mask=True)
+    frame = full_ccd_frame(path, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
+                           telescope=telescope, psf=False, noise=False, slit_mask=True)
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
     openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
     rate = frame.rate[ccd]
@@ -245,11 +258,10 @@ def test_a_frame_with_imperfect_serial_transfer_trails_into_the_overscan(uniform
     """
     from eclipse.readout import ReadoutSequence, dark_current_time, serial_dark_shares
 
-    products = read_synthesis_products(uniform_synthesis)
     det = Detector_SWC(cte_serial=0.999)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=500 * u.s,
                            det=det, noise=False, n_workers=1)
-    perfect = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 500 * u.s,
+    perfect = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=500 * u.s,
                              noise=False, n_workers=1)
     pre, over, half = det.serial_prescan, det.serial_overscan, det.n_columns // 2
     sequence = ReadoutSequence.from_detector(det)
@@ -279,69 +291,81 @@ def test_a_pixels_emission_measure_is_shared_between_the_densities_either_side()
     assert np.allclose(high_share, [0.25, 0.0, 0.0, 0.0])
 
 
-def test_lines_on_a_wider_density_grid_give_the_same_frame(uniform_synthesis, sharp_frame):
+def test_lines_on_a_wider_density_grid_give_the_same_frame(uniform_synthesis):
     products = read_synthesis_products(uniform_synthesis)
     grid = products["logN_grid"]
     step = grid[1] - grid[0]
     wider = np.concatenate([grid[0] - step * np.arange(3, 0, -1), grid,
                             grid[-1] + step * np.arange(1, 4)])
-    frame = full_ccd_frame(uniform_synthesis,
-                           _one_line(products, wider, g_off_the_synthesis=5 * G0),
-                           0.3 * u.Mm, 1 * u.s, psf=False, noise=False, n_workers=1)
-    assert np.array_equal(frame.rate["left"], sharp_frame.rate["left"])
+    settings = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s, psf=False, noise=False,
+                    n_workers=1)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        own = full_ccd_frame(uniform_synthesis, _one_line(products), **settings)
+        frame = full_ccd_frame(uniform_synthesis,
+                               _one_line(products, wider, g_off_the_synthesis=5 * G0),
+                               **settings)
+    assert own.rate["left"].any()
+    assert np.allclose(frame.rate["left"], own.rate["left"], rtol=1e-12, atol=0)
 
 
-def test_a_frame_needs_the_synthesis_grids_and_abundances_and_no_tilt(uniform_synthesis):
+def test_the_band_from_lines_needs_the_synthesis_grids_and_abundances(uniform_synthesis):
     products = read_synthesis_products(uniform_synthesis)
     lines = _one_line(products)
+    settings = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s, n_workers=1)
     other = BandLines(band=lines.band, logT_grid=lines.logT_grid + 0.01,
                       logN_grid=lines.logN_grid, abundance=lines.abundance,
                       hdf5_dbase_root="test", ions=lines.ions)
-    with pytest.raises(ValueError, match="another grid of temperature"):
-        full_ccd_frame(uniform_synthesis, other, 0.3 * u.Mm, 1 * u.s, n_workers=1)
     # Half a step off the synthesis's densities.
     shifted = _one_line(products, products["logN_grid"] + 0.05)
-    with pytest.raises(ValueError, match="not all on the band's grid"):
-        full_ccd_frame(uniform_synthesis, shifted, 0.3 * u.Mm, 1 * u.s, n_workers=1)
     feldman = BandLines(band=lines.band, logT_grid=lines.logT_grid,
                         logN_grid=lines.logN_grid, abundance="sun_coronal_1992_feldman",
                         hdf5_dbase_root="test", ions=lines.ions)
-    with pytest.raises(ValueError, match="abundances"):
-        full_ccd_frame(uniform_synthesis, feldman, 0.3 * u.Mm, 1 * u.s, n_workers=1)
     wavelength = np.linspace(190.0, 200.0, 11) * u.AA
     continuum = (wavelength, np.zeros((lines.logT_grid.size, 11)),
                  np.zeros((lines.logN_grid.size - 1, lines.logT_grid.size, 11)))
-    with pytest.raises(ValueError, match="work it out on the band's grids"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=continuum,
-                       n_workers=1)
     descending = (wavelength[::-1], np.zeros((lines.logT_grid.size, 11)),
                   np.zeros((lines.logN_grid.size, lines.logT_grid.size, 11)))
-    with pytest.raises(ValueError, match="finite and increase"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, continuum=descending,
-                       n_workers=1)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        with pytest.raises(ValueError, match="another grid of temperature"):
+            full_ccd_frame(uniform_synthesis, other, **settings)
+        with pytest.raises(ValueError, match="not all on the band's grid"):
+            full_ccd_frame(uniform_synthesis, shifted, **settings)
+        with pytest.raises(ValueError, match="abundances"):
+            full_ccd_frame(uniform_synthesis, feldman, **settings)
+        with pytest.raises(ValueError, match="work it out on the band's grids"):
+            full_ccd_frame(uniform_synthesis, lines, continuum=continuum, **settings)
+        with pytest.raises(ValueError, match="finite and increase"):
+            full_ccd_frame(uniform_synthesis, lines, continuum=descending, **settings)
+    with pytest.raises(ValueError, match="continuum goes with lines"):
+        full_ccd_frame(uniform_synthesis, continuum=continuum, **settings)
+
+
+def test_a_frame_needs_a_slit_position_an_exposure_and_a_matching_focal_plane(
+        uniform_synthesis):
+    with pytest.raises(TypeError, match="by name"):
+        full_ccd_frame(uniform_synthesis, 0.3 * u.Mm, 1 * u.s)
+    with pytest.raises(TypeError, match="needs a slit_position and an exposure"):
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm)
     for settings in ({"exposure": -1 * u.s}, {"exposure": 1.0}, {"slit_width": 0 * u.arcsec}):
         settings = {"exposure": 1 * u.s, **settings}
         with pytest.raises(ValueError, match="above zero"):
-            full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, **settings, n_workers=1)
+            full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, **settings)
     with pytest.raises(ValueError, match="one position"):
-        full_ccd_frame(uniform_synthesis, lines, [0.3, 0.4] * u.Mm, 1 * u.s, n_workers=1)
+        full_ccd_frame(uniform_synthesis, slit_position=[0.3, 0.4] * u.Mm, exposure=1 * u.s)
+    common = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s)
     smaller = FocalPlane_SWC.from_detector(Detector_SWC(n_columns=1024))
     with pytest.raises(ValueError, match="they must match"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=smaller,
-                       n_workers=1)
+        full_ccd_frame(uniform_synthesis, focal_plane=smaller, **common)
     tilted = FocalPlane_SWC.from_detector(Detector_SWC(), slit_image_tilt=(0.5, 0.0))
     with pytest.raises(ValueError, match="tilted"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=tilted,
-                       n_workers=1)
+        full_ccd_frame(uniform_synthesis, focal_plane=tilted, **common)
     # The detector and the focal plane must agree on the focal plane settings.
     shifted = FocalPlane_SWC.from_detector(Detector_SWC(), wavelength_offset=0.1 * u.AA)
     with pytest.raises(ValueError, match="different wavelength_offset"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, focal_plane=shifted,
-                       n_workers=1)
+        full_ccd_frame(uniform_synthesis, focal_plane=shifted, **common)
     det = Detector_SWC(dispersion=(199.0, 1.25), lit_band=(171 * u.AA, 211 * u.AA))
     with pytest.raises(ValueError, match="different dispersion, lit_band"):
-        full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, det=det,
-                       focal_plane=FocalPlane_SWC(), n_workers=1)
+        full_ccd_frame(uniform_synthesis, det=det, focal_plane=FocalPlane_SWC(), **common)
 
 
 def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synthesis,
@@ -406,9 +430,11 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
     # the synthesis's own density gives the expected frame.
     two_photon = (1e-30 * (1 + np.arange(wider.size))[:, None, None]
                   * (REST / wavelength) ** 2 * np.ones((1, n_t, 1)))
-    frame = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, psf=psf,
-                           continuum=(wavelength * u.AA, free, two_photon), noise=False,
-                           n_workers=1, telescope=Telescope_EUVST(resolution_budget="none"))
+    with pytest.warns(FutureWarning, match="deprecated"):
+        frame = full_ccd_frame(uniform_synthesis, lines, slit_position=0.3 * u.Mm,
+                               exposure=1 * u.s, psf=psf,
+                               continuum=(wavelength * u.AA, free, two_photon), noise=False,
+                               n_workers=1, telescope=Telescope_EUVST(resolution_budget="none"))
     det, tel = Detector_SWC(), Telescope_EUVST(resolution_budget="none")
     focal_plane = FocalPlane_SWC.from_detector(det)
     # A column in the middle of the scene sees one pixel's emission measure,
@@ -423,9 +449,16 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
         radiance * u.erg / (u.s * u.cm**2 * u.sr * u.AA), det=det,
         spectral_psf="quadrature" if psf else None).to_value(1 / u.s)
     middle = focal_plane.n_columns // 2
-    assert np.allclose(frame.rate["left"][:, middle], expected, rtol=1e-9,
-                       atol=1e-12 * expected.max())
-    assert expected.sum() > 0
+    rate = frame.rate["left"][:, middle]
+    # The frame takes each wavelength to cover the bin halfway to its
+    # neighbours, and photons_from_spectrum the intervals between them, so
+    # they differ at the ends of the window, by half a bin, and nowhere else.
+    row = focal_plane.wavelength(np.arange(focal_plane.n_rows), "left").to_value(u.AA)
+    inside = (row > 194.2) & (row < 195.8)
+    assert np.allclose(rate[inside], expected[inside], rtol=1e-5, atol=0)
+    assert rate.sum() == pytest.approx(expected.sum(), rel=2e-3)
+    assert expected[inside].min() > 0
+    assert frame.settings["continuum"] and frame.settings["spectra"] == ["band", "continuum"]
 
 
 def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis, monkeypatch):
@@ -433,11 +466,10 @@ def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis,
 
     products = read_synthesis_products(two_temperature_synthesis)
     lines = _one_line(products)
-    settings = {"psf": False, "noise": False}
-    one = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s, n_workers=1,
-                         **settings)
-    two = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s, n_workers=2,
-                         **settings)
+    settings = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s, psf=False, noise=False)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        one = full_ccd_frame(two_temperature_synthesis, lines, n_workers=1, **settings)
+        two = full_ccd_frame(two_temperature_synthesis, lines, n_workers=2, **settings)
     assert np.count_nonzero(products["em_tv"][0, 0].sum(axis=-1)) > 1
     assert one.rate["left"].any()
     for name in ("rate", "photon_wavelength", "photon_rms_wavelength"):
@@ -446,8 +478,7 @@ def test_the_workers_give_the_frame_one_process_gives(two_temperature_synthesis,
     # Where processes cannot be forked, one process computes every temperature.
     monkeypatch.setattr(multiprocessing, "get_all_start_methods", lambda: ["spawn"])
     with pytest.warns(UserWarning, match="cannot be forked"):
-        alone = full_ccd_frame(two_temperature_synthesis, lines, 0.3 * u.Mm, 1 * u.s,
-                               n_workers=2, **settings)
+        alone = full_ccd_frame(two_temperature_synthesis, lines, n_workers=2, **settings)
     assert np.array_equal(alone.rate["left"], one.rate["left"])
 
 
@@ -463,18 +494,19 @@ def test_the_continuum_holds_plasma_faster_than_the_velocity_grid(uniform_synthe
     n_t, n_n = lines.logT_grid.size, lines.logN_grid.size
     continuum = (wavelength * u.AA, np.full((n_t, wavelength.size), 1e-30),
                  np.full((n_n, n_t, wavelength.size), 1e-30))
-    settings = {"psf": False, "noise": False, "continuum": continuum, "n_workers": 1}
-    at_rest = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
-    moving = full_ccd_frame(fast_synthesis, lines, 0.3 * u.Mm, 1 * u.s, **settings)
+    settings = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s, psf=False, noise=False,
+                    continuum=continuum, n_workers=1)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        at_rest = full_ccd_frame(uniform_synthesis, lines, **settings)
+        moving = full_ccd_frame(fast_synthesis, lines, **settings)
     assert at_rest.rate["left"].any()
     assert np.allclose(moving.rate["left"], at_rest.rate["left"], rtol=1e-12, atol=0)
 
 
 def test_a_frame_takes_its_settings_from_a_simulation(uniform_synthesis, blurred_frame):
     """A `Simulation` with the keyword arguments' values gives the same frame."""
-    products = read_synthesis_products(uniform_synthesis)
     sim = Simulation(slit_width=0.2 * u.arcsec, psf=True, noise=False)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), sim=sim,
                            n_workers=1)
     _same_frames(frame, blurred_frame)
@@ -494,17 +526,15 @@ def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
         uniform_synthesis):
     """With the same seed, noise, convolution, a dark boundary and a 0.4 arcsec slit give the
     same frame."""
-    products = read_synthesis_products(uniform_synthesis)
-    lines = _one_line(products)
-    common = dict(telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
+    common = dict(slit_position=0.3 * u.Mm, exposure=10 * u.s,
+                  telescope=Telescope_EUVST(resolution_budget="none"))
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
                      spectral_psf="convolution", noise=True)
     np.random.seed(170)
-    from_sim = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 10 * u.s, sim=sim, **common)
+    from_sim = full_ccd_frame(uniform_synthesis, sim=sim, **common)
     np.random.seed(170)
-    from_keywords = full_ccd_frame(uniform_synthesis, lines, 0.3 * u.Mm, 10 * u.s,
-                                   slit_width=0.4 * u.arcsec, spectral_psf="convolution",
-                                   psf_boundary="zero", **common)
+    from_keywords = full_ccd_frame(uniform_synthesis, slit_width=0.4 * u.arcsec,
+                                   spectral_psf="convolution", psf_boundary="zero", **common)
     assert from_sim.slit_width == 0.4 * u.arcsec
     assert from_sim.settings["spectral_psf"] == "convolution" and from_sim.settings["noise"]
     assert from_sim.settings["psf_boundary"] == "zero"
@@ -513,8 +543,7 @@ def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
 
 def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame):
     """`psf=None` is taken as false and recorded as given."""
-    products = read_synthesis_products(uniform_synthesis)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), psf=None,
                            noise=False, n_workers=1)
     assert frame.settings["psf"] is None
@@ -649,7 +678,7 @@ def test_the_frame_api_is_exported_from_the_package():
     for module, names in ((full_frame, ("full_ccd_frame", "write_full_frame", "FullFrame")),
                           (readout, ("FocalPlane_SWC", "ReadoutSequence")),
                           (band, ("BandLines", "IonLines", "band_contribution_functions",
-                                  "read_band_lines", "write_band_lines"))):
+                                  "band_spectra", "read_band_lines", "write_band_lines"))):
         for name in names:
             assert getattr(eclipse, name) is getattr(module, name)
             assert name in eclipse.__all__
@@ -688,8 +717,7 @@ def test_replicate_gives_the_ends_of_a_uniform_scene_the_middle_rate(blurred_fra
 def test_zero_takes_light_out_of_the_ends_of_the_scene(uniform_synthesis, blurred_frame):
     """With the Sun beyond the scene dark, the end columns lose light to the columns beyond,
     and the blur keeps the total."""
-    products = read_synthesis_products(uniform_synthesis)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
                            n_workers=1, psf_boundary="zero")
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
@@ -704,7 +732,7 @@ def test_zero_takes_light_out_of_the_ends_of_the_scene(uniform_synthesis, blurre
     assert zero.sum() == pytest.approx(replicate.sum(), rel=1e-6)
     assert frame.settings["psf_boundary"] == "zero"
     with pytest.raises(ValueError, match="psf_boundary must be"):
-        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                        psf_boundary="reflect")
 
 
@@ -713,23 +741,20 @@ def test_replicate_keeps_the_light_the_blur_across_the_slit_takes_past_the_scene
     """The scene is 0.8 arcsec across, so a 1 arcsec blur across the slit carries light past its
     edges. With the edges extended a uniform scene gives the slit what it gives without blur,
     also with the slit half past the edge, where both take light only from its inner half."""
-    from eclipse.full_frame import read_slit_scene
+    def under(position, blur=None, extend=False):
+        return read_slit_spectra(uniform_synthesis, position, 0.2 * u.arcsec, blur,
+                                 extend=extend).radiance[0]
 
-    sharp = read_slit_scene(uniform_synthesis, 0.3 * u.Mm, 0.2 * u.arcsec).emission_measure
-    zero, replicate = (read_slit_scene(uniform_synthesis, 0.3 * u.Mm, 0.2 * u.arcsec,
-                                       1.0 * u.arcsec, extend=extend).emission_measure
-                       for extend in (False, True))
+    sharp = under(0.3 * u.Mm)
+    zero, replicate = (under(0.3 * u.Mm, 1.0 * u.arcsec, extend) for extend in (False, True))
     assert sharp.sum() > 0
     assert np.allclose(replicate, sharp, rtol=1e-12, atol=0)
     assert zero.sum() < 0.95 * sharp.sum()
-    edge, sharp_edge = (read_slit_scene(uniform_synthesis, 0.6 * u.Mm, 0.2 * u.arcsec, blur,
-                                        extend=True).emission_measure
-                        for blur in (1.0 * u.arcsec, None))
+    edge, sharp_edge = (under(0.6 * u.Mm, blur, True) for blur in (1.0 * u.arcsec, None))
     assert np.allclose(edge, sharp_edge, rtol=1e-12, atol=0)
     assert np.allclose(edge, sharp / 2, rtol=1e-6, atol=0)
     with pytest.raises(ValueError, match="off the image"):
-        read_slit_scene(uniform_synthesis, 0.9 * u.Mm, 0.2 * u.arcsec, 1.0 * u.arcsec,
-                        extend=True)
+        under(0.9 * u.Mm, 1.0 * u.arcsec, True)
 
 
 # A slit 4 arcsec long with fiducials 1 arcsec either side of its centre, so the 6 arcsec
@@ -742,9 +767,8 @@ def test_the_slit_mask_darkens_the_columns_beyond_the_slit_and_behind_the_fiduci
         uniform_synthesis, blurred_frame):
     """The blur comes before the slit, so in a uniform scene with its edges extended each column
     gets the middle column's rate times its open part inside the scene."""
-    products = read_synthesis_products(uniform_synthesis)
     telescope = Telescope_EUVST(**_SHORT_SLIT)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                            telescope=telescope, noise=False, n_workers=1, slit_mask=True)
     focal_plane = FocalPlane_SWC.from_detector(Detector_SWC())
     openings = telescope.slit_openings(0.2 * u.arcsec).to_value(u.arcsec)
@@ -763,22 +787,20 @@ def test_the_slit_mask_darkens_the_columns_beyond_the_slit_and_behind_the_fiduci
                           blurred_frame.rate["left"][:, open_columns])
     assert frame.settings["slit_mask"] is True
     with pytest.raises(ValueError, match="known for the 0.2, 0.4, 0.8 and 1.6"):
-        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                        slit_width=0.3 * u.arcsec, slit_mask=True)
     with pytest.raises(ValueError, match="slit_mask must be True or False"):
-        full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                        slit_mask="yes")
 
 
 def test_a_simulation_with_the_slit_mask_and_a_dark_boundary_gives_the_keyword_frame(
         uniform_synthesis):
-    products = read_synthesis_products(uniform_synthesis)
     common = dict(telescope=Telescope_EUVST(**_SHORT_SLIT), n_workers=1)
     sim = Simulation(psf=True, psf_boundary="zero", slit_mask=True, noise=False)
-    from_sim = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1000 * u.s,
+    from_sim = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                               sim=sim, **common)
-    from_keywords = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm,
-                                   1000 * u.s, noise=False, psf_boundary="zero", slit_mask=True,
+    from_keywords = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s, noise=False, psf_boundary="zero", slit_mask=True,
                                    **common)
     assert from_sim.settings["slit_mask"] is True and from_sim.settings["psf_boundary"] == "zero"
     _same_frames(from_sim, from_keywords)
@@ -793,9 +815,8 @@ def test_a_simulation_with_the_slit_mask_and_a_dark_boundary_gives_the_keyword_f
 
 def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):
     """No rate is below zero, so the Poisson draw takes them all."""
-    products = read_synthesis_products(uniform_synthesis)
     np.random.seed(0)
-    frame = full_ccd_frame(uniform_synthesis, _one_line(products), 0.3 * u.Mm, 1 * u.s,
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), n_workers=1)
     for ccd in ("left", "right"):
         assert (frame.rate[ccd] >= 0).all()

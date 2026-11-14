@@ -17,9 +17,11 @@ from astropy.wcs import WCS
 from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
-from .synthesis_file import write_line_cubes
+from .synthesis_file import _pixel_edges, _to_length, write_line_cubes
+from .band import BAND_STEP, band_lines_for, band_spectra, band_wavelengths
 from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
-from .continuum import compute_continuum_fiasco, continuum_spectra, continuum_windows
+from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
+                        continuum_windows)
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
                          mass_per_electron, read_atmosphere, require_mass_per_electron)
 
@@ -1115,6 +1117,20 @@ def density_grid(
     return _density_point(first), _density_point(last), last - first + 1
 
 
+def band_density_grid(logN_min: float, logN_max: float) -> np.ndarray:
+    """
+    Densities, as log10 n_e, on which to work out a band's lines for a synthesis.
+
+    The default grid, extended to `logN_min` and `logN_max` if they lie
+    beyond it. A band's lines take hours to work out, and on this grid they
+    serve every later synthesis whose densities the default grid covers.
+    """
+    step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
+    first = min(0, int(round((logN_min - _LOGN_MIN) / step)))
+    last = max(_N_N - 1, int(round((logN_max - _LOGN_MIN) / step)))
+    return np.array([_density_point(index) for index in range(first, last + 1)])
+
+
 def _density_point(index: int) -> float:
     """log10 n_e at 0-based point `index` of the default density grid."""
     return _LOGN_MIN + index * (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
@@ -1618,6 +1634,7 @@ def create_line_cube(
     spatial_cube: NDCube,
     intensity_unit: u.Unit,
     integration_axis: str = "z",
+    image_columns: Optional[Tuple[int, int]] = None,
 ) -> NDCube:
     """
     NDCube of one line's synthesised spectra, with the image's coordinates.
@@ -1641,6 +1658,10 @@ def create_line_cube(
         side opposite :data:`OBSERVER_SIDE`, the image is mirrored left to
         right, so its column coordinate is the box coordinate with its sign
         flipped, which increases to that observer's right.
+    image_columns : tuple of int, optional
+        For spectra of a strip of the image only: the strip's first column
+        and the number of columns of the whole image. Default None, for the
+        whole image.
 
     Returns
     -------
@@ -1664,6 +1685,8 @@ def create_line_cube(
     # The simulation cubes are (z, y, x), so integrating one axis out leaves
     # 'si' already in (row, column, wavelength) order for every view.
     cube_data = line_data["si"]
+    first_column, n_columns = ((0, cube_data.shape[1]) if image_columns is None
+                               else image_columns)
 
     # Take each axis's cell size from the reference cube's WCS, so an axis
     # one cell wide has one too. It is read as the world size of one pixel,
@@ -1690,7 +1713,7 @@ def create_line_cube(
             cell_size[1],
             cell_size[2],
         ]
-        spatial_crpix = [(nl + 1) / 2, (ny + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
+        spatial_crpix = [(nl + 1) / 2, (n_columns + 1) / 2, 1]  # Wavelength centered, Y centered, Z at first pixel
         spatial_crval = [
             _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
             _world_at(y_coords.to(u.Mm), spatial_crpix[1]),
@@ -1710,7 +1733,7 @@ def create_line_cube(
             cell_size[0],
             cell_size[2],
         ]
-        spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
+        spatial_crpix = [(nl + 1) / 2, (n_columns + 1) / 2, 1]  # Wavelength centered, X centered, Z at first pixel
         spatial_crval = [
             _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
             _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
@@ -1730,7 +1753,7 @@ def create_line_cube(
             cell_size[0],
             cell_size[1],
         ]
-        spatial_crpix = [(nl + 1) / 2, (nx + 1) / 2, (ny + 1) / 2]  # All centered
+        spatial_crpix = [(nl + 1) / 2, (n_columns + 1) / 2, (ny + 1) / 2]  # All centered
         spatial_crval = [
             _world_at(line_data["wl_grid"].to(u.cm), spatial_crpix[0]),
             _world_at(x_coords.to(u.Mm), spatial_crpix[1]),
@@ -1742,6 +1765,8 @@ def create_line_cube(
     # its sign flipped. The columns are centred, so the middle one stays put.
     if side != OBSERVER_SIDE[los_axis]:
         spatial_crval[1] = -spatial_crval[1]
+    # A strip keeps the whole image's coordinates.
+    spatial_crpix[1] -= first_column
 
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = spatial_axes
@@ -1764,6 +1789,75 @@ def create_line_cube(
             "spatial_reference": spatial_cube.meta if hasattr(spatial_cube, 'meta') else None
         }
     )
+
+
+def image_x_edges(spatial_cube: NDCube, integration_axis: str) -> u.Quantity:
+    """
+    Pixel boundaries across the slit, in Mm, of the image of a view of `spatial_cube`.
+
+    These are the `x_edges` a synthesis of the whole image is written with.
+    """
+    n_rows, n_columns = _image_pixels(spatial_cube.data.shape, integration_axis)[1]
+    grid = np.array([1.0, 2.0]) * u.cm
+    blank = {"si": np.broadcast_to(0.0, (n_rows, n_columns, 2)), "wl_grid": grid,
+             "wl0": grid[0], "atom": None, "ion": None}
+    cube = create_line_cube("image", blank, spatial_cube, u.dimensionless_unscaled,
+                            integration_axis)
+    return _pixel_edges(cube, 1)
+
+
+def image_columns_between(x_edges: u.Quantity, limits) -> slice:
+    """
+    Image columns with any part between two positions across the slit.
+
+    Parameters
+    ----------
+    x_edges : u.Quantity
+        Pixel boundaries across the slit, increasing.
+    limits : sequence of two
+        Positions, as lengths on the Sun or angles seen from 1 AU, in the
+        coordinates of `x_edges`.
+
+    Raises
+    ------
+    ValueError
+        If the positions are not two lengths or angles in increasing order,
+        or no column lies between them.
+    """
+    try:
+        low, high = (_to_length(u.Quantity(value)).to_value(u.Mm) for value in limits)
+    except (TypeError, ValueError, u.UnitConversionError):
+        raise ValueError(f"--image-x takes two positions across the slit, such as '-1 Mm' "
+                         f"'1 Mm', got {list(limits)}.") from None
+    if not low < high:
+        raise ValueError(f"--image-x runs from one position to a larger one, got "
+                         f"{list(limits)}.")
+    edges = x_edges.to_value(u.Mm)
+    kept = np.flatnonzero((edges[1:] > low) & (edges[:-1] < high))
+    if kept.size == 0:
+        raise ValueError(f"No part of the image, which runs from {edges[0]:g} to "
+                         f"{edges[-1]:g} Mm across the slit, is between --image-x "
+                         f"{list(limits)}.")
+    return slice(int(kept[0]), int(kept[-1]) + 1)
+
+
+def image_strip(cube: np.ndarray, integration_axis: str, columns: slice) -> np.ndarray:
+    """
+    Cells of a (z, y, x) cube seen in a strip of image columns, for a view
+    along `integration_axis`. The strip's image is the whole image's
+    columns `columns`, in order.
+    """
+    axis, side = view_axis_and_side(integration_axis)
+    column_axis = {"x": 1, "y": 2, "z": 2}[axis]
+    n_columns = cube.shape[column_axis]
+    first, last = columns.start, columns.stop
+    # Seen from the other side the image is mirrored left to right
+    # (_image_pixels), so the strip is counted from the other end.
+    if side != OBSERVER_SIDE[axis]:
+        first, last = n_columns - last, n_columns - first
+    kept = [slice(None)] * 3
+    kept[column_axis] = slice(first, last)
+    return cube[tuple(kept)]
 
 
 
@@ -1838,8 +1932,18 @@ def build_parser() -> argparse.ArgumentParser:
                             "writes the deprecated pickle instead")
 
     lines = parser.add_argument_group("Lines and atomic data")
-    lines.add_argument("--lines", nargs="+", required=True,
+    lines.add_argument("--lines", nargs="+", default=None,
                        help="Line specifications (e.g. Fe12_195.1190 Fe09_171.073)")
+    lines.add_argument("--band", nargs=2, type=str, default=None, metavar=("FROM", "TO"),
+                       help="In place of --lines, synthesise every CHIANTI line between "
+                            "two wavelengths as one spectrum (e.g. '169 Angstrom' "
+                            "'213.5 Angstrom'), as a full-CCD frame needs")
+    lines.add_argument("--band-step", type=str, default=f"{BAND_STEP} Angstrom",
+                       help="Wavelength step of the band's spectrum")
+    lines.add_argument("--band-lines", type=str, default=None,
+                       help="File the contribution functions of the band's lines are kept "
+                            "in, and read back from if it is there already. By default "
+                            "band_lines.h5 in the output directory.")
     lines.add_argument("--abundance", type=str, default="sun_coronal_2021_chianti",
                        help="CHIANTI abundance dataset name for fiasco")
     lines.add_argument("--continuum", action="store_true",
@@ -1898,6 +2002,11 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
     view.add_argument("--downsample", type=int, default=1,
                       help="Downsampling factor (1 = no downsampling)")
+    view.add_argument("--image-x", nargs=2, type=str, default=None, metavar=("FROM", "TO"),
+                      help="Synthesise only the part of the image between two positions "
+                           "across the slit, in the image's own x coordinates (e.g. "
+                           "'-1 Mm' '1 Mm'). The emission is still summed along the "
+                           "whole line of sight.")
 
     grids = parser.add_argument_group("Grids and precision")
     grids.add_argument("--vel-res", type=str, default="5.0 km/s",
@@ -2220,9 +2329,26 @@ def main(args=None) -> None:
     if args.downsample < 1:
         raise ValueError(f"--downsample must be 1 or more, got {args.downsample}.")
     downsample = args.downsample if args.downsample > 1 else False
-    # Check the line names now, before reading the atmosphere, which can take
-    # minutes and gigabytes.
-    for name in args.lines:
+    # Check the lines or the band now, before reading the atmosphere, which
+    # can take minutes and gigabytes.
+    band = band_grid = None
+    if getattr(args, "band", None):
+        if args.lines:
+            raise ValueError(
+                "Give --lines or --band, not both: a run or a frame adds up everything a "
+                "synthesis file holds, so a line in both would be counted twice.")
+        try:
+            band = tuple(u.Quantity(edge).to_value(u.Angstrom) for edge in args.band)
+            band_step = u.Quantity(args.band_step).to_value(u.Angstrom)
+        except (TypeError, ValueError, u.UnitConversionError):
+            raise ValueError(
+                f"--band takes two wavelengths, such as '169 Angstrom' '213.5 Angstrom', "
+                f"and --band-step one, such as '0.002 Angstrom'; got {args.band} and "
+                f"{args.band_step!r}.") from None
+        band_grid = band_wavelengths(band, band_step)
+    elif not args.lines:
+        raise ValueError("Name the --lines to synthesise, or a --band.")
+    for name in args.lines or []:
         _parse_line_name(name)
     vel_res = u.Quantity(args.vel_res)
     vel_lim = u.Quantity(args.vel_lim)
@@ -2300,6 +2426,9 @@ def main(args=None) -> None:
 
     if dynamic_mode:
         # Validate dynamic mode requirements
+        if band is not None or getattr(args, "image_x", None):
+            raise ValueError("Dynamic mode, which is deprecated, takes neither --band nor "
+                             "--image-x; synthesise from an atmosphere file.")
         if args.slit_width is None:
             raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
         # The snapshots are laid out along x, which the slit steps across in a
@@ -2563,24 +2692,54 @@ def main(args=None) -> None:
 
     # ---------------- Compute contribution functions (fiasco) ---------
     # Only over the densities this atmosphere has.
+    temperature = temp_cube.data
     logN_min, logN_max, nN = density_grid(
-        temp_cube.data, ne_values,
+        temperature, ne_values,
         np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
-    print(f"Computing contribution functions via fiasco at 10^{logN_min:.1f} to "
-          f"10^{logN_max:.1f} cm^-3 ({print_mem()})")
-    goft, logT_goft, logN_grid = compute_goft_fiasco(
-        args.lines, abundance=args.abundance, precision=precision,
-        logN_min=logN_min, logN_max=logN_max, nN=nN,
-        n_workers=args.n_workers,
-        hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
-        temperature_chunk=getattr(args, "goft_temperature_chunk", None),
-    )
 
-    # Record the database actually used, not the one requested, so a run that
-    # did not choose one can still be traced to its atomic data.
-    goft_dbase_root = (
-        next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
-    )
+    # Only a strip of the image, if asked for. The densities above are the
+    # whole image's, so one file of a band's lines serves every strip. Seen
+    # along an axis, the strip's cells are cut out of the box. Seen from a
+    # position, the box's columns are not the image's, so the image is cut
+    # once it is made, before the band's spectrum.
+    image_columns = columns = None
+    if getattr(args, "image_x", None):
+        columns = image_columns_between(image_x_edges(reference_cube, view), args.image_x)
+        n_columns = image_x_edges(reference_cube, view).size - 1
+        image_columns = (columns.start, n_columns)
+        if sky is None:
+            temperature, ne_values, vel_data = (
+                image_strip(cube, view, columns) for cube in (temperature, ne_values, vel_data))
+        print(f"  Image columns {columns.start} to {columns.stop - 1} of {n_columns} kept")
+
+    band_lines = None
+    if band is None:
+        print(f"Computing contribution functions via fiasco at 10^{logN_min:.1f} to "
+              f"10^{logN_max:.1f} cm^-3 ({print_mem()})")
+        goft, logT_goft, logN_grid = compute_goft_fiasco(
+            args.lines, abundance=args.abundance, precision=precision,
+            logN_min=logN_min, logN_max=logN_max, nN=nN,
+            n_workers=args.n_workers,
+            hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
+            temperature_chunk=getattr(args, "goft_temperature_chunk", None),
+        )
+        # Record the database actually used, not the one requested, so a run
+        # that did not choose one can still be traced to its atomic data.
+        goft_dbase_root = (
+            next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
+        )
+    else:
+        # Every line in the band, on the temperatures the lines above would
+        # be on.
+        logT_band = np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T)
+        logN_band = np.linspace(logN_min, logN_max, nN)
+        band_lines = band_lines_for(
+            args.band_lines or Path(args.output_dir) / "band_lines.h5", band, logT_band,
+            logN_band, abundance=args.abundance, n_workers=args.n_workers,
+            hdf5_dbase_root=getattr(args, "hdf5_dbase_root", None),
+            wider_grid=band_density_grid(logN_min, logN_max))
+        goft, logT_goft, logN_grid = {}, logT_band.astype(precision), logN_band.astype(precision)
+        goft_dbase_root = band_lines.hdf5_dbase_root
     print(f"  CHIANTI database: {goft_dbase_root}")
 
     # Use the GOFT temperature grid as our DEM temperature grid
@@ -2598,8 +2757,13 @@ def main(args=None) -> None:
     # wavelength, as in synthesise_spectra.
     continuum = None
     if getattr(args, "continuum", False):
-        windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
-                                     for info in goft.values()])
+        if band is not None:
+            # On the band's own wavelengths.
+            windows = {f"{CONTINUUM_PREFIX}_{band_grid[0]:.4f}-{band_grid[-1]:.4f}":
+                       (band_grid * u.Angstrom).to(u.cm)}
+        else:
+            windows = continuum_windows([(vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+                                         for info in goft.values()])
         print(f"Computing the continuum over {len(windows)} window"
               f"{'' if len(windows) == 1 else 's'} via fiasco ({print_mem()})")
         wavelength = np.concatenate([grid.to_value(u.cm) for grid in windows.values()]) * u.cm
@@ -2615,15 +2779,32 @@ def main(args=None) -> None:
 
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
     goft, dem_map, em_tv, electron_density = synthesise_cubes(
-        temp_cube.data, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
+        temperature, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
         vel_grid, view, precision, continuum=continuum, sky=sky, return_density=True)
+    if sky is not None and columns is not None:
+        dem_map, em_tv, electron_density = (
+            cube[:, columns] for cube in (dem_map, em_tv, electron_density))
+        for info in goft.values():
+            info["si"] = info["si"][:, columns]
+
+    band_name = None
+    if band is not None:
+        print(f"Calculating the spectrum of the band's {band_lines.n_lines} lines at "
+              f"{band_grid.size} wavelengths ({print_mem()})")
+        grid = (band_grid * u.Angstrom).to(u.cm)
+        spectra = band_spectra(band_lines, em_tv, electron_density, vel_grid, grid,
+                               n_workers=args.n_workers)
+        band_name = f"band_{band_grid[0]:.4f}-{band_grid[-1]:.4f}"
+        goft[band_name] = {"si": spectra.to_value(intensity_unit).astype(precision),
+                           "wl_grid": grid, "wl0": grid[grid.size // 2],
+                           "atom": None, "ion": None}
 
     # ---------------- Create output cubes -----------------
     print(f"Creating output cubes ({print_mem()})")
     line_cubes = {}
     for name, info in goft.items():
         line_cubes[name] = create_line_cube(
-            name, info, reference_cube, intensity_unit, view
+            name, info, reference_cube, intensity_unit, view, image_columns=image_columns
         )
     
     print(f"Built {len(line_cubes)} line cubes")
@@ -2648,7 +2829,8 @@ def main(args=None) -> None:
         # so they are not stored twice.
         "goft": {name: {key: value for key, value in info.items()
                         if key not in ("si", "wl_grid")}
-                 for name, info in goft.items() if name not in (continuum or {})},
+                 for name, info in goft.items()
+                 if name not in (continuum or {}) and name != band_name},
         "voxel_sizes": {"dx": voxel_dx, "dy": voxel_dy, "dz": voxel_dz},
         "dynamic_mode": dynamic_mode_metadata,
         "atmosphere": atmosphere_metadata,
@@ -2663,7 +2845,10 @@ def main(args=None) -> None:
             "atmosphere": args.atmosphere,
             "cube_shape": None if args.atmosphere else args.cube_shape,
             "data_dir": None if args.atmosphere else str(Path(args.data_dir)),
-            "lines": args.lines,
+            "lines": args.lines or [],
+            "band": None if band is None else list(band),
+            "band_step": None if band is None else band_step,
+            "image_x": getattr(args, "image_x", None),
             "abundance": args.abundance,
             "continuum": bool(getattr(args, "continuum", False)),
             "hdf5_dbase_root": goft_dbase_root,
@@ -2689,7 +2874,7 @@ def main(args=None) -> None:
         with open(output_file, "wb") as f:
             dill.dump({"line_cubes": line_cubes, **products,
                        "goft": {name: info for name, info in goft.items()
-                                if name not in (continuum or {})}}, f)
+                                if name not in (continuum or {}) and name != band_name}}, f)
     else:
         # Save the snapshot time, so syntheses of a series of snapshots can be
         # observed as a time series.

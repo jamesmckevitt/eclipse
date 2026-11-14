@@ -74,7 +74,7 @@ Each run's files take its name, such as `run/result/job_fe12.h5`. `--only fe09` 
 
 ## A full-CCD frame
 
-A `frame:` section describes the [full-CCD frame](full-ccd-frame.md) to make:
+A `frame:` section describes the [full-CCD frame](full-ccd-frame.md) to make. With an `atmosphere`, the run synthesises the band under the slit for it. With a `synthesis_file`, the frame holds that file's spectra.
 
 ```yaml
 frame:
@@ -87,13 +87,15 @@ frame:
 | `slit_position` | The slit's centre, in the synthesis's x coordinates | required |
 | `exposure` | The exposure time | `simulation.expos` |
 | `slit_width` | The slit width | `simulation.slit_width`, or 0.2 arcsec |
-| `continuum` | Whether to add the continuum | `False` |
-| `band` | The wavelengths of the lines to add | `[169 AA, 213.5 AA]` |
-| `band_lines` | Where to keep the band's lines for later frames | `run/input/band_lines.h5` |
-| `n_workers` | Processes to use | one per CPU |
 | `output` | The frame file | `run/result/<run file name>_frame.h5` |
+| `continuum` | Whether to add the continuum | `False` |
+| `band` | The wavelengths of the lines to add | `[169 Angstrom, 213.5 Angstrom]` |
+| `band_step` | The spacing of the band's wavelengths | `0.002 Angstrom` |
+| `band_lines` | Where to keep the band's lines for later frames | `run/input/band_lines.h5` |
+| `band_file` | Where the band's synthesis goes, which runs can share | `run/input/<run file name>_band.h5` |
+| `n_workers` | Processes to use | one per CPU |
 
-The instrument settings come from the run's other sections.
+The last six need an `atmosphere`. The instrument settings come from the run's other sections.
 
 ## On a cluster
 

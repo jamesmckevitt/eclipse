@@ -25,6 +25,15 @@ CONTINUUM_PREFIX = "continuum"
 # n_e^2 dh, with wavelengths in cm, as for ECLIPSE's line spectra.
 EMISSIVITY_UNIT = u.erg * u.cm**3 / (u.s * u.sr * u.cm)
 
+# A range that is a whole number of bins to within this fraction is given
+# that number, whatever rounding error the division has.
+_WHOLE_BINS = 1e-12
+
+
+def bins_to_cover(low: float, high: float, step: float) -> int:
+    """Number of bins of width `step` needed to reach from `low` to `high`."""
+    return int(np.ceil((high - low) / step * (1 - _WHOLE_BINS)))
+
 
 def is_continuum(name: str) -> bool:
     """Whether synthesis file entry `name` is the continuum rather than a line."""
@@ -66,10 +75,6 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         windows.append((float(values[0] - spacing[0] / 2), float(values[-1] + spacing[-1] / 2),
                         float(np.min(spacing))))
 
-    def bins(low, high, step):
-        """Number of bins of width `step` needed to reach from `low` to `high`."""
-        return int(np.ceil((high - low) / step * (1 - 1e-12)))
-
     windows.sort()
     groups: List[List[float]] = []
     for low, high, step in windows:
@@ -77,14 +82,14 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         # grouped with it if it begins before the group's bins end.
         if groups:
             first, last, spacing = groups[-1]
-            if low < first + bins(first, last, spacing) * spacing:
+            if low < first + bins_to_cover(first, last, spacing) * spacing:
                 groups[-1] = [first, max(last, high), min(spacing, step)]
                 continue
         groups.append([low, high, step])
     grids = {}
     for low, high, step in groups:
         # Bins of this spacing from the group's first bin edge to past its last.
-        grid = low + (np.arange(bins(low, high, step)) + 0.5) * step
+        grid = low + (np.arange(bins_to_cover(low, high, step)) + 0.5) * step
         name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.4f}-{grid[-1] * 1e8:.4f}"
         # Windows far narrower than any line's could round to the same name.
         if name in grids:

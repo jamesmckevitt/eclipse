@@ -38,8 +38,8 @@ _COMMANDS = {
            "frame if it has a 'frame:' section.",
     "synthesise": "Synthesise the run file's atmosphere.",
     "observe": "Observe what the run file describes, and write the results.",
-    "frame": "Make the full-CCD frame the run file's 'frame:' section describes, "
-             "synthesising its atmosphere first if needed.",
+    "frame": "Make the full-CCD frame the run file's 'frame:' section describes, from "
+             "its synthesis file, or from the band synthesised from its atmosphere.",
 }
 
 _PASSED_ON = {

@@ -148,9 +148,11 @@ These are the steps `simulate_once` takes, in order.
 
 ## Every line in a band
 
-A full-CCD frame holds every line in the band, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, and keep them in a file.
+Every line in a band, for a full-CCD frame of the whole band: their contribution functions, kept in a file, and their spectrum from an emission measure.
 
 ::: eclipse.band_contribution_functions
+
+::: eclipse.band_spectra
 
 ::: eclipse.BandLines
 
@@ -162,7 +164,7 @@ A full-CCD frame holds every line in the band, not only the lines a synthesis na
 
 ## Full-CCD frames
 
-A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [A full-CCD frame](full-ccd-frame.md) shows how to make a frame.
+A frame of both SW CCDs at one slit position, holding the spectra of a synthesis file. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [A full-CCD frame](full-ccd-frame.md) shows how to make a frame.
 
 ::: eclipse.full_ccd_frame
 

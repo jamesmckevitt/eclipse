@@ -220,7 +220,6 @@ def test_a_frame_takes_the_run_files_settings(tmp_path, monkeypatch):
     with h5py.File(tmp_path / "syn.h5", "w"):
         pass
     taken = {}
-    monkeypatch.setattr(run_file, "_band_lines", lambda *args: "lines")
     monkeypatch.setattr(full_frame, "full_ccd_frame",
                         lambda *args, **kwargs: taken.update(args=args, kwargs=kwargs))
     monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
@@ -229,9 +228,10 @@ def test_a_frame_takes_the_run_files_settings(tmp_path, monkeypatch):
            "detector": {"qe_euv": 0.6}, "frame": {"slit_position": "1 arcsec"}}
     [output] = eclipse.make_frame(job, name="job")
     assert output.frame == Path("run/result/job_frame.h5")
-    synthesis, lines, position, exposure = taken["args"]
-    assert (synthesis, lines) == (Path("syn.h5"), "lines")
-    assert (position, exposure) == (1 * u.arcsec, 20 * u.s)
+    # The frame holds the spectra in the synthesis file as they are.
+    assert taken["args"] == (Path("syn.h5"),)
+    assert taken["kwargs"]["slit_position"] == 1 * u.arcsec
+    assert taken["kwargs"]["exposure"] == 20 * u.s
     assert taken["kwargs"]["slit_width"] == 0.4 * u.arcsec
     assert taken["kwargs"]["slit_mask"] is True
     assert taken["kwargs"]["det"].qe_euv == 0.6
@@ -239,6 +239,102 @@ def test_a_frame_takes_the_run_files_settings(tmp_path, monkeypatch):
         eclipse.make_frame(job, name="job", settings=["simulation.expos=[5 s, 20 s]"])
     with pytest.raises(ValueError, match="no 'frame:' section"):
         eclipse.make_frame({"synthesis_file": "syn.h5"}, name="job")
+    for key, value in (("band", ["169 Angstrom", "213.5 Angstrom"]), ("continuum", True)):
+        with pytest.raises(ValueError, match=f"'frame.{key}' is for a run with an 'atmosphere'"):
+            eclipse.make_frame(job, name="job", frame={key: value})
+
+
+def test_a_frame_from_an_atmosphere_synthesises_the_band_under_the_slit(
+        tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    taken = {}
+    monkeypatch.setattr(full_frame, "full_ccd_frame",
+                        lambda *args, **kwargs: taken.update(args=args, kwargs=kwargs))
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = _job(atmosphere, synthesis={"lines": [LINE], "abundance": "sun_coronal_1992_feldman",
+                                      "continuum": False, "n_workers": 3},
+               simulation={"expos": "5 s", "psf": False, "slit_width": "0.4 arcsec"},
+               frame={"slit_position": "0.3 arcsec", "continuum": True, "n_workers": 2})
+    [output] = eclipse.make_frame(job, name="job")
+    # Only the band is synthesised, with the run's settings, into the frame's own file.
+    [args] = fake_synthesis
+    assert output.synthesis == Path("run/input/job_band.h5") and output.results is None
+    assert Path(args.output_dir, args.output_name).name.endswith(".h5")
+    assert output.frame == Path("run/result/job_frame.h5")
+    assert taken["args"] == (Path("run/input/job_band.h5"),)
+    assert args.lines is None and args.band == ["169.0 Angstrom", "213.5 Angstrom"]
+    assert args.abundance == "sun_coronal_1992_feldman" and args.continuum is True
+    # The band's lines are kept beside the band, unless the frame names a file for them.
+    assert args.n_workers == 2 and args.band_lines is None
+    # The slit is 0.4 arcsec wide at 0.3 arcsec, and the PSF is off.
+    assert [u.Quantity(edge).to_value(u.arcsec) for edge in args.image_x] == pytest.approx(
+        [0.1, 0.5])
+    # The same frame again reuses the band, and another slit position remakes it.
+    eclipse.make_frame(job, name="job")
+    assert len(fake_synthesis) == 1
+    eclipse.make_frame(job, name="job", settings=["frame.slit_position=1 arcsec"])
+    assert len(fake_synthesis) == 2
+    # The band's lines are kept where the frame says, with its own band and step.
+    eclipse.make_frame(job, name="other", frame={
+        "slit_position": "0 arcsec", "band": ["190 Angstrom", "200 Angstrom"],
+        "band_step": "0.004 Angstrom", "band_lines": "kept/lines.h5"})
+    args = fake_synthesis[-1]
+    assert args.band == ["190 Angstrom", "200 Angstrom"] and args.band_step == "0.004 Angstrom"
+    assert args.band_lines == "kept/lines.h5"
+    # A mistake in the band is found before anything is synthesised.
+    made = len(fake_synthesis)
+    for mistake in ({"band": "190 Angstrom"}, {"band": [190, 200]},
+                    {"band": ["200 Angstrom", "190 Angstrom"]}, {"band_step": 0.002},
+                    {"band_step": "0 Angstrom"}):
+        with pytest.raises(ValueError, match="'frame.band' takes two wavelengths"):
+            eclipse.run(job, name="job", frame=mistake)
+    with pytest.raises(FileNotFoundError, match="Atmosphere file not found"):
+        eclipse.make_frame(job, name="job", atmosphere="gone.h5")
+    assert len(fake_synthesis) == made
+
+
+def test_runs_share_a_band_file_they_would_synthesise_alike(tmp_path, monkeypatch, atmosphere,
+                                                            fake_synthesis):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(full_frame, "full_ccd_frame", lambda *args, **kwargs: None)
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"instrument": "SWC", "atmosphere": str(atmosphere),
+           "simulation": {"psf": False},
+           "frame": {"slit_position": "0 arcsec", "band_file": "run/input/shared.h5"},
+           "runs": [{"name": "short", "frame": {"exposure": "5 s"}},
+                    {"name": "long", "frame": {"exposure": "60 s"}}]}
+    outputs = eclipse.make_frame(job, name="job")
+    assert [output.synthesis for output in outputs] == [Path("run/input/shared.h5")] * 2
+    assert len(fake_synthesis) == 1
+    job["runs"][1]["frame"]["slit_position"] = "0.5 arcsec"
+    with pytest.raises(ValueError, match="give each its own 'frame.band_file'"):
+        eclipse.make_frame(job, name="job")
+
+
+def test_a_frame_needs_no_lines_and_widens_the_strip_by_the_blur_across_the_slit(
+        tmp_path, monkeypatch, atmosphere, fake_synthesis):
+    from eclipse import full_frame
+    from eclipse.config import Telescope_EUVST
+    from eclipse.radiometric import across_slit_fwhm
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(full_frame, "full_ccd_frame", lambda *args, **kwargs: None)
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"instrument": "SWC", "atmosphere": str(atmosphere),
+           "simulation": {"expos": "5 s", "psf": True},
+           "frame": {"slit_position": "0 arcsec"}}
+    eclipse.make_frame(job, name="job")
+    low, high = (u.Quantity(edge).to_value(u.arcsec) for edge in fake_synthesis[-1].image_x)
+    sigma = across_slit_fwhm(Telescope_EUVST()).to_value(u.arcsec) / (2 * np.sqrt(2 * np.log(2)))
+    assert sigma > 0
+    assert (low, high) == pytest.approx((-0.1 - 12 * sigma, 0.1 + 12 * sigma))
+    # Without lines there is nothing to observe, so a whole run is refused.
+    with pytest.raises(ValueError, match="names the 'lines' to synthesise"):
+        eclipse.run(job, name="job")
 
 
 def test_the_eclipse_command_runs_the_steps_it_names(monkeypatch):
@@ -407,3 +503,21 @@ def test_a_runs_setting_replaces_the_list(tmp_path, monkeypatch, atmosphere, fak
     job = _job(atmosphere, runs=[{"name": "fe12"}, {"name": "fe09"}])
     outputs = eclipse.synthesise(job, name="job", settings=["runs=[{name: fe11}]"])
     assert [output.name for output in outputs] == ["job_fe11"]
+
+
+def test_a_frame_seen_from_a_position_synthesises_the_strip_under_the_slit(tmp_path, monkeypatch,
+                                                                  atmosphere, fake_synthesis):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(full_frame, "full_ccd_frame", lambda *args, **kwargs: None)
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"instrument": "SWC", "atmosphere": str(atmosphere),
+           "synthesis": {"position": ["600 arcsec", "0 arcsec"]},
+           "simulation": {"expos": "5 s", "psf": False},
+           "frame": {"slit_position": "0 arcsec"}}
+    eclipse.make_frame(job, name="job")
+    args = fake_synthesis[-1]
+    assert args.position == ["600 arcsec", "0 arcsec"]
+    assert [u.Quantity(edge).to_value(u.arcsec) for edge in args.image_x] == pytest.approx(
+        [-0.1, 0.1])
