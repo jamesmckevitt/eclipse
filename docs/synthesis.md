@@ -58,25 +58,20 @@ The synthesis file records the atmosphere file's path, its `source` and `time`, 
 
 ### Seen from a position on the disk
 
-By default the box is seen from straight above, as at disk centre. `--position` places it elsewhere on the disk, at the helioprojective x and y of its centre:
+By default the box is seen from straight above, as at disk centre. `--position` puts its centre at a helioprojective x and y instead:
 
 ```bash
 synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
   --position "600 arcsec" "-200 arcsec"
 ```
 
-The observer is taken to be 1 AU from the Sun, above its equator, with solar north up. The position is converted to a point on the surface with SunPy's coordinate frames. The box's z is taken to point up, along the local vertical. Its x points west and its y north, unless `--rotation` turns the box about the vertical: `--rotation "30 deg"` turns its x from west towards north by 30 degrees. A position and a rotation together place the box on the surface in any way it can sit there.
+The box's z points along the local vertical, its x west and its y north. `--rotation "30 deg"` turns its x from west towards north. The observer is at 1 AU, above the solar equator.
 
-Away from disk centre the line of sight is slanted through the box, at the heliocentric angle from the vertical, and the image is foreshortened towards the limb. The Doppler velocity is the part of the flow along the line of sight, so the atmosphere file needs the velocity along each axis the line of sight leans along: `velocity_z`, and `velocity_x`, `velocity_y` or both, depending on the position and rotation.
+Away from disk centre the line of sight is slanted through the box, so the atmosphere file needs the velocity along each axis it leans along, as well as `velocity_z`.
 
-Each cell is taken to be uniform, and its emission is shared between the image's pixels in proportion to the part of the cell in front of each. The pixels are as big as the box's cells across. `--projection` chooses how this is worked out:
+Each cell's emission is shared between the image's pixels by the part of the cell in front of each, so none is lost. `--projection exact` does this exactly. The default, `two-step`, is faster and softens detail by up to a pixel.
 
-- `two-step` (the default) first shares each cell between the box's columns, along the line of sight, to where it meets the box's base at z = 0. This step is exact. The columns are then shared between the image's pixels by area, each taken to be uniform across, which softens detail by up to a pixel.
-- `exact` shares each cell between the image's pixels directly. It is exact for uniform cells, and slower.
-
-Both keep all of each cell's emission, and at disk centre with no rotation both give the view from straight above.
-
-A box is taken to repeat sideways, as MURaM and Bifrost boxes do, so a line of sight leaving one side comes back in at the other, and every pixel of the image sees the box's full height. The image covers where the box's base is seen. `--no-wrap` ends the lines of sight at the box's sides instead, and so does cropping in x or y, since a cropped box does not repeat. The image then covers every cell, and the pixels near its edges see only part of a column.
+The box is taken to repeat sideways, as MURaM and Bifrost boxes do. `--no-wrap`, or cropping in x or y, ends the lines of sight at the box's sides instead.
 
 ### Worked example: a MURaM active region
 
