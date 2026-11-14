@@ -246,7 +246,7 @@ BAND = ("--band", "194 Angstrom", "196.5 Angstrom")
 
 
 def test_a_band_is_synthesised_as_one_spectrum_and_its_lines_kept_in_a_file(tmp_path):
-    path = _synthesise(tmp_path, "band.h5", *BAND)
+    path = _synthesise(tmp_path, "band.h5", *BAND, "--keep-vdem")
     held = read_synthesis(path)
     assert list(held.lines) == ["band_194.0010-196.4990"]
     line = held.lines["band_194.0010-196.4990"]
@@ -303,7 +303,7 @@ def test_a_strip_of_the_image_holds_the_whole_images_columns(tmp_path, view):
 
 
 def test_the_deprecated_lines_give_the_frame_of_the_band_synthesised_into_a_file(tmp_path):
-    band = _synthesise(tmp_path, "band.h5", *BAND)
+    band = _synthesise(tmp_path, "band.h5", *BAND, "--keep-vdem")
     products = read_synthesis_products(band)
     lines = _band_lines(products["logT_grid"], products["logN_grid"])
     settings = dict(slit_position=0.3 * u.Mm, exposure=1 * u.s, noise=False,
