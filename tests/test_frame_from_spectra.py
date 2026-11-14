@@ -229,7 +229,8 @@ def _synthesise(tmp_path, name, *words, view="z", monkeypatch=None):
         _atmosphere(tmp_path, view)
     patch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(atmosphere), "--output-dir", str(tmp_path),
-        "--output-name", name, "--mass-per-electron", "1.2", f"--integration-axis={view}",
+        "--output-name", name, "--mass-per-electron", "1.2",
+        *([] if "--position" in words else [f"--integration-axis={view}"]),
         *words])
     patch.setattr(band_module, "band_contribution_functions",
                   lambda band, logT, logN, **kwargs: _band_lines(logT, logN, band, **kwargs))
