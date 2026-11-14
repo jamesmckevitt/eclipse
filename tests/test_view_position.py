@@ -4,8 +4,9 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from eclipse.projection import PROJECTIONS, SkyView, _cell_faces, _overlaps, _patch_faces
-from eclipse.synthesis import build_em_tv, compute_dem, disk_frame
+from eclipse.projection import (PROJECTIONS, SkyView, _cell_faces, _overlaps, _patch_faces,
+                                disk_frame)
+from eclipse.synthesis import build_em_tv, compute_dem
 from eclipse.utils import velocity_grid
 
 LOGT = np.array([5.9, 6.0, 6.1, 6.2, 6.3])
