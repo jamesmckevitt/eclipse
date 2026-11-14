@@ -1,4 +1,27 @@
-# Synthesising from a DEM or VDEM
+# From a DEM or VDEM
+
+<div class="glance" markdown>
+<div markdown>
+**You need**
+
+An [emission measure file](../files/emission-measure.md), written from your DEM or VDEM
+</div>
+<div markdown>
+**You run**
+
+`eclipse run`, or `eclipse synthesise` for this step alone
+</div>
+<div markdown>
+**You get**
+
+A [synthesis file](../files/synthesis.md) in `run/input/`
+</div>
+<div markdown>
+**Next**
+
+[Simulating an observation](../observe/simulate.md) or [Full-CCD frames](../observe/full-ccd-frames.md)
+</div>
+</div>
 
 A differential emission measure (DEM) says how much plasma there is at each temperature, such as from an inversion of observations. A velocity DEM (VDEM) also splits it by line-of-sight velocity. ECLIPSE synthesises the lines either emits, taking the plasma to be optically thin.
 
@@ -26,11 +49,11 @@ measure = EmissionMeasure(
 write_emission_measure(measure, "dem.h5")
 ```
 
-The temperatures are bin centres, evenly spaced in log10(T). [Files](files.md#emission-measure-files) gives the file's layout.
+The temperatures are bin centres, evenly spaced in log10(T). [Files](../files/emission-measure.md) gives the file's layout.
 
 ## Synthesising and observing it
 
-A [run file](run-files.md) names it with `emission_measure` in place of `atmosphere`:
+A [run file](../run-files.md) names it with `emission_measure` in place of `atmosphere`:
 
 ```yaml
 instrument: EIS
@@ -72,7 +95,7 @@ The velocities are bulk motions only, positive away from the observer. The synth
 
 ## A full-CCD frame
 
-A run file with an `emission_measure` and a `frame:` section makes a [full-CCD frame](full-ccd-frame.md) from it, as from an atmosphere:
+A run file with an `emission_measure` and a `frame:` section makes a [full-CCD frame](../observe/full-ccd-frames.md) from it, as from an atmosphere:
 
 ```bash
 eclipse frame dem.yaml

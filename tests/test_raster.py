@@ -519,7 +519,7 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
     monkeypatch.setattr(raster_module, "compute_goft_fiasco", None)
     with pytest.raises(ValueError, match="outside the series"):
         run(simulation={"slit_width": "0.4 arcsec", "expos": ["5 s", "15 s"], "psf": False})
-    # An empty reference_line means the first line (docs/time-series.md), so
+    # An empty reference_line means the first line (docs/observe/rasters.md), so
     # the run gets as far.
     with pytest.raises(ValueError, match="outside the series"):
         run(reference_line=None)

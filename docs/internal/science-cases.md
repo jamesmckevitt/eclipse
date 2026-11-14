@@ -12,7 +12,7 @@ eclipse-science-cases --out run/input
 eclipse run run/input/1.1.1-nanoflares_events_fe12_195119.yaml
 ```
 
-That writes one configuration for each case and line that ECLIPSE can simulate, each as a [single intensity](../uniform-intensity.md). The intensity is the line's intensity in that case times the case's filling factor. The line's width is its thermal width at its formation temperature. The case sets the exposure time and slit width. Every configuration has the PSF on, runs 512 Monte Carlo iterations, and compares off-chip binning of 1 and 2 slit pixels. The instrument has ECLIPSE's default settings.
+That writes one configuration for each case and line that ECLIPSE can simulate, each as a [single intensity](../emission/single-intensity.md). The intensity is the line's intensity in that case times the case's filling factor. The line's width is its thermal width at its formation temperature. The case sets the exposure time and slit width. Every configuration has the PSF on, runs 512 Monte Carlo iterations, and compares off-chip binning of 1 and 2 slit pixels. The instrument has ECLIPSE's default settings.
 
 To choose cases and lines, or change the settings:
 

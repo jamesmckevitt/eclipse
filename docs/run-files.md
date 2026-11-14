@@ -6,9 +6,17 @@ A run file is a YAML file that describes a whole job: the simulation to synthesi
 eclipse run job.yaml
 ```
 
+## Installing
+
+```bash
+pip install eclipse
+```
+
+ECLIPSE needs Python 3.11 or later. The first synthesis offers to download and build the CHIANTI atomic database for [fiasco](https://fiasco.readthedocs.io/).
+
 ## What a run file holds
 
-A run file is the [configuration file](instrument-response.md#the-configuration-file) of a run, with an atmosphere to synthesise in place of a synthesis file:
+A run file is the [configuration file](observe/simulate.md#the-run-file) of a run, with an atmosphere to synthesise in place of a synthesis file:
 
 ```yaml
 instrument: SWC
@@ -25,9 +33,9 @@ simulation:
   psf: True
 ```
 
-The `synthesis:` section takes the options of [`synthesise-spectra`](synthesis.md), with underscores in place of dashes, such as `lines`, `crop_z` or `position`. The [configuration reference](configuration.md) lists the other settings.
+The `synthesis:` section takes the options of [`synthesise-spectra`](emission/mhd.md), with underscores in place of dashes, such as `lines`, `crop_z` or `position`. The [run file settings](reference/run-file-settings.md) lists the other settings.
 
-A run file can name an `emission_measure`, a [DEM or VDEM](dem-synthesis.md), in place of the `atmosphere`, with `electron_density` or `pressure` in its `synthesis:` section.
+A run file can name an `emission_measure`, a [DEM or VDEM](emission/dem.md), in place of the `atmosphere`, with `electron_density` or `pressure` in its `synthesis:` section.
 
 ## The commands
 
@@ -37,14 +45,14 @@ A run file can name an `emission_measure`, a [DEM or VDEM](dem-synthesis.md), in
 | `eclipse synthesise job.yaml` | Synthesises the atmosphere only |
 | `eclipse observe job.yaml` | Observes the synthesis only |
 | `eclipse frame job.yaml` | Makes the [full-CCD frame](#a-full-ccd-frame) |
-| `eclipse atmosphere ...` | Writes or inspects [atmosphere files](synthesis.md#atmosphere-files) |
+| `eclipse atmosphere ...` | Writes or inspects [atmosphere files](files/atmosphere.md) |
 | `eclipse science-cases ...` | Writes run files for the science cases |
 
 The synthesis goes to `run/input/<run file name>.h5`, unless `synthesis_file` names another, and the results to `run/result/<run file name>.h5`. `eclipse --help` lists the options.
 
-## Reusing the synthesis
+## Sweeping a setting
 
-A run reuses its synthesis while the atmosphere file and the `synthesis:` section are unchanged, so changing an exposure time only observes again.
+A setting given as a list of values is swept: ECLIPSE runs every combination; see [The run file](observe/simulate.md#the-run-file).
 
 ## Changing a setting from the command line
 
@@ -74,9 +82,13 @@ runs:
 
 Each run's files take its name, such as `run/result/job_fe12.h5`. `--only fe09` does one run.
 
-## A full-CCD frame
+## Reusing the synthesis { data-routes="mhd dem" }
 
-A `frame:` section describes the [full-CCD frame](full-ccd-frame.md) to make. With an `atmosphere`, the run synthesises the band under the slit for it. With a `synthesis_file`, the frame holds that file's spectra.
+A run reuses its synthesis while the atmosphere file and the `synthesis:` section are unchanged, so changing an exposure time only observes again.
+
+## A full-CCD frame { data-routes="spectra mhd dem" }
+
+A `frame:` section describes the [full-CCD frame](observe/full-ccd-frames.md) to make. With an `atmosphere`, the run synthesises the band under the slit for it. With a `synthesis_file`, the frame holds that file's spectra.
 
 ```yaml
 frame:
@@ -99,20 +111,6 @@ frame:
 
 The last six need an `atmosphere`. The instrument settings come from the run's other sections.
 
-## On a cluster
+## Running it elsewhere
 
-```bash
-eclipse synthesise job.yaml
-srun --mpi=pmi2 --kill-on-bad-exit=1 eclipse observe job.yaml
-```
-
-## From Python
-
-```python
-import eclipse
-
-[output] = eclipse.run("job.yaml", n_iter=10, simulation={"expos": "5 s"})
-print(output.synthesis, output.results)
-```
-
-`eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do one step each.
+[On a cluster](cluster.md) runs the steps on different nodes, or on many at once. [From Python](python.md#running-a-run-file) runs a run file from a script.

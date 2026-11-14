@@ -1,5 +1,5 @@
 """
-Write the sources and plain defaults in docs/instrument-sources.md from the code.
+Write the sources and plain defaults in docs/background/instrument-sources.md from the code.
 
 CONTRIBUTING.md describes the page's tables and which cells this script
 writes. Run it as `python tools/update_instrument_sources.py`.
@@ -22,8 +22,8 @@ from eclipse.config import (DETECTOR_MATERIALS, AluminiumFilter,  # noqa: E402
                             Detector_EIS, Detector_SWC, Simulation, Telescope_EIS,
                             Telescope_EUVST)
 
-PAGE = Path(__file__).resolve().parents[1] / "docs" / "instrument-sources.md"
-PAGE_NAME = "docs/instrument-sources.md"
+PAGE = Path(__file__).resolve().parents[1] / "docs" / "background" / "instrument-sources.md"
+PAGE_NAME = "docs/background/instrument-sources.md"
 
 # The class behind each configuration section, for each instrument.
 INSTRUMENTS = {

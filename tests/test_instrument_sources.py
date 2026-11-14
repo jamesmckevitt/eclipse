@@ -1,4 +1,4 @@
-"""Every instrument setting has a source, and docs/instrument-sources.md shows the code's."""
+"""Every instrument setting has a source, and docs/background/instrument-sources.md shows the code's."""
 import dataclasses
 import importlib.util
 import re

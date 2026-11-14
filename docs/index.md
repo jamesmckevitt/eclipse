@@ -1,100 +1,241 @@
+---
+hide:
+  - toc
+---
+
+<div class="home-aside" markdown>
+![The ECLIPSE logo](images/logo/eclipse-logo-transparent.svg)
+
+Maintained at UCL Mullard Space Science Laboratory for SOLAR-C. Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See [LICENSE](https://github.com/jamesmckevitt/eclipse/blob/master/LICENSE) for usage terms.
+</div>
+
 # ECLIPSE
 
 **E**mission **C**alculation and **Li**ne **P**rediction for **S**OLAR-C **E**UVST
 
-ECLIPSE predicts what the EUV spectrograph EUVST on SOLAR-C will measure, and how precisely, starting from a model of the solar atmosphere. It also models Hinode/EIS.
-
-Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See [LICENSE](https://github.com/jamesmckevitt/eclipse/blob/master/LICENSE) for usage terms.
+ECLIPSE predicts what the EUV spectrograph EUVST on SOLAR-C will measure, and how precisely, from a model of the solar atmosphere or from spectra you have made yourself. It also models Hinode/EIS.
 
 The instrument model will be updated as EUVST is built, tested and commissioned.
 
-[![PyPI](https://img.shields.io/pypi/v/eclipse.svg)](https://pypi.org/project/eclipse/)
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.17543844-blue.svg)](https://doi.org/10.5281/zenodo.17543844)
+<div class="install" markdown>
+Install with
 
-## How ECLIPSE works
-
-A run has three stages:
-
-```mermaid
-flowchart LR
-    MHD["MHD simulation"]
-    DEM["Observed DEM"]
-    UNI["Single intensity"]
-
-    MHD --> VDEM["VDEM"]
-
-    subgraph SYN["1. Synthesise the spectra"]
-        ECL["ECLIPSE synthesis<br>optically thin, G(T, n_e)"]
-        EXT["Any other synthesis code<br>Lightweaver, RH1.5D, ...<br>optically thin or thick"]
-    end
-
-    subgraph SIM["2. Simulate the instrument"]
-        INS["Optics, detector and noise,<br>then line fitting"]
-    end
-
-    subgraph ANL["3. Analyse the results"]
-        ANA["Measured against truth"]
-    end
-
-    MHD --> ECL
-    MHD --> EXT
-    VDEM --> ECL
-    DEM --> ECL
-
-    ECL -- "synthesis file" --> INS
-    EXT -- "synthesis file" --> INS
-    UNI --> INS
-    INS -- "results file" --> ANA
-
-    classDef node fill:#ECECFF,fill-opacity:1,stroke:#9370DB,stroke-opacity:1,color:#1a1a1a;
-    class MHD,DEM,UNI,VDEM,ECL,EXT,INS,ANA node
-    style SYN fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
-    style SIM fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
-    style ANL fill:#fdf6d8,fill-opacity:1,stroke:#c9b46a
+```bash
+pip install eclipse
 ```
 
-**1. Synthesise the spectra.** Turn a model of the emitting plasma into the spectra it emits, as they leave the Sun. ECLIPSE does this from an MHD simulation, a VDEM or a DEM, or you can bring spectra that another code has made.
-
-**2. Simulate the instrument.** Pass those spectra through the telescope, filter, grating and detector, add the noise, and fit the lines as you would fit real data. Repeating this many times with new noise each time (a Monte Carlo simulation) shows how much the measured intensities, velocities and widths scatter. See [Running a simulation](instrument-response.md).
-
-**3. Analyse the results.** Find how precisely the instrument measured each line, compare the measurements with the truth, compare the settings the run swept through, and make maps. See [Analysing the results](analysis.md).
-
-## What to expect
-
-The [worked example](worked-example.ipynb) takes a MURaM simulation of an active region from its files to the maps below, and the other pages show what their settings do.
-
-An example simulation of Fe XII 195.12 emission, observed with the 0.4 arcsec slit with 60 s exposures per slit position:
-
-![Four maps of the active region: the Fe XII intensity as synthesised, the measured intensity, the measured Doppler velocity and its measurement precision](images/example-stages.png)
-
-A raster like this is built up one slit position at a time. At each position, the camera records the spectrum of the whole band, all along the slit:
-
-![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](images/example-slit-and-frame.png)
-
-[A full-CCD frame](full-ccd-frame.md) makes this frame.
+</div>
 
 ## Where to start
 
-To install ECLIPSE and make a first run, see [Getting started](quickstart.md). Then start from what you have:
+<div class="guide slim-steps four" data-v="3" data-fade-links data-global-route markdown>
 
-| You have | Go to | Use it when | What you run |
-| --- | --- | --- | --- |
-| One snapshot of a 3D MHD simulation | [From an MHD simulation](synthesis.md) | You want realistic solar structure and Doppler shifts. You write the snapshot as an atmosphere file from your code's output. | `eclipse run`, which synthesises and then observes |
-| A series of MHD snapshots | [Time series](time-series.md) | The atmosphere changes during the observation, as it does in a raster or a sit-and-stare. | `eclipse`, which synthesises each exposure as it goes |
-| A VDEM | [From a DEM or VDEM](dem-synthesis.md#with-velocities-a-vdem) | Your simulation has already been reduced to the emission measure at each temperature and line-of-sight velocity. | A short Python script, then `eclipse` |
-| A DEM | [From a DEM or VDEM](dem-synthesis.md) | You have a DEM inferred from observations. It has no velocities, so the lines are not Doppler shifted. | A short Python script, then `eclipse` |
-| Spectra from another code | [Spectra from another code](other-codes.md) | Another code has already made the spectra, for example an optically thick code such as Lightweaver or RH1.5D. | A short Python script to write them as a synthesis file, then `eclipse` |
-| The brightness of one line | [A single line of known intensity](uniform-intensity.md) | You only want to know how precisely a line of that brightness can be measured. This is the quickest way to run ECLIPSE. | `eclipse` only |
+<div class="have-bar" markdown>
+<p class="have-question">What do you have?</p>
+<div class="have-buttons" markdown>
+[:material-circle-medium: A single intensity](#){ .have-button data-have="one" }
+[:material-chart-bell-curve: A synthetic spectrum](#){ .have-button data-have="spectra" }
+[:material-cube-outline: An MHD simulation](#){ .have-button data-have="mhd" }
+[:material-chart-histogram: A DEM or VDEM](#){ .have-button data-have="dem" }
+</div>
+</div>
 
-## Instruments
+<div class="rows" markdown>
+<div></div>
+<div class="files four" markdown>
 
-ECLIPSE models EUVST-SW, the short wavelength channel of SOLAR-C/EUVST, with `instrument: SWC`, the default, and Hinode/EIS, with `instrument: EIS`. The EUVST long wavelength channel (LW) is coming soon. [The instrument model](instrument-model.md) describes what ECLIPSE models of each.
+<div class="file c2" data-id="output" data-from="" data-to="spectra" data-have="spectra" markdown>
+:material-file-code-outline:{ .ficon } **Your code's output**
+<span>The spectra your code makes, in its own format.</span>
+</div>
+
+<div class="file c3" data-id="atmosphere" data-from="" data-to="mhd" data-have="mhd" markdown>
+:material-database-outline:{ .ficon } [**Atmosphere file**](files/atmosphere.md)
+<span>Your simulation's temperature, density and velocity, written in ECLIPSE's format.</span>
+</div>
+
+<div class="file c4" data-id="measure" data-from="" data-to="dem" data-have="dem" markdown>
+:material-chart-histogram:{ .ficon } [**Emission measure file**](files/emission-measure.md)
+<span>The emission measure at each temperature, and velocity for a VDEM.</span>
+</div>
+
+</div>
+<div></div>
+<div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="output" data-to="spectra" d="M37.5 0 L37.5 40"/>
+<path data-from="atmosphere" data-to="mhd" d="M62.5 0 L62.5 40"/>
+<path data-from="measure" data-to="dem" d="M87.5 0 L87.5 40"/>
+</svg></div>
+<div class="label" data-tier="1"><span class="step">1</span>Make the emission</div>
+<div class="tier four" markdown>
+
+<div class="box card" data-tier="1" data-id="one" data-route="one" data-to="obs" markdown>
+
+### A single intensity
+
+Give only a line's brightness, for the quickest estimate of how precisely it is measured.
+
+[From a single intensity](emission/single-intensity.md){ data-routes="one" }
+{: .card-links }
+
+</div>
+
+<div class="box card" data-tier="1" data-id="spectra" data-route="spectra" data-to="obs frame" markdown>
+
+### Another code's spectra
+
+Bring spectra that your own code has made, optically thin or thick.
+
+[From another code](emission/other-codes.md){ data-routes="spectra" }
+{: .card-links }
+
+</div>
+
+<div class="box card" data-tier="1" data-id="mhd" data-route="mhd" data-to="obs frame" markdown>
+
+### An MHD simulation
+
+ECLIPSE works out the spectra a 3D simulation emits, seen from above or from the side.
+
+[From an MHD simulation](emission/mhd.md){ data-routes="mhd" }
+{: .card-links }
+
+</div>
+
+<div class="box card" data-tier="1" data-id="dem" data-route="dem" data-to="obs frame" markdown>
+
+### A DEM or VDEM
+
+ECLIPSE works out the spectra from the emission measure at each temperature, and velocity if you have it.
+
+[From a DEM or VDEM](emission/dem.md){ data-routes="dem" }
+{: .card-links }
+
+</div>
+
+</div>
+<div class="divider"></div>
+<div></div>
+<div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="one" data-to="obs" d="M12.5 0 L12.5 40"/>
+<path data-from="spectra" data-to="synth" d="M37.5 0 C37.5 20 62.5 20 62.5 40"/>
+<path data-from="mhd" data-to="synth" d="M62.5 0 L62.5 40"/>
+<path data-from="dem" data-to="synth" d="M87.5 0 C87.5 20 62.5 20 62.5 40"/>
+</svg></div>
+<div></div>
+<div class="files four" markdown>
+
+<div class="links pass"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="one" data-to="obs" d="M50 0 L50 40"/>
+</svg></div>
+
+<div class="file c234" data-id="synth" data-from="spectra mhd dem" data-to="obs frame" data-have="spectra mhd dem" markdown>
+:material-file-document-outline:{ .ficon } [**Synthesis file**](files/synthesis.md)
+<span>The emission spectra in each spatial pixel: a few lines to observe, or the whole band for a full-CCD frame.</span>
+</div>
+
+</div>
+<div></div>
+<div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="one" data-to="obs" d="M12.5 0 C12.5 20 25 20 25 40"/>
+<path data-from="synth" data-to="obs" d="M62.5 0 C62.5 20 25 20 25 40"/>
+<path data-from="synth" data-to="frame" d="M62.5 0 C62.5 20 75 20 75 40"/>
+</svg></div>
+<div class="label" data-tier="2"><span class="step">2</span>Observe it</div>
+<div class="tier four" markdown>
+
+<div class="box card c12" data-tier="2" data-id="obs" data-to="analysis" markdown>
+
+### Simulate an observation
+
+The spectra pass through the telescope and detector, noise is added and the lines are fitted, for a snapshot, a raster or a sit-and-stare.
+
+[Simulating an observation](observe/simulate.md) [Rasters and sit-and-stares](observe/rasters.md){ data-routes="mhd spectra" } [Fitting the lines](observe/fitting.md)
+{: .card-links }
+
+</div>
+
+<div class="box card c34" data-tier="2" data-id="frame" data-to="frameview" markdown>
+
+### Make a full-CCD frame
+
+Everything both CCDs read out at one slit position, from the spectra in the synthesis file.
+
+[Full-CCD frames](observe/full-ccd-frames.md){ data-routes="spectra mhd dem" }
+{: .card-links }
+
+</div>
+
+</div>
+<div class="divider"></div>
+<div></div>
+<div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="obs" data-to="results" d="M25 0 L25 40"/>
+<path data-from="frame" data-to="framefile" d="M75 0 L75 40"/>
+</svg></div>
+<div></div>
+<div class="files four" markdown>
+
+<div class="file c12" data-id="results" data-from="obs" data-to="analysis" markdown>
+:material-file-chart-outline:{ .ficon } [**Results file**](files/results.md)
+<span>Fitted observations and the ground truth.</span>
+</div>
+
+<div class="file c34" data-id="framefile" data-from="frame" data-to="frameview" markdown>
+:material-file-image-outline:{ .ficon } [**Frame file**](files/frame.md)
+<span>What both CCDs read out, in DN.</span>
+</div>
+
+</div>
+<div></div>
+<div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
+<path data-from="results" data-to="analysis" d="M25 0 L25 40"/>
+<path data-from="framefile" data-to="frameview" d="M75 0 L75 40"/>
+</svg></div>
+<div class="label" data-tier="3"><span class="step">3</span>Analyse your measurements</div>
+<div class="tier four" markdown>
+
+<div class="box card c12" data-tier="3" data-id="analysis" markdown>
+
+### Analyse an observation
+
+How precisely each line is measured, maps of its intensity, velocity and width, and the exposure each pixel needs.
+
+![The Fe XII intensity as synthesised, the measured intensity, the measured velocity and its precision](images/example-stages.png)
+
+[Analysing an observation](analyse/observation.md)
+{: .card-links }
+
+</div>
+
+<div class="box card c34" data-tier="3" data-id="frameview" markdown>
+
+### Analyse a full-CCD frame
+
+What the frame holds, and the spectrum of the whole band that the camera records.
+
+![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png)
+
+[Analysing a full-CCD frame](analyse/frame.md){ data-routes="spectra mhd dem" }
+{: .card-links }
+
+</div>
+
+</div>
+
+</div>
+
+<div class="also" markdown>
+**All three steps run from one file:** [Run files](run-files.md) | [On a cluster](cluster.md) | [From Python](python.md)
+
+**To learn more:** [Worked example](worked-example.ipynb) | [The instrument model](background/instrument-model.md) | [Run file settings](reference/run-file-settings.md)
+</div>
+
+</div>
 
 ## Citing ECLIPSE
 
-If ECLIPSE contributed to a publication, please cite both the paper describing the instrument model and the version of ECLIPSE you ran:
+If ECLIPSE contributed to a publication, please cite both:
 
 - [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000)
-- The Zenodo DOI for the release. [10.5281/zenodo.17543844](https://doi.org/10.5281/zenodo.17543844) always points to the latest version, and each release has its own DOI.
-
-Every results file records the version and git commit that made it, and `summary_table(results)` prints them.
+- [The DOI for the version of the code you used](https://zenodo.org/search?q=parent.id%3A17543844&f=allversions%3Atrue&l=list&p=1&s=10&sort=version).
