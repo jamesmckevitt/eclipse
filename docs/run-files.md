@@ -37,8 +37,6 @@ The `synthesis:` section takes the options of [`synthesise-spectra`](emission/mh
 
 A run file can name an `emission_measure`, a [DEM or VDEM](emission/dem.md), in place of the `atmosphere`, with `electron_density` or `pressure` in its `synthesis:` section.
 
-A run file can name an `emission_measure`, a [DEM or VDEM](dem-synthesis.md), in place of the `atmosphere`, with `electron_density` or `pressure` in its `synthesis:` section.
-
 ## The commands
 
 | Command | What it does |
