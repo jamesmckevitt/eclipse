@@ -24,7 +24,7 @@ import numpy as np
 import astropy.constants as const
 import astropy.units as u
 
-from .continuum import bins_to_cover
+from .continuum import _beyond_the_rates, bins_to_cover
 
 FORMAT_NAME = "eclipse-band-lines"
 FORMAT_VERSION = 1
@@ -175,11 +175,6 @@ def _unfed_levels_dropped(dropped: Dict[int, int]):
 
     with mock.patch("numpy.linalg.solve", new=solve):
         yield
-
-
-def _beyond_the_rates(error: ValueError) -> bool:
-    """Whether fiasco stopped at a temperature beyond the rates CHIANTI tabulates."""
-    return "interpolation range" in str(error)
 
 
 def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):

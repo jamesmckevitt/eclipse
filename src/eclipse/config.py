@@ -1706,7 +1706,7 @@ class Simulation:
         if inst == "EIS":
             if slit_val not in allowed_slits["EIS"]:
                 raise ValueError("For EIS, slit_width must be 1 or 2 arcsec, its two slits.")
-        elif inst in ("SWC"):
+        elif inst == "SWC":
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
 
