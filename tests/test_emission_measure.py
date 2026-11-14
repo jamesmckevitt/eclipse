@@ -344,3 +344,10 @@ def test_a_run_makes_a_frame_from_an_emission_measure(tmp_path, monkeypatch, chi
         rate = f["left/rate"][()]
         assert [name.decode() for name in f["spectra"][()]] == ["band_194.0010-196.4990"]
     assert rate.any()
+
+
+def test_an_emission_measure_takes_no_position_options(tmp_path, monkeypatch, chianti_free):
+    for words in (("--position", "600 arcsec", "0 arcsec"), ("--no-wrap",), ("--curvature",)):
+        with pytest.raises(ValueError, match="would not be used"):
+            _synthesise(tmp_path, _dem(), "--lines", LINE, "--electron-density", "1e9 cm-3",
+                        *words, monkeypatch=monkeypatch)
