@@ -56,6 +56,26 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
+### Seen from a position on the disk
+
+`--position` puts the box's centre at a helioprojective x and y, instead of seeing it from straight above. `--rotation` turns it about the vertical.
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec"
+```
+
+The line of sight is then slanted, so the atmosphere file needs the velocity along each axis it leans along. The box is taken to repeat sideways unless `--no-wrap` is given.
+
+#### The curved surface
+
+`--curvature` lays the box on the curved surface, each column along its own vertical. It needs `velocity_x`, `velocity_y` and `velocity_z`.
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec" --curvature
+```
+
 ### Worked example: a MURaM active region
 
 The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
@@ -178,6 +198,11 @@ synthesise-spectra --help
     - `z`: The view from above (+z), looking down through the height
     - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
     - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+- `--position`: The helioprojective x and y of the box's centre, for example `--position "600 arcsec" "-200 arcsec"`; see [Seen from a position on the disk](#seen-from-a-position-on-the-disk). Not with `--integration-axis`
+- `--rotation`: With `--position`, turn the box about the vertical, from x pointing west towards north, for example `--rotation "30 deg"`
+- `--projection`: With `--position`, `two-step` (default) or `exact`, which shares cells between pixels exactly and is slower
+- `--curvature`: With `--position`, lay the box on the curved solar surface; see [The curved surface](#the-curved-surface)
+- `--no-wrap`: With `--position`, do not take the box to repeat sideways
 
 **Cropping, in the file's coordinates, with units:**
 
