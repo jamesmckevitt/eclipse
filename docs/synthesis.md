@@ -56,6 +56,23 @@ The contribution functions are computed on a grid of densities, 0.3 apart in log
 
 The synthesis file records the atmosphere file's path, its `source` and `time`, and the mass per electron that was used.
 
+### Seen from a position on the disk
+
+By default the box is seen from straight above, as at disk centre. `--position` puts its centre at a helioprojective x and y instead:
+
+```bash
+synthesise-spectra --atmosphere atmosphere.h5 --lines Fe12_195.1190 \
+  --position "600 arcsec" "-200 arcsec"
+```
+
+The box's z points along the local vertical, its x west and its y north. `--rotation "30 deg"` turns its x from west towards north. The observer is at 1 AU, above the solar equator.
+
+Away from disk centre the line of sight is slanted through the box, so the atmosphere file needs the velocity along each axis it leans along, as well as `velocity_z`.
+
+Each cell's emission is shared between the image's pixels by the part of the cell in front of each, so none is lost. `--projection exact` does this exactly. The default, `two-step`, is faster and softens detail by up to a pixel.
+
+The box is taken to repeat sideways, as MURaM and Bifrost boxes do. `--no-wrap`, or cropping in x or y, ends the lines of sight at the box's sides instead.
+
 ### Worked example: a MURaM active region
 
 The [worked example](worked-example.ipynb) writes an atmosphere file from a MURaM simulation of an active region and synthesises it.
@@ -174,6 +191,10 @@ synthesise-spectra --help
     - `z`: The view from above (+z), looking down through the height
     - `x`: The side view from +x, looking towards decreasing x; a flow towards +x is blueshifted
     - `y`: The side view from -y, looking towards increasing y; a flow towards -y is blueshifted
+- `--position`: The helioprojective x and y of the box's centre, for a line of sight slanted through it, for example `--position "600 arcsec" "-200 arcsec"`; see [Seen from a position on the disk](#seen-from-a-position-on-the-disk). Not with `--integration-axis`.
+- `--rotation`: With `--position`, turn the box about the vertical by this angle, from its x pointing west towards north, for example `--rotation "30 deg"`. Default 0 deg
+- `--projection`: With `--position`, how cells are shared between the image's pixels: `two-step` (default) or `exact`, which is slower
+- `--no-wrap`: With `--position`, end the lines of sight at the box's sides, rather than taking the box to repeat sideways
 
 **Cropping, in the file's coordinates, with units:**
 
