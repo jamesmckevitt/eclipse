@@ -132,7 +132,7 @@ Given the telescope and a simulation with `psf=True`, `create_uniform_intensity_
 
 A cube you make yourself is blurred on its pixels, unless `meta["psf_applied"]` is True. Blurring the pixels pulls a line narrower than a pixel toward the pixel's centre, which biases its fitted velocity, and a warning says so. To avoid this, blur your scene by the PSF, in wavelength and along the slit, before you average it onto the pixels, and set `meta["psf_applied"] = True`. The PSF's widths are `spatial_psf_fwhm` along the slit and `spectral_psf_fwhm` in wavelength; [the spectral PSF and the slit](background/instrument-model.md#the-spectral-psf-and-the-slit) describes the response for `spectral_psf: convolution`.
 
-To observe a synthesis file, or synthesise and observe an atmosphere, use a run file. `eclipse.run` does from Python what `eclipse run` does, and takes the settings as a dictionary as well as a file; see [Run files](python.md#running-a-run-file).
+To observe a synthesis file, or synthesise and observe an atmosphere, use a run file. `eclipse.run` does from Python what `eclipse run` does, and takes the settings as a dictionary as well as a file; see [Run files](run-files.md).
 
 ## Common random numbers
 
@@ -165,7 +165,7 @@ They can only be switched on from Python, not in a run file run with `eclipse ru
 
 | To | Use | See |
 | --- | --- | --- |
-| Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](files/atmosphere.md), [Atmosphere files](files/atmosphere.md) |
+| Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](emission/mhd.md), [Atmosphere files](files/atmosphere.md) |
 | Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](emission/dem.md) |
 | Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [From another code](emission/other-codes.md), [Synthesis files](files/synthesis.md) |
 | Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing an observation](analyse/observation.md) |

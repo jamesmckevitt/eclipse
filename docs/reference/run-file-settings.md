@@ -17,18 +17,18 @@ A value with units is written as a number and a unit, such as `0.4 arcsec`, `-60
 | `ncpu` | How many CPU cores to use; `-1` for all of them | `-1` |
 | `offchip_bin_slit` | How many pixels along the slit to add together after read-out; see [Off-chip slit binning](../observe/simulate.md#off-chip-slit-binning) | `1` |
 | `fit_signals` | Which signals to fit: `dn`, `photon` or `both`; see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted) | `both` |
-| `uniform_intensity` | A single line of this total intensity, in place of a synthesis file; see [A single line of known intensity](../emission/single-intensity.md) | none |
+| `uniform_intensity` | A single line of this total intensity, in place of a synthesis file; see [From a single intensity](../emission/single-intensity.md) | none |
 | `rest_wavelength` | That line's rest wavelength | `195.119 AA` |
 | `thermal_width` | That line's width, as a 1-sigma velocity | `20 km/s` |
 | `pinhole_sizes` | The diameters of pinholes in the filter, one per pinhole (SWC only); see [Pinholes](#pinholes) | none |
 | `pinhole_positions` | Where each pinhole is along the slit, as a fraction from 0 to 1 | none |
 | `pinhole_positions_spectral` | Where each pinhole is along the spectral axis, as a fraction from 0 to 1 | the middle |
-| `atmosphere_series` | A time series of atmosphere files, in place of a synthesis file; see [Time series](../observe/rasters.md) | none |
-| `synthesis_series` | A time series of synthesis files, in place of a synthesis file; see [Time series](../observe/rasters.md#from-synthesis-files) | none |
+| `atmosphere_series` | A time series of atmosphere files, in place of a synthesis file; see [Rasters and sit-and-stares](../observe/rasters.md) | none |
+| `synthesis_series` | A time series of synthesis files, in place of a synthesis file; see [Rasters and sit-and-stares](../observe/rasters.md#from-synthesis-files) | none |
 | `atmosphere` | An atmosphere file to synthesise and then observe, in place of a synthesis file; see [Run files](../run-files.md) | none |
 | `runs` | Several runs from one file, each a `name` and the settings it changes; see [Several runs in one file](../run-files.md#several-runs-in-one-file) | none |
 
-The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are described below. A time series also has a `raster` section, the observing plan, and for atmosphere files a `synthesis` section; [Time series](../observe/rasters.md) lists their settings. A run with an `atmosphere` has a `synthesis` section too, and may have a `frame` section; [Run files](../run-files.md) lists their settings.
+The sections `simulation`, `detector`, `telescope`, `filter` and `fitting` are described below. A time series also has a `raster` section, the observing plan, and for atmosphere files a `synthesis` section; [Rasters and sit-and-stares](../observe/rasters.md) lists their settings. A run with an `atmosphere` has a `synthesis` section too, and may have a `frame` section; [Run files](../run-files.md) lists their settings.
 
 ## simulation
 
@@ -146,7 +146,7 @@ Each entry of `components` takes `wavelength`, `tie_center`, `tie_width`, `ampli
 
 `pinhole_sizes` and `pinhole_positions` have one entry per pinhole, so they must be the same length. `pinhole_positions_spectral` can be left out, which puts every pinhole in the middle of the spectral window; if given, it needs an entry per pinhole too. `simulation.enable_pinholes` switches the pinholes on. They model defects in SWC's filter, which let through visible light and unattenuated EUV. They are for filter engineering rather than for science runs.
 
-## atmosphere and synthesis { data-routes="mhd" }
+## atmosphere and synthesis { data-routes="mhd dem" }
 
 `atmosphere` names the [atmosphere file](../files/atmosphere.md) to synthesise. The `synthesis:` section takes the options of `synthesise-spectra`, with underscores in place of the dashes: `lines`, `abundance`, `continuum`, `integration_axis`, `position`, `rotation`, `projection`, `curvature`, `no_wrap`, `crop_x`, `crop_y`, `crop_z`, `downsample`, `vel_res`, `vel_lim`, `precision`, `mass_per_electron`, `hdf5_dbase_root`, `n_workers` and `goft_temperature_chunk`. An option that takes two values, such as `crop_z`, takes a list, and an option that is on or off, such as `continuum`, takes `True` or `False`. [From an MHD simulation](../emission/mhd.md#command-line-options) describes each.
 

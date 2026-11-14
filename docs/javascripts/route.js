@@ -34,6 +34,7 @@
     "files/atmosphere/": "mhd",
     "files/synthesis/": "mhd dem spectra",
     "files/frame/": "spectra mhd dem",
+    "files/band-lines/": "spectra mhd dem",
     "files/emission-measure/": "dem",
   };
 

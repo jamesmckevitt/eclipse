@@ -214,7 +214,7 @@ What the frame holds, and the spectrum of the whole band that the camera records
 
 ![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png)
 
-[Analysing a full-CCD frame](analyse/frame.md){ data-routes="mhd dem" }
+[Analysing a full-CCD frame](analyse/frame.md){ data-routes="spectra mhd dem" }
 {: .card-links }
 
 </div>

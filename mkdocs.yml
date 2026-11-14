@@ -52,6 +52,7 @@ nav:
       - Synthesis files: files/synthesis.md
       - Results files: files/results.md
       - Frame files: files/frame.md
+      - Band lines files: files/band-lines.md
   - Background:
       - The instrument model: background/instrument-model.md
       - Instrument sources: background/instrument-sources.md

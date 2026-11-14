@@ -6,7 +6,7 @@
 
 Every step the run file describes: it synthesises the atmosphere, unless the synthesis is made already, observes it, and makes the frame if the file has a `frame:` section.
 
-## eclipse synthesise { data-routes="mhd" }
+## eclipse synthesise { data-routes="mhd dem" }
 
 Synthesises the atmosphere only; see [From an MHD simulation](../emission/mhd.md).
 
@@ -28,7 +28,7 @@ Writes or inspects [atmosphere files](../files/atmosphere.md), as `eclipse-atmos
 
 Writes run files for the Concept Study Report's science cases, as `eclipse-science-cases` does. `--one-file` writes them as one run file, with a run for each line.
 
-## synthesise-spectra { data-routes="mhd" }
+## synthesise-spectra { data-routes="mhd dem" }
 
 `synthesise-spectra --config job.yaml` reads the atmosphere, the `synthesis:` section and `synthesis_file` of a run file. Options given on the command line override the file's.
 

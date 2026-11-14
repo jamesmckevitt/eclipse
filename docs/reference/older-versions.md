@@ -66,7 +66,7 @@ To move over, write each snapshot as an [atmosphere file](../files/atmosphere.md
 
 ## Dynamic mode
 
-Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Simulating a time series](../observe/rasters.md).
+Dynamic mode synthesises a raster over a time series of MURaM snapshots in `synthesise-spectra`, with the slit width and exposure fixed at synthesis. It still runs, with a warning, until a future release removes it. A time series of atmosphere files is now observed by the instrument run instead, as described in [Rasters and sit-and-stares](../observe/rasters.md).
 
 ```bash
 synthesise-spectra \
@@ -87,7 +87,7 @@ synthesise-spectra \
 
 The instrument run on the synthesis file must have exactly one slit width, the one used in the synthesis, and exactly one exposure time, equal to `--slit-rest-time`.
 
-To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Time series](../observe/rasters.md).
+To move a dynamic-mode run over, write each snapshot as an atmosphere file with its time, as in the [Bifrost example](../emission/mhd.md#a-bifrost-quiet-sun), and give the files as `atmosphere_series`; see [Rasters and sit-and-stares](../observe/rasters.md).
 
 ## Renamed options
 

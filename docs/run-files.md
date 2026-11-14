@@ -39,7 +39,7 @@ The `synthesis:` section takes the options of [`synthesise-spectra`](emission/mh
 
 A run file can name an `emission_measure`, a [DEM or VDEM](emission/dem.md), in place of the `atmosphere`. Its `synthesis:` section then also takes `electron_density` and `pressure`, and does not take the options that describe an atmosphere: `integration_axis`, the crops, `downsample` and `mass_per_electron`.
 
-A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `uniform_intensity` or a [time series](observe/rasters.md), as before.
+A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `uniform_intensity` or a [time series](observe/rasters.md).
 
 ## The commands
 
@@ -54,7 +54,7 @@ A run file without `atmosphere:` observes what it names, a `synthesis_file`, a `
 
 The first four take `--set` and `--only`, below, and `--debug`, which opens an IPython debugger where an error happens. `eclipse --help` and `eclipse run --help` list the options.
 
-The synthesis is written to `synthesis_file`, if the run file gives one, or to `run/input/<run file name>.h5`. The results are written to `run/result/<run file name>.h5`, as before.
+The synthesis is written to `synthesis_file`, if the run file gives one, or to `run/input/<run file name>.h5`. The results are written to `run/result/<run file name>.h5`.
 
 ## Sweeping a setting
 
@@ -98,7 +98,7 @@ A setting given as a list of values is still [swept](observe/simulate.md#the-run
 
 `eclipse science-cases --one-file` writes the science cases as one run file, with a run for each line.
 
-## Reusing the synthesis { data-routes="mhd" }
+## Reusing the synthesis { data-routes="mhd dem" }
 
 A synthesis can take hours, so a run reuses the one it made before if the atmosphere file and the `synthesis:` section are the same. The atmosphere file counts as the same if its path, its size and the time it was last changed are. A run made with another version of ECLIPSE synthesises again.
 

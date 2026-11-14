@@ -61,7 +61,7 @@ eclipse frame slit_core.yaml
 
 This does three things:
 
-1. It works out the contribution function of every CHIANTI line from 169 to 213.5 Angstrom, and keeps them in `run/input/band_lines.h5`. The whole band takes a few hours on 32 cores, and is only worked out once. Later frames read the file back.
+1. It works out the contribution function of every CHIANTI line from 169 to 213.5 Angstrom, and keeps them in a [band lines file](../files/band-lines.md), `run/input/band_lines.h5`. The whole band takes a few hours on 32 cores, and is only worked out once. Later frames read the file back.
 2. It synthesises the band's spectrum, with the continuum, in the part of the image under the slit, into the synthesis file `run/input/slit_core_band.h5`.
 3. It makes the frame from that file, and writes it to `run/result/slit_core_frame.h5`.
 
