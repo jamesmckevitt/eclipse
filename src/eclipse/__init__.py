@@ -29,6 +29,7 @@ from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, 
                              read_synthesis, read_synthesis_products, write_line_cubes,
                              write_synthesis)
 from .results_file import convert_results_pickle
+from .emission_measure import EmissionMeasure, read_emission_measure, write_emission_measure
 from .band import (BandLines, IonLines, band_contribution_functions, band_spectra,
                    read_band_lines, write_band_lines)
 from .readout import FocalPlane_SWC, ReadoutSequence
@@ -80,6 +81,9 @@ __all__ = [
     "read_synthesis",
     "write_synthesis",
     "convert_results_pickle",
+    "EmissionMeasure",
+    "read_emission_measure",
+    "write_emission_measure",
     "BandLines",
     "IonLines",
     "band_contribution_functions",

@@ -27,6 +27,8 @@ simulation:
 
 The `synthesis:` section takes the options of [`synthesise-spectra`](synthesis.md), with underscores in place of dashes, such as `lines`, `crop_z` or `position`. The [configuration reference](configuration.md) lists the other settings.
 
+A run file can name an `emission_measure`, a [DEM or VDEM](dem-synthesis.md), in place of the `atmosphere`, with `electron_density` or `pressure` in its `synthesis:` section.
+
 ## The commands
 
 | Command | What it does |

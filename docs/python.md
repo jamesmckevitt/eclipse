@@ -153,6 +153,6 @@ They can only be switched on from Python, not in a run file run with `eclipse ru
 | To | Use | See |
 | --- | --- | --- |
 | Write and read atmosphere files | `Atmosphere`, `write_atmosphere`, `read_atmosphere` | [From an MHD simulation](synthesis.md#atmosphere-files), [Files](files.md#atmosphere-files) |
-| Synthesise lines from a DEM or VDEM | `compute_goft_fiasco`, `interpolate_g_on_dem`, `synthesise_spectra` | [From a DEM or VDEM](dem-synthesis.md) |
+| Synthesise lines from a DEM or VDEM | `EmissionMeasure`, `write_emission_measure`, `eclipse.synthesise` | [From a DEM or VDEM](dem-synthesis.md) |
 | Write and read synthesis files | `Synthesis`, `SpectralLine`, `write_synthesis`, `load_synthesis`, `read_synthesis`, `read_synthesis_products` | [Spectra from another code](other-codes.md), [Files](files.md#synthesis-files) |
 | Analyse the results | `load_instrument_response_results`, `summary_table`, `get_results_for_combination`, `analyse_fit_statistics`, `create_sunpy_maps_from_combo` | [Analysing the results](analysis.md) |

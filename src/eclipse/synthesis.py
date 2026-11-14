@@ -12,13 +12,18 @@ import astropy.constants as const
 from tqdm import tqdm
 import psutil
 import dill
+import h5py
 from ndcube import NDCube
 from astropy.wcs import WCS
 from .utils import (angle_to_distance, element_data, require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
-from .synthesis_file import _pixel_edges, _to_length, write_line_cubes
-from .band import BAND_STEP, band_lines_for, band_spectra, band_wavelengths
+from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, write_line_cubes,
+                             write_synthesis)
+from .emission_measure import (EmissionMeasure, is_emission_measure_file,
+                               read_emission_measure, read_emission_measure_layout)
+from .band import (BAND_STEP, BandLines, IonLines, band_lines_for, band_spectra,
+                   band_wavelengths, same_temperatures)
 from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
 from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
                         continuum_windows)
@@ -1149,14 +1154,21 @@ def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
     if not counted.any():
         return None
 
+    return _points_just_past(np.min(logN_cube, where=counted, initial=np.inf),
+                             np.max(logN_cube, where=counted, initial=-np.inf))
+
+
+def _points_just_past(lowest: float, highest: float) -> Tuple[int, int]:
+    """
+    :func:`_density_point` indices just past the densities `lowest` and
+    `highest`, as log10 n_e.
+    """
     step = (_LOGN_MAX - _LOGN_MIN) / (_N_N - 1)
     # Positions of the lowest and highest densities, in steps from the
     # default grid's first point. Rounded so that a density on a point up to
     # floating-point error counts as on it.
-    lowest, highest = (
-        round((float(extreme) - _LOGN_MIN) / step, 9) for extreme in (
-            np.min(logN_cube, where=counted, initial=np.inf),
-            np.max(logN_cube, where=counted, initial=-np.inf)))
+    lowest, highest = (round((float(extreme) - _LOGN_MIN) / step, 9)
+                       for extreme in (lowest, highest))
     # Take the points just past them, so a mean density a rounding error
     # beyond the lowest or highest is still on the grid.
     return int(np.ceil(lowest)) - 1, int(np.floor(highest)) + 1
@@ -1695,7 +1707,7 @@ def create_line_cube(
 
     # The WCS below has a single linear CDELT, so the wavelength grid must be
     # uniform. Checked here as well as in synthesise_spectra because this is
-    # a public entry point, called directly by the DEM and VDEM routes.
+    # a public entry point.
     wl_step = require_uniform_grid(line_data["wl_grid"].to(u.cm), "wl_grid")
 
     # Get spatial coordinate information from the reference cube,
@@ -1789,6 +1801,322 @@ def create_line_cube(
             "spatial_reference": spatial_cube.meta if hasattr(spatial_cube, 'meta') else None
         }
     )
+
+def continuum_tables(windows: Dict[str, u.Quantity], logT_grid: np.ndarray,
+                     logN_grid: np.ndarray, abundance: str, n_workers: int = 0,
+                     hdf5_dbase_root=None) -> Dict[str, dict]:
+    """
+    Continuum per unit emission measure over each of a set of windows.
+
+    Parameters
+    ----------
+    windows : dict
+        Wavelengths of each continuum entry by name, as from `continuum_windows`.
+    logT_grid, logN_grid, abundance, n_workers, hdf5_dbase_root
+        As for `compute_continuum_fiasco`, which is called once for all the
+        windows.
+
+    Returns
+    -------
+    dict
+        For each entry, its `"wl_grid"`, and `"free"` and `"two_photon"` on it.
+    """
+    wavelength = np.concatenate([grid.to_value(u.cm) for grid in windows.values()]) * u.cm
+    free, two_photon = compute_continuum_fiasco(
+        wavelength, logT_grid, logN_grid, abundance=abundance, n_workers=n_workers,
+        hdf5_dbase_root=hdf5_dbase_root)
+    tables, start = {}, 0
+    for name, grid in windows.items():
+        stop = start + grid.size
+        tables[name] = {"wl_grid": grid, "free": free[:, start:stop],
+                        "two_photon": two_photon[:, :, start:stop]}
+        start = stop
+    return tables
+
+
+# Options that describe an atmosphere, which an emission measure does not have.
+ATMOSPHERE_ONLY_OPTIONS = ("integration_axis", "crop_x", "crop_y", "crop_z", "downsample",
+                           "mass_per_electron")
+
+
+def check_source_options(args) -> None:
+    """
+    Reject options that do not go with what is synthesised from.
+
+    An emission measure file takes none of the options that describe an
+    atmosphere, and needs an electron density or a pressure if it holds no
+    density. An atmosphere takes neither a density nor a pressure. Raises
+    ValueError.
+    """
+    if not getattr(args, "emission_measure", None):
+        for name in ("electron_density", "pressure"):
+            if getattr(args, name, None) is not None:
+                raise ValueError(f"--{name.replace('_', '-')} is for an emission measure file, "
+                                 f"given with --emission-measure. An atmosphere has its own "
+                                 f"densities.")
+        return
+    # The parser notes each of these options that appeared on the command
+    # line, so one typed at its default value is caught too.
+    noted = getattr(args, "given_options", ())
+    given = [name for name in ATMOSPHERE_ONLY_OPTIONS + MURAM_LAYOUT_OPTIONS + DYNAMIC_OPTIONS
+             if name in noted]
+    given += [name for name in ("position", "rotation", "projection")
+              if getattr(args, name, None) is not None]
+    given += [name for name in ("curvature", "no_wrap") if getattr(args, name, False)]
+    if args.slit_rest_time is not None:
+        given.insert(0, "slit_rest_time")
+    if args.atmosphere:
+        given.insert(0, "atmosphere")
+    if given:
+        flags = ", ".join("--" + name.replace("_", "-") for name in given)
+        raise ValueError(f"--emission-measure is the emission measure of an image already, "
+                         f"so {flags} would not be used. Those options describe an "
+                         f"atmosphere.")
+    if Path(args.output_name).suffix.lower() in (".pkl", ".pickle", ".dill"):
+        raise ValueError(f"An emission measure is synthesised into a synthesis file, which "
+                         f"is HDF5: give --output-name a name ending in .h5, not "
+                         f"{args.output_name}.")
+    if args.electron_density is not None and args.pressure is not None:
+        raise ValueError("Give --electron-density or --pressure, not both.")
+    for name, unit, example in (("electron_density", u.cm**-3, "1e9 cm-3"),
+                                ("pressure", u.K / u.cm**3, "1e15 K cm-3")):
+        value = getattr(args, name)
+        if value is None:
+            continue
+        try:
+            value = u.Quantity(value).to_value(unit)
+        except (TypeError, ValueError, u.UnitConversionError):
+            value = None
+        if value is None or np.ndim(value) != 0 or not (np.isfinite(value) and value > 0):
+            raise ValueError(f"--{name.replace('_', '-')} takes one value above zero, such as "
+                             f"'{example}', got {getattr(args, name)!r}.")
+    # A file of another kind is reported when it is read.
+    if (args.electron_density is None and args.pressure is None
+            and is_emission_measure_file(args.emission_measure)):
+        with h5py.File(args.emission_measure, "r") as f:
+            if "electron_density" not in f:
+                raise ValueError(
+                    "An emission measure has no densities, so the contribution functions "
+                    "need an electron density to be taken at: give --electron-density, such "
+                    "as '1e9 cm-3', or --pressure, such as '1e15 K cm-3', or put an "
+                    "electron_density in the file.")
+
+
+def emission_measure_density(measure: EmissionMeasure, electron_density=None,
+                             pressure=None) -> np.ndarray:
+    """
+    Electron density at each temperature of each pixel of an emission measure, in cm^-3.
+
+    Parameters
+    ----------
+    measure : EmissionMeasure
+        DEM or VDEM.
+    electron_density : u.Quantity, optional
+        One density for all the plasma, in place of any in `measure`.
+    pressure : u.Quantity, optional
+        Electron pressure n_e T, such as in K cm^-3, which gives each
+        temperature the density at that pressure, in place of any in
+        `measure`.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (ny, nx, n_temperatures).
+
+    Raises
+    ------
+    ValueError
+        If neither a density nor a pressure is given and `measure` has no
+        density.
+    """
+    shape = (*measure.shape, measure.temperature.size)
+    if pressure is not None:
+        density = (u.Quantity(pressure) / measure.temperature).to_value(u.cm**-3)
+    elif electron_density is not None:
+        density = u.Quantity(electron_density).to_value(u.cm**-3)
+    elif measure.electron_density is not None:
+        density = measure.electron_density.to_value(u.cm**-3)
+        if density.ndim == 2:
+            density = density[:, :, np.newaxis]
+    else:
+        raise ValueError("The emission measure has no electron density: give one, or a "
+                         "pressure.")
+    return np.broadcast_to(np.asarray(density, dtype=float), shape)
+
+
+def _line_as_band(info: dict, logT_grid: np.ndarray, logN_grid: np.ndarray,
+                  abundance: str) -> BandLines:
+    """One line from `compute_goft_fiasco`, as the lines of a band, for `band_spectra`."""
+    rest = info["wl0"].to_value(u.Angstrom)
+    ion = IonLines(name=f"{info['atom']} {info['ion']}", atom=int(info["atom"]),
+                   stage=int(info["ion"]), mass=element_data(int(info["atom"]))[1],
+                   wavelength=np.array([rest]), observed=np.array([True]),
+                   temperatures=np.arange(logT_grid.size),
+                   g=np.asarray(info["g_tn"], dtype=float)[np.newaxis])
+    return BandLines(band=(rest, rest), logT_grid=logT_grid, logN_grid=logN_grid,
+                     abundance=abundance, hdf5_dbase_root=str(info["hdf5_dbase_root"]),
+                     ions=[ion])
+
+
+def _synthesise_emission_measure(args, precision: type, band, band_grid, band_step) -> None:
+    """
+    Synthesise spectra from an emission measure file: a DEM or a VDEM.
+
+    A DEM's emission is at rest, and a VDEM's is Doppler shifted by its own
+    velocity bins. Each line is a Gaussian of its thermal width, integrated
+    over the wavelength bins, as for a band (:func:`eclipse.band.band_spectra`).
+    A line's wavelengths are those of `--vel-res` and `--vel-lim`.
+    """
+    check_source_options(args)
+    intensity_unit = u.erg / u.s / u.cm**2 / u.sr / u.cm
+    print("Synthesis from an emission measure file")
+    print(f"  Emission measure: {args.emission_measure}")
+    # Only the columns asked for are read, as a VDEM of a whole image is large.
+    layout = read_emission_measure_layout(args.emission_measure)
+    columns = None
+    if getattr(args, "image_x", None):
+        columns = image_columns_between(_to_length(layout["x_edges"]), args.image_x)
+        print(f"  Image columns {columns.start} to {columns.stop - 1} of "
+              f"{layout['x_edges'].size - 1} kept")
+    measure = read_emission_measure(args.emission_measure, columns=columns)
+    logT_grid = np.log10(measure.temperature.to_value(u.K))
+    em_tv = measure.emission_measure.to_value(u.cm**-5).astype(float)
+    if measure.velocity is None:
+        # A DEM: all of the emission is in one bin, at rest.
+        em_tv, velocity = em_tv[..., np.newaxis], np.zeros(1) * u.cm / u.s
+    else:
+        velocity = measure.velocity.to(u.cm / u.s)
+    density = emission_measure_density(measure, args.electron_density, args.pressure)
+    em_t = em_tv.sum(axis=3)
+    print(f"  {em_t.shape[0]} by {em_t.shape[1]} pixels, {logT_grid.size} temperatures from "
+          f"log T {logT_grid[0]:.2f} to {logT_grid[-1]:.2f}, "
+          f"{'a DEM' if measure.velocity is None else f'a VDEM with {velocity.size} velocities'}")
+
+    # The default density grid's points, as far as just past the densities
+    # of the plasma.
+    logN_min, logN_max, nN = _LOGN_MIN, _LOGN_MAX, _N_N
+    occupied = em_t > 0
+    if occupied.any():
+        first, last = _points_just_past(np.log10(density[occupied].min()),
+                                        np.log10(density[occupied].max()))
+        logN_min, logN_max, nN = _density_point(first), _density_point(last), last - first + 1
+    logN_grid = np.linspace(logN_min, logN_max, nN)
+
+    dbase_root = getattr(args, "hdf5_dbase_root", None)
+    lines, goft = {}, {}
+    if band is None:
+        print(f"Computing contribution functions via fiasco at 10^{logN_min:.1f} to "
+              f"10^{logN_max:.1f} cm^-3")
+        goft, logT_goft, _ = compute_goft_fiasco(
+            args.lines, abundance=args.abundance, precision=np.float64,
+            logT_min=float(logT_grid[0]), logT_max=float(logT_grid[-1]), nT=logT_grid.size,
+            logN_min=logN_min, logN_max=logN_max, nN=nN, n_workers=args.n_workers,
+            hdf5_dbase_root=dbase_root,
+            temperature_chunk=getattr(args, "goft_temperature_chunk", None))
+        if not same_temperatures(logT_goft, logT_grid):
+            raise ValueError("The contribution functions came back on other temperatures "
+                             "than the emission measure's.")
+        dbase_root = next(iter(goft.values()))["hdf5_dbase_root"] if goft else None
+        window = velocity_grid(u.Quantity(args.vel_res), u.Quantity(args.vel_lim),
+                               ("--vel-res", "--vel-lim"))
+        fastest = np.abs(velocity.value[em_tv.any(axis=(0, 1, 2))]).max(initial=0.0)
+        if fastest > window.value[-1]:
+            warnings.warn(
+                f"The emission measure has plasma at up to {fastest / 1e5:.4g} km/s, beyond "
+                f"the {window.value[-1] / 1e5:.4g} km/s each line's wavelengths reach, so "
+                f"part of its light is left out. Set --vel-lim wide enough for it.",
+                UserWarning, stacklevel=2)
+        for name, info in goft.items():
+            grid = (window * info["wl0"] / const.c + info["wl0"]).cgs
+            # One line needs no workers.
+            spectra = band_spectra(_line_as_band(info, logT_grid, logN_grid, args.abundance),
+                                   em_tv, density, velocity, grid, n_workers=1)
+            lines[name] = {"si": spectra.to_value(intensity_unit), "wl_grid": grid,
+                           "wl0": info["wl0"], "atom": info["atom"], "ion": info["ion"]}
+    else:
+        # A band's lines are worked out on the densities of the whole image,
+        # so one file of them serves every strip of it. The file is named
+        # for its temperatures, which are the emission measure's own.
+        whole = density
+        if (args.electron_density is None and args.pressure is None
+                and layout["electron_density"] is not None):
+            whole = layout["electron_density"].to_value(u.cm**-3)
+        first, last = _points_just_past(np.log10(whole.min()), np.log10(whole.max()))
+        name = f"band_lines_logT_{logT_grid[0]:.2f}-{logT_grid[-1]:.2f}_{logT_grid.size}.h5"
+        band_lines = band_lines_for(
+            args.band_lines or Path(args.output_dir) / name, band, logT_grid, logN_grid,
+            abundance=args.abundance, n_workers=args.n_workers, hdf5_dbase_root=dbase_root,
+            wider_grid=band_density_grid(_density_point(first), _density_point(last)))
+        dbase_root = band_lines.hdf5_dbase_root
+        print(f"Calculating the spectrum of the band's {band_lines.n_lines} lines at "
+              f"{band_grid.size} wavelengths")
+        grid = (band_grid * u.Angstrom).to(u.cm)
+        spectra = band_spectra(band_lines, em_tv, density, velocity, grid,
+                               n_workers=args.n_workers)
+        lines[f"band_{band_grid[0]:.4f}-{band_grid[-1]:.4f}"] = {
+            "si": spectra.to_value(intensity_unit), "wl_grid": grid,
+            "wl0": grid[grid.size // 2], "atom": None, "ion": None}
+    print(f"  CHIANTI database: {dbase_root}")
+
+    if getattr(args, "continuum", False):
+        if band is not None:
+            # On the band's own wavelengths.
+            windows = {f"{CONTINUUM_PREFIX}_{band_grid[0]:.4f}-{band_grid[-1]:.4f}":
+                       (band_grid * u.Angstrom).to(u.cm)}
+        else:
+            windows = continuum_windows([info["wl_grid"] for info in lines.values()])
+        print(f"Computing the continuum over {len(windows)} window"
+              f"{'' if len(windows) == 1 else 's'} via fiasco")
+        tables = continuum_tables(windows, logT_grid, logN_grid, args.abundance,
+                                  args.n_workers, dbase_root)
+        for name, table in tables.items():
+            grid = table["wl_grid"]
+            lines[name] = {"si": continuum_spectra(em_t, density, logN_grid, table["free"],
+                                                   table["two_photon"]),
+                           "wl_grid": grid, "wl0": grid[grid.size // 2],
+                           "atom": None, "ion": None}
+
+    held = {name: SpectralLine(
+        intensity=info["si"].astype(precision) * intensity_unit, wavelength=info["wl_grid"],
+        rest_wavelength=info["wl0"],
+        **{key: int(info[key]) for key in ("atom", "ion") if info.get(key) is not None})
+        for name, info in lines.items()}
+    synthesis = Synthesis(lines=held, x_edges=measure.x_edges, y_edges=measure.y_edges,
+                          source=measure.source, time=measure.time)
+    products = {
+        # Per unit log T, as the synthesis of an atmosphere keeps it.
+        "dem_map": em_t / _temperature_bins(logT_grid)[0],
+        "em_tv": em_tv,
+        "electron_density": density,
+        "logT_grid": logT_grid,
+        "vel_grid": velocity,
+        "logN_grid": logN_grid,
+        "goft": goft,
+        "dynamic_mode": {"enabled": False},
+        "config": {
+            "precision": precision.__name__,
+            "emission_measure": args.emission_measure,
+            "electron_density": args.electron_density,
+            "pressure": args.pressure,
+            "vel_res": u.Quantity(args.vel_res),
+            "vel_lim": u.Quantity(args.vel_lim),
+            "intensity_unit": str(intensity_unit),
+            "lines": args.lines or [],
+            "band": None if band is None else list(band),
+            "band_step": None if band is None else band_step,
+            "image_x": getattr(args, "image_x", None),
+            "abundance": args.abundance,
+            "continuum": bool(getattr(args, "continuum", False)),
+            "hdf5_dbase_root": dbase_root,
+            "velocity_convention": VELOCITY_CONVENTION,
+        },
+    }
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / args.output_name
+    write_synthesis(synthesis, output_file, products=products)
+    print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.2f} MB)")
+    print("Synthesis complete!")
 
 
 def image_x_edges(spatial_cube: NDCube, integration_axis: str) -> u.Quantity:
@@ -1915,6 +2243,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="The ECLIPSE atmosphere file (HDF5) to synthesise "
                             f"from; see {ATMOSPHERE_DOCS} for how to write one. "
                             "Required, except in dynamic mode.")
+    files.add_argument("--emission-measure", type=str, default=None,
+                       help="In place of --atmosphere, an emission measure file (HDF5) to "
+                            "synthesise from: a DEM, or with velocities a VDEM.")
     # MURaM file options of the deprecated static route, hidden from the
     # help so old command lines still run, with a warning, until the route
     # is removed.
@@ -1950,6 +2281,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Also synthesise the free-free, free-bound and two-photon "
                             "continuum under the lines' windows, as entries of its own "
                             "beside the lines")
+    lines.add_argument("--electron-density", type=str, default=None,
+                       help="With --emission-measure, the electron density to take the "
+                            "contribution functions at, such as '1e9 cm-3', in place of "
+                            "any in the file")
+    lines.add_argument("--pressure", type=str, default=None,
+                       help="With --emission-measure, the electron pressure, such as "
+                            "'1e15 K cm-3', which gives each temperature its own electron "
+                            "density, in place of --electron-density")
     lines.add_argument("--hdf5-dbase-root", type=str, default=None,
                        help="CHIANTI HDF5 database to use, overriding the one "
                             "in ~/.fiasco/fiascorc. Use this to run against a "
@@ -1957,6 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "default for other work.")
     lines.add_argument("--mass-per-electron", "--mean-mol-wt",
                        dest="mass_per_electron", type=float, default=None,
+                       action=_NotedOption,
                        help="Mass of the plasma per free electron, in atomic mass "
                             "units, which turns a mass density into an electron "
                             "density. By default it is worked out from --abundance "
@@ -1994,13 +2334,13 @@ def build_parser() -> argparse.ArgumentParser:
     view.add_argument("--no-wrap", action="store_true",
                       help="With --position, end lines of sight at the box's sides, rather "
                            "than taking the box to repeat sideways")
-    view.add_argument("--crop-x", nargs=2, type=str, default=None,
+    view.add_argument("--crop-x", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in x direction: x_min x_max (e.g. '-50 Mm' '50 Mm')")
-    view.add_argument("--crop-y", nargs=2, type=str, default=None,
+    view.add_argument("--crop-y", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in y direction: y_min y_max (e.g. '-50 Mm' '50 Mm')")
-    view.add_argument("--crop-z", nargs=2, type=str, default=None,
+    view.add_argument("--crop-z", nargs=2, type=str, default=None, action=_NotedOption,
                       help="Crop in z direction: z_min z_max (e.g. '0 Mm' '20 Mm')")
-    view.add_argument("--downsample", type=int, default=1,
+    view.add_argument("--downsample", type=int, default=1, action=_NotedOption,
                       help="Downsampling factor (1 = no downsampling)")
     view.add_argument("--image-x", nargs=2, type=str, default=None, metavar=("FROM", "TO"),
                       help="Synthesise only the part of the image between two positions "
@@ -2355,6 +2695,11 @@ def main(args=None) -> None:
     # Check the velocity grid now, before the atmosphere is read or anything
     # computed.
     velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
+    if getattr(args, "emission_measure", None):
+        _synthesise_emission_measure(args, precision, band, band_grid,
+                                     None if band is None else band_step)
+        return
+    check_source_options(args)
 
     intensity_unit = u.erg/u.s/u.cm**2/u.sr/u.cm
 
@@ -2766,16 +3111,8 @@ def main(args=None) -> None:
                                          for info in goft.values()])
         print(f"Computing the continuum over {len(windows)} window"
               f"{'' if len(windows) == 1 else 's'} via fiasco ({print_mem()})")
-        wavelength = np.concatenate([grid.to_value(u.cm) for grid in windows.values()]) * u.cm
-        free, two_photon = compute_continuum_fiasco(
-            wavelength, logT_grid, logN_grid, abundance=args.abundance,
-            n_workers=args.n_workers, hdf5_dbase_root=goft_dbase_root)
-        continuum, start = {}, 0
-        for name, grid in windows.items():
-            stop = start + grid.size
-            continuum[name] = {"wl_grid": grid, "free": free[:, start:stop],
-                               "two_photon": two_photon[:, :, start:stop]}
-            start = stop
+        continuum = continuum_tables(windows, logT_grid, logN_grid, args.abundance,
+                                     args.n_workers, goft_dbase_root)
 
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
     goft, dem_map, em_tv, electron_density = synthesise_cubes(

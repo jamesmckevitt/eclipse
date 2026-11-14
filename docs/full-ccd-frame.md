@@ -31,6 +31,8 @@ eclipse frame slit_core.yaml
 
 This synthesises the band under the slit, then writes the frame to `run/result/slit_core_frame.h5`. The band's lines take a few hours to work out the first time, and are kept in `run/input/band_lines.h5` for later frames.
 
+With an `emission_measure` in place of the `atmosphere`, the frame is made from a [DEM or VDEM](dem-synthesis.md#a-full-ccd-frame) the same way.
+
 ## From your own spectra
 
 With a `synthesis_file` in place of the `atmosphere`, the frame holds that file's spectra as they are, from [another code](other-codes.md) or from ECLIPSE:
