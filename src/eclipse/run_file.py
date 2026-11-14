@@ -600,10 +600,6 @@ def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
     section.update(band=[str(edge) for edge in band],
                    continuum=bool(frame.get("continuum", False)),
                    image_x=[f"{centre - reach!r} arcsec", f"{centre + reach!r} arcsec"])
-    # Seen from a position on the disk, the slit's columns are not columns of
-    # the box, so the whole image is synthesised.
-    if section.get("position"):
-        del section["image_x"]
     for key in ("band_step", "band_lines"):
         if key in frame:
             section[key] = str(frame[key])

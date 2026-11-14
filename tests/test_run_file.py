@@ -505,7 +505,7 @@ def test_a_runs_setting_replaces_the_list(tmp_path, monkeypatch, atmosphere, fak
     assert [output.name for output in outputs] == ["job_fe11"]
 
 
-def test_a_frame_seen_from_a_position_synthesises_the_whole_image(tmp_path, monkeypatch,
+def test_a_frame_seen_from_a_position_synthesises_the_strip_under_the_slit(tmp_path, monkeypatch,
                                                                   atmosphere, fake_synthesis):
     from eclipse import full_frame
 
@@ -518,4 +518,6 @@ def test_a_frame_seen_from_a_position_synthesises_the_whole_image(tmp_path, monk
            "frame": {"slit_position": "0 arcsec"}}
     eclipse.make_frame(job, name="job")
     args = fake_synthesis[-1]
-    assert args.position == ["600 arcsec", "0 arcsec"] and args.image_x is None
+    assert args.position == ["600 arcsec", "0 arcsec"]
+    assert [u.Quantity(edge).to_value(u.arcsec) for edge in args.image_x] == pytest.approx(
+        [-0.1, 0.1])

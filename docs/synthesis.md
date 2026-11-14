@@ -210,7 +210,7 @@ synthesise-spectra --help
 - `--crop-y`: The range of y to keep, for example `--crop-y "-50 Mm" "50 Mm"`
 - `--crop-z`: The range of z to keep, for example `--crop-z "0 Mm" "20 Mm"`
 - Leave out a crop option to keep the whole range along that axis
-- `--image-x`: Synthesise only the image between two positions across the slit, for example `--image-x "-1 Mm" "1 Mm"`. Not with `--position`
+- `--image-x`: Synthesise only the image between two positions across the slit, for example `--image-x "-1 Mm" "1 Mm"`
 
 **Processing:**
 

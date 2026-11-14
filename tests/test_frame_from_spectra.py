@@ -400,10 +400,17 @@ def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_pa
     assert np.allclose(rate, whole.rate["left"], rtol=1e-9, atol=0)
 
 
-def test_a_strip_of_the_image_is_refused_with_a_position(monkeypatch):
-    """Seen from a position on the disk, the box's columns are not the image's."""
-    monkeypatch.setattr(sys, "argv", [
-        "synthesise-spectra", "--atmosphere", "box.h5", "--lines", "Fe12_195.1190",
-        "--position", "600 arcsec", "0 arcsec", "--image-x", "-1 Mm", "1 Mm"])
-    with pytest.raises(ValueError, match="--image-x keeps columns of the box"):
-        synthesis.main()
+def test_a_strip_of_a_view_from_a_position_holds_the_whole_images_columns(tmp_path):
+    """Seen from a position, the image is cut once it is made, so the strip is the whole
+    image's columns, as for a view from above."""
+    words = ("--position", "300 arcsec", "100 arcsec")
+    whole = read_synthesis(_synthesise(tmp_path, "whole.h5", *BAND, *words))
+    edges = whole.x_edges.to_value(u.Mm)
+    limits = (f"{edges[1] + 0.01} Mm", f"{edges[4] - 0.01} Mm")
+    strip = read_synthesis(_synthesise(tmp_path, "strip.h5", *BAND, *words, "--image-x",
+                                       *limits))
+    assert np.allclose(strip.x_edges.to_value(u.Mm), edges[1:5], rtol=0, atol=1e-9)
+    (name,) = whole.lines
+    full, part = whole.lines[name].intensity.value, strip.lines[name].intensity.value
+    assert full[:, 1:4].any()
+    assert np.allclose(part, full[:, 1:4], rtol=1e-12, atol=0)

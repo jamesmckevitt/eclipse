@@ -2376,10 +2376,6 @@ def main(args=None) -> None:
                              f"as '600 arcsec'; got {args.position}.")
         if not args.atmosphere:
             raise ValueError("--position needs an atmosphere file, given with --atmosphere.")
-        if getattr(args, "image_x", None):
-            raise ValueError("--image-x keeps columns of the box, which with --position are "
-                             "not columns of the image. Leave it out to synthesise the whole "
-                             "image.")
         if "integration_axis" in getattr(args, "given_options", ()) or view != "z":
             raise ValueError("--position sets the line of sight itself, so --integration-axis "
                              "cannot be given with it.")
@@ -2702,15 +2698,19 @@ def main(args=None) -> None:
         np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
 
     # Only a strip of the image, if asked for. The densities above are the
-    # whole image's, so one file of a band's lines serves every strip.
-    image_columns = None
+    # whole image's, so one file of a band's lines serves every strip. Seen
+    # along an axis, the strip's cells are cut out of the box. Seen from a
+    # position, the box's columns are not the image's, so the image is cut
+    # once it is made, before the band's spectrum.
+    image_columns = columns = None
     if getattr(args, "image_x", None):
         columns = image_columns_between(image_x_edges(reference_cube, view), args.image_x)
-        image_columns = (columns.start, _image_pixels(temperature.shape, view)[1][1])
-        temperature, ne_values, vel_data = (
-            image_strip(cube, view, columns) for cube in (temperature, ne_values, vel_data))
-        print(f"  Image columns {columns.start} to {columns.stop - 1} of "
-              f"{image_columns[1]} kept")
+        n_columns = image_x_edges(reference_cube, view).size - 1
+        image_columns = (columns.start, n_columns)
+        if sky is None:
+            temperature, ne_values, vel_data = (
+                image_strip(cube, view, columns) for cube in (temperature, ne_values, vel_data))
+        print(f"  Image columns {columns.start} to {columns.stop - 1} of {n_columns} kept")
 
     band_lines = None
     if band is None:
@@ -2781,6 +2781,11 @@ def main(args=None) -> None:
     goft, dem_map, em_tv, electron_density = synthesise_cubes(
         temperature, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
         vel_grid, view, precision, continuum=continuum, sky=sky, return_density=True)
+    if sky is not None and columns is not None:
+        dem_map, em_tv, electron_density = (
+            cube[:, columns] for cube in (dem_map, em_tv, electron_density))
+        for info in goft.values():
+            info["si"] = info["si"][:, columns]
 
     band_name = None
     if band is not None:
