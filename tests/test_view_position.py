@@ -306,7 +306,7 @@ def _synthesise(tmp_path, monkeypatch, position, flow, extra=()):
     monkeypatch.setattr(sys, "argv", [
         "synthesise-spectra", "--atmosphere", str(path), "--lines", "Fe12_195.1190",
         "--output-dir", str(tmp_path), "--output-name", "seen.h5",
-        "--position", *position, *extra])
+        "--position", *position, "--keep-vdem", *extra])
     monkeypatch.setattr(synthesis, "compute_goft_fiasco", _flat_goft)
     synthesis.main()
     return tmp_path / "seen.h5"
