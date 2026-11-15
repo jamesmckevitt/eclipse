@@ -11,7 +11,7 @@ import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, effective_n_jobs
 from tqdm import tqdm
 from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
@@ -1261,6 +1261,12 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     return flat | too_wide | np.any(below | above, axis=-1)
 
 
+# Pieces of spectra per fitting worker in `fit_cube_gauss`. With several
+# pieces per worker, the workers that finish first wait only a small part of
+# a pass for the others.
+FIT_PIECES_PER_WORKER = 8
+
+
 @overload
 def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                    fit_config: FitConfig | None = None, *,
@@ -1393,11 +1399,23 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     min_pixels = _n_free_params(fit_config)
 
-    def _rows():
-        """Each row along the slit, with its uncertainties and the pixels kept."""
-        for i in range(n_slit):
-            yield (signal_cube.data[i], None if uncertainty is None else uncertainty[i],
-                   kept[i])
+    # The spectra are fitted in pieces: one per row on one CPU, and otherwise
+    # FIT_PIECES_PER_WORKER per worker, so that the last pieces of a pass
+    # leave the workers idle for only a small part of it.
+    n_spectra = n_slit * n_scan
+    n_pieces = max(1, n_slit if effective_n_jobs(n_jobs) == 1
+                   else min(n_spectra, FIT_PIECES_PER_WORKER * effective_n_jobs(n_jobs)))
+    piece_edges = np.linspace(0, n_spectra, n_pieces + 1).astype(int)
+    spectra = signal_cube.data.reshape(n_spectra, -1)
+    flat_uncertainty = None if uncertainty is None else uncertainty.reshape(n_spectra, -1)
+    flat_kept = kept.reshape(n_spectra, -1)
+
+    def _pieces():
+        """Each piece of the spectra, with its uncertainties and the pixels kept."""
+        for first, last in zip(piece_edges[:-1], piece_edges[1:]):
+            yield (spectra[first:last],
+                   None if flat_uncertainty is None else flat_uncertainty[first:last],
+                   flat_kept[first:last])
 
     if fit_config is None or fit_config.is_single:
         # One Gaussian on a background, with its own fast fit.
@@ -1456,13 +1474,13 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 _start)
         return results, succeeded
 
-    with tqdm_joblib(tqdm(total=n_slit, desc=description, leave=False)):
+    with tqdm_joblib(tqdm(total=n_pieces, desc=description, leave=False)):
         results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block)(*row) for row in _rows()
+            delayed(_fit_block)(*piece) for piece in _pieces()
         )
 
-    data_array = np.stack([r[0] for r in results], axis=0)
-    failed = ~np.stack([r[1] for r in results], axis=0)
+    data_array = np.concatenate([r[0] for r in results]).reshape(n_slit, n_scan, n_params)
+    failed = ~np.concatenate([r[1] for r in results]).reshape(n_slit, n_scan)
     failed |= _unmeasurable(data_array, signal_cube.data, wv.value, n_components, kept)
 
     # Amplitude, centre and width of each component, then the background.
