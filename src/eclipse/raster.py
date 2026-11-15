@@ -12,6 +12,7 @@ slit position.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -19,6 +20,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
+import psutil
 from astropy.wcs import WCS
 from ndcube import NDCube
 
@@ -36,7 +38,8 @@ from .synthesis import (
     line_of_sight_velocity,
     synthesise_cubes,
 )
-from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
+from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _reaches, _same_grid,
+                             _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
 from .sampling import pixel_weights
 from .utils import (VELOCITY_CONVENTION, _fwhm_to_sigma, angle_to_distance, require_uniform_grid,
@@ -430,6 +433,34 @@ class SynthesisSeries(_Series):
         return list(self.wavelengths)
 
 
+# Largest strip of columns fetched at once, in bytes of the arrays it needs.
+STRIP_BYTES = 2**30
+# Share of the memory this process may use that the cached columns may
+# take. Past it, the columns used longest ago are dropped, and fetched again
+# if needed.
+COLUMN_CACHE_SHARE = 0.25
+
+
+def _memory_for_this_process() -> int:
+    """
+    Bytes of memory this process may use: the machine's, or the job's limit
+    if lower, shared between the MPI ranks.
+    """
+    from .utils import _get_mpi_info
+
+    memory = psutil.virtual_memory().total
+    # A job's memory limit, from its control group, version 2 or 1.
+    for limit in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            value = Path(limit).read_text().strip()
+        except OSError:
+            continue
+        if value.isdigit():
+            memory = min(memory, int(value))
+            break
+    return memory // max(1, _get_mpi_info()[2])
+
+
 def _runs(indices: Sequence[int]) -> List[Tuple[int, int]]:
     """Runs of consecutive values in ascending `indices`, as (first, last + 1) pairs."""
     runs: List[Tuple[int, int]] = []
@@ -445,9 +476,13 @@ class _SlitRaster:
     """
     Spectra a slit sees over a plan, from the columns of a snapshot series.
 
-    Each column of each snapshot is fetched when an exposure first needs it
-    and then cached, so a sweep over exposure times or slit widths reuses
-    most of the work. Subclasses define how a strip of columns is fetched.
+    Before each raster, the columns it needs are fetched, a strip of
+    neighbouring columns at a time, and then cached, so a sweep over exposure
+    times or slit widths reuses most of the work. After each exposure the
+    columns used longest ago are dropped until the cache is within
+    `cache_bytes`.
+    Subclasses define how a strip of columns is fetched and how big a column
+    is.
     """
 
     # What the x grid spans, named in the error when a slit reaches beyond it.
@@ -455,11 +490,46 @@ class _SlitRaster:
 
     def __init__(self, series: _Series):
         self.series = series
-        self._columns: Dict[Tuple[int, int], Dict[str, np.ndarray]] = {}
+        self._columns: "OrderedDict[Tuple[int, int], Dict[str, np.ndarray]]" = OrderedDict()
+        self._cached_bytes = 0
+        self.cache_bytes = int(COLUMN_CACHE_SHARE * _memory_for_this_process())
 
     def _load_strip(self, snapshot: int, first: int, last: int) -> None:
         """Put columns `first` to `last` - 1 of one snapshot into the cache."""
         raise NotImplementedError
+
+    def _column_bytes(self) -> int:
+        """Bytes the arrays of one column take while it is fetched."""
+        raise NotImplementedError
+
+    def _keep(self, snapshot: int, column: int, spectra: Dict[str, np.ndarray]) -> None:
+        """Cache one column's spectra, as arrays of their own so each can be let go alone."""
+        spectra = {name: np.ascontiguousarray(si) for name, si in spectra.items()}
+        previous = self._columns.pop((snapshot, column), None)
+        if previous is not None:
+            self._cached_bytes -= sum(si.nbytes for si in previous.values())
+        self._columns[(snapshot, column)] = spectra
+        self._cached_bytes += sum(si.nbytes for si in spectra.values())
+
+    def _trim(self) -> None:
+        """Drop the columns used longest ago until the cache is within `cache_bytes`."""
+        while self._cached_bytes > self.cache_bytes and len(self._columns) > 1:
+            _, spectra = self._columns.popitem(last=False)
+            self._cached_bytes -= sum(si.nbytes for si in spectra.values())
+
+    def _fetch(self, needed: Dict[int, set], until_full: bool = False) -> None:
+        """
+        Fetch the columns in `needed`, by snapshot, that are not cached, a
+        strip at a time. With `until_full`, stop once the cache is full.
+        """
+        width = max(1, int(STRIP_BYTES // max(1, self._column_bytes())))
+        for snapshot in sorted(needed):
+            missing = sorted(c for c in needed[snapshot] if (snapshot, c) not in self._columns)
+            for run_first, run_last in _runs(missing):
+                for first in range(run_first, run_last, width):
+                    if until_full and self._cached_bytes >= self.cache_bytes:
+                        return
+                    self._load_strip(snapshot, first, min(first + width, run_last))
 
     # ------------------------------------------------------------------
     # Geometry
@@ -531,7 +601,10 @@ class _SlitRaster:
         """Spectra of one column of one snapshot, `(rows, wavelength)` per line."""
         if (snapshot, column) not in self._columns:
             self._load_strip(snapshot, column, column + 1)
-        return self._columns[(snapshot, column)]
+        self._columns.move_to_end((snapshot, column))
+        spectra = self._columns[(snapshot, column)]
+        self._trim()
+        return spectra
 
     def columns_seen(self, position: u.Quantity, slit_width: u.Quantity,
                      across_slit: Optional[u.Quantity] = None,
@@ -572,17 +645,17 @@ class _SlitRaster:
         first, last, fractions = self.columns_seen(exposure.position, slit_width,
                                                    across_slit, extend)
         spectra: Dict[str, np.ndarray] = {}
-        for snapshot, weight in self.series.coverage(exposure.start, exposure.end):
-            missing = [c for c in range(first, last) if (snapshot, c) not in self._columns]
-            # Fetch each run of missing neighbouring columns as one strip, so
-            # a wider slit only fetches the columns beside those a narrower
-            # slit already fetched.
-            for run_first, run_last in _runs(missing):
-                self._load_strip(snapshot, run_first, run_last)
+        coverage = self.series.coverage(exposure.start, exposure.end)
+        # Columns a wider slit needs beside those a narrower one fetched, or
+        # any dropped from the cache since, are fetched now.
+        self._fetch({snapshot: set(range(first, last)) for snapshot, _ in coverage})
+        for snapshot, weight in coverage:
             for column, fraction in zip(range(first, last), fractions):
+                self._columns.move_to_end((snapshot, column))
                 for name, si in self._columns[(snapshot, column)].items():
                     contribution = weight * fraction * si
                     spectra[name] = contribution if name not in spectra else spectra[name] + contribution
+        self._trim()
         return spectra
 
     def _observe(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
@@ -604,6 +677,15 @@ class _SlitRaster:
         # so the image has the same orientation; each keeps its own times.
         if plan.direction == "decreasing":
             exposures = exposures[::-1]
+        # Fetch the columns the raster needs first, in strips of neighbouring
+        # columns, rather than a few at a time as each exposure comes, while
+        # the cache has room; any others are fetched as their exposures come.
+        needed: Dict[int, set] = {}
+        for exposure in exposures:
+            first, last, _ = self.columns_seen(exposure.position, slit_width, across_slit, extend)
+            for snapshot, _ in self.series.coverage(exposure.start, exposure.end):
+                needed.setdefault(snapshot, set()).update(range(first, last))
+        self._fetch(needed, until_full=True)
         collected = [self.exposure_spectra(exposure, slit_width, across_slit, extend)
                      for exposure in exposures]
         positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
@@ -638,11 +720,21 @@ class RasterSynthesiser(_SlitRaster):
     ----------
     series : AtmosphereSeries
     settings : SynthesisSettings
+    reference_line : str, optional
+        Line whose window is observed. Once the contribution functions give
+        each line's wavelengths, only the lines reaching that window are
+        synthesised, and the line cubes are of those lines alone. Default
+        None, every line.
     """
 
-    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings):
+    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings,
+                 reference_line: Optional[str] = None):
         super().__init__(series)
         self.settings = settings
+        if reference_line is not None and reference_line not in settings.lines:
+            raise ValueError(f"The reference line {reference_line!r} is not among the "
+                             f"synthesised lines {list(settings.lines)}.")
+        self.reference_line = reference_line
         self.vel_grid = settings.velocity_grid()
         # The contribution functions are computed for the first strip's
         # densities, and extended when a later strip needs others.
@@ -675,6 +767,14 @@ class RasterSynthesiser(_SlitRaster):
     def _load_strip(self, snapshot: int, first: int, last: int) -> None:
         self._synthesise_strip(snapshot, first, last)
 
+    def _column_bytes(self) -> int:
+        # The temperature, density and velocity read, and the log cubes, of
+        # each cell of the column, and its spectra in float64.
+        rows = self.series.y_edges.size - 1
+        cells = (self.series.z_edges.size - 1) * rows
+        spectra = 8 * rows * self.vel_grid.size * len(self.lines)
+        return 5 * cells * np.dtype(self.settings.precision).itemsize + spectra
+
     def _cover_densities(self, temperature: np.ndarray, electron_density: np.ndarray) -> None:
         """Compute the contribution functions at the missing densities these cells need."""
         settings = self.settings
@@ -691,16 +791,17 @@ class RasterSynthesiser(_SlitRaster):
             missing = ([(needed[0], have[0] - 1)] if needed[0] < have[0] else []) + (
                 [(have[1] + 1, needed[1])] if needed[1] > have[1] else [])
         for first, last in missing:
-            print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines "
+            names = self.lines
+            print(f"Computing contribution functions via fiasco for {len(names)} lines "
                   f"at 10^{_density_point(first):.1f} to 10^{_density_point(last):.1f} cm^-3")
             goft, self.logT_grid, logN_grid = compute_goft_fiasco(
-                list(settings.lines), abundance=settings.abundance,
+                names, abundance=settings.abundance,
                 logN_min=_density_point(first), logN_max=_density_point(last),
                 nN=last - first + 1, precision=settings.precision,
                 n_workers=settings.n_workers, hdf5_dbase_root=settings.hdf5_dbase_root,
                 temperature_chunk=settings.goft_temperature_chunk)
             if self.goft is None:
-                self.goft, self.logN_grid = goft, logN_grid
+                self.goft, self.logN_grid = self._reaching_the_window(goft), logN_grid
                 self.goft_dbase_root = next(iter(goft.values()))["hdf5_dbase_root"]
                 print(f"  CHIANTI database: {self.goft_dbase_root}")
                 self._density_points = (first, last)
@@ -715,6 +816,22 @@ class RasterSynthesiser(_SlitRaster):
             self.logN_grid = np.concatenate(parts if below else parts[::-1])
             self._density_points = (min(first, self._density_points[0]),
                                     max(last, self._density_points[1]))
+
+    @property
+    def lines(self) -> List[str]:
+        """Lines synthesised: all of them, or those reaching the reference line's window."""
+        return list(self.settings.lines if self.goft is None else self.goft)
+
+    def _reaching_the_window(self, goft: Dict[str, dict]) -> Dict[str, dict]:
+        """The lines of `goft` whose wavelengths reach the reference line's window, if any."""
+        if self.reference_line is None:
+            return goft
+
+        def wavelengths(info):
+            return (self.vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+
+        window = wavelengths(goft[self.reference_line])
+        return {name: info for name, info in goft.items() if _reaches(wavelengths(info), window)}
 
     def _synthesise_strip(self, snapshot: int, first: int, last: int) -> None:
         """Synthesise columns `first` to `last` - 1 of one snapshot into the cache."""
@@ -746,7 +863,7 @@ class RasterSynthesiser(_SlitRaster):
         self._cover_densities(temperature, electron_density)
         lines, _, _ = synthesise_cubes(
             temperature, electron_density, velocity, dh_cm, self.goft,
-            self.logT_grid, self.logN_grid, self.vel_grid, "z", precision)
+            self.logT_grid, self.logN_grid, self.vel_grid, "z", precision, keep_em_tv=False)
         self.strips_synthesised += 1
 
         if self._rows is None:
@@ -754,8 +871,8 @@ class RasterSynthesiser(_SlitRaster):
             self._row_pitch = strip.spacing("y")
             self._wl_grids = {name: info["wl_grid"] for name, info in lines.items()}
         for offset in range(last - first):
-            self._columns[(snapshot, first + offset)] = {
-                name: info["si"][:, offset, :] for name, info in lines.items()}
+            self._keep(snapshot, first + offset,
+                       {name: info["si"][:, offset, :] for name, info in lines.items()})
 
     def line_cubes(self, plan: RasterPlan, slit_width: u.Quantity,
                    expos: u.Quantity, repeat: Optional[int] = None, *,
@@ -776,7 +893,7 @@ class RasterSynthesiser(_SlitRaster):
         row_pitch = self._row_pitch.to(u.Mm)
         n_columns, n_rows = positions.size, rows.size
         cubes = {}
-        for name in self.settings.lines:
+        for name in self.lines:
             data = np.stack([c[name] for c in collected], axis=1)
             wl_grid = self._wl_grids[name].to(u.cm)
             # Reference pixel at the middle of each spatial axis, with the grid
@@ -808,6 +925,10 @@ class RasterSynthesiser(_SlitRaster):
         if reference_line not in self.settings.lines:
             raise ValueError(f"The reference line {reference_line!r} is not among the "
                              f"synthesised lines {list(self.settings.lines)}.")
+        if self.reference_line not in (None, reference_line):
+            raise ValueError(f"This raster synthesises the lines reaching the window of "
+                             f"{self.reference_line}, so it cannot sum them onto "
+                             f"{reference_line}'s.")
         return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat,
                                               across_slit=across_slit, extend=extend),
                               reference_line)
@@ -817,9 +938,9 @@ class SynthesisRaster(_SlitRaster):
     """
     Reads the spectra a slit sees over a plan from a series of synthesis files.
 
-    Each column of each snapshot is read when an exposure first needs it and
-    cached in ECLIPSE's radiance unit, so a sweep over exposure times or
-    slit widths reads each column once.
+    The columns are read before each raster, a strip at a time, and cached
+    in ECLIPSE's radiance unit, so a sweep over exposure times or slit
+    widths reads each column once while the cache has room.
 
     Parameters
     ----------
@@ -840,8 +961,13 @@ class SynthesisRaster(_SlitRaster):
                     for name in self.series.lines}
         self.strips_read += 1
         for offset in range(last - first):
-            self._columns[(snapshot, first + offset)] = {
-                name: values[:, offset, :] for name, values in radiance.items()}
+            self._keep(snapshot, first + offset,
+                       {name: values[:, offset, :] for name, values in radiance.items()})
+
+    def _column_bytes(self) -> int:
+        # Each line's radiance along the slit, in float64.
+        rows = self.series.y_edges.size - 1
+        return 8 * rows * sum(grid.size for grid in self.series.wavelengths.values())
 
     def synthesis(self, plan: RasterPlan, slit_width: u.Quantity, expos: u.Quantity,
                   repeat: Optional[int] = None, *, across_slit: Optional[u.Quantity] = None,

@@ -22,8 +22,8 @@ import numpy as np
 
 from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
                          _text_attribute, _write_dataset)
-from .utils import (_bin_edges, _unpickle, angle_to_distance, onto_wavelength_bins, require_uniform_grid,
-                    view_axis_and_side, view_name)
+from .utils import (_bin_edges, _unpickle, angle_to_distance, checked_quantity,
+                    onto_wavelength_bins, require_uniform_grid, view_axis_and_side, view_name)
 
 __all__ = [
     "FORMAT_NAME",
@@ -86,26 +86,6 @@ def to_radiance(intensity: u.Quantity, wavelength: u.Quantity) -> u.Quantity:
     return flux.to(RADIANCE_UNIT * u.sr, equivalencies=u.spectral_density(wavelength)) / u.sr
 
 
-def _checked(value, name: str, ndim: int, kinds: Optional[tuple] = None) -> u.Quantity:
-    """
-    Validate and return `value`.
-
-    It must be a finite Quantity with `ndim` axes and, if `kinds` is given,
-    a unit of one of those physical types.
-    """
-    if not isinstance(value, u.Quantity):
-        raise TypeError(f"{name} must be an astropy Quantity, got "
-                        f"{type(value).__name__}.")
-    if kinds is not None and value.unit.physical_type not in kinds:
-        raise u.UnitConversionError(
-            f"{name} must be in a unit of {' or '.join(kinds)}, got {value.unit}.")
-    if value.ndim != ndim:
-        raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}.")
-    if not np.all(np.isfinite(value.value)):
-        raise ValueError(f"{name} contains NaN or infinite values.")
-    return value
-
-
 def _to_length(value: u.Quantity) -> u.Quantity:
     """Position or size on the Sun in Mm, from a length or an angle seen from 1 AU."""
     if value.unit.physical_type == "angle":
@@ -135,7 +115,7 @@ def _check_wavelength(wavelength) -> u.Quantity:
     It must be a finite, increasing 1D Quantity of lengths with at least 2
     values.
     """
-    wavelength = _checked(wavelength, "wavelength", ndim=1, kinds=("length",))
+    wavelength = checked_quantity(wavelength, "wavelength", (u.AA,), ndim=1)
     if wavelength.size < 2:
         raise ValueError(f"wavelength must have at least 2 values, got {wavelength.size}.")
     if np.any(np.diff(wavelength.value) <= 0):
@@ -182,11 +162,11 @@ class SpectralLine:
         if self.atom is not None and self.ion is not None and self.ion > self.atom + 1:
             raise ValueError(f"ion {self.ion} is beyond the last stage of atom {self.atom}, "
                              f"{self.atom + 1}.")
-        rest = _checked(self.rest_wavelength, "rest_wavelength", ndim=0, kinds=("length",))
+        rest = checked_quantity(self.rest_wavelength, "rest_wavelength", (u.AA,), ndim=0)
         if not wavelength[0] <= rest <= wavelength[-1]:
             raise ValueError(f"rest_wavelength {rest} is outside the wavelengths, "
                              f"which run from {wavelength[0]} to {wavelength[-1]}.")
-        intensity = _checked(self.intensity, "intensity", ndim=3)
+        intensity = checked_quantity(self.intensity, "intensity", ndim=3)
         # A trial conversion rejects any unit that is not a spectral radiance.
         to_radiance(1.0 * intensity.unit, wavelength[0])
         if intensity.shape[-1] != wavelength.size:
@@ -237,7 +217,7 @@ class Synthesis:
 
     def __post_init__(self):
         if self.time is not None:
-            _checked(self.time, "time", ndim=0, kinds=("time",))
+            checked_quantity(self.time, "time", (u.s,), ndim=0)
         if self.integration_axis is not None:
             try:
                 view = view_name(self.integration_axis)
@@ -249,7 +229,7 @@ class Synthesis:
             object.__setattr__(self, "integration_axis", view)
         for axis in AXES:
             name = EDGES[axis]
-            edges = _checked(getattr(self, name), name, ndim=1, kinds=("length", "angle"))
+            edges = checked_quantity(getattr(self, name), name, (u.Mm, u.arcsec), ndim=1)
             # The instrument grid uses one pixel size per axis, so the edges
             # must be evenly spaced.
             require_uniform_grid(edges.value, name)
@@ -477,30 +457,36 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
     with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
-        edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
-        if columns is not None:
-            nx = edges["x_edges"].size - 1
-            first = 0 if columns.start is None else columns.start
-            last = nx if columns.stop is None else columns.stop
-            if columns.step not in (None, 1) or not 0 <= first < last <= nx:
-                raise ValueError(f"columns must be a slice of neighbouring pixels among the "
-                                 f"{nx} along x, got {columns}.")
-            edges["x_edges"] = edges["x_edges"][first:last + 1]
-            columns = slice(first, last)
-        group, names = _lines_reaching(f, path, reference_line)
-        lines = {}
-        for name in names:
-            entry = group[name]
-            fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
-                      "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
-                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
-                      **_identity(entry)}
-            try:
-                lines[name] = SpectralLine(**fields)
-            except (TypeError, ValueError) as error:
-                raise type(error)(f"{path}, line {name!r}: {error}") from None
-        source, integration_axis = _source(f), _integration_axis(f)
-        time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
+        return _synthesis_in(f, path, reference_line, columns)
+
+
+def _synthesis_in(f, path: Path, reference_line: Optional[str],
+                  columns: Optional[slice]) -> Synthesis:
+    """`read_synthesis`, from a synthesis file already open and checked."""
+    edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
+    if columns is not None:
+        nx = edges["x_edges"].size - 1
+        first = 0 if columns.start is None else columns.start
+        last = nx if columns.stop is None else columns.stop
+        if columns.step not in (None, 1) or not 0 <= first < last <= nx:
+            raise ValueError(f"columns must be a slice of neighbouring pixels among the "
+                             f"{nx} along x, got {columns}.")
+        edges["x_edges"] = edges["x_edges"][first:last + 1]
+        columns = slice(first, last)
+    group, names = _lines_reaching(f, path, reference_line)
+    lines = {}
+    for name in names:
+        entry = group[name]
+        fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
+                  "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
+                  "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
+                  **_identity(entry)}
+        try:
+            lines[name] = SpectralLine(**fields)
+        except (TypeError, ValueError) as error:
+            raise type(error)(f"{path}, line {name!r}: {error}") from None
+    source, integration_axis = _source(f), _integration_axis(f)
+    time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
     try:
         return Synthesis(lines=lines, source=source, time=time,
                          integration_axis=integration_axis, **edges)
@@ -527,8 +513,8 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
         layout["time"] = None
         if "time" in f:
             try:
-                layout["time"] = _checked(_read_dataset(f, "time", units=UNITS), "time",
-                                          ndim=0, kinds=("time",))
+                layout["time"] = checked_quantity(
+                    _read_dataset(f, "time", units=UNITS), "time", (u.s,), ndim=0)
             except (TypeError, ValueError) as error:
                 raise type(error)(f"{path}: {error}") from None
         layout["source"] = _source(f)

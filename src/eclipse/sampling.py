@@ -225,7 +225,8 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     Returns
     -------
     tuple
-        `(moved, mean, rms)`.
+        `(moved, mean, rms)`. If `carry` gives a tuple of arrays, one such
+        tuple for each, with `fill` a tuple of fills to match.
     """
     photons = np.asarray(photons, dtype=float)
     mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
@@ -239,6 +240,15 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     moved = carry(photons)
     energy = carry(photons * np.divide(scale, mean, out=np.zeros(photons.shape), where=mean > 0))
     square = carry(photons * np.divide(scale, rms, out=np.zeros(photons.shape), where=rms > 0)**2)
+    if isinstance(moved, tuple):
+        # `carry` lands the photons in several places, each with its own fill.
+        return tuple(_landed_wavelengths(*parts, scale)
+                     for parts in zip(moved, energy, square, fill))
+    return _landed_wavelengths(moved, energy, square, fill, scale)
+
+
+def _landed_wavelengths(moved, energy, square, fill, scale) -> tuple:
+    """The wavelengths of `_carry_photon_wavelengths` from what was carried."""
     empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
     tiny = np.finfo(float).tiny
     with_mean = (moved >= tiny) & (energy >= tiny)

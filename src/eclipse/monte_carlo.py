@@ -5,10 +5,12 @@ Monte Carlo simulation functions for instrument response analysis.
 from __future__ import annotations
 import dataclasses
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple
 import numpy as np
 import astropy.units as u
 from ndcube import NDCube
+from joblib import effective_n_jobs
 from tqdm import tqdm
 from .radiometric import (
     apply_exposure, sample_photon_arrivals, intensity_to_photons, add_telescope_throughput,
@@ -609,37 +611,54 @@ def monte_carlo(I_cube: NDCube, t_exp: u.Quantity, det, tel, sim, n_iter: int = 
         show_progress = (rank == 0)
         desc = "Monte-Carlo" if world_size == 1 else f"MC (rank 0/{world_size})"
 
-        for i in tqdm(range(local_n_iter), desc=desc, unit="iter", leave=False,
-                      disable=not show_progress):
-            # Simulate one run
-            (intensity_exp, photons_total, photons_throughput, photons_pixels,
-             photons_focused, photon_arrivals, electrons, electrons_stray,
-             electrons_pinholes, dn) = _simulate_once(
+        def _simulate():
+            return _simulate_once(
                 I_cube, t_exp, det, tel, sim,
                 uniform_mode=uniform_mode,
                 photon_shot_inverse_transform=photon_shot_inverse_transform,
                 dark_current_inverse_transform=dark_current_inverse_transform,
             )
 
-            # Store first iteration signals only on rank 0 (binned, to match fit shapes)
-            if i == 0 and rank == 0:
-                first_dn_signal = rebin_slit_offchip(dn, offchip_bin_slit)
-                first_photon_signal = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
+        # With fitting workers, the next iteration is simulated in a thread
+        # while this one is fitted, so the workers are not idle while the
+        # noise is drawn. The iterations are still simulated one after
+        # another, so the noise is drawn in the same order. On one CPU the
+        # fits run in this process, and nothing would be gained.
+        overlap = effective_n_jobs(sim.ncpu) > 1
+        with ThreadPoolExecutor(max_workers=1) as simulator:
+            upcoming = simulator.submit(_simulate) if overlap and local_n_iter > 0 else None
+            for i in tqdm(range(local_n_iter), desc=desc, unit="iter", leave=False,
+                          disable=not show_progress):
+                # Simulate one run
+                if upcoming is not None:
+                    simulated = upcoming.result()
+                    upcoming = simulator.submit(_simulate) if i + 1 < local_n_iter else None
+                else:
+                    simulated = _simulate()
+                # Only the photons arriving and the DN are fitted; the other
+                # stages are let go now, rather than kept through the fits.
+                photon_arrivals, dn = simulated[5], simulated[9]
+                del simulated
 
-            # Off-chip slit binning (sum already noisy pixels)
-            if do_dn:
-                dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
-                dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
-                    dn_binned, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True, uncertainty=_dn_uncertainty(dn_binned.data))
-                dn_fit_values_list.append((dn_fit_values, dn_failed))
+                # Store first iteration signals only on rank 0 (binned, to match fit shapes)
+                if i == 0 and rank == 0:
+                    first_dn_signal = rebin_slit_offchip(dn, offchip_bin_slit)
+                    first_photon_signal = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
 
-            if do_photon:
-                photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
-                photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
-                    photon_binned, n_jobs=sim.ncpu, fit_config=fit_config,
-                    return_failed=True, poisson=_weighted(fit_config))
-                photon_fit_values_list.append((photon_fit_values, photon_failed))
+                # Off-chip slit binning (sum already noisy pixels)
+                if do_dn:
+                    dn_binned = rebin_slit_offchip(dn, offchip_bin_slit)
+                    dn_fit_values, dn_fit_units, dn_failed = fit_cube_gauss(
+                        dn_binned, n_jobs=sim.ncpu, fit_config=fit_config,
+                        return_failed=True, uncertainty=_dn_uncertainty(dn_binned.data))
+                    dn_fit_values_list.append((dn_fit_values, dn_failed))
+
+                if do_photon:
+                    photon_binned = rebin_slit_offchip(photon_arrivals, offchip_bin_slit)
+                    photon_fit_values, photon_fit_units, photon_failed = fit_cube_gauss(
+                        photon_binned, n_jobs=sim.ncpu, fit_config=fit_config,
+                        return_failed=True, poisson=_weighted(fit_config))
+                    photon_fit_values_list.append((photon_fit_values, photon_failed))
 
         # --- MPI gather: collect fit arrays from all ranks on root -----------
         if world_size > 1:

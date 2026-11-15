@@ -986,3 +986,65 @@ def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_sn
     # Nothing new is needed a second time.
     synthesiser._synthesise_strip(1, 1, 2)
     assert len(calls) == 3
+
+
+def test_a_small_cache_drops_columns_and_gives_the_same_raster(tmp_path, flat_goft):
+    """Columns dropped from a full cache are fetched again, and the cubes do not change."""
+    snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
+    series = AtmosphereSeries(_series(tmp_path, snapshots))
+    plan = RasterPlan(start=0 * u.s, steps=3, repeats=1)
+    roomy = RasterSynthesiser(series, _settings())
+    tight = RasterSynthesiser(series, _settings())
+    tight.cache_bytes = 1
+    for width in (0.4 * u.arcsec, 0.2 * u.arcsec, 0.4 * u.arcsec):
+        expected = roomy.line_cubes(plan, width, 10 * u.s)[LINE].data
+        got = tight.line_cubes(plan, width, 10 * u.s)[LINE].data
+        assert np.array_equal(got, expected)
+    # One column is kept at the least; the roomy cache kept every one.
+    assert len(tight._columns) == 1 and len(roomy._columns) > 1
+    assert tight.strips_synthesised > roomy.strips_synthesised
+
+
+def test_a_raster_fetches_its_columns_before_its_exposures(tmp_path, flat_goft, monkeypatch):
+    """Each snapshot's columns for the whole raster come in one strip, not one per exposure."""
+    snapshots = [_snapshot(t) for t in (0.0, 30.0)]
+    series = AtmosphereSeries(_series(tmp_path, snapshots))
+    synthesiser = RasterSynthesiser(series, _settings())
+    strips = []
+    synthesise_strip = synthesiser._synthesise_strip
+
+    def recording(snapshot, first, last):
+        strips.append((snapshot, first, last))
+        synthesise_strip(snapshot, first, last)
+
+    monkeypatch.setattr(synthesiser, "_synthesise_strip", recording)
+    synthesiser.line_cubes(RasterPlan(start=0 * u.s, steps=3, repeats=1), 0.4 * u.arcsec,
+                           10 * u.s)
+    # One strip per snapshot, the first covering all three slit positions.
+    assert len(strips) == len({snapshot for snapshot, _, _ in strips})
+    assert strips[0][0] == 0 and strips[0][2] - strips[0][1] >= 3
+
+
+def _goft_at_named_wavelengths(lines, logN_min=8.0, logN_max=10.0, nN=21, **kwargs):
+    """As `_flat_goft`, with each line at the wavelength in its name."""
+    goft, logT_grid, logN_grid = _flat_goft(lines, logN_min, logN_max, nN)
+    for name, info in goft.items():
+        info["wl0"] = (float(name.split("_")[1]) * u.Angstrom).to(u.cm)
+    return goft, logT_grid, logN_grid
+
+
+def test_a_raster_synthesises_only_the_lines_reaching_the_window(tmp_path, monkeypatch):
+    """Lines outside the reference window are left out, and the summed cube is unchanged."""
+    monkeypatch.setattr(raster_module, "compute_goft_fiasco", _goft_at_named_wavelengths)
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(30.0)]))
+    lines = (LINE, "Fe12_195.1790", "Fe09_171.0730")
+    plan = RasterPlan(start=0 * u.s, steps=2, repeats=1)
+    every = RasterSynthesiser(series, SynthesisSettings(lines=lines))
+    reaching = RasterSynthesiser(series, SynthesisSettings(lines=lines), reference_line=LINE)
+    expected = every.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, LINE)
+    got = reaching.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, LINE)
+    assert np.array_equal(got.data, expected.data)
+    assert reaching.lines == [LINE, "Fe12_195.1790"] and every.lines == list(lines)
+    assert set(reaching.line_cubes(plan, 0.4 * u.arcsec, 10 * u.s)) == {LINE, "Fe12_195.1790"}
+    with pytest.raises(ValueError, match="cannot sum"):
+        reaching.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, "Fe12_195.1790")

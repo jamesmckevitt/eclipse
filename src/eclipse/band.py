@@ -24,7 +24,8 @@ import numpy as np
 import astropy.constants as const
 import astropy.units as u
 
-from .continuum import bins_to_cover
+from .continuum import _beyond_the_rates, bins_to_cover
+from .utils import proton_electron_ratio_once
 
 FORMAT_NAME = "eclipse-band-lines"
 FORMAT_VERSION = 1
@@ -177,11 +178,6 @@ def _unfed_levels_dropped(dropped: Dict[int, int]):
         yield
 
 
-def _beyond_the_rates(error: ValueError) -> bool:
-    """Whether fiasco stopped at a temperature beyond the rates CHIANTI tabulates."""
-    return "interpolation range" in str(error)
-
-
 def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):
     """
     fiasco's contribution function of an ion, leaving out levels nothing populates if needed.
@@ -212,8 +208,10 @@ def _ion_band_lines(args):
     fiasco_logger = logging.getLogger("fiasco")
     previous = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
+    _, _, temperature_K, *_ = args
     try:
-        return _band_lines_of_ion(*args)
+        with proton_electron_ratio_once(temperature_K):
+            return _band_lines_of_ion(*args)
     finally:
         fiasco_logger.setLevel(previous)
 
