@@ -1720,7 +1720,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
     wl0 : u.Quantity
         Rest wavelength the velocity is measured from.
     n_jobs : int, optional
-        Not used; kept so existing calls still work.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's centre.
@@ -1756,7 +1756,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
         Fitted values from `fit_cube_gauss`, with the parameters on the last
         axis.
     n_jobs : int, optional
-        Not used; kept so existing calls still work.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's width.
@@ -1778,7 +1778,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
         get_val = np.vectorize(lambda q: q.value)
         get_unit = widths_raw.flat[0].unit  # Get unit from first element
         widths = u.Quantity(get_val(widths_raw), get_unit)
-    
+
     return widths
 
 

@@ -393,3 +393,8 @@ def test_each_element_is_read_from_mendeleev_once(monkeypatch):
 def test_a_gaussian_named_in_capitals_and_a_blur_across_the_slit_are_accepted():
     Telescope_EUVST(psf_type="Gaussian", psf_across_slit=1 * u.arcsec)
     Telescope_EIS(psf_across_slit=0.5 * u.arcmin)
+
+
+def test_an_unknown_instrument_is_refused():
+    with pytest.raises(ValueError, match="instrument must be SWC or EIS"):
+        Simulation(instrument="SW", slit_width=0.4 * u.arcsec)

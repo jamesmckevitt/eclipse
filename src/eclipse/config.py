@@ -1709,6 +1709,8 @@ class Simulation:
         elif inst == "SWC":
             if slit_val not in allowed_slits["SWC"]:
                 raise ValueError("For SWC, slit_width must be 0.2, 0.4, 0.8, or 1.6 arcsec.")
+        else:
+            raise ValueError(f"instrument must be SWC or EIS, got {self.instrument!r}.")
 
         if self.psf_boundary not in ("replicate", "zero"):
             raise ValueError(
