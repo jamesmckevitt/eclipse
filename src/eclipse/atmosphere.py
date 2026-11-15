@@ -727,7 +727,7 @@ def _read_dataset(f: h5py.Group, name: str,
         index = [slice(None)] * dataset.ndim
         index[axis] = columns
         values = dataset[tuple(index)]
-    return u.Quantity(values, unit)
+    return values << unit
 
 
 def _dataset_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS) -> u.Unit:

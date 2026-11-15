@@ -66,3 +66,26 @@ def test_plasma_beyond_the_velocity_grid_is_warned_of_once_with_the_whole_fracti
     faster = [str(w.message) for w in by_rows if "faster" in str(w.message)]
     assert faster == [str(w.message) for w in whole if "faster" in str(w.message)]
 
+
+
+@pytest.mark.parametrize("view", ["z", "-x"])
+def test_g_by_rows_is_g_from_the_whole_box(view, monkeypatch):
+    whole, _, _, _ = _synthesise(view, keep_em_tv=True)
+    monkeypatch.setattr(synthesis, "EM_BLOCK_BYTES", 1)
+    by_rows, _, _, _ = _synthesise(view, keep_em_tv=False)
+    for name in whole:
+        assert by_rows[name]["g"].dtype == whole[name]["g"].dtype
+        assert np.array_equal(by_rows[name]["g"], whole[name]["g"])
+
+
+def test_the_logs_a_slab_at_a_time_are_the_logs_of_the_whole_box():
+    temperature, density, _ = _box()
+    mass = (density / u.cm**3 * 1.2 * u.u).to(u.g / u.cm**3).astype(np.float32)
+    per_electron = 1.2 * u.u
+    whole = synthesis._log_cubes(temperature.astype(np.float32),
+                                 (mass / per_electron).to_value(u.cm**-3), np.float32)
+    by_slab = synthesis._log_cubes_by_slab(
+        temperature.astype(np.float32), mass,
+        lambda part: (part / per_electron).to_value(u.cm**-3), np.float32, slab=4)
+    for expected, got in zip(whole, by_slab):
+        assert got.dtype == np.float32 and np.array_equal(got, expected)
