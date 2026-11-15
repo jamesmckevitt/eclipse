@@ -1405,14 +1405,14 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     n_spectra = n_slit * n_scan
     n_pieces = max(1, n_slit if effective_n_jobs(n_jobs) == 1
                    else min(n_spectra, FIT_PIECES_PER_WORKER * effective_n_jobs(n_jobs)))
-    bounds = np.linspace(0, n_spectra, n_pieces + 1).astype(int)
+    piece_edges = np.linspace(0, n_spectra, n_pieces + 1).astype(int)
     spectra = signal_cube.data.reshape(n_spectra, -1)
     flat_uncertainty = None if uncertainty is None else uncertainty.reshape(n_spectra, -1)
     flat_kept = kept.reshape(n_spectra, -1)
 
     def _pieces():
         """Each piece of the spectra, with its uncertainties and the pixels kept."""
-        for first, last in zip(bounds[:-1], bounds[1:]):
+        for first, last in zip(piece_edges[:-1], piece_edges[1:]):
             yield (spectra[first:last],
                    None if flat_uncertainty is None else flat_uncertainty[first:last],
                    flat_kept[first:last])
