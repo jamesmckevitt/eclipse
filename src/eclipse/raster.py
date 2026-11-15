@@ -746,7 +746,7 @@ class RasterSynthesiser(_SlitRaster):
         self._cover_densities(temperature, electron_density)
         lines, _, _ = synthesise_cubes(
             temperature, electron_density, velocity, dh_cm, self.goft,
-            self.logT_grid, self.logN_grid, self.vel_grid, "z", precision)
+            self.logT_grid, self.logN_grid, self.vel_grid, "z", precision, keep_em_tv=False)
         self.strips_synthesised += 1
 
         if self._rows is None:

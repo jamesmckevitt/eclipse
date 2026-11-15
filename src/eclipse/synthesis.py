@@ -966,6 +966,13 @@ def compute_dem(
     avg_ne : np.ndarray
         Mean electron density per T-bin [cm^-3]. Same shape as `dem_map`.
     """
+    dem, avg_ne, _ = _compute_dem(logT_cube, logN_cube, voxel_dh_cm, logT_grid,
+                                  integration_axis, sky)
+    return dem, avg_ne
+
+
+def _compute_dem(logT_cube, logN_cube, voxel_dh_cm, logT_grid, integration_axis, sky):
+    """`compute_dem`, with each cell's n_e^2 dh, which `build_em_tv` takes."""
     nT = len(logT_grid)
     axis, _ = view_axis_and_side(integration_axis)
 
@@ -1004,7 +1011,7 @@ def compute_dem(
     # leaves uninitialised memory there, which ends up in the saved G
     # diagnostic.
     avg_ne = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
-    return dem, avg_ne
+    return dem, avg_ne, w2
 
 
 def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
@@ -1082,6 +1089,26 @@ def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
     return logT_cube, logN_cube
 
 
+def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, precision: type,
+                       slab: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    `_log_cubes`, a slab of the first axis at a time, so the electron
+    density, which can be float64, is never held for the whole box.
+    `to_electron_density` turns a slab of `density` into electron density
+    in cm^-3.
+    """
+    logT_cube = np.empty(temperature.shape, dtype=precision)
+    logN_cube = np.empty(temperature.shape, dtype=precision)
+    if slab is None:
+        # Planes whose few float64 arrays fit in EM_BLOCK_BYTES.
+        slab = max(1, int(EM_BLOCK_BYTES // (4 * 8 * temperature[0].size)))
+    for first in range(0, temperature.shape[0], slab):
+        cut = slice(first, first + slab)
+        logT_cube[cut], logN_cube[cut] = _log_cubes(
+            temperature[cut], to_electron_density(density[cut]), precision)
+    return logT_cube, logN_cube
+
+
 def density_grid(
     temperature: np.ndarray,
     electron_density: np.ndarray,
@@ -1115,7 +1142,12 @@ def density_grid(
         Grid for :func:`compute_goft_fiasco`. The default grid if no cell
         has electrons at a temperature on `logT_grid`.
     """
-    points = _density_points(temperature, electron_density, logT_grid, precision)
+    return _density_grid_from_points(
+        _density_points(temperature, electron_density, logT_grid, precision))
+
+
+def _density_grid_from_points(points: Optional[Tuple[int, int]]) -> Tuple[float, float, int]:
+    """`density_grid`'s result from `_density_points`'s."""
     if points is None:
         return _LOGN_MIN, _LOGN_MAX, _N_N
     first, last = points
@@ -1147,7 +1179,13 @@ def _density_points(temperature: np.ndarray, electron_density: np.ndarray,
 
     None if no cell has electrons at a temperature on `logT_grid`.
     """
-    logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
+    return _density_points_from_logs(*_log_cubes(temperature, electron_density, precision),
+                                     logT_grid)
+
+
+def _density_points_from_logs(logT_cube: np.ndarray, logN_cube: np.ndarray,
+                              logT_grid: np.ndarray) -> Optional[Tuple[int, int]]:
+    """`_density_points` from the cells' logs, as `_log_cubes` gives them."""
     _, logT_edges = _temperature_bins(logT_grid)
     counted = ((logT_cube >= logT_edges[0]) & (logT_cube < logT_edges[-1])
                & np.isfinite(logN_cube))
@@ -1207,6 +1245,15 @@ def interpolate_g_on_dem(
     precision : type, optional
         `np.float32` (default) or `np.float64`.
     """
+    lines = _g_on_pixels(goft, avg_ne, logT_grid, logN_grid, logT_goft, precision)
+    for name, g in tqdm(lines, total=len(goft), desc="interpolating G", unit="line",
+                        leave=False):
+        goft[name]["g"] = g
+
+
+def _g_on_pixels(goft: Dict[str, dict], avg_ne: np.ndarray, logT_grid: np.ndarray,
+                 logN_grid: np.ndarray, logT_goft: np.ndarray, precision: type):
+    """Each line's name and G, one line at a time, as `interpolate_g_on_dem` stores it."""
     nT, n_rows, n_cols = len(logT_grid), *avg_ne.shape[:2]
 
     # Build query points for interpolation
@@ -1216,13 +1263,13 @@ def interpolate_g_on_dem(
                                (nT, n_rows, n_cols)).ravel()
     query_pts = np.column_stack((logNe_flat, logT_flat))
 
-    for name, info in tqdm(goft.items(), desc="interpolating G", unit="line", leave=False):
+    for name, info in goft.items():
         rgi = RegularGridInterpolator(
             (logN_grid, logT_goft), info["g_tn"],
             method="linear", bounds_error=False, fill_value=0.0
         )
         g_flat = rgi(query_pts)
-        info["g"] = g_flat.reshape(nT, n_rows, n_cols).transpose(1, 2, 0).astype(precision)
+        yield name, g_flat.reshape(nT, n_rows, n_cols).transpose(1, 2, 0).astype(precision)
 
 
 ##############################################################################
@@ -1347,11 +1394,42 @@ def build_em_tv(
     axis, _ = view_axis_and_side(integration_axis)
     print("  Building 4-D emission-measure cube along "
           + (f"{axis}-axis..." if sky is None else "the slanted line of sight..."))
+    em_tv, beyond, seen = _em_tv(logT_cube, vel_cube, logT_grid, vel_grid, ne_sq_dh,
+                                 integration_axis, sky)
+    _warn_beyond_velocity_grid(beyond, seen, vel_grid)
+    return em_tv
 
-    _, logT_edges = _temperature_bins(logT_grid)
+
+def _velocity_edges(vel_grid) -> Tuple[np.ndarray, np.ndarray]:
+    """Velocity bin centres and edges in cm/s; a plain array is taken to be in cm/s."""
     v_centres = (vel_grid.to_value(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
                  else np.asarray(vel_grid, dtype=float))
-    v_edges = velocity_centers_to_edges(v_centres)
+    return v_centres, velocity_centers_to_edges(v_centres)
+
+
+def _warn_beyond_velocity_grid(beyond: float, seen: float, vel_grid) -> None:
+    """Warn that plasma faster than the velocity grid is missing from the spectra."""
+    # Plasma faster than the velocity grid emits outside the synthesised
+    # wavelengths, so it is missing from the spectra but kept in the DEM.
+    # Warn, since the default grid misses the fastest flows of a flare.
+    if beyond > 0:
+        _, v_edges = _velocity_edges(vel_grid)
+        warnings.warn(
+            f"{100 * beyond / seen:.3g} per cent of the emission measure is "
+            f"from plasma faster than the velocity grid reaches, "
+            f"{v_edges[0] / 1e5:.1f} to {v_edges[-1] / 1e5:.1f} km/s, and emits beyond the "
+            f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
+            f"it.", UserWarning, stacklevel=3)
+
+
+def _em_tv(logT_cube, vel_cube, logT_grid, vel_grid, ne_sq_dh, integration_axis,
+           sky) -> Tuple[np.ndarray, float, float]:
+    """
+    Emission measure cube as `build_em_tv` gives it, with the emission
+    measure beyond the velocity grid and the total, for its warning.
+    """
+    _, logT_edges = _temperature_bins(logT_grid)
+    v_centres, v_edges = _velocity_edges(vel_grid)
 
     # Split each cell between the two temperature and two velocity bins
     # either side of it, in proportion to how close it is to each. Put wholly
@@ -1396,20 +1474,10 @@ def build_em_tv(
                 in_bin = in_bin_T * nv + np.minimum(lower_v_c + step_v, nv - 1)
                 np.add.at(em_tv, in_bin.ravel(), (in_pixel * of_T * of_v).ravel())
 
-    # Plasma faster than the velocity grid emits outside the synthesised
-    # wavelengths, so it is missing from the spectra but kept in the DEM.
-    # Warn, since the default grid misses the fastest flows of a flare.
-    if beyond > 0:
-        warnings.warn(
-            f"{100 * beyond / seen:.3g} per cent of the emission measure is "
-            f"from plasma faster than the velocity grid reaches, "
-            f"{v_edges[0] / 1e5:.1f} to {v_edges[-1] / 1e5:.1f} km/s, and emits beyond the "
-            f"synthesised wavelengths, so it is not in the spectra. Widen --vel-lim to keep "
-            f"it.", UserWarning, stacklevel=2)
     if sky is not None:
         em_tv = sky.to_image(em_tv.reshape(n_rows * n_cols, nT * nv))
         n_rows, n_cols = sky.image_shape
-    return em_tv.reshape(n_rows, n_cols, nT, nv)
+    return em_tv.reshape(n_rows, n_cols, nT, nv), beyond, seen
 
 
 def synthesise_spectra(
@@ -1440,48 +1508,130 @@ def synthesise_spectra(
     logT_grid : np.ndarray
         Temperature bin centres, as log10(T / K).
     """
-    kb = const.k_B.cgs.value
-    c_cm_s = const.c.cgs.value
-    # The Doppler shifts below are in cm/s. A grid in km/s taken as cm/s
+    vel_grid = _spectral_velocity_grid(vel_grid)
+    for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
+        data["wl_grid"] = (vel_grid * data["wl0"] / const.c + data["wl0"]).cgs
+        data["si"] = _line_spectra(em_tv, data["g"], _line_profiles(data, vel_grid, logT_grid))
+
+
+def _spectral_velocity_grid(vel_grid) -> u.Quantity:
+    """Velocity grid in cm/s, checked to be even; a plain array is taken to be in cm/s."""
+    # The Doppler shifts are in cm/s. A grid in km/s taken as cm/s
     # would shift every line by a factor of 1e5 too little.
     vel_grid = (vel_grid.to(u.cm / u.s) if isinstance(vel_grid, u.Quantity)
                 else np.asarray(vel_grid, dtype=float) * (u.cm / u.s))
-
-    # The wavelength grid below is the velocity grid mapped through
+    # The wavelength grid is the velocity grid mapped through
     # lambda_0 (1 + v/c), and create_line_cube sets CDELT from the first step
     # alone, so an uneven velocity grid would give a wrong wavelength axis.
     require_uniform_grid(vel_grid, "vel_grid")
+    return vel_grid
 
-    for line, data in tqdm(goft.items(), desc="spectra", unit="line", leave=False):
-        wl0 = data["wl0"].cgs.value  # cm
-        
-        # Create wavelength grid for this line
+
+def _line_profiles(data: dict, vel_grid: u.Quantity, logT_grid: np.ndarray) -> np.ndarray:
+    """
+    Normalised Gaussian of each temperature and velocity bin on the line's
+    wavelengths `data["wl_grid"]`, shape (temperatures, velocities,
+    wavelengths), in 1/cm.
+    """
+    kb = const.k_B.cgs.value
+    c_cm_s = const.c.cgs.value
+    wl0 = data["wl0"].cgs.value  # cm
+    wl_grid = data["wl_grid"].cgs.value  # (n_lambda,)
+
+    _, atomic_weight = element_data(int(data["atom"]))
+    atom_weight_g = (atomic_weight * u.u).cgs.value
+
+    # Thermal width per T-bin: sigma_T (nT,)
+    sigma_T = wl0 * np.sqrt(kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
+
+    # Doppler-shifted center for each v-bin: (nv,)
+    lam_cent = wl0 * (1 + vel_grid.value / c_cm_s)
+
+    # Build phi(T,v,lambda) as (nT,nv,n_lambda)
+    delta = wl_grid[None, None, :] - lam_cent[None, :, None]
+    phi = np.exp(-0.5 * (delta / sigma_T[:, None, None]) ** 2)
+    phi /= sigma_T[:, None, None] * np.sqrt(2 * np.pi)
+    return phi
+
+
+def _line_spectra(em_tv: np.ndarray, g: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    """
+    One line's spectra in each pixel of `em_tv`, in erg / (s cm2 sr cm), on
+    the wavelengths of its profiles `phi` from `_line_profiles`. `g` is its
+    contribution function on the same pixels and temperatures, or one that
+    broadcasts to them.
+    """
+    # One row at a time, as EM(row,col,T,v) * G(T) can be as large as em_tv.
+    g = np.broadcast_to(g, em_tv.shape[:3])
+    spec_map = np.zeros((*em_tv.shape[:2], phi.shape[-1]))
+    for row in range(em_tv.shape[0]):
+        weighted = em_tv[row] * g[row, ..., None]
+        # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (n_cols,n_lambda)
+        spec_map[row] = np.tensordot(weighted, phi, axes=([1, 2], [0, 1]))
+    return spec_map / (4 * np.pi)
+
+
+# Largest block of the emission measure cube held at once when the spectra
+# are synthesised a block of image rows at a time, in bytes.
+EM_BLOCK_BYTES = 2**30
+
+
+def _synthesise_by_rows(lines: Dict[str, dict], logT_cube: np.ndarray, logN_cube: np.ndarray,
+                        los_velocity: np.ndarray, dh_cm, logT_grid: np.ndarray,
+                        logN_grid: np.ndarray, vel_grid: u.Quantity, integration_axis: str,
+                        precision: type) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    DEM, density, G and spectra as the whole box gives them, worked out a
+    block of image rows at a time, so neither the whole emission measure
+    cube nor any float64 array over the whole box is held.
+
+    Along an axis of the box, each image row is a slab of the box, so a
+    block's pixels take their cells from that slab alone, summed in the same
+    order. Each line in `lines` gets `g`, `wl_grid` and `si`, as from
+    `interpolate_g_on_dem` and `synthesise_spectra`. Returns the DEM and the
+    density, as from `compute_dem`.
+    """
+    axis, _ = view_axis_and_side(integration_axis)
+    print(f"  Building the DEM and the emission measure in (T,v) along {axis}-axis, a "
+          f"block of rows at a time...")
+    vel_grid = _spectral_velocity_grid(vel_grid)
+    shape = logT_cube.shape
+    row_axis = 1 if axis == "z" else 0
+    n_rows = shape[row_axis]
+    n_cols = shape[{"x": 1, "y": 2, "z": 2}[axis]]
+    nT = len(logT_grid)
+    # A row's emission measure, or the arrays of about 16 numbers per cell
+    # that compute_dem and _em_tv work it out with, whichever is larger.
+    per_row = max(n_cols * nT * vel_grid.size,
+                  16 * logT_cube[(slice(None),) * row_axis + (0,)].size) * 8
+    step = max(1, int(EM_BLOCK_BYTES // per_row))
+
+    dem_map = np.empty((n_rows, n_cols, nT))
+    avg_ne = np.empty((n_rows, n_cols, nT))
+    profiles = {}
+    for name, data in lines.items():
         data["wl_grid"] = (vel_grid * data["wl0"] / const.c + data["wl0"]).cgs
-        wl_grid = data["wl_grid"].cgs.value  # (n_lambda,)
-
-        _, atomic_weight = element_data(int(data["atom"]))
-        atom_weight_g = (atomic_weight * u.u).cgs.value
-
-        # Thermal width per T-bin: sigma_T (nT,)
-        sigma_T = wl0 * np.sqrt(kb * (10 ** logT_grid) / atom_weight_g) / c_cm_s
-
-        # Doppler-shifted center for each v-bin: (nv,)
-        lam_cent = wl0 * (1 + vel_grid.value / c_cm_s)
-
-        # Build phi(T,v,lambda) as (nT,nv,n_lambda)
-        delta = wl_grid[None, None, :] - lam_cent[None, :, None]
-        phi = np.exp(-0.5 * (delta / sigma_T[:, None, None]) ** 2)
-        phi /= sigma_T[:, None, None] * np.sqrt(2 * np.pi)
-
-        # One row at a time, as EM(row,col,T,v) * G(T) can be as large as em_tv.
-        g = np.broadcast_to(data["g"], em_tv.shape[:3])
-        spec_map = np.zeros((*em_tv.shape[:2], wl_grid.size))
-        for row in range(em_tv.shape[0]):
-            weighted = em_tv[row] * g[row, ..., None]
-            # Collapse T and v: dot ((nT,nv) , (nT,nv)) -> (n_cols,n_lambda)
-            spec_map[row] = np.tensordot(weighted, phi, axes=([1, 2], [0, 1]))
-
-        data["si"] = spec_map / (4 * np.pi)
+        data["g"] = np.empty((n_rows, n_cols, nT), dtype=precision)
+        data["si"] = np.zeros((n_rows, n_cols, vel_grid.size), dtype=precision)
+        profiles[name] = _line_profiles(data, vel_grid, logT_grid)
+    los_velocity = np.broadcast_to(los_velocity, shape)
+    beyond, seen = 0.0, 0.0
+    for first in tqdm(range(0, n_rows, step), desc="rows", unit="block", leave=False):
+        rows = slice(first, min(first + step, n_rows))
+        cut = (slice(None),) * row_axis + (rows,)
+        logT_rows, logN_rows = logT_cube[cut], logN_cube[cut]
+        dem_map[rows], avg_ne[rows], ne_sq_dh = _compute_dem(
+            logT_rows, logN_rows, dh_cm, logT_grid, integration_axis, None)
+        em_tv, more, total = _em_tv(logT_rows, los_velocity[cut], logT_grid, vel_grid,
+                                    ne_sq_dh, integration_axis, None)
+        del ne_sq_dh
+        beyond, seen = beyond + more, seen + total
+        for name, g in _g_on_pixels(lines, avg_ne[rows], logT_grid, logN_grid, logT_grid,
+                                    precision):
+            lines[name]["g"][rows] = g
+            lines[name]["si"][rows] = _line_spectra(em_tv, g, profiles[name])
+    _warn_beyond_velocity_grid(beyond, seen, vel_grid)
+    return dem_map, avg_ne
 
 
 def synthesise_cubes(
@@ -1499,6 +1649,7 @@ def synthesise_cubes(
     continuum: Optional[Dict[str, dict]] = None,
     sky: Optional[SkyView] = None,
     return_density: bool = False,
+    keep_em_tv: bool = True,
 ) -> Union[Tuple[Dict[str, dict], np.ndarray, np.ndarray],
            Tuple[Dict[str, dict], np.ndarray, np.ndarray, np.ndarray]]:
     """
@@ -1546,6 +1697,11 @@ def synthesise_cubes(
         Also return the electron density at which the contribution functions
         are taken: for each temperature of each pixel, the mean over its
         cells weighted by emission measure. Keyword only. Default False.
+    keep_em_tv : bool, optional
+        Return the emission measure cube. False builds it a block of image
+        rows at a time, which needs far less memory, and returns None in
+        its place; seen from a position on the disk it is built whole either
+        way. Keyword only. Default True.
 
     Returns
     -------
@@ -1557,17 +1713,22 @@ def synthesise_cubes(
         middle of its wavelengths), and no `"atom"` or `"ion"`.
     dem_map : np.ndarray
         As returned by :func:`compute_dem`.
-    em_tv : np.ndarray
-        As returned by :func:`build_em_tv`.
+    em_tv : np.ndarray or None
+        As returned by :func:`build_em_tv`, or None without `keep_em_tv`.
     electron_density : np.ndarray
         Only with `return_density`: density in cm^-3, same shape as
         `dem_map`, zero where there is no plasma at a temperature.
     """
     logT_cube, logN_cube = _log_cubes(temperature, electron_density, precision)
+    return _synthesise_from_logs(
+        logT_cube, logN_cube, los_velocity, dh_cm, goft, logT_grid, logN_grid, vel_grid,
+        integration_axis, precision, continuum=continuum, sky=sky,
+        return_density=return_density, keep_em_tv=keep_em_tv)
 
-    dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid, integration_axis,
-                                      sky=sky)
 
+def _warn_off_density_grid(dem_map: np.ndarray, avg_ne_map: np.ndarray,
+                           logN_grid: np.ndarray) -> None:
+    """Warn of emission measure at densities the contribution functions do not cover."""
     # The contribution functions are zero off their density grid; warn, with
     # the fraction of the emission measure affected.
     occupied = dem_map > 0
@@ -1579,19 +1740,36 @@ def synthesise_cubes(
             f"{100 * dem_map[off_grid].sum() / dem_map[occupied].sum():.3g} per cent of the "
             f"emission measure is at electron densities outside the {10 ** logN_grid[0]:.0e} "
             f"to {10 ** logN_grid[-1]:.0e} cm^-3 the contribution functions are worked out "
-            f"for, where they are taken as zero.", UserWarning, stacklevel=2)
+            f"for, where they are taken as zero.", UserWarning, stacklevel=3)
 
+
+def _synthesise_from_logs(logT_cube, logN_cube, los_velocity, dh_cm, goft, logT_grid,
+                          logN_grid, vel_grid, integration_axis, precision, *, continuum=None,
+                          sky=None, return_density=False, keep_em_tv=True):
+    """
+    `synthesise_cubes` from the cells' log10 temperature and electron
+    density, as `_log_cubes` gives them.
+    """
     lines = {name: dict(info) for name, info in goft.items()}
-    interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
-
-    ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
-                * along_line_of_sight(dh_cm, view_axis_and_side(integration_axis)[0]))
-    em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh, integration_axis,
-                        sky=sky)
-
-    synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
-    for name in goft:
-        lines[name]["si"] = lines[name]["si"].astype(precision, copy=False)
+    if keep_em_tv or sky is not None:
+        dem_map, avg_ne_map, ne_sq_dh = _compute_dem(logT_cube, logN_cube, dh_cm, logT_grid,
+                                                     integration_axis, sky)
+        _warn_off_density_grid(dem_map, avg_ne_map, logN_grid)
+        interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
+        em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh,
+                            integration_axis, sky=sky)
+        del ne_sq_dh
+        synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+        for name in goft:
+            lines[name]["si"] = lines[name]["si"].astype(precision, copy=False)
+        if not keep_em_tv:
+            em_tv = None
+    else:
+        em_tv = None
+        dem_map, avg_ne_map = _synthesise_by_rows(
+            lines, logT_cube, logN_cube, los_velocity, dh_cm, logT_grid, logN_grid, vel_grid,
+            integration_axis, precision)
+        _warn_off_density_grid(dem_map, avg_ne_map, logN_grid)
 
     # The continuum uses the emission measure in each temperature bin from
     # the DEM, and each pixel's density at that temperature. The DEM keeps
@@ -2900,7 +3078,7 @@ def main(args=None) -> None:
             print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
         
         reference_cube = temp_cube
-        rho = u.Quantity(rho_cube.data, rho_cube.unit)
+        rho = rho_cube.data << rho_cube.unit
 
         # Dynamic mode metadata for output (no spatial rebinning in synthesis)
         dynamic_mode_metadata = {
@@ -2962,10 +3140,11 @@ def main(args=None) -> None:
         # The file may hold float32 in any units. Convert to the --precision
         # dtype and to K and cm/s, which the processing below assumes.
         temp_cube = atmosphere.to_ndcube(
-            atmosphere.temperature.astype(precision).to(u.K))
+            atmosphere.temperature.astype(precision, copy=False).to(u.K, copy=False))
         if towards is None:
             vel_cube = atmosphere.to_ndcube(
-                atmosphere.velocity(integration_axis).astype(precision).to(u.cm / u.s))
+                atmosphere.velocity(integration_axis).astype(precision, copy=False)
+                .to(u.cm / u.s, copy=False))
         else:
             wrap = not (getattr(args, "no_wrap", False) or args.crop_x or args.crop_y)
             if not wrap and not getattr(args, "no_wrap", False):
@@ -2993,9 +3172,10 @@ def main(args=None) -> None:
                               atmosphere.edges("z"), wrap, projection)
         rho = None
         if atmosphere.mass_density is not None:
-            rho = atmosphere.mass_density.astype(precision)
+            rho = atmosphere.mass_density.astype(precision, copy=False)
         if atmosphere.electron_density is not None:
-            ne_values = atmosphere.electron_density.astype(precision).to_value(u.cm**-3)
+            ne_values = atmosphere.electron_density.astype(precision, copy=False).to_value(
+                u.cm**-3)
         los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
         if towards is not None:
@@ -3029,11 +3209,18 @@ def main(args=None) -> None:
         mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
         print(f"Electron density from the mass density with "
               f"{mass_per_electron_amu:.4f} u per electron ({mass_per_electron_source})")
-        ne_values = (rho / (mass_per_electron_amu * const.u)).to_value(u.cm**-3)
+        per_electron = mass_per_electron_amu * const.u
+        logT_cube, logN_cube = _log_cubes_by_slab(
+            temp_cube.data, rho, lambda mass: (mass / per_electron).to_value(u.cm**-3),
+            precision)
     else:
+        logT_cube, logN_cube = _log_cubes_by_slab(temp_cube.data, ne_values,
+                                                  lambda electrons: electrons, precision)
         mass_per_electron_amu = None
         mass_per_electron_source = "not needed: the atmosphere gives the electron density"
         print("Electron density taken from the atmosphere")
+    # The mass or electron density is not needed once its log is taken.
+    rho = ne_values = atmosphere = rho_cube = None
 
     # The velocity files hold the velocity along each axis; the Doppler shift
     # needs the velocity away from the observer. Along a slanted line of
@@ -3044,10 +3231,8 @@ def main(args=None) -> None:
 
     # ---------------- Compute contribution functions (fiasco) ---------
     # Only over the densities this atmosphere has.
-    temperature = temp_cube.data
-    logN_min, logN_max, nN = density_grid(
-        temperature, ne_values,
-        np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision), precision)
+    logN_min, logN_max, nN = _density_grid_from_points(_density_points_from_logs(
+        logT_cube, logN_cube, np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(precision)))
 
     # Only a strip of the image, if asked for. The densities above are the
     # whole image's, so one file of a band's lines serves every strip. Seen
@@ -3060,8 +3245,9 @@ def main(args=None) -> None:
         n_columns = image_x_edges(reference_cube, view).size - 1
         image_columns = (columns.start, n_columns)
         if sky is None:
-            temperature, ne_values, vel_data = (
-                image_strip(cube, view, columns) for cube in (temperature, ne_values, vel_data))
+            logT_cube, logN_cube, vel_data = (
+                image_strip(cube, view, columns).copy()
+                for cube in (logT_cube, logN_cube, vel_data))
         print(f"  Image columns {columns.start} to {columns.stop - 1} of {n_columns} kept")
 
     band_lines = None
@@ -3122,12 +3308,15 @@ def main(args=None) -> None:
                                      args.n_workers, goft_dbase_root)
 
     print(f"Calculating the DEM, the emission measure in (T,v) and the spectra ({print_mem()})")
-    goft, dem_map, em_tv, electron_density = synthesise_cubes(
-        temperature, ne_values, vel_data, dh_cm, goft, logT_grid, logN_grid,
-        vel_grid, view, precision, continuum=continuum, sky=sky, return_density=True)
+    keep_vdem = bool(getattr(args, "keep_vdem", False))
+    goft, dem_map, em_tv, electron_density = _synthesise_from_logs(
+        logT_cube, logN_cube, vel_data, dh_cm, goft, logT_grid, logN_grid,
+        vel_grid, view, precision, continuum=continuum, sky=sky, return_density=True,
+        keep_em_tv=keep_vdem or band is not None or write_pickle)
     if sky is not None and columns is not None:
-        dem_map, em_tv, electron_density = (
-            cube[:, columns] for cube in (dem_map, em_tv, electron_density))
+        dem_map, electron_density = (cube[:, columns] for cube in (dem_map, electron_density))
+        if em_tv is not None:
+            em_tv = em_tv[:, columns]
         for info in goft.values():
             info["si"] = info["si"][:, columns]
 
@@ -3162,7 +3351,7 @@ def main(args=None) -> None:
     # saved with them, so the file holds the whole synthesis.
     products = {
         "dem_map": dem_map,
-        **({"em_tv": em_tv} if getattr(args, "keep_vdem", False) else {}),
+        **({"em_tv": em_tv} if keep_vdem else {}),
         # Electron density at each temperature of each pixel (mean over its
         # cells weighted by emission measure), at which G was taken.
         "electron_density": electron_density,
@@ -3180,7 +3369,7 @@ def main(args=None) -> None:
         "atmosphere": atmosphere_metadata,
         "config": {
             "precision": precision.__name__,
-            "keep_vdem": bool(getattr(args, "keep_vdem", False)),
+            "keep_vdem": keep_vdem,
             "downsample": downsample,
             "vel_res": vel_res,
             "vel_lim": vel_lim,
