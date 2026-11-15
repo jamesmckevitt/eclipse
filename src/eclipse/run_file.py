@@ -773,7 +773,7 @@ def _check_files_apart(found: list, steps: tuple, frames: dict) -> None:
     Refuse runs that would write different things to the same file. `frames`
     holds each run's frame settings, by run name.
     """
-    syntheses, frames = {}, {}
+    syntheses, outputs = {}, {}
     for run_name, config in found:
         if synthesises(config):
             path = synthesis_path(config, run_name).resolve()
@@ -786,7 +786,7 @@ def _check_files_apart(found: list, steps: tuple, frames: dict) -> None:
         if "frame" in config and "frame" in steps:
             settings = frames[run_name]
             path = settings["output"].resolve()
-            other = frames.setdefault(path, run_name)
+            other = outputs.setdefault(path, run_name)
             if other != run_name:
                 raise ValueError(f"The runs {other} and {run_name} would both write their "
                                  f"frame to {path}; give each its own 'frame.output'.")
