@@ -1113,7 +1113,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         # Check the plan before computing the contribution functions, which
         # take minutes and gigabytes.
         RasterSynthesiser.check_plan(series, raster_plan, *_swept("slit_width", "expos"))
-        raster = RasterSynthesiser(series, synthesis_settings)
+        raster = RasterSynthesiser(series, synthesis_settings, reference_line=reference_line)
     elif synthesis_series_mode:
         # The spectra are read per combination in the loop, a strip of
         # columns at a time, each column once.
