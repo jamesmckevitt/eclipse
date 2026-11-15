@@ -10,6 +10,7 @@ from ndcube import NDCube
 from scipy.ndimage import convolve1d
 from scipy.signal import convolve2d
 from scipy.special import erf
+from scipy.stats import binom, poisson
 from . import resolution_budget
 from .config import _pair_energy
 from .sampling import _carry_photon_wavelengths
@@ -48,8 +49,6 @@ def _poisson_inverse_transform(mean_counts, size=None) -> np.ndarray:
     # keeps the CRN property.
     np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
 
-    from scipy.stats import poisson
-
     return poisson.ppf(u_draw, mean_counts).astype(np.int64)
 
 
@@ -64,8 +63,6 @@ def _binomial_inverse_transform(trials, probability: float) -> np.ndarray:
     """
     u_draw = np.random.random(size=np.shape(trials))
     np.maximum(u_draw, np.nextafter(0.0, 1.0), out=u_draw)
-    from scipy.stats import binom
-
     return binom.ppf(u_draw, trials, probability).astype(np.int64)
 
 
