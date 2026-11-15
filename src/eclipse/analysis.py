@@ -7,10 +7,6 @@ import warnings
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-import sunpy.map
-import h5py
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -677,7 +673,11 @@ def create_sunpy_maps_from_combo(
         `exposure_time_results` is given. Files written before components
         were stored by name have no intensity maps and no `failed_fits`.
     """
-    
+    # Imported here: sunpy and matplotlib are only needed for the maps.
+    import matplotlib
+    import sunpy.map
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+
     date_obs = _resolve_date_obs(combination_results, date_obs)
 
     if rest_wavelength is None and "components" not in _get_fit_stats(
@@ -783,7 +783,7 @@ def create_sunpy_maps_from_combo(
                                      [times[-1] + (times[-1] - middles[-1])]])
         else:
             bounds = np.array([0.5 * times[0], 1.5 * times[0]])
-        cmap = ListedColormap(plt.get_cmap("viridis")(np.linspace(0, 1, nlevels)))
+        cmap = ListedColormap(matplotlib.colormaps["viridis"](np.linspace(0, 1, nlevels)))
         cmap.set_over("white")
         cmap.set_bad("gray")  # Change bad color so we can distinguish from over
         norm = BoundaryNorm(bounds, nlevels)

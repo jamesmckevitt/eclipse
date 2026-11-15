@@ -19,7 +19,6 @@ import astropy.constants as const
 import joblib
 from scipy import sparse
 from tqdm import tqdm
-from mendeleev import element
 
 
 # Global debug flag - can be set by command line or configuration
@@ -309,6 +308,10 @@ def element_data(symbol_or_number: str | int) -> tuple[int, float]:
         If there is no such element.
     """
     if symbol_or_number not in _ELEMENTS:
+        # Imported here: mendeleev brings in pandas and SQLAlchemy, which
+        # most uses of the package never need.
+        from mendeleev import element
+
         atom = element(symbol_or_number)
         data = (atom.atomic_number, atom.atomic_weight)
         for key in (atom.symbol, atom.atomic_number, symbol_or_number):
