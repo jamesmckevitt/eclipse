@@ -151,7 +151,7 @@ def _atmosphere(tmp_path, name="box.h5", **overrides):
                 f["time"].attrs.__setitem__("unit", "s")), "time must have 0 dimensions"),
     (lambda f: f["temperature"].attrs.__delitem__("unit"), "'temperature' in .* has no 'unit'"),
     (lambda f: f["temperature"].attrs.__setitem__("unit", "m"),
-     "must be in a unit convertible to K, got m"),
+     "must be in a unit of temperature, such as K, got m"),
 ])
 def test_info_refuses_a_file_that_cannot_be_read_rather_than_describing_it(tmp_path, change, message):
     path = _atmosphere(tmp_path)

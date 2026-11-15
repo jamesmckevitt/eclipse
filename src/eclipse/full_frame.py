@@ -22,9 +22,10 @@ import numpy as np
 import astropy.units as u
 
 from .band import BandLines
+from .deprecated import _band_scene
 from .config import Simulation
 from .frame import (_response, _sorted_rows, detect, digitise,
-                    expose_serial_overscan_with_wavelengths, expose_with_wavelengths,
+                    expose_with_serial_overscan_with_wavelengths, expose_with_wavelengths,
                     pixel_solid_angle)
 from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
 from .config import _FOCAL_PLANE_SETTINGS, _same_setting
@@ -145,87 +146,6 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
             edges[name] = _bin_edges(line.wavelength.to_value(u.Angstrom))
     return _Scene(y_edges=_centred(layout["y_edges"]), names=list(radiance),
                   edges=list(edges.values()), radiance=list(radiance.values()))
-
-
-def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
-                slit_position: u.Quantity, slit_width: u.Quantity,
-                psf_across_slit: Optional[u.Quantity], extend: bool, n_workers: int) -> _Scene:
-    """
-    Spectrum of every line in a band under the slit, from the emission
-    measure a synthesis file from ECLIPSE keeps, for the deprecated `lines`
-    and `continuum` arguments of `full_ccd_frame`.
-    """
-    from .band import (BAND_STEP, band_spectra, band_wavelengths, densities_on_grid,
-                       same_temperatures)
-    from .continuum import continuum_spectra
-    from .synthesis import _temperature_bins
-    from .synthesis_file import read_synthesis_products
-
-    path = Path(path).expanduser()
-    with h5py.File(path, "r") as f:
-        x_edges = u.Quantity(f["x_edges"][()], f["x_edges"].attrs["unit"])
-        y_edges = u.Quantity(f["y_edges"][()], f["y_edges"].attrs["unit"])
-        products = f.get("synthesis", {})
-        missing = [key for key in ("em_tv", "dem_map", "electron_density", "logT_grid",
-                                   "logN_grid", "vel_grid") if key not in products]
-        if missing == ["em_tv"]:
-            raise ValueError(
-                f"{path} has no em_tv, which the spectrum of a band's lines is worked out "
-                f"from. Synthesise with --keep-vdem to keep it, or leave out lines for a "
-                f"frame of the spectra the file holds.")
-        if missing:
-            raise ValueError(
-                f"{path} has no {', '.join(missing)}, which the spectrum of a band's lines "
-                f"is worked out from: it was not made by ECLIPSE's synthesis. Leave out "
-                f"lines for a frame of the spectra the file holds.")
-        columns, weights = _slit_columns(x_edges, slit_position, slit_width, psf_across_slit,
-                                         extend)
-        em = products["em_tv"][:, columns, :, :].astype(float)
-        dem = products["dem_map"][:, columns, :].astype(float)
-        density = products["electron_density"][:, columns, :].astype(float)
-        logT = products["logT_grid"][()]
-        logN = products["logN_grid"][()]
-        velocity = u.Quantity(products["vel_grid"][()],
-                              products["vel_grid"].attrs.get("unit", "cm / s"))
-    if not same_temperatures(logT, lines.logT_grid):
-        raise ValueError("The band's lines are on another grid of temperature than the "
-                         "synthesis; work them out on the synthesis's own.")
-    if not densities_on_grid(logN, lines.logN_grid):
-        raise ValueError(
-            f"The synthesis takes the contribution functions at densities, log10 n_e "
-            f"{logN[0]:.2f} to {logN[-1]:.2f}, that are not all on the "
-            f"band's grid, {lines.logN_grid[0]:.2f} to {lines.logN_grid[-1]:.2f}; work the "
-            f"lines out on a grid that has them.")
-    abundance = (read_synthesis_products(path, keys=["config"]).get("config")
-                 or {}).get("abundance")
-    if abundance is not None and abundance != lines.abundance:
-        raise ValueError(f"The synthesis used the abundances {abundance} and the band's lines "
-                         f"{lines.abundance}; work the lines out with the synthesis's.")
-    wavelength = band_wavelengths(lines.band, BAND_STEP)
-    spectra = band_spectra(lines, em, density, velocity, wavelength * u.Angstrom, n_workers,
-                           column_weights=weights)
-    names, edges, radiance = ["band"], [_bin_edges(wavelength)], [spectra.value]
-    if continuum is not None:
-        grid, free, two_photon = continuum
-        expected = (lines.logN_grid.size, lines.logT_grid.size, u.Quantity(grid).size)
-        if np.shape(two_photon) != expected or np.shape(free) != expected[1:]:
-            raise ValueError(
-                f"The continuum is shaped {np.shape(free)} and {np.shape(two_photon)}, not "
-                f"{expected[1:]} and {expected}: work it out on the band's grids.")
-        grid = u.Quantity(grid).to_value(u.Angstrom)
-        if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
-            raise ValueError("The continuum's wavelengths must be finite and increase.")
-        # The DEM is per unit log T, and also holds plasma faster than the
-        # velocity grid, which the continuum, not Doppler shifted, needs.
-        total = dem * _temperature_bins(logT)[0]
-        names.append("continuum")
-        edges.append(_bin_edges(grid))
-        # One column at a time, to hold one column's spectrum.
-        radiance.append(sum(
-            weight * continuum_spectra(total[:, [k]], density[:, [k]], lines.logN_grid,
-                                       np.asarray(free), np.asarray(two_photon))[:, 0]
-            for k, weight in enumerate(weights)))
-    return _Scene(y_edges=_centred(y_edges), names=names, edges=edges, radiance=radiance)
 
 
 def _rates(scene: _Scene, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
@@ -664,16 +584,22 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         reaching_rms = np.sqrt(np.divide(image_rate, per_square[ccd].T,
                                          out=np.array(own, dtype=float) ** 2,
                                          where=lit & (per_square[ccd].T > 0))) * u.Angstrom
-        photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
-            image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
+        overscan = None
+        if sequence.cte_serial != 1:
+            # Charge the serial register leaves behind reaches the overscan;
+            # one transfer gives it and the image.
+            (photons, mean_wavelength, rms_wavelength), overscan = (
+                expose_with_serial_overscan_with_wavelengths(
+                    image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms))
+        else:
+            photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
+                image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
         drawn = np.random.poisson(photons).astype(float) if noise else photons
         electrons = detect(drawn, mean_wavelength, dark_time, det, noise=noise,
                            rms_wavelength=rms_wavelength)
         overscan_dn = None
-        if sequence.cte_serial != 1:
-            # Charge the serial register leaves behind reaches the overscan.
-            trail, trail_wavelength, trail_rms = expose_serial_overscan_with_wavelengths(
-                image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
+        if overscan is not None:
+            trail, trail_wavelength, trail_rms = overscan
             trail = np.random.poisson(trail).astype(float) if noise else trail
             overscan_dn = digitise(detect(trail, trail_wavelength,
                                           dark[:, np.newaxis] * dark_overscan, det,

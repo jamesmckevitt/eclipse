@@ -1046,6 +1046,30 @@ def check_config_keys(provided, allowed, context: str,
 _SINGLE_PRECISION_ULPS = 4
 
 
+def checked_quantity(value, name: str, units=None, ndim=None) -> u.Quantity:
+    """
+    `value`, checked to be a finite Quantity.
+
+    With `units`, its unit must convert to one of them. With `ndim`, a
+    number or several, it must have that many axes.
+    """
+    if not isinstance(value, u.Quantity):
+        raise TypeError(f"{name} must be an astropy Quantity, got {type(value).__name__}.")
+    if units is not None and not any(value.unit.is_equivalent(unit) for unit in units):
+        kinds = [str(unit.physical_type) for unit in units]
+        kind = "" if "unknown" in kinds else f" of {' or '.join(kinds)},"
+        raise u.UnitConversionError(
+            f"{name} must be in a unit{kind} such as {' or '.join(str(unit) for unit in units)}, "
+            f"got {value.unit}.")
+    allowed = (ndim,) if isinstance(ndim, int) else ndim
+    if allowed is not None and value.ndim not in allowed:
+        raise ValueError(f"{name} must have {' or '.join(str(n) for n in allowed)} dimensions, "
+                         f"got {value.ndim}.")
+    if not np.all(np.isfinite(value.value)):
+        raise ValueError(f"{name} contains NaN or infinite values.")
+    return value
+
+
 def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     """
     Check that `values` is a finite, increasing, evenly spaced 1D grid.
