@@ -1738,7 +1738,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
     wl0 : u.Quantity
         Rest wavelength the velocity is measured from.
     n_jobs : int, optional
-        Number of processes; -1 for one per CPU. Default -1.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's centre.
@@ -1760,20 +1760,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
         get_val = np.vectorize(lambda q: q.to_value(wl0.unit))
         centres = u.Quantity(get_val(centres_raw), wl0.unit)
 
-    n_rows = centres.shape[0]
-
-    def _one_row(i):
-        return ((centres[i] - wl0) / wl0 * const.c).to(u.cm / u.s).value
-
-    with tqdm_joblib(tqdm(total=n_rows, desc="Velocity calc", leave=False)):
-        v_val = np.array(
-            Parallel(n_jobs=n_jobs)(
-                delayed(_one_row)(i) for i in range(n_rows)
-            )
-        )
-
-    v = v_val * (u.cm / u.s)
-    return v
+    return ((centres - wl0) / wl0 * const.c).to(u.cm / u.s)
 
 
 def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
@@ -1787,7 +1774,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
         Fitted values from `fit_cube_gauss`, with the parameters on the last
         axis.
     n_jobs : int, optional
-        Not used; kept so existing calls still work.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's width.
@@ -1809,7 +1796,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
         get_val = np.vectorize(lambda q: q.value)
         get_unit = widths_raw.flat[0].unit  # Get unit from first element
         widths = u.Quantity(get_val(widths_raw), get_unit)
-    
+
     return widths
 
 
