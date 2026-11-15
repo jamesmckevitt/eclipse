@@ -472,12 +472,11 @@ def _check_method(method: str) -> str:
 def _interpolator(method: str, date_str: str, band: str):
     """Callable EA(wavelength_aa), built once per calibration and epoch.
 
-    Cached because `radiometric.add_telescope_throughput` evaluates the
-    telescope response one wavelength sample at a time, in a Python loop, on
-    every Monte Carlo iteration. Rebuilding a 49-point spline per sample would
-    dominate the run time. The cache holds built interpolators, not results,
-    so it is exact. Warnings are left to :func:`effective_area`, since a
-    cached call would not repeat them.
+    Cached because the telescope response is evaluated on every Monte Carlo
+    iteration, and rebuilding the spline each time would dominate the run
+    time. The cache holds built interpolators, not results, so it is exact.
+    Warnings are left to :func:`effective_area`, since a cached call would
+    not repeat them.
     """
     return _METHODS[_check_method(method)](date_str, band)
 

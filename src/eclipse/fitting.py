@@ -1403,8 +1403,9 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     # FIT_PIECES_PER_WORKER per worker, so that the last pieces of a pass
     # leave the workers idle for only a small part of it.
     n_spectra = n_slit * n_scan
-    n_pieces = max(1, n_slit if effective_n_jobs(n_jobs) == 1
-                   else min(n_spectra, FIT_PIECES_PER_WORKER * effective_n_jobs(n_jobs)))
+    workers = effective_n_jobs(n_jobs)
+    n_pieces = max(1, n_slit if workers == 1
+                   else min(n_spectra, FIT_PIECES_PER_WORKER * workers))
     piece_edges = np.linspace(0, n_spectra, n_pieces + 1).astype(int)
     spectra = signal_cube.data.reshape(n_spectra, -1)
     flat_uncertainty = None if uncertainty is None else uncertainty.reshape(n_spectra, -1)
@@ -1474,8 +1475,10 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 _start)
         return results, succeeded
 
+    # No more workers than pieces: a few spectra would otherwise start a worker
+    # on every CPU, each importing the package before its first fit.
     with tqdm_joblib(tqdm(total=n_pieces, desc=description, leave=False)):
-        results = Parallel(n_jobs=n_jobs)(
+        results = Parallel(n_jobs=min(workers, n_pieces))(
             delayed(_fit_block)(*piece) for piece in _pieces()
         )
 
