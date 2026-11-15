@@ -434,9 +434,30 @@ class SynthesisSeries(_Series):
 
 # Largest strip of columns fetched at once, in bytes of the arrays it needs.
 STRIP_BYTES = 2**30
-# Share of the machine's memory the cached columns may take. Past it, the
-# columns used longest ago are dropped, and fetched again if needed.
+# Share of the memory this process may use that the cached columns may
+# take. Past it, the columns used longest ago are dropped, and fetched again
+# if needed.
 COLUMN_CACHE_SHARE = 0.25
+
+
+def _memory_for_this_process() -> int:
+    """
+    Bytes of memory this process may use: the machine's, or the job's limit
+    if lower, shared between the MPI ranks.
+    """
+    from .utils import _get_mpi_info
+
+    memory = psutil.virtual_memory().total
+    # A job's memory limit, from its control group, version 2 or 1.
+    for limit in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            value = Path(limit).read_text().strip()
+        except OSError:
+            continue
+        if value.isdigit():
+            memory = min(memory, int(value))
+            break
+    return memory // max(1, _get_mpi_info()[2])
 
 
 def _runs(indices: Sequence[int]) -> List[Tuple[int, int]]:
@@ -456,8 +477,9 @@ class _SlitRaster:
 
     Before each raster, the columns it needs are fetched, a strip of
     neighbouring columns at a time, and then cached, so a sweep over exposure
-    times or slit widths reuses most of the work. The cache takes at most
-    `cache_bytes`; past that the columns used longest ago are dropped.
+    times or slit widths reuses most of the work. After each exposure the
+    columns used longest ago are dropped until the cache is within
+    `cache_bytes`.
     Subclasses define how a strip of columns is fetched and how big a column
     is.
     """
@@ -469,7 +491,7 @@ class _SlitRaster:
         self.series = series
         self._columns: "OrderedDict[Tuple[int, int], Dict[str, np.ndarray]]" = OrderedDict()
         self._cached_bytes = 0
-        self.cache_bytes = int(COLUMN_CACHE_SHARE * psutil.virtual_memory().total)
+        self.cache_bytes = int(COLUMN_CACHE_SHARE * _memory_for_this_process())
 
     def _load_strip(self, snapshot: int, first: int, last: int) -> None:
         """Put columns `first` to `last` - 1 of one snapshot into the cache."""
@@ -494,13 +516,18 @@ class _SlitRaster:
             _, spectra = self._columns.popitem(last=False)
             self._cached_bytes -= sum(si.nbytes for si in spectra.values())
 
-    def _fetch(self, needed: Dict[int, set]) -> None:
-        """Fetch the columns in `needed`, by snapshot, that are not cached, a strip at a time."""
+    def _fetch(self, needed: Dict[int, set], until_full: bool = False) -> None:
+        """
+        Fetch the columns in `needed`, by snapshot, that are not cached, a
+        strip at a time. With `until_full`, stop once the cache is full.
+        """
         width = max(1, int(STRIP_BYTES // max(1, self._column_bytes())))
         for snapshot in sorted(needed):
             missing = sorted(c for c in needed[snapshot] if (snapshot, c) not in self._columns)
             for run_first, run_last in _runs(missing):
                 for first in range(run_first, run_last, width):
+                    if until_full and self._cached_bytes >= self.cache_bytes:
+                        return
                     self._load_strip(snapshot, first, min(first + width, run_last))
 
     # ------------------------------------------------------------------
@@ -574,7 +601,9 @@ class _SlitRaster:
         if (snapshot, column) not in self._columns:
             self._load_strip(snapshot, column, column + 1)
         self._columns.move_to_end((snapshot, column))
-        return self._columns[(snapshot, column)]
+        spectra = self._columns[(snapshot, column)]
+        self._trim()
+        return spectra
 
     def columns_seen(self, position: u.Quantity, slit_width: u.Quantity,
                      across_slit: Optional[u.Quantity] = None,
@@ -647,14 +676,15 @@ class _SlitRaster:
         # so the image has the same orientation; each keeps its own times.
         if plan.direction == "decreasing":
             exposures = exposures[::-1]
-        # Fetch every column the raster needs first, in strips of neighbouring
-        # columns, rather than a few at a time as each exposure comes.
+        # Fetch the columns the raster needs first, in strips of neighbouring
+        # columns, rather than a few at a time as each exposure comes, while
+        # the cache has room; any others are fetched as their exposures come.
         needed: Dict[int, set] = {}
         for exposure in exposures:
             first, last, _ = self.columns_seen(exposure.position, slit_width, across_slit, extend)
             for snapshot, _ in self.series.coverage(exposure.start, exposure.end):
                 needed.setdefault(snapshot, set()).update(range(first, last))
-        self._fetch(needed)
+        self._fetch(needed, until_full=True)
         collected = [self.exposure_spectra(exposure, slit_width, across_slit, extend)
                      for exposure in exposures]
         positions = u.Quantity([e.position for e in exposures]).to(u.Mm)
@@ -728,9 +758,11 @@ class RasterSynthesiser(_SlitRaster):
 
     def _column_bytes(self) -> int:
         # The temperature, density and velocity read, and the log cubes, of
-        # each cell of the column, in float32 or float64.
-        cells = (self.series.z_edges.size - 1) * (self.series.y_edges.size - 1)
-        return 5 * cells * np.dtype(self.settings.precision).itemsize
+        # each cell of the column, and its spectra in float64.
+        rows = self.series.y_edges.size - 1
+        cells = (self.series.z_edges.size - 1) * rows
+        spectra = 8 * rows * self.vel_grid.size * len(self.settings.lines)
+        return 5 * cells * np.dtype(self.settings.precision).itemsize + spectra
 
     def _cover_densities(self, temperature: np.ndarray, electron_density: np.ndarray) -> None:
         """Compute the contribution functions at the missing densities these cells need."""

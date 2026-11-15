@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import astropy.units as u
 import numpy as np
@@ -23,6 +23,10 @@ from tqdm import tqdm
 from .atmosphere import AXES, Atmosphere
 from .radiometric import _spectral_kernel
 from .utils import _warn_outside, angle_to_distance, require_downsample_divides
+
+if TYPE_CHECKING:
+    from .band import BandLines
+    from .full_frame import _Scene
 
 
 def _warn(name: str, reason: str) -> None:
@@ -743,15 +747,12 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
     if integration_axis == "x":
         vel_dir = args.vx_dir or "vx"
         vel_filename = args.vx_filename
-        voxel_dh = voxel_dx
     elif integration_axis == "y":
         vel_dir = args.vy_dir or "vy"
         vel_filename = args.vy_filename
-        voxel_dh = voxel_dy
     else:  # "z"
         vel_dir = args.vz_dir or "vz"
         vel_filename = args.vz_filename
-        voxel_dh = voxel_dz
     
     # Set directory defaults
     temp_dir = args.temp_dir or "temp"

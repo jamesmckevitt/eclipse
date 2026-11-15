@@ -15,8 +15,7 @@ import dill
 import h5py
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import (element_data, proton_electron_ratio_once, require_downsample_divides,
-                    require_uniform_grid, velocity_centers_to_edges, velocity_grid,
+from .utils import (element_data, proton_electron_ratio_once, require_uniform_grid, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, write_line_cubes,
                              write_synthesis)

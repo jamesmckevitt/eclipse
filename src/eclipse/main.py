@@ -651,14 +651,14 @@ def _observed_input(config: dict) -> tuple:
     uniform_intensity_mode = "uniform_intensity" in config
     if uniform_intensity_mode and "synthesis_file" in config:
         warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
-                      UserWarning, stacklevel=2)
+                      UserWarning, stacklevel=3)
     # These describe the line of a uniform intensity; other modes observe the
     # spectra they are given.
     for key in ("rest_wavelength", "thermal_width"):
         if key in config and not uniform_intensity_mode:
             warnings.warn(f"'{key}' is ignored: it describes the line of a 'uniform_intensity', "
                           f"and this run observes the spectra it is given.",
-                          UserWarning, stacklevel=2)
+                          UserWarning, stacklevel=3)
     atmosphere_series_mode = "atmosphere_series" in config
     synthesis_series_mode = "synthesis_series" in config
     raster_mode = atmosphere_series_mode or synthesis_series_mode
