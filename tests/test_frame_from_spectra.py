@@ -147,8 +147,7 @@ G_LINES = np.array([1e-24, 3e-24, 2e-24])
 
 def _band_lines(logT_grid, logN_grid, band=(194.0, 196.5), **kwargs):
     g = np.broadcast_to(G_LINES[:, None, None], (LINES.size, logN_grid.size, logT_grid.size))
-    # G rises with density, by its value at 1e7 cm^-3 for each decade, so the density the
-    # lines are taken at shows.
+    # G rises by its value at 1e7 cm^-3 per decade of density, so the density used shows.
     g = g * (1 + (np.asarray(logN_grid, dtype=float) - 7.0))[None, :, None]
     ion = IonLines(name="Fe 12", atom=26, stage=12, mass=55.845, wavelength=LINES,
                    observed=np.ones(LINES.size, dtype=bool),
@@ -208,7 +207,7 @@ def _atmosphere(tmp_path, view="z"):
     if view.endswith("x"):
         nz, ny, nx = 44, 6, 4
     density = np.full((nz, ny, nx), 1.0e9)
-    # Brighter along the axis the image's columns run on.
+    # Brighter along the image's column axis.
     columns = {"z": 2, "x": 1, "-x": 1}[view]
     shape = [1, 1, 1]
     shape[columns] = -1
@@ -364,9 +363,10 @@ def test_a_file_of_a_bands_lines_is_read_back_only_if_it_serves(tmp_path, monkey
 
 
 def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_path, monkeypatch):
-    """The blur across the slit reaches about 2 arcsec either side of it, and the image is
-    8.3 arcsec across, so the run synthesises a strip, which gives the frame the whole image
-    gives."""
+    """A run's frame of the band, synthesised from a strip, matches the whole image's.
+
+    The blur across the slit reaches about 2 arcsec either side and the image is 8.3 arcsec
+    across, so the run synthesises only a strip."""
     import eclipse
 
     monkeypatch.chdir(tmp_path)
@@ -402,8 +402,8 @@ def test_a_run_files_frame_of_the_band_under_the_slit_is_the_whole_images(tmp_pa
 
 
 def test_a_strip_of_a_view_from_a_position_holds_the_whole_images_columns(tmp_path):
-    """Seen from a position, the image is cut once it is made, so the strip is the whole
-    image's columns, as for a view from above."""
+    """Seen from a position, the image is cut after it is made, so the strip holds the whole
+    image's columns."""
     words = ("--position", "300 arcsec", "100 arcsec")
     whole = read_synthesis(_synthesise(tmp_path, "whole.h5", *BAND, *words))
     edges = whole.x_edges.to_value(u.Mm)

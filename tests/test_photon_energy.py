@@ -60,9 +60,8 @@ def test_a_pixel_holds_its_cells_photons_and_the_wavelengths_of_their_mean_and_r
 def test_a_pixel_whose_photons_vanish_keeps_its_own_wavelength():
     """
     In a line's far wings the photons can round to zero, or to below the
-    smallest normal float, where the photons over their wavelengths, in cm,
-    do not. Such pixels keep their own wavelength, not 0 or a ratio of
-    rounding errors.
+    smallest normal float, while photons over wavelength in cm do not. Such
+    pixels keep their own wavelength, not 0 or a ratio of rounding errors.
     """
     from eclipse.sampling import _carry_photon_wavelengths
 
@@ -117,9 +116,8 @@ def _two_energies(det):
 
 
 def test_a_pixels_electrons_spread_as_its_photons_own_electrons_do():
-    # Each photon frees electrons by its own energy, with a Fano spread. The
-    # variance for N photons is N times that of one photon: its Fano spread
-    # plus the spread of electrons per photon across the photons.
+    # The variance for N photons is N times that of one: the Fano spread plus
+    # the spread of electrons per photon across the photons.
     det = Detector_SWC()
     counts, own, n, mean, rms = _two_energies(det)
     m = (counts * own).sum() / n

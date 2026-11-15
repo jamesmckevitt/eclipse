@@ -1,10 +1,10 @@
 """
-Deprecated functions and routes, which will be removed in a future release.
+Deprecated functions, to be removed in a future release.
 
-Each can still be imported from where it was before, such as
-`eclipse.frame.apply_spectral_psf`, so existing scripts still run. The
-synthesis from MURaM's own files and its dynamic mode are here as well; they
-warn when `synthesise-spectra` takes them.
+Each can still be imported from its old place, such as
+`eclipse.frame.apply_spectral_psf`. The synthesis from MURaM's own files
+and its dynamic mode are here too, and warn when `synthesise-spectra` uses
+them.
 """
 
 from __future__ import annotations
@@ -41,34 +41,27 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
     """
     Blur a frame's rows with the instrument's spectral response.
 
-    Along the dispersion a pixel is a row. The response is that of
-    :func:`~eclipse.radiometric.apply_focusing_optics_psf` for a
-    synthesis through the same slit, on the same rows: for `spectral_psf`
-    `"quadrature"` a Gaussian of
-    :func:`~eclipse.radiometric.spectral_psf_fwhm`, and for
-    `"convolution"` :func:`~eclipse.radiometric.spectral_line_spread`.
-    The slit's image is part of the line profile, so a wider slit gives a
-    wider response: a FWHM of 2.54 rows for the 0.2 arcsec slit and 3.35
-    for the 0.4 arcsec slit.
+    The response is that of
+    :func:`~eclipse.radiometric.apply_focusing_optics_psf` through the same
+    slit: a Gaussian of :func:`~eclipse.radiometric.spectral_psf_fwhm` for
+    `spectral_psf` `"quadrature"`, and
+    :func:`~eclipse.radiometric.spectral_line_spread` for `"convolution"`.
+    It includes the slit's image, so its FWHM is 2.54 rows for the 0.2
+    arcsec slit and 3.35 for the 0.4 arcsec slit.
 
-    Nothing is assumed beyond the rows given: light blurred past either end
-    is lost, as off the edge of a detector, and none comes in. The edge rows
-    of a CCD do receive light from just off the chip, and at the butted edge
-    the spectrum continues across the gap. To include this, lay the spectrum
-    with a `margin` of at least
-    :func:`~eclipse.radiometric.spectral_psf_reach` rows past each
-    end (:func:`~eclipse.frame.photons_from_lines` and
-    :func:`~eclipse.frame.photons_from_spectrum` take one), and pass
-    the same margin here. The result is then the chip's own rows. The
-    kernel is normalised, so flux that stays within the rows is conserved.
+    Light blurred past either end is lost, and none comes in. To include
+    light from just off the chip, lay the spectrum with a `margin` of at
+    least :func:`~eclipse.radiometric.spectral_psf_reach` rows at each end,
+    as :func:`~eclipse.frame.photons_from_lines` and
+    :func:`~eclipse.frame.photons_from_spectrum` allow, and pass the same
+    margin here. The chip's own rows are then returned. The kernel is
+    normalised, so flux that stays within the rows is conserved.
 
-    Deprecated since 0.12.0: blurring the rows after the light is on them
+    Deprecated since 0.12.0, as blurring the rows after the light is on them
     moves a line narrower than a row toward the middle of its row, by up to
-    a few km/s.
-    Give `spectral_psf` and `det` to
+    a few km/s. Give `spectral_psf` and `det` to
     :func:`~eclipse.frame.photons_from_lines` or
-    :func:`~eclipse.frame.photons_from_spectrum` instead, which blur
-    the light as it is laid onto the rows.
+    :func:`~eclipse.frame.photons_from_spectrum` instead.
     """
     _warn("apply_spectral_psf",
           "blurring the rows once the light is on them moves a line narrower than a row "
@@ -95,7 +88,7 @@ def apply_spectral_psf(rows: u.Quantity, telescope, det, slit_width: u.Quantity,
 
 def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
     """
-    DEM data held in the results, which no version of ECLIPSE has written there.
+    DEM data held in the results, where no version of ECLIPSE has written it.
 
     Deprecated since 0.12.0. The DEM and emission measure are in the
     synthesis file, the emission measure only if synthesised with
@@ -132,14 +125,14 @@ def get_dem_data_from_results(results: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _load_psf_ascii(fname: Path, skip: int) -> np.ndarray:
-    """Load PSF data from ASCII file."""
+    """PSF read from an ASCII file."""
     _warn("_load_psf_ascii", "ECLIPSE does not use it. "
           "numpy.loadtxt(fname, skiprows=skip, encoding='utf-16 LE') does the same.")
     return np.loadtxt(fname, skiprows=skip, encoding="utf-16 LE")
 
 
 def _resample_psf(psf: np.ndarray, res_in: u.Quantity, res_out: u.Quantity) -> np.ndarray:
-    """Resample PSF to different pixel scale."""
+    """PSF resampled to another pixel scale."""
     _warn("_resample_psf", "ECLIPSE does not use it. scipy.ndimage.zoom does the same.")
     factor = (res_in / res_out).decompose().value
     return zoom(psf, factor, order=1)
@@ -196,18 +189,16 @@ def load_cube(
     Parameters
     ----------
     file_path : str | Path
-        Path to the binary file.
+        Binary file.
     shape : Tuple[int, int, int]
-        Full cube dimensions in the file's storage order, `(nx, nz, ny)`:
-        the vertical axis is second, not last.
+        Cube shape in the file's storage order, `(nx, nz, ny)`, with the
+        vertical axis second.
     unit : astropy.units.Unit, optional
-        Unit to attach (e.g. u.K or u.g/u.cm**3). If None, returns a plain
-        ndarray.
+        Unit to attach, such as `u.K`. Default None, for a plain ndarray.
     downsample : int | bool
-        Integer factor; if not False, keep every `downsample`-th cell along
-        each axis (simple stride).
+        If not False, keep every `downsample`-th cell along each axis.
     precision : type
-        np.float32 or np.float64 for the returned dtype.
+        Returned dtype, np.float32 or np.float64.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity, optional
         Voxel sizes in the file, at full resolution. With `downsample`, the
         returned cube's WCS uses them multiplied by it. Required if
@@ -228,9 +219,8 @@ def load_cube(
 
     if downsample:
         data = data[::downsample, ::downsample, ::downsample]
-        # Each kept cell spans `downsample` cells of the file. Make new
-        # quantities rather than use *=, which would scale the caller's voxel
-        # sizes and compound across calls.
+        # Each kept cell spans `downsample` cells of the file. New
+        # quantities, as *= would scale the caller's voxel sizes.
         voxel_dx, voxel_dy, voxel_dz = (
             None if size is None else size * downsample
             for size in (voxel_dx, voxel_dy, voxel_dz))
@@ -250,18 +240,16 @@ def load_cube(
 
 def read_timestep_time(file_path: Path) -> float:
     """
-    Read simulation time from MHD header file.
-    
-    The header file contains a single line with 9 space-separated values:
-    nx ny nz dx dy dz time dt va_max
-    
-    The time is the 7th value (index 6) in seconds.
-    
+    Simulation time from a MURaM header file.
+
+    The file holds one line, `nx ny nz dx dy dz time dt va_max`, with the
+    time in seconds.
+
     Parameters
     ----------
     file_path : Path
-        Path to the header file.
-        
+        Header file.
+
     Returns
     -------
     float
@@ -280,20 +268,20 @@ def discover_timesteps(
     time_filename: str,
 ) -> Dict[str, float]:
     """
-    Discover all available timesteps and their simulation times.
-    
+    Simulation time of every timestep in a directory.
+
     Parameters
     ----------
     time_dir : Path
-        Directory containing header files.
+        Directory of header files.
     time_filename : str
-        Filename prefix before the timestep suffix (e.g., "Header").
-        
+        File name before the timestep suffix, such as "Header".
+
     Returns
     -------
     dict
-        Mapping of timestep suffix to simulation time in seconds.
-        E.g., {"0270000": 26729.535, "0280000": 27571.395, ...}
+        Simulation time in seconds of each timestep suffix, such as
+        `{"0270000": 26729.535, "0280000": 27571.395}`.
     """
     if not time_dir.is_dir():
         raise FileNotFoundError(f"Time directory not found: {time_dir}")
@@ -302,10 +290,9 @@ def discover_timesteps(
     
     for file_path in sorted(time_dir.iterdir()):
         if file_path.is_file() and file_path.name.startswith(time_filename):
-            # Extract suffix after the filename prefix
             suffix = file_path.name[len(time_filename):]
             if suffix.startswith('.'):
-                suffix = suffix[1:]  # Remove leading dot
+                suffix = suffix[1:]
             
             try:
                 sim_time = read_timestep_time(file_path)
@@ -325,21 +312,21 @@ def get_file_for_timestep(
     suffix: str,
 ) -> Path:
     """
-    Get the file path for a specific timestep.
-    
+    Path of a data file at one timestep.
+
     Parameters
     ----------
     directory : Path
-        Directory containing the data files.
+        Directory of the data files.
     filename : str
-        Filename prefix before the suffix (e.g., "eosT").
+        File name before the suffix, such as "eosT".
     suffix : str
-        Timestep suffix (e.g., "0270000").
-        
+        Timestep suffix, such as "0270000".
+
     Returns
     -------
     Path
-        Full path to the file.
+        Path to the file.
     """
     file_path = directory / f"{filename}.{suffix}"
     if not file_path.exists():
@@ -358,30 +345,27 @@ def compute_slice_timestep_mapping_mhd(
     """
     Timestep suffix to use for each MHD X-slice.
 
-    The spectrometer scans from right to left (high X to low X), and each
-    slit position covers `slit_width` converted to Mm. Each MHD slice is
-    assigned to a slit position, then to the timestep at that position's
-    observation time. The time is worked out from the slice's absolute
-    position, so errors do not accumulate.
-
-    With `crop_x`, the scan starts at the right edge of the crop region.
-    Slices to the right of it get the first timestep.
+    The slit scans from high to low X, each position covering `slit_width`
+    as a length. Each slice gets the latest timestep at or before the time
+    its slit position is observed, or the first if there is none. The time is worked out from the slice's
+    own position, so errors do not accumulate. With `crop_x`, the scan
+    starts at the right edge of the crop, and slices to the right of it get
+    the first timestep.
 
     Parameters
     ----------
     nx_mhd : int
         Number of MHD X-slices.
     voxel_dx : u.Quantity
-        MHD voxel size along X, as a length (e.g. Mm).
+        Voxel size along X, as a length.
     slit_width : u.Quantity
-        Slit width as an angle (e.g. arcsec).
+        Slit width, as an angle.
     slit_rest_time : u.Quantity
-        Slit rest time per position.
+        Time at each slit position.
     timestep_times : dict
-        Simulation time in seconds for each timestep suffix.
+        Simulation time in seconds of each timestep suffix.
     crop_x : tuple of u.Quantity, optional
-        (x_min, x_max) crop boundaries. The scan starts at x_max, the right
-        edge of the crop; slices to the right of it use the first timestep.
+        `(x_min, x_max)` of the crop.
 
     Returns
     -------
@@ -392,22 +376,19 @@ def compute_slice_timestep_mapping_mhd(
     """
     rest_time_sec = slit_rest_time.to_value(u.s)
     
-    # Convert slit width from angular to physical distance
+    # Slit width as a length
     slit_physical = angle_to_distance(slit_width).to(u.Mm)
     voxel_physical = voxel_dx.to(u.Mm)
     
-    # Sort timesteps by simulation time
     sorted_timesteps = sorted(timestep_times.items(), key=lambda x: x[1])
     suffixes = [s for s, t in sorted_timesteps]
     times = np.array([t for s, t in sorted_timesteps])
     first_suffix = suffixes[0]
     
-    # Check if observation time range extends beyond available MHD time range
     t0 = times[0]
     t_final = times[-1]
     mhd_duration = t_final - t0
     
-    # Total physical extent of the full domain
     total_extent = nx_mhd * voxel_physical
     
     # The scan starts at the right edge of the domain, or of the crop if given.
@@ -415,13 +396,13 @@ def compute_slice_timestep_mapping_mhd(
         x_min_crop = crop_x[0].to(u.Mm)
         x_max_crop = crop_x[1].to(u.Mm)
         
-        # The WCS centres X on zero (x=0 is at nx/2), so convert to absolute
-        # positions from the left edge.
+        # The WCS centres X on zero, so convert to positions from the left
+        # edge.
         domain_center = total_extent / 2
-        scan_start_position = domain_center + x_max_crop  # Right edge of crop in absolute coords
-        scan_end_position = domain_center + x_min_crop    # Left edge of crop in absolute coords
+        scan_start_position = domain_center + x_max_crop
+        scan_end_position = domain_center + x_min_crop
         
-        # Calculate observation duration for just the cropped region
+        # Observation duration of the crop alone
         crop_extent = x_max_crop - x_min_crop
         n_slit_positions_crop = int(np.ceil((crop_extent / slit_physical).decompose().value))
         observation_duration = n_slit_positions_crop * rest_time_sec
@@ -429,7 +410,7 @@ def compute_slice_timestep_mapping_mhd(
         print(f"  Crop region: X = [{x_min_crop:.3f}, {x_max_crop:.3f}]")
         print(f"  Observation starts at X = {x_max_crop:.3f} (right edge of crop)")
     else:
-        scan_start_position = total_extent  # Right edge of full domain
+        scan_start_position = total_extent
         scan_end_position = 0 * u.Mm
         n_slit_positions_crop = int(np.ceil((total_extent / slit_physical).decompose().value))
         observation_duration = n_slit_positions_crop * rest_time_sec
@@ -440,13 +421,12 @@ def compute_slice_timestep_mapping_mhd(
     
     slice_mapping = []
     
-    # Find the slit position of each MHD X-slice. The scan runs right to left,
-    # so scan_start_position is observed first, at t=t0.
+    # The scan runs right to left, so scan_start_position is observed first,
+    # at t0.
     for mhd_slice_idx in range(nx_mhd):
-        # Physical position of this slice (center of voxel) in absolute coords
+        # Centre of the slice, from the left edge
         x_physical = (mhd_slice_idx + 0.5) * voxel_physical
         
-        # Distance from the scan start position (right edge of observation region)
         distance_from_scan_start = scan_start_position - x_physical
         
         if distance_from_scan_start < 0:
@@ -457,23 +437,20 @@ def compute_slice_timestep_mapping_mhd(
         # Slit position 0 is at scan_start_position.
         slit_position = int(np.floor((distance_from_scan_start / slit_physical).decompose().value))
         
-        # Observation time for this slit position
         observation_time = t0 + slit_position * rest_time_sec
         
-        # Find the latest timestep that doesn't exceed observation_time
+        # Latest timestep at or before observation_time
         idx = np.searchsorted(times, observation_time, side='right') - 1
-        # Clamp to valid range (0 to len(times)-1)
         idx = max(0, min(idx, len(times) - 1))
         slice_mapping.append(suffixes[idx])
     
-    # Group slices by timestep for efficient processing
+    # Slices of each timestep, so each is read once
     grouped = {}
     for slice_idx, suffix in enumerate(slice_mapping):
         if suffix not in grouped:
             grouped[suffix] = []
         grouped[suffix].append(slice_idx)
     
-    # Print statistics
     if crop_x is not None:
         print(f"  Cropped region extent: {crop_extent:.3f}")
     else:
@@ -494,15 +471,15 @@ def apply_cube_cropping(
     crop_z: Optional[List[str]],
 ) -> Tuple[NDCube, NDCube, NDCube]:
     """
-    Apply cropping to temperature, density, and velocity cubes.
-    
+    Temperature, density and velocity cubes cropped.
+
     Parameters
     ----------
     temp_cube, rho_cube, vel_cube : NDCube
-        Input cubes to crop.
+        Cubes to crop.
     crop_x, crop_y, crop_z : list of str or None
-        Crop boundaries for each axis as [min, max] strings with units.
-        
+        `[min, max]` of each axis, as strings with units.
+
     Returns
     -------
     tuple of NDCube
@@ -560,15 +537,15 @@ def build_composite_cubes_mhd(
     precision: type,
 ) -> Tuple[NDCube, NDCube, NDCube]:
     """
-    Build composite temp, rho, vel cubes from multiple timesteps at MHD resolution.
+    Temperature, density and velocity cubes built from several timesteps.
 
-    Each MHD X-slice comes from its timestep in `slice_mapping`. There is no
-    spatial rebinning: the output is at full MHD resolution.
-    
+    Each MHD X-slice comes from its timestep in `slice_mapping`. The cubes
+    stay at the MHD resolution.
+
     Parameters
     ----------
     base_dir : Path
-        Base directory for atmosphere data.
+        Directory of the atmosphere data.
     temp_dir, temp_filename : str
         Directory and filename prefix for temperature files.
     rho_dir, rho_filename : str
@@ -578,25 +555,25 @@ def build_composite_cubes_mhd(
     slice_mapping : list
         Timestep suffix for each MHD X-slice.
     grouped_slices : dict
-        Slices grouped by timestep for efficient processing.
+        Slices of each timestep.
     cube_shape : tuple
-        Original cube dimensions in the file's storage order.
+        Cube shape in the file's storage order.
     voxel_dx, voxel_dy, voxel_dz : u.Quantity
         Voxel sizes in the files, at full resolution; `load_cube` applies the
         downsampling.
     downsample : int or bool
         Downsampling factor.
     precision : type
-        Numerical precision.
-        
+        Data type.
+
     Returns
     -------
     tuple
-        (temp_composite, rho_composite, vel_composite) NDCubes at MHD resolution.
+        Temperature, density and velocity NDCubes.
     """
     nx_mhd = len(slice_mapping)
     
-    # Load first timestep to determine dimensions and get reference WCS
+    # First timestep, for the shape and WCS
     first_suffix = list(grouped_slices.keys())[0]
     temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, first_suffix)
     temp_cube_ref = load_cube(
@@ -609,18 +586,14 @@ def build_composite_cubes_mhd(
     nz, ny, nx = temp_cube_ref.data.shape
     reference_wcs = temp_cube_ref.wcs
 
-    # Verify dimensions match slice mapping
     if nx != nx_mhd:
         raise ValueError(f"Cube X dimension ({nx}) doesn't match slice mapping ({nx_mhd})")
 
-    # Initialise composite arrays
     temp_composite = np.zeros((nz, ny, nx), dtype=precision)
     rho_composite = np.zeros((nz, ny, nx), dtype=precision)
     vel_composite = np.zeros((nz, ny, nx), dtype=precision)
     
-    # Process each timestep
     for suffix, slice_indices in tqdm(grouped_slices.items(), desc="Loading timesteps", unit="timestep"):
-        # Load cubes for this timestep
         temp_file = get_file_for_timestep(base_dir / temp_dir, temp_filename, suffix)
         rho_file = get_file_for_timestep(base_dir / rho_dir, rho_filename, suffix)
         vel_file = get_file_for_timestep(base_dir / vel_dir, vel_filename, suffix)
@@ -644,13 +617,12 @@ def build_composite_cubes_mhd(
             create_ndcube=True
         )
         
-        # Copy relevant slices to composite (no rebinning - direct copy)
+        # This timestep's slices
         for slice_idx in slice_indices:
             temp_composite[:, :, slice_idx] = temp_cube.data[:, :, slice_idx]
             rho_composite[:, :, slice_idx] = rho_cube.data[:, :, slice_idx]
             vel_composite[:, :, slice_idx] = vel_cube.data[:, :, slice_idx]
     
-    # Create NDCubes with proper WCS (at MHD resolution)
     temp_ndcube = NDCube(temp_composite * u.K, wcs=reference_wcs, meta={"source": "composite_dynamic"})
     rho_ndcube = NDCube(rho_composite * (u.g/u.cm**3), wcs=reference_wcs, meta={"source": "composite_dynamic"})
     vel_ndcube = NDCube(vel_composite * (u.cm/u.s), wcs=reference_wcs, meta={"source": "composite_dynamic"})
@@ -669,8 +641,7 @@ def load_muram_files(
 
     They are downsampled, cropped and checked as in
     :func:`load_atmosphere_file`. x and y are centred on zero and z = 0 is at
-    the centre of the bottom cell, as ECLIPSE has always placed a MURaM box,
-    so the crop options keep the meaning they had before atmosphere files.
+    the centre of the bottom cell, which the crop options assume.
     """
     data_dir = Path(args.data_dir)
     files = {
@@ -702,19 +673,18 @@ def load_muram_files(
 def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample, precision,
                         print_mem):
     """
-    Temperature, mass density and velocity cubes of the deprecated dynamic
-    mode of `synthesise-spectra`, built from MURaM's own files as the slit
-    steps across them, with the mode's settings and the cell sizes.
+    Cubes of the deprecated dynamic mode of `synthesise-spectra`.
+
+    Temperature, mass density and velocity, built from MURaM's own files as
+    the slit steps across them, with the mode's settings and the cell sizes.
     """
-    # Validate dynamic mode requirements
     if band is not None or getattr(args, "image_x", None):
         raise ValueError("Dynamic mode, which is deprecated, takes neither --band nor "
                          "--image-x; synthesise from an atmosphere file.")
     if args.slit_width is None:
         raise ValueError("--slit-width is required for dynamic mode (when --slit-rest-time is specified)")
-    # The snapshots are laid out along x, which the slit steps across in a
-    # view along z or y. In a view along x, x is the line of sight, and
-    # every pixel would sum cells from all the snapshots.
+    # The snapshots are laid out along x, which is the line of sight in a
+    # view along x, so every pixel would sum all of them.
     if integration_axis == "x":
         raise ValueError(
             "Dynamic mode lays its snapshots across x, which is the line of sight "
@@ -727,8 +697,8 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
             f"{view}, synthesise from an atmosphere file with --atmosphere.")
 
     base_dir = Path(args.data_dir)
-    # Voxel sizes in the MURaM files. load_cube scales them itself when it
-    # downsamples, so they are passed to it as given.
+    # Voxel sizes in the MURaM files; load_cube scales them when it
+    # downsamples.
     file_voxel_dz = u.Quantity(args.voxel_dz)
     file_voxel_dx = u.Quantity(args.voxel_dx)
     file_voxel_dy = u.Quantity(args.voxel_dy)
@@ -739,11 +709,10 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
     voxel_dx = file_voxel_dx * (downsample or 1)
     voxel_dy = file_voxel_dy * (downsample or 1)
 
-    # Parse slit rest time and slit width
     slit_rest_time = u.Quantity(args.slit_rest_time)
     slit_width = u.Quantity(args.slit_width)
     
-    # Determine which velocity direction to use
+    # Velocity along the line of sight
     if integration_axis == "x":
         vel_dir = args.vx_dir or "vx"
         vel_filename = args.vx_filename
@@ -754,7 +723,6 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
         vel_dir = args.vz_dir or "vz"
         vel_filename = args.vz_filename
     
-    # Set directory defaults
     temp_dir = args.temp_dir or "temp"
     rho_dir = args.rho_dir or "rho"
     
@@ -764,7 +732,6 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
     print(f"  Voxel dx: {voxel_dx}")
     print()
     
-    # Discover available timesteps
     time_dir = base_dir / args.time_dir
     print(f"Discovering timesteps from {time_dir}...")
     timestep_times = discover_timesteps(time_dir, args.time_filename)
@@ -773,18 +740,16 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
         print(f"    {suffix}: {sim_time:.3f} s")
     print()
     
-    # Calculate MHD cube dimensions
+    # Number of X-slices after downsampling
     cube_shape_tuple = tuple(args.cube_shape)
     nx_mhd = cube_shape_tuple[0]
     if downsample:
         nx_mhd = nx_mhd // downsample
     
-    # Prepare crop_x for slice mapping if specified
     crop_x_for_mapping = None
     if args.crop_x:
         crop_x_for_mapping = (u.Quantity(args.crop_x[0]), u.Quantity(args.crop_x[1]))
     
-    # Compute slice-to-timestep mapping at MHD resolution
     print(f"Computing slice-to-timestep mapping at MHD resolution...")
     slice_mapping, grouped_slices = compute_slice_timestep_mapping_mhd(
         nx_mhd, voxel_dx, slit_width, slit_rest_time, timestep_times,
@@ -795,7 +760,6 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
         print(f"    {suffix}: {len(indices)} slices (indices {min(indices)}-{max(indices)})")
     print()
     
-    # Build composite cubes at MHD resolution
     print(f"Building composite atmosphere cubes at MHD resolution ({print_mem()})...")
     temp_cube, rho_cube, vel_cube = build_composite_cubes_mhd(
         base_dir=base_dir,
@@ -816,7 +780,6 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
     )
     print(f"  Composite cube shape: {temp_cube.data.shape}")
     
-    # Apply cropping if requested in dynamic mode
     if args.crop_x or args.crop_y or args.crop_z:
         print(f"Applying cropping ({print_mem()})")
         temp_cube, rho_cube, vel_cube = apply_cube_cropping(
@@ -827,7 +790,7 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
     
     rho = rho_cube.data << rho_cube.unit
 
-    # Dynamic mode metadata for output (no spatial rebinning in synthesis)
+    # Dynamic mode metadata for the synthesis file
     dynamic_mode_metadata = {
         "enabled": True,
         "slit_width": slit_width,
@@ -843,8 +806,10 @@ def _dynamic_mode_cubes(args, view: str, integration_axis: str, band, downsample
 def _check_dynamic_mode_synthesis(dynamic_mode_info: dict, sweep_dims: dict,
                                   sim_fixed: dict) -> None:
     """
-    For a synthesis made in the deprecated dynamic mode, check that the run
-    observes it with the slit width and exposure time it was made for.
+    Check that a dynamic-mode synthesis is observed as it was made.
+
+    For a synthesis made in the deprecated dynamic mode, the run must have
+    the one slit width and exposure time the synthesis was made for.
     """
     is_dynamic_mode = dynamic_mode_info.get("enabled", False)
     if is_dynamic_mode:
@@ -904,9 +869,9 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
                 slit_position: u.Quantity, slit_width: u.Quantity,
                 psf_across_slit: Optional[u.Quantity], extend: bool, n_workers: int) -> _Scene:
     """
-    Spectrum of every line in a band under the slit, from the emission
-    measure a synthesis file from ECLIPSE keeps, for the deprecated `lines`
-    and `continuum` arguments of `full_ccd_frame`.
+    Spectra of a band's lines under the slit, from a synthesis file's emission measure.
+
+    For the deprecated `lines` and `continuum` arguments of `full_ccd_frame`.
     """
     import h5py
 
@@ -972,12 +937,13 @@ def _band_scene(path: str | Path, lines: BandLines, continuum: Optional[tuple],
         grid = u.Quantity(grid).to_value(u.Angstrom)
         if grid.ndim != 1 or not np.all(np.isfinite(grid)) or np.any(np.diff(grid) <= 0):
             raise ValueError("The continuum's wavelengths must be finite and increase.")
-        # The DEM is per unit log T, and also holds plasma faster than the
-        # velocity grid, which the continuum, not Doppler shifted, needs.
+        # The DEM is per unit log T. It also holds plasma faster than the
+        # velocity grid, which the continuum needs, as it is not Doppler
+        # shifted.
         total = dem * _temperature_bins(logT)[0]
         names.append("continuum")
         edges.append(_bin_edges(grid))
-        # One column at a time, to hold one column's spectrum.
+        # One column at a time, to hold only one column's spectrum in memory.
         radiance.append(sum(
             weight * continuum_spectra(total[:, [k]], density[:, [k]], lines.logN_grid,
                                        np.asarray(free), np.asarray(two_photon))[:, 0]

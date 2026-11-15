@@ -209,7 +209,7 @@ def test_replace_with_the_old_dark_current_name_uses_its_value(cls):
 
 
 def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
-    """As pickled by an older version, before the new settings existed."""
+    """Pickled by an older version, without the new settings."""
     state = dict(Detector_SWC(dark_current_293k=7 * DARK).__dict__)
     state["_dark_current_293k"] = state.pop("dark_current_293k")
     for name in ("fano_factor", "pair_energy_300k", "pair_energy_slope", "dispersion",
@@ -231,7 +231,7 @@ def test_a_pickled_detector_with_the_old_name_reads_back_with_it():
 
 
 def test_a_results_file_with_the_old_name_and_none_of_the_new_settings_reads_back(tmp_path):
-    """Without a warning, as the new settings' defaults are the values runs had before."""
+    """No warning, as the new settings' defaults are the values older runs used."""
     encoded = results_file._jsonable(Detector_SWC(dark_current_293k=7 * DARK))
     fields = encoded["fields"]
     fields["_dark_current_293k"] = fields.pop("dark_current_293k")

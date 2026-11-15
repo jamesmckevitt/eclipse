@@ -1,14 +1,14 @@
 """
-Every line in a band, for full-CCD frames: contribution functions and spectrum.
+Contribution functions and spectra of every line in a band, for full-CCD frames.
 
 G(T, n_e) of every CHIANTI line in the band, on a synthesis's temperature
-and density grids, with n_H / n_e included as elsewhere in ECLIPSE. Levels
-that nothing populates, as in a few ions such as N IV in CHIANTI 10.1, are
-left out and the rest solved exactly. Where an ion's level-resolved
-recombination and ionisation rates stop short of the hottest temperatures,
-or it has none, fiasco's single-ion model is used. Ions without data or an
-abundance are skipped and named. The whole SW band takes about two hours on
-32 cores, so the result is written to a file.
+and density grids, including n_H / n_e. Levels that nothing populates, as
+in a few ions such as N IV in CHIANTI 10.1, are left out and the rest
+solved exactly. Where an ion's level-resolved recombination and ionisation
+rates stop short of the hottest temperatures, or are missing, fiasco's
+single-ion model is used. Ions without data or an abundance are skipped and
+named. The whole SW band takes about two hours on 32 cores, so the result
+is written to a file.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ class IonLines:
     mass : float
         Ion mass in atomic mass units, for the thermal width of its lines.
     wavelength : np.ndarray
-        Wavelength of each line in Angstrom: CHIANTI's observed value where
-        it has one, and the theoretical value otherwise.
+        Wavelength of each line in Angstrom: observed where CHIANTI has one,
+        theoretical otherwise.
     observed : np.ndarray of bool
         Whether each wavelength is observed.
     temperatures : np.ndarray of int
@@ -109,15 +109,14 @@ def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[n
     One ion's level populations, solved without the levels nothing populates.
 
     In fiasco's rate matrix, element [i, j] is the rate from level j into
-    level i, and each column sums to zero. The last row is replaced by ones
-    so that the populations sum to one. A level whose row has no rate from
-    any other level gains nothing, so it is empty in a steady state. Such
-    levels are left out, the rest solved exactly, and the left-out
-    populations set to zero. The ground level is always kept.
+    level i, and each column sums to zero. The last row is replaced by ones,
+    so the populations sum to one. A level with no rate in from any other
+    level is empty in a steady state. Such levels are set to zero and the
+    rest solved exactly. The ground level is always kept.
     """
     matrix = np.asarray(matrix, dtype=float)
-    # Rebuild the last row, which the ones replaced, from each column summing
-    # to zero; values within the rounding error of the sums are taken as zero.
+    # Rebuild the last row from the zero column sums, taking values within
+    # rounding error as zero.
     rebuilt = -matrix[:-1].sum(axis=0)
     rounding = matrix.shape[0] * np.finfo(float).eps * np.abs(matrix[:-1]).sum(axis=0)
     rebuilt[np.abs(rebuilt) <= rounding] = 0.0
@@ -142,10 +141,10 @@ def _solve_dropping_unfed_levels(matrix: np.ndarray, rhs: np.ndarray) -> Tuple[n
 @contextlib.contextmanager
 def _unfed_levels_dropped(dropped: Dict[int, int]):
     """
-    Context in which a singular level-population solve drops the levels nothing populates.
+    Context in which singular level-population solves drop unpopulated levels.
 
     fiasco solves all temperatures at once with numpy's solve. This replaces
-    it, solving each matrix as numpy would and falling back to
+    it with a solve of each matrix in turn, as numpy would, using
     :func:`_solve_dropping_unfed_levels` for a singular one. `dropped`
     collects the number of levels left out, keyed by matrix index. numpy's
     solve is restored on exit.
@@ -199,11 +198,10 @@ def _ion_band_lines(args):
     """One ion's lines in the band, for a worker process; None if it has none there."""
     import logging
 
-    # fiasco creates its logger on first import, so import it before looking
-    # the logger up.
+    # fiasco creates its logger on first import.
     import fiasco  # noqa: F401
 
-    # fiasco warns about its fallbacks once per density; the run reports them
+    # fiasco warns about its fallbacks once per density; they are reported
     # once instead.
     fiasco_logger = logging.getLogger("fiasco")
     previous = fiasco_logger.level
@@ -253,7 +251,7 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
         except ValueError as error:
             if not _beyond_the_rates(error):
                 raise
-            # For some ions CHIANTI's level-resolved recombination and
+            # For some ions, CHIANTI's level-resolved recombination and
             # ionisation rates stop short of the hottest temperatures. Use
             # fiasco's single-ion model there, as for ions with no such rates.
             first = None
@@ -494,10 +492,10 @@ def same_temperatures(first: np.ndarray, second: np.ndarray) -> bool:
 
 def densities_on_grid(densities: np.ndarray, grid: np.ndarray) -> bool:
     """
-    Whether every one of `densities` is a point of `grid`, both as log10 n_e.
+    Whether every value of `densities` is a point of `grid`, both as log10 n_e.
 
-    A synthesis's densities are points of ECLIPSE's default grid, so lines
-    worked out on a wider run of those points serve it.
+    A synthesis's densities are points of the default grid, so lines
+    computed on a wider range of those points serve it.
     """
     densities, grid = np.asarray(densities, dtype=float), np.asarray(grid, dtype=float)
     nearest = np.abs(densities[:, np.newaxis] - grid).argmin(axis=1)
@@ -505,7 +503,7 @@ def densities_on_grid(densities: np.ndarray, grid: np.ndarray) -> bool:
 
 
 def _serves(path: Path, band, logT_grid, logN_grid, abundance, dbase_root) -> Optional[str]:
-    """Why the band's lines in the file at `path` do not serve a synthesis, or None if they do."""
+    """Why the band's lines in `path` do not serve a synthesis, or None if they do."""
     with h5py.File(path, "r") as f:
         if f.attrs.get("format") != FORMAT_NAME:
             return "is not a file of a band's lines"
@@ -530,7 +528,7 @@ def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarra
                    n_workers: int = 0, hdf5_dbase_root=None,
                    wider_grid: Optional[np.ndarray] = None) -> BandLines:
     """
-    A band's lines, read back from a file if it holds them and worked out and written there if not.
+    A band's lines, read from `path`, or computed and written there if it is missing.
 
     A file serves if it covers the band, is on the same temperatures and
     abundances, and has every density of `logN_grid` on its grid.
@@ -544,9 +542,9 @@ def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarra
     logN_grid : np.ndarray
         Densities the synthesis needs, as log10(n_e / cm-3).
     wider_grid : np.ndarray, optional
-        Densities to work the lines out on, if the file is not there, so
-        that they serve later syntheses too. It must have those of
-        `logN_grid`. Default None, for `logN_grid` itself.
+        Densities to compute the lines on if the file is missing, so it
+        serves later syntheses too. Must contain every density of
+        `logN_grid`. Default None uses `logN_grid`.
 
     Returns
     -------
@@ -555,8 +553,8 @@ def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarra
     Raises
     ------
     ValueError
-        If the file is there and does not serve. It is not replaced, as the
-        whole SW band takes hours to work out.
+        If the file exists and does not serve. It is not replaced, as the
+        whole SW band takes hours to compute.
     """
     path = Path(path).expanduser()
     band = tuple(float(value) for value in band)
@@ -578,11 +576,11 @@ def band_lines_for(path: str | Path, band: Sequence[float], logT_grid: np.ndarra
     return lines
 
 
-# Lines are laid onto the wavelengths in blocks of this many, to bound the
-# memory a whole band takes. The result does not depend on it.
+# Lines per block when laid onto the wavelengths, to bound memory. The
+# result does not depend on it.
 _LINES_AT_ONCE = 20000
 
-# Pixels are given their light in blocks of this many, for the same reason.
+# Pixels per block when adding their light, likewise.
 _PIXELS_AT_ONCE = 2048
 
 # Data shared by the workers of one `band_spectra` call, set in each worker
@@ -619,12 +617,11 @@ def band_wavelengths(band: Sequence[float], step: float) -> np.ndarray:
 
 def _density_shares(log_density: np.ndarray, logN_grid: np.ndarray):
     """
-    Indices of the grid densities either side of each density, and the share
-    of its emission measure each takes.
+    Grid densities either side of each density, and their shares of its emission measure.
 
-    The shares are linear in log10 n_e, as the contribution functions are
-    interpolated. Off the grid both shares are zero, as are the contribution
-    functions.
+    Returns the lower and upper grid indices and their shares. The shares
+    are linear in log10 n_e, as the contribution functions are interpolated.
+    Off the grid both shares are zero, as are the contribution functions.
     """
     grid = np.asarray(logN_grid, dtype=float)
     finite = np.isfinite(log_density)
@@ -648,8 +645,7 @@ def _templates_in_worker(t: int):
 
 def _templates_at(t: int, context: dict) -> np.ndarray:
     """
-    Light of every line in each wavelength bin, per unit emission measure,
-    from plasma at one temperature (an index into the temperature grid).
+    Spectrum of every line per unit emission measure at temperature index `t`.
 
     One spectrum for each velocity bin and grid density with plasma at this
     temperature, `context["used"][t]`, in erg cm3 / s over the whole sphere,
@@ -676,7 +672,7 @@ def _templates_at(t: int, context: dict) -> np.ndarray:
     wavelength, thermal, g = wavelength[near], thermal[near], g[near]
     for template, factor in zip(templates, factors):
         # Each line is a Gaussian of its thermal width at its Doppler-shifted
-        # wavelength, shared between the bins by exact integrals.
+        # wavelength, integrated exactly over the bins.
         for start in range(0, wavelength.size, _LINES_AT_ONCE):
             block = slice(start, start + _LINES_AT_ONCE)
             template += (points_onto_pixels(wavelength[block] * factor, edges,
@@ -714,11 +710,10 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
     """
     Spectrum of every line in a band in every pixel, from the emission measure EM(T, v).
 
-    Each temperature and velocity bin adds every line as a Gaussian with
-    that temperature's thermal width, Doppler shifted by that velocity,
-    scaled by the emission measure times G. Each Gaussian is integrated
-    over the wavelength bins, so a line's light is kept whatever the
-    spacing.
+    Each temperature and velocity bin adds every line as a Gaussian of that
+    temperature's thermal width, shifted by that velocity and scaled by the
+    emission measure times G. The Gaussians are integrated over the
+    wavelength bins, so no light is lost at any spacing.
 
     Parameters
     ----------
@@ -743,10 +738,10 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
         every CPU this process may use. Where processes cannot be forked, as
         on Windows, one process is used.
     column_weights : np.ndarray, optional
-        Weight of each column, to give each row the weighted sum of its
-        columns' spectra, such as the light a slit takes from them, without
-        holding every column's spectrum. Default None, for every pixel's
-        own spectrum.
+        Weight of each column. Each row then gets the weighted sum of its
+        columns' spectra, such as the light through a slit, without holding
+        every column's spectrum. Default None returns every pixel's
+        spectrum.
 
     Returns
     -------

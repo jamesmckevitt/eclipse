@@ -48,8 +48,8 @@ def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.
     """
     Solid angle of the Sun seen by one pixel, in steradian.
 
-    A pixel covers the plate scale along the slit and the slit width, which
-    is the raster step, across it.
+    A pixel covers the plate scale along the slit and the slit width (the
+    raster step) across it.
     """
     along_slit = angle_to_distance(focal_plane.plate_scale)
     across = angle_to_distance(u.Quantity(slit_width))
@@ -58,8 +58,9 @@ def pixel_solid_angle(focal_plane: FocalPlane_SWC, slit_width: u.Quantity) -> u.
 
 def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int = 0) -> np.ndarray:
     """
-    Row boundaries in Angstrom, shorter wavelength first, for the CCD's rows
-    and `margin` more past each end.
+    Wavelength bounds of each row in Angstrom, shorter first.
+
+    Covers the CCD's rows and `margin` more past each end.
     """
     if margin:
         rows = np.arange(-margin, focal_plane.n_rows + margin + 1) - 0.5
@@ -70,13 +71,11 @@ def _row_bounds(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int 
                             np.maximum(edges[:-1], edges[1:])])
 
 
-# Number of cells per row a line is laid onto, by exact integrals of its
-# Gaussian, so the telescope throughput and photon energy are taken at each
-# cell's wavelength rather than once for the whole line.
+# Cells per row a line is split into, so the throughput and photon energy
+# are taken at each cell's wavelength, not once per line.
 CELLS_PER_ROW = 16
 
-# Lines are laid in blocks of this many, to bound the memory a whole band
-# takes. The result does not depend on it.
+# Lines laid per block, to bound memory. The result does not depend on it.
 _LINES_AT_ONCE = 10000
 
 
@@ -96,9 +95,10 @@ def _sorted_rows(focal_plane: FocalPlane_SWC, ccd: str, column=None, margin: int
 def _cells(focal_plane: FocalPlane_SWC, ccd: str, column, row_edges: np.ndarray,
            reach: float) -> np.ndarray:
     """
-    Cell edges, `CELLS_PER_ROW` cells to the CCD's narrowest row, covering
-    the rows and `reach` Angstrom past each end. The edges are whole steps
-    from 0 Angstrom, so extending the range does not move them.
+    Cell edges covering the rows and `reach` Angstrom past each end.
+
+    The CCD's narrowest row holds `CELLS_PER_ROW` cells. The edges are whole
+    steps from 0 Angstrom, so extending the range does not move them.
     """
     step = np.abs(np.diff(focal_plane.row_edges(ccd, column).to_value(u.Angstrom))).min()
     step /= CELLS_PER_ROW
@@ -112,14 +112,12 @@ def _response(focal_plane: FocalPlane_SWC, ccd: str, column, telescope, det,
     """
     Spectral response of the instrument at each `wavelength` (Angstrom).
 
-    Returns the standard deviation of the Gaussian and the width of the
-    slit's image it is convolved with, both in Angstrom. With `spectral_psf`
-    `"quadrature"` the slit is included in the Gaussian and the width is 0.
-
-    The response is set in rows, as :func:`~eclipse.radiometric._spectral_response`
-    gives it, and converted at the width of the row each wavelength falls
-    in. The row width changes by less than a part in 1e4 across the
-    response.
+    Returns the Gaussian's standard deviation and the width of the slit
+    image it is convolved with, both in Angstrom. With `spectral_psf`
+    `"quadrature"` the slit is in the Gaussian and the width is 0. The
+    response from :func:`~eclipse.radiometric._spectral_response` is in
+    rows, converted at the width of the row each wavelength falls in, which
+    changes by less than 1 part in 1e4 across the response.
     """
     sigma_rows, box_rows = _spectral_response(telescope, det, slit_width, spectral_psf)
     bounds = _row_bounds(focal_plane, ccd, column)
@@ -134,10 +132,9 @@ def _intervals_onto_rows(bounds: np.ndarray, low: np.ndarray, high: np.ndarray,
     """
     Light in each row of `bounds` from intervals `low` to `high`.
 
-    Each interval holds `light` spread evenly over it, blurred by a Gaussian
+    Each interval's `light` is spread evenly over it, blurred by a Gaussian
     of standard deviation `sigma` convolved with a rectangle `box` wide, and
-    integrated exactly over the rows. Only the rows the blur reaches from an
-    interval are computed.
+    integrated exactly over the rows.
     """
     order = np.argsort(bounds[:, 0])
     row_low, row_high = bounds[order, 0], bounds[order, 1]
@@ -165,8 +162,8 @@ def _photons_per_energy(telescope, wavelength: u.Quantity) -> u.Quantity:
     :func:`~eclipse.radiometric.photons_per_energy` at each wavelength.
 
     Raises ValueError for a wavelength outside the telescope's throughput
-    tables, where it has no effective area: a single one would turn every
-    row of the frame to NaN through the spectral blur.
+    tables, as a single NaN there would spread to every row through the
+    spectral blur.
     """
     wavelength = np.atleast_1d(u.Quantity(wavelength))
     collected = photons_per_energy(telescope, wavelength)
@@ -188,12 +185,11 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     """
     Photons per second in each row of one CCD from a list of emission lines.
 
-    Each line is split between cells, `CELLS_PER_ROW` to a row, by exact
-    integrals of its Gaussian. Each cell's light is converted to photons at
-    the cell's wavelength, with the telescope's effective area there. With
-    `spectral_psf`, the light is blurred by the instrument's spectral
-    response as it is laid onto the rows, so a line narrower than a row
-    stays where it is. Blurring the rows afterwards with
+    Each line is split into cells, `CELLS_PER_ROW` to a row, by exact
+    integrals of its Gaussian, and each cell's light is converted to photons
+    at the cell's wavelength. With `spectral_psf`, the light is blurred by
+    the spectral response as it is laid onto the rows, so a line narrower
+    than a row stays where it is. Blurring the rows afterwards with
     :func:`apply_spectral_psf` moves it toward the middle of its row.
 
     Parameters
@@ -203,39 +199,36 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     ccd : str
         `'left'` or `'right'`.
     telescope : Telescope_EUVST
-        Gives the effective area, for an array of wavelengths at once.
+        Telescope, for the effective area.
     slit_width : u.Quantity
-        Width of the slit the light came through, as an angle.
+        Slit width, as an angle.
     wavelengths : u.Quantity
         Rest wavelengths of the lines.
     intensities : u.Quantity
         Spectrally integrated radiance of each line, in erg / (s cm2 sr).
     widths : u.Quantity
-        Gaussian 1-sigma width of each line as emitted, as a wavelength:
-        thermal plus any non-thermal broadening, without the instrument's
-        spectral response.
+        Gaussian 1-sigma width of each line as emitted (thermal and
+        non-thermal), as a wavelength.
     column : int, optional
         Column along the slit, for a focal plane whose lines drift along it.
         Ignored otherwise.
     lit_only : bool
-        Zero the rows the baffle keeps dark. They still pass charge, so the
-        smear model needs them present but empty. Only for the deprecated
-        :func:`apply_spectral_psf`, leave this off, blur, and empty the dark
-        rows afterwards.
+        Zero the rows the baffle keeps dark. They stay in the output, as
+        they still pass charge. For the deprecated :func:`apply_spectral_psf`,
+        turn this off, blur, then empty the dark rows.
     margin : int
-        Rows to add past each end of the CCD, only for the deprecated
-        :func:`apply_spectral_psf`. Needs `lit_only=False`. Not needed with
-        `spectral_psf`, which blurs the light of a line off the chip onto
-        the edge rows as it is laid.
+        Rows to add past each end of the CCD, for the deprecated
+        :func:`apply_spectral_psf` only. Needs `lit_only=False`. Not needed
+        with `spectral_psf`, which already blurs light from off the chip
+        onto the edge rows.
     det : Detector_SWC, optional
         Detector, for the spectral response in rows. Needed with
         `spectral_psf`.
     spectral_psf : str, optional
         `"quadrature"` or `"convolution"`, as in the configuration: blur the
         lines with the spectral response of
-        :func:`~eclipse.radiometric.apply_focusing_optics_psf` for a
-        synthesis through the same slit. None, the default, lays the lines
-        as emitted.
+        :func:`~eclipse.radiometric.apply_focusing_optics_psf` for the same
+        slit. Default None, no blur.
 
     Returns
     -------
@@ -258,8 +251,7 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     if np.any(widths.value <= 0):
         raise ValueError("Line widths must be positive.")
 
-    # A line outside the telescope's throughput tables is an error, as is a
-    # spectrum reaching beyond them.
+    # A line outside the telescope's throughput tables is an error.
     at_centre = _photons_per_energy(telescope, wavelengths).to_value(u.cm**2 / u.erg)
     edges, order = _sorted_rows(focal_plane, ccd, column, margin)
     centre, width = wavelengths.to_value(u.Angstrom), widths.to_value(u.Angstrom)
@@ -278,19 +270,17 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     for start in range(0, centre.size, _LINES_AT_ONCE):
         block = slice(start, start + _LINES_AT_ONCE)
         collected = light[block] * at_centre[block]
-        # Each line blurred by the response is a Gaussian of the two widths
-        # in quadrature, convolved with the slit's image for "convolution".
-        # Share it between the rows by exact integrals, in photons at the
-        # line centre's wavelength.
+        # A blurred line is a Gaussian of the two widths in quadrature,
+        # convolved with the slit image for "convolution". Lay it on the rows
+        # by exact integrals, in photons at the line centre.
         sorted_rows += points_onto_pixels(
             centre[block], edges, np.hypot(width[block], psf_sigma[block]), box[block]
         ) @ collected
         masses = points_onto_pixels(centre[block], cells, width[block])
         in_cells += masses @ light[block]
         at_centres += masses @ collected
-    # Then correct, cell by cell across each line, for the throughput and
-    # photon energy at each cell's wavelength rather than the line centre's,
-    # with the same blur as the line.
+    # Correct each cell for the throughput and photon energy at its own
+    # wavelength rather than the line centre's, with the same blur.
     lit = np.flatnonzero(in_cells > 0)
     low, high = cells[lit], cells[lit + 1]
     middle = (low + high) / 2
@@ -303,8 +293,8 @@ def photons_from_lines(focal_plane: FocalPlane_SWC, ccd: str, telescope,
         sigma, cell_box = _response(focal_plane, ccd, column, telescope, det, slit_width,
                                     spectral_psf, middle)
     sorted_rows += light_onto_pixels(low, high, edges, sigma, cell_box) @ change
-    # Far from a line, the exact part and the correction nearly cancel and
-    # can leave a row slightly below zero, which no light can be.
+    # Far from a line the two parts nearly cancel and can leave a row
+    # slightly negative.
     np.maximum(sorted_rows, 0.0, out=sorted_rows)
     rows = np.zeros(edges.size - 1)
     rows[order] = sorted_rows
@@ -324,12 +314,10 @@ def photons_from_spectrum(focal_plane: FocalPlane_SWC, ccd: str, telescope,
     """
     Photons per second in each row of one CCD from a continuous spectrum.
 
-    Use this for a continuum, or anything already sampled on a wavelength
-    grid. The grid must be finer than a row, since the radiance is
-    integrated between the row boundaries by the trapezium rule on it: each
-    grid interval holds its trapezium-rule light, spread evenly over it.
-    With `spectral_psf` that light is blurred by the instrument's spectral
-    response as it is laid onto the rows, as in :func:`photons_from_lines`.
+    For a continuum, or anything sampled on a wavelength grid. The grid must
+    be finer than a row: each grid interval's light, by the trapezium rule,
+    is spread evenly over it and integrated between the row boundaries. With
+    `spectral_psf` the light is blurred as in :func:`photons_from_lines`.
 
     Parameters
     ----------
@@ -403,9 +391,9 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
     """
     Photons in each pixel of a frame and the wavelength of their mean energy.
 
-    The photons are as from :func:`~eclipse.readout.expose`. This is
-    :func:`expose_with_wavelengths` without the spread of photon energies,
-    which :func:`detect` also takes.
+    The photons are as from :func:`~eclipse.readout.expose`.
+    :func:`expose_with_wavelengths` also gives the spread of photon
+    energies, which :func:`detect` takes.
 
     Parameters
     ----------
@@ -431,18 +419,15 @@ def expose_with_wavelength(rate: np.ndarray, wavelength: u.Quantity, exposure: u
 def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: u.Quantity,
                             sequence, rms_wavelength: Optional[u.Quantity] = None) -> tuple:
     """
-    Photons in each pixel of a frame and the wavelengths of their mean and
-    root mean square energies.
+    Photons in each pixel and the wavelengths of their mean and root mean square energies.
 
-    The photons are as from :func:`~eclipse.readout.expose`. Without
-    a shutter a pixel holds photons from every row its charge crossed.
-    :func:`detect` needs their mean energy to convert them to electrons, and
-    their root mean square energy for the spread in electrons from photons
-    of different energies. `expose` is linear in the rate, so exposing the
-    rate weighted by the energy, and by its square, gives each pixel's total
-    energy and squared energy; dividing by the photons gives the means. A
-    pixel with no photons keeps its given wavelength, and a parallel
-    overscan pixel with none takes the last image row's.
+    The photons are as from :func:`~eclipse.readout.expose`. Without a
+    shutter a pixel holds photons from every row its charge crossed.
+    :func:`detect` needs their mean energy to convert them to electrons,
+    and their root mean square energy for the extra spread in electrons.
+    Both come from exposing the rate weighted by the energy and by its
+    square. A pixel with no photons keeps its given wavelength, and a
+    parallel overscan pixel with none takes the last image row's.
 
     Parameters
     ----------
@@ -497,7 +482,7 @@ def expose_with_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u
     """
     :func:`expose_with_wavelengths` and
     :func:`expose_serial_overscan_with_wavelengths` together, from one
-    transfer of the charge rather than two.
+    charge transfer rather than two.
 
     Returns
     -------
@@ -529,12 +514,11 @@ def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quan
                                             exposure: u.Quantity, sequence,
                                             rms_wavelength: Optional[u.Quantity] = None) -> tuple:
     """
-    Photons the serial register carries into the overscan, with the
-    wavelengths of their mean and root mean square energies.
+    Serial overscan photons and the wavelengths of their mean and root mean square energies.
 
     As :func:`expose_with_wavelengths`, for the samples of
-    :func:`~eclipse.readout.expose_serial_overscan`. A sample no
-    photons reach takes the wavelength of the image pixel next to it.
+    :func:`~eclipse.readout.expose_serial_overscan`. A sample no photons
+    reach takes the wavelength of the image pixel next to it.
 
     Returns
     -------
@@ -572,9 +556,8 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
 
     The stages are those of :func:`eclipse.radiometric.to_electrons`:
     quantum efficiency, electrons per photon with their Fano spread, dark
-    current and read noise. A frame spans the band, so each row has its own
-    photon energy. Without a shutter each row waits a different time to be
-    read out, so each row has its own dark current.
+    current and read noise. Each row has its own photon energy and dark
+    current time.
 
     Parameters
     ----------
@@ -583,13 +566,11 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         these must be whole numbers, as from a Poisson draw.
     wavelength : u.Quantity
         Wavelength of the photons, one per row or one per pixel (same shape
-        as `photons`). Without a shutter a pixel holds photons from every
-        row its charge crossed; per pixel, give the wavelength of their mean
-        energy, as from :func:`expose_with_wavelengths`.
+        as `photons`). Per pixel, give that of their mean energy, as from
+        :func:`expose_with_wavelengths`.
     dark_time : u.Quantity
-        Time each row collects dark current, one per row or one for all, as
-        from :func:`eclipse.readout.dark_current_time`, or one per
-        pixel, same shape as `photons`.
+        Time collecting dark current: one for all, one per row as from
+        :func:`eclipse.readout.dark_current_time`, or one per pixel.
     det : Detector_SWC
         Detector.
     noise : bool
@@ -597,9 +578,9 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
     rms_wavelength : u.Quantity, optional
         Wavelength of the root mean square energy of the photons in each row
         or pixel, shaped as `wavelength`, as from
-        :func:`expose_with_wavelengths`. Photons of different energies free
-        different numbers of electrons, which widens the spread of a pixel's
-        electrons. Default `wavelength`, for photons of one energy.
+        :func:`expose_with_wavelengths`. Mixed photon energies widen the
+        spread of a pixel's electrons. Default `wavelength`, for photons of
+        one energy.
 
     Returns
     -------
@@ -630,7 +611,9 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
 
 def digitise(electrons: np.ndarray, det) -> np.ndarray:
     """
-    DN per pixel: electrons divided by the gain, rounded and clipped at the
-    detector's maximum, as in :func:`eclipse.radiometric.to_dn`.
+    DN per pixel, as in :func:`eclipse.radiometric.to_dn`.
+
+    Electrons divided by the gain, rounded and clipped at the detector's
+    maximum.
     """
     return _digitise(electrons, det)

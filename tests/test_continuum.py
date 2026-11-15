@@ -1,7 +1,7 @@
 """The continuum under the lines: free-free, free-bound and two-photon emission.
 
-It is stored once per group of overlapping windows, so each observed window
-adds it once.
+It is stored once per group of overlapping windows, so each window adds it
+once.
 """
 import dataclasses
 import sys
@@ -117,7 +117,7 @@ FLAT = 1e-30  # erg cm3 / (s sr cm) per n_e^2 dh, at every temperature and wavel
 
 
 def _flat_continuum(wavelength, logT_grid, logN_grid, **kwargs):
-    """Continuum of FLAT everywhere, with no two-photon part, in place of fiasco."""
+    """Continuum of `FLAT` everywhere, with no two-photon part, in place of fiasco."""
     n = np.atleast_1d(wavelength).size
     return (np.full((len(logT_grid), n), FLAT),
             np.zeros((len(logN_grid), len(logT_grid), n)))
@@ -154,14 +154,13 @@ def test_a_synthesis_with_the_continuum_keeps_it_beside_the_lines(tmp_path, monk
     assert len(entries) == 2 and set(synthesis_read.lines) == set(lines) | set(entries)
     products = read_synthesis_products(path)
     assert set(products["goft"]) == set(lines) and products["config"]["continuum"] is True
-    # Each pixel's continuum is its emission measure, summed over all
-    # temperatures and velocities, times the flat continuum.
+    # Each pixel's continuum is its emission measure, summed over temperature
+    # and velocity, times FLAT.
     em = products["em_tv"].sum(axis=(-1, -2))
     for name in entries:
         radiance = synthesis_read.lines[name].radiance().to_value(synthesis_unit())
         assert np.allclose(radiance, (em * FLAT)[..., np.newaxis], rtol=1e-6)
-    # A window adds the continuum once: with the line spectra set to zero,
-    # what remains is the continuum.
+    # With the line spectra set to zero, a window holds the continuum once.
     only = {name: line if is_continuum(name)
             else dataclasses.replace(line, intensity=0 * line.intensity)
             for name, line in synthesis_read.lines.items()}
@@ -205,7 +204,7 @@ def test_the_continuum_is_fiascos_per_emission_measure_and_per_steradian():
 
 
 def test_the_continuum_counts_plasma_moving_faster_than_the_velocity_grid(tmp_path, monkeypatch):
-    """The continuum is not Doppler shifted, so plasma left out of em_tv still adds to it."""
+    """The continuum is not Doppler shifted, so plasma left out of `em_tv` still adds to it."""
     nz, ny, nx = 4, 3, 2
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
     atmosphere = Atmosphere(

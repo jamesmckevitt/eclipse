@@ -154,7 +154,7 @@ def test_an_ion_whose_data_are_missing_is_left_out_and_named(monkeypatch, capsys
     band = band_contribution_functions((195.10, 195.13), np.linspace(5.8, 6.6, 9),
                                        np.array([9.0]), elements=["Fe"], n_workers=1)
     assert band.ions == []
-    # With the work done in this process, fiasco's warnings are restored afterwards.
+    # Run in this process, fiasco's log level is restored afterwards.
     assert logger.level == logging.INFO
     assert "Fe 12 (no such data)" in capsys.readouterr().out
 

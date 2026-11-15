@@ -524,7 +524,7 @@ def test_a_frame_seen_from_a_position_synthesises_the_strip_under_the_slit(tmp_p
 
 
 def test_a_partial_synthesis_keeps_its_ending_and_is_hidden(tmp_path):
-    """synthesise-spectra reads the ending as the file's kind; a series' *.h5 must not match it."""
+    """`synthesise-spectra` reads the kind from the ending; a series' `*.h5` must not match."""
     import glob
 
     from eclipse.atmosphere import _new_partial

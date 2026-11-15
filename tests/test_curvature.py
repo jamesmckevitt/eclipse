@@ -24,7 +24,7 @@ def _random_box(shape, seed=3):
 
 @pytest.mark.parametrize("seed", range(4))
 def test_the_compiled_faces_match_the_shared_ones(seed):
-    """Cells each seen their own way share themselves as the same cells seen alike."""
+    """Cells each given the same projection overlap the pixels as with one shared one."""
     rng = np.random.default_rng(seed)
     frame, _ = disk_frame(*rng.uniform(-600, 600, 2) * u.arcsec, rng.uniform(0, 360) * u.deg)
     linear = np.vstack([frame[:2] / 0.2, frame[2]]) @ np.diag(rng.uniform(0.8, 1.2, 3))
@@ -71,7 +71,7 @@ def test_every_cell_of_a_box_that_does_not_repeat_is_seen_once(x, y, rotation):
 
 @pytest.mark.parametrize("x, y, rotation", [(0, 0, 0), (500, 300, 20), (-700, -300, 60)])
 def test_a_thin_repeating_layer_is_seen_through_one_over_mu(x, y, rotation):
-    """Each pixel sees n_e^2 times the layer's thickness over the cosine at its own place."""
+    """Each pixel sees n_e^2 times the layer's thickness divided by its own mu."""
     n, size, thickness = 30, 2.0, 0.01
     log_t, log_n = np.full((1, n, n), 6.0), np.full((1, n, n), 9.0)
     geometry = disk_geometry(x * u.arcsec, y * u.arcsec, rotation * u.deg)
@@ -79,25 +79,24 @@ def test_a_thin_repeating_layer_is_seen_through_one_over_mu(x, y, rotation):
                         np.array([0.0, thickness]) * u.Mm, True)
     dem, _ = compute_dem(log_t, log_n, thickness * 1e8, LOGT, "z", sky=sky)
     em = dem.sum(axis=-1) * 0.1
-    # Where each pixel is seen from the Sun's centre on the sky, and the
-    # cosine there.
+    # Each pixel's distance from disk centre, in solar radii, and mu there.
     radius = const.R_sun.to_value(u.Mm)
     sun = -radius * geometry.sky[:2] @ geometry.up
     columns = 0.5 * (sky.x_edges[1:] + sky.x_edges[:-1]).to_value(u.Mm)
     rows = 0.5 * (sky.y_edges[1:] + sky.y_edges[:-1]).to_value(u.Mm)
     off = np.hypot(columns[np.newaxis, :] - sun[0], rows[:, np.newaxis] - sun[1]) / radius
     mu = np.sqrt(1.0 - off ** 2)
-    # The layer is laid on the sphere with lengths across the way from the
-    # box's centre shortened by sin(a) / a, at the angle a round the Sun from
-    # it, so the emission measure per area grows by a / sin(a).
+    # On the sphere, lengths away from the box centre shrink by sin(a) / a at
+    # angle a round the Sun, so the emission measure per area grows by
+    # a / sin(a).
     across = (columns[np.newaxis, :] - sun[0])[..., np.newaxis] * geometry.sky[0]
     up = (rows[:, np.newaxis] - sun[1])[..., np.newaxis] * geometry.sky[1]
     point = across + up + radius * mu[..., np.newaxis] * geometry.sky[2]
     angle = np.arccos(np.clip(point @ geometry.up / radius, -1.0, 1.0))
     stretch = np.where(angle > 0, angle / np.sin(np.where(angle > 0, angle, 1.0)), 1.0)
-    # Each cell is laid flat, along the surface at its centre, so neighbouring
-    # cells meet with slivers between them, which move about a tenth of the
-    # cell's size over the radius between pixels, more where seen at a slant.
+    # Each cell is laid flat along the surface at its centre, so neighbours
+    # leave slivers between them. These move about a tenth of size / radius
+    # between pixels, more where seen at a slant.
     assert em == pytest.approx(1e18 * thickness * 1e8 / mu * stretch, rel=0.2 * size / radius)
 
 

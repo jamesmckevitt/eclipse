@@ -95,7 +95,7 @@ def test_a_synthesised_line_has_the_brightness_and_the_thermal_width_it_should()
 
 
 def test_the_filter_attenuates_the_visible_stray_light():
-    """The earlier test of it left out the telescope, and so the filter."""
+    """With the telescope given, the light is scaled by the filter's visible throughput."""
     det = Detector_SWC()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec,
                      vis_sl=1.0e12 * u.photon / (u.s * u.cm**2))

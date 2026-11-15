@@ -73,8 +73,8 @@ def test_simulating_ahead_of_the_fits_gives_the_same_monte_carlo(monkeypatch):
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     runs = []
     for workers in (1, 2):
-        # Two workers make the next iteration be simulated in a thread; the
-        # fits themselves still run here, as ncpu is 1.
+        # With two workers the next iteration is simulated in a thread, and
+        # the fits still run here, as ncpu is 1.
         monkeypatch.setattr(mc, "effective_n_jobs", lambda n_jobs: workers)
         np.random.seed(11)
         runs.append(mc.monte_carlo(_intensity_cube(), 40 * u.s, det, tel, sim, n_iter=3))

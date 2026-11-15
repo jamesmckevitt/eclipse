@@ -1,7 +1,7 @@
-"""--goft-temperature-chunk changes only the memory fiasco needs.
+"""`--goft-temperature-chunk` changes only the memory fiasco needs.
 
-Contribution functions from chunks of the temperature grid must match those
-from the whole grid. A stand-in for fiasco removes the need for CHIANTI.
+Contribution functions from chunks of the temperature grid match those from
+the whole grid. A stand-in for fiasco means CHIANTI is not needed.
 """
 import sys
 import types
@@ -25,7 +25,7 @@ class _Transitions:
 
 
 class _Ion:
-    """Enough of fiasco.Ion for _compute_single_ion, recording each call."""
+    """Enough of `fiasco.Ion` for `_compute_single_ion`, recording each call."""
 
     temperatures_per_call = []
 
@@ -49,9 +49,9 @@ class _Ion:
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):
-    # Import the real fiasco first so that it creates its own "fiasco" logger.
-    # Created by the synthesis under the stand-in, it would be a plain logger,
-    # which the real fiasco fails to set up when a later test imports it.
+    # Import the real fiasco first, so it makes its own "fiasco" logger. Made
+    # under the stand-in, it would be a plain logger that breaks a later real
+    # import.
     import fiasco  # noqa: F401
     module = types.ModuleType("fiasco")
     module.Ion = _Ion

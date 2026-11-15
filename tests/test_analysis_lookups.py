@@ -1,8 +1,7 @@
-"""Finding a combination, dating a map and reading fit_cube_gauss output.
+"""Finding a combination, dating a map and reading `fit_cube_gauss` output.
 
-A combination is matched with its units, a date keeps its offset, the
-exposure-time map holds seconds, and the velocity and width helpers take
-fit_cube_gauss's plain array.
+A combination is matched with its units, a date keeps its offset, and the
+velocity and width helpers take `fit_cube_gauss` output as a plain array.
 """
 import astropy.units as u
 import numpy as np
@@ -63,7 +62,7 @@ def test_a_date_with_an_offset_is_written_in_utc(given, expected):
 
 
 def test_the_fits_as_fit_cube_gauss_returns_them_give_velocities_and_widths():
-    """Plain array in cm, as returned by fit_cube_gauss."""
+    """Velocity and width from `fit_cube_gauss` output, a plain array in cm."""
     rest = 195.119 * u.AA
     fits = np.zeros((2, 3, 4))
     fits[..., 1] = (rest * (1 + 10 * u.km / u.s / (299792.458 * u.km / u.s))).to_value(u.cm)

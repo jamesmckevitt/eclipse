@@ -109,7 +109,7 @@ def test_a_box_turned_at_disk_centre_is_the_view_from_above_turned(projection):
 def test_a_repeating_slab_is_uniform_and_seen_through_one_over_cos(projection, x, y, rotation,
                                                                     nz):
     """
-    Every pixel of a repeating, uniform slab sees n_e^2 times its height over cos.
+    Every pixel of a repeating, uniform slab sees n_e^2 times its height over cos(angle).
 
     One layer is the hardest case, a thin layer seen at a slant.
     """
@@ -162,8 +162,7 @@ def test_a_raised_feature_is_seen_outward_from_disk_centre(projection):
     columns = 0.5 * (sky.x_edges[1:] + sky.x_edges[:-1]).to_value(u.Mm)
     rows = 0.5 * (sky.y_edges[1:] + sky.y_edges[:-1]).to_value(u.Mm)
     height = 2.05                                      # the cell's centre, Mm
-    # Mean position over the image's pixels, which are 0.2 Mm: putting a cell's shadow into
-    # pixels moves its mean by a small fraction of one.
+    # Mean position over the 0.2 Mm pixels, which binning moves by a small fraction of one.
     assert (image.sum(axis=0) * columns).sum() / image.sum() == pytest.approx(
         height * np.sin(angle.to_value(u.rad)), abs=0.01)
     assert (image.sum(axis=1) * rows).sum() / image.sum() == pytest.approx(0.0, abs=1e-12)

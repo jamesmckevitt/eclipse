@@ -42,7 +42,6 @@ SIM = Simulation()
 def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
     """A field uniform along the slit is unchanged by the PSF.
 
-    Every row is identical, so blurring along the slit should change nothing.
     With zero fill the outer rows would lose flux.
     """
     cube = _uniform_slit_cube()
@@ -56,9 +55,8 @@ def test_a_field_uniform_along_the_slit_keeps_its_edge_rows():
 def test_zero_fill_darkens_the_outer_rows_by_the_kernel_weight():
     """Zero fill loses the kernel weight that falls off the array.
 
-    The flux lost from row r is the fraction of the Gaussian kernel's weight
-    beyond the edge. It is computed from the kernel rather than quoted, so it
-    cannot drift from the PSF.
+    The loss is worked out from the kernel, so it follows any change to the
+    PSF.
     """
     cube = _uniform_slit_cube()
     zero_filled = apply_focusing_optics_psf(cube, TEL, DET, SIM, boundary="zero")
@@ -98,7 +96,7 @@ def test_the_interior_is_untouched_by_the_choice():
 
 
 def test_the_spectral_axis_is_still_zero_filled():
-    """Established in #44: there is no flux at the ends of the grid to lose."""
+    """There is no flux at the ends of the grid to lose (#44)."""
     data = np.zeros((N_SLIT, N_SCAN, N_WAVE))
     data[:, :, 0] = 1000.0     # all the flux against the blue edge
     cube = _cube(data)

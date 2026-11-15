@@ -1,11 +1,10 @@
 """
 Slit observations of a time series of atmospheres or synthesis files.
 
-For each exposure of a :class:`RasterPlan`, only the columns under the slit
-are synthesised, or read from synthesis files, from the snapshots the
-exposure overlaps, weighted by the share of the exposure each covers. A
+Each exposure of a :class:`RasterPlan` takes only the columns under the
+slit, from the snapshots it overlaps, weighted by the time each covers. A
 snapshot stands for the atmosphere until the next one's time, and the last
-for as long again as the gap before it; an exposure outside that range is
+for as long again as the gap before it. An exposure outside that range is
 an error. Each raster is one cube, and a sit-and-stare is a raster of one
 slit position.
 """
@@ -76,9 +75,8 @@ class SynthesisSettings:
     n_workers : int
         Workers for computing the contribution functions; 0 uses all CPUs.
     goft_temperature_chunk : int, optional
-        Number of temperatures passed to fiasco at a time when computing the
-        contribution functions, to reduce memory use. None passes the whole
-        grid at once.
+        Temperatures passed to fiasco at a time, to reduce memory use. None
+        passes the whole grid.
     """
 
     lines: Tuple[str, ...]
@@ -134,21 +132,20 @@ class RasterPlan:
     steps : int
         Slit positions per raster; 1 is a sit-and-stare.
     step : u.Quantity, optional
-        Angle between neighbouring slit positions. None uses the slit width,
-        so the positions abut.
+        Angle between neighbouring slit positions. None uses the slit width.
     repeats : int
         Number of rasters, one after another.
     cadence : u.Quantity, optional
         Time between the starts of consecutive exposures. None uses the
-        exposure time, so each exposure starts as the previous one ends.
+        exposure time, leaving no gaps.
     centre : u.Quantity, optional
         Heliocentric x of the raster centre, as a length. None centres it on
         the atmosphere.
     direction : str
         Direction the slit steps in x: `"increasing"` (default) or
-        `"decreasing"`, as the deprecated dynamic mode scanned. Either way
-        the image columns run along increasing x, each observed at its own
-        exposure's time.
+        `"decreasing"`, as the deprecated dynamic mode scanned. The image
+        columns always run along increasing x, each at its own exposure's
+        time.
     """
 
     start: u.Quantity
@@ -196,12 +193,10 @@ class RasterPlan:
         expos : u.Quantity
             Exposure time. Also the cadence if none was given.
         atmosphere_centre : u.Quantity
-            Heliocentric x of the centre of the atmosphere, or of the image
-            of a series of synthesis files. Also the raster centre if none
-            was given.
+            Heliocentric x of the centre of the atmosphere or synthesis
+            image. Also the raster centre if none was given.
         repeat : int, optional
-            Raster index, from 0. Not needed for a plan of one raster, but
-            required for several, since each raster is observed separately.
+            Raster index, from 0. Required for a plan of several rasters.
         """
         if expos <= 0:
             raise ValueError(f"The exposure time must be positive, got {expos}.")
@@ -235,7 +230,7 @@ class _Series:
     """
     Snapshot files sorted by their recorded times.
 
-    Each snapshot represents the Sun from its time until the next one's,
+    Each snapshot stands for the Sun from its time until the next one's,
     and the last for as long again as the gap before it.
     """
 
@@ -256,10 +251,10 @@ class _Series:
 
     def valid_until(self) -> u.Quantity:
         """
-        Time at which each snapshot stops representing the atmosphere.
+        Time each snapshot stops standing for the atmosphere.
 
-        This is the next snapshot's time, and for the last snapshot its own
-        time plus the gap before it.
+        The next snapshot's time, and for the last its own time plus the gap
+        before it.
         """
         times = self.times.to_value(u.s)
         if times.size == 1:
@@ -270,10 +265,10 @@ class _Series:
 
     def coverage(self, start: u.Quantity, end: u.Quantity) -> List[Tuple[int, float]]:
         """
-        Snapshots an exposure from `start` to `end` falls in, with the fraction each covers.
+        Snapshots an exposure from `start` to `end` overlaps, with the fraction each covers.
 
-        The fractions sum to one. An exposure reaching before the first
-        snapshot or beyond the last one's span raises a ValueError.
+        The fractions sum to one. An exposure reaching outside the series
+        raises ValueError.
         """
         t0, t1 = start.to_value(u.s), end.to_value(u.s)
         if t1 <= t0:
@@ -281,11 +276,9 @@ class _Series:
         begins = self.times.to_value(u.s)
         ends = self.valid_until().to_value(u.s)
         # Allow for rounding, so a plan that exactly fills the series is not
-        # rejected. Exposure times are a start plus whole cadences plus an
-        # exposure, and the series end is the last time plus the last gap.
-        # Each of these few steps, and each unit change, rounds by at most
-        # half a unit in the last place of the largest time; 16 units bound
-        # them all.
+        # rejected. The few additions and unit changes behind these times
+        # each round by at most half a unit in the last place of the largest
+        # time; 16 units bound them all.
         rounding = 16 * np.spacing(max(abs(begins[0]), abs(ends[-1]), abs(t0), abs(t1)))
         early, late = begins[0] - t0, t1 - ends[-1]
         if early > rounding or late > rounding:
@@ -310,8 +303,7 @@ class AtmosphereSeries(_Series):
     """
     Atmosphere files sorted by their recorded times.
 
-    Every file must record a time, and all must share one grid, since an
-    exposure combines columns from different snapshots.
+    Every file must record a time, and all must share one grid.
     """
 
     def __init__(self, paths: Sequence[str | Path]):
@@ -337,11 +329,9 @@ class SynthesisSeries(_Series):
     """
     Synthesis files sorted by their recorded times, for one line's window.
 
-    Every file must record a time, and all must share one image, seen along
-    one axis, and the same lines on the same wavelengths, since an exposure
-    combines columns from different snapshots and adds up their spectra.
-    Only the lines reaching the window of `reference_line` are read, as for
-    a single synthesis file.
+    Every file must record a time, and all must share one image, viewing
+    axis, and set of lines on the same wavelengths. Only the lines reaching
+    the window of `reference_line` are read.
 
     Parameters
     ----------
@@ -435,21 +425,22 @@ class SynthesisSeries(_Series):
 
 # Largest strip of columns fetched at once, in bytes of the arrays it needs.
 STRIP_BYTES = 2**30
-# Share of the memory this process may use that the cached columns may
-# take. Past it, the columns used longest ago are dropped, and fetched again
-# if needed.
+# Share of this process's memory the column cache may take. Past it, the
+# least recently used columns are dropped.
 COLUMN_CACHE_SHARE = 0.25
 
 
 def _memory_for_this_process() -> int:
     """
-    Bytes of memory this process may use: the machine's, or the job's limit
-    if lower, shared between the MPI ranks.
+    Bytes of memory this process may use.
+
+    The machine's memory, or the job's limit if lower, shared between the
+    MPI ranks.
     """
     from .utils import _get_mpi_info
 
     memory = psutil.virtual_memory().total
-    # A job's memory limit, from its control group, version 2 or 1.
+    # Job memory limit, from cgroup v2 or v1.
     for limit in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
         try:
             value = Path(limit).read_text().strip()
@@ -476,13 +467,11 @@ class _SlitRaster:
     """
     Spectra a slit sees over a plan, from the columns of a snapshot series.
 
-    Before each raster, the columns it needs are fetched, a strip of
-    neighbouring columns at a time, and then cached, so a sweep over exposure
-    times or slit widths reuses most of the work. After each exposure the
-    columns used longest ago are dropped until the cache is within
-    `cache_bytes`.
-    Subclasses define how a strip of columns is fetched and how big a column
-    is.
+    The columns a raster needs are fetched a strip at a time and cached, so
+    a sweep over exposure times or slit widths reuses most of the work. The
+    least recently used columns are dropped to keep the cache within
+    `cache_bytes`. Subclasses define how a strip is fetched and how big a
+    column is.
     """
 
     # What the x grid spans, named in the error when a slit reaches beyond it.
@@ -503,7 +492,7 @@ class _SlitRaster:
         raise NotImplementedError
 
     def _keep(self, snapshot: int, column: int, spectra: Dict[str, np.ndarray]) -> None:
-        """Cache one column's spectra, as arrays of their own so each can be let go alone."""
+        """Cache one column's spectra as separate arrays, so each can be freed alone."""
         spectra = {name: np.ascontiguousarray(si) for name, si in spectra.items()}
         previous = self._columns.pop((snapshot, column), None)
         if previous is not None:
@@ -519,8 +508,9 @@ class _SlitRaster:
 
     def _fetch(self, needed: Dict[int, set], until_full: bool = False) -> None:
         """
-        Fetch the columns in `needed`, by snapshot, that are not cached, a
-        strip at a time. With `until_full`, stop once the cache is full.
+        Fetch the uncached columns in `needed`, by snapshot, a strip at a time.
+
+        With `until_full`, stop once the cache is full.
         """
         width = max(1, int(STRIP_BYTES // max(1, self._column_bytes())))
         for snapshot in sorted(needed):
@@ -546,9 +536,9 @@ class _SlitRaster:
         Check that `plan` can observe `series` with every slit width and exposure time.
 
         Every exposure of every raster must lie within the series' times and
-        put the slit within its x grid, or a ValueError is raised. Only the
-        series' times and edges are used, so the check runs before anything
-        is synthesised or read and a sweep does not fail part-way through.
+        put the slit within its x grid, or ValueError is raised. Only the
+        times and edges are used, so this runs before anything is
+        synthesised or read.
         """
         geometry = _SlitRaster(series)
         geometry._extent = cls._extent
@@ -572,10 +562,9 @@ class _SlitRaster:
         edges = self.series.x_edges.to_value(u.Mm)
         low = position.to_value(u.Mm) - width / 2
         high = position.to_value(u.Mm) + width / 2
-        # A slit edge on a cell boundary (as when the slit is a whole number
-        # of cells wide) must not, through rounding, pull in the next cell or
-        # reach past the edge of the box. A column counts only when more than
-        # a millionth of a cell of it is under the slit.
+        # Keep rounding at a slit edge on a cell boundary from pulling in the
+        # next cell or reaching past the box. A column counts only when more
+        # than a millionth of a cell is under the slit.
         tolerance = 1e-6 * np.diff(edges).min()
         if low < edges[0] - tolerance or high > edges[-1] + tolerance:
             where = (f"{edges[0] - low:.3g} Mm below it" if low < edges[0] - tolerance
@@ -612,12 +601,11 @@ class _SlitRaster:
         """
         Columns whose light enters a slit at `position`.
 
-        Returned in the same form as :meth:`columns_under`. With
-        `across_slit`, the telescope blurs the image across the slit by a
-        Gaussian of that FWHM, so light from columns beside the slit enters
-        it too. With `extend` the edge columns stand in for the Sun beyond
-        them; without it, the Sun beyond is dark. Without `across_slit`,
-        these are the columns under the slit.
+        Returned as by :meth:`columns_under`. `across_slit` is the FWHM of a
+        Gaussian blur across the slit, which lets in light from columns
+        beside it; without it these are the columns under the slit. With
+        `extend` the edge columns stand in for the Sun beyond them; without
+        it, the Sun beyond is dark.
         """
         first, last, fractions = self.columns_under(position, slit_width)
         if across_slit is None:
@@ -637,17 +625,15 @@ class _SlitRaster:
         """
         Spectra collected by the slit in one exposure.
 
-        The columns under the slit are averaged over the slit, and the
-        snapshots the exposure spans are weighted by the time each covers.
-        With `across_slit`, light blurred into the slit from beside it is
-        included too (:meth:`columns_seen`).
+        Columns are weighted by the share of the slit they cover, and
+        snapshots by the time each covers. With `across_slit`, light blurred
+        into the slit is included (:meth:`columns_seen`).
         """
         first, last, fractions = self.columns_seen(exposure.position, slit_width,
                                                    across_slit, extend)
         spectra: Dict[str, np.ndarray] = {}
         coverage = self.series.coverage(exposure.start, exposure.end)
-        # Columns a wider slit needs beside those a narrower one fetched, or
-        # any dropped from the cache since, are fetched now.
+        # Fetch any columns not cached, such as those a wider slit adds.
         self._fetch({snapshot: set(range(first, last)) for snapshot, _ in coverage})
         for snapshot, weight in coverage:
             for column, fraction in zip(range(first, last), fractions):
@@ -664,22 +650,17 @@ class _SlitRaster:
         """
         Observe one raster of the plan.
 
-        Returns each exposure's spectra, the slit positions, the spacing
-        between them, and the raster metadata for the cube.
-
-        The columns are the raster's exposures in order, at slit positions
-        advancing by the step. A sit-and-stare is a raster of one exposure,
-        so its cube has one column, as wide as the slit. `across_slit` and
-        `extend` are as for :meth:`columns_seen`.
+        Returns each exposure's spectra, the slit positions, their spacing,
+        and the raster metadata for the cube. A sit-and-stare gives one
+        column, as wide as the slit. `across_slit` and `extend` are as for
+        :meth:`columns_seen`.
         """
         exposures = plan.exposures(slit_width, expos, self.atmosphere_centre(), repeat)
-        # Order the columns along increasing x whichever way the slit stepped,
-        # so the image has the same orientation; each keeps its own times.
+        # Order the columns along increasing x; each keeps its own times.
         if plan.direction == "decreasing":
             exposures = exposures[::-1]
-        # Fetch the columns the raster needs first, in strips of neighbouring
-        # columns, rather than a few at a time as each exposure comes, while
-        # the cache has room; any others are fetched as their exposures come.
+        # Fetch the raster's columns in strips up front while the cache has
+        # room; the rest are fetched as their exposures need them.
         needed: Dict[int, set] = {}
         for exposure in exposures:
             first, last, _ = self.columns_seen(exposure.position, slit_width, across_slit, extend)
@@ -710,21 +691,17 @@ class RasterSynthesiser(_SlitRaster):
     Synthesises the spectra a slit sees over a plan, one exposure at a time.
 
     The contribution functions are computed for the densities of the first
-    strip synthesised. Later strips add only the densities they need beyond
-    those, which can take as long as the first if the plasma reaches far
-    beyond them. Each column of each snapshot is synthesised when an
-    exposure first needs it and then cached, so a sweep over exposure times
-    or slit widths reuses most of the work.
+    strip. Later strips add only the densities they need beyond those, which
+    can take as long as the first. Each column is synthesised when first
+    needed and then cached.
 
     Parameters
     ----------
     series : AtmosphereSeries
     settings : SynthesisSettings
     reference_line : str, optional
-        Line whose window is observed. Once the contribution functions give
-        each line's wavelengths, only the lines reaching that window are
-        synthesised, and the line cubes are of those lines alone. Default
-        None, every line.
+        Line whose window is observed. Only the lines reaching that window
+        are synthesised and returned. Default None, every line.
     """
 
     def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings,
@@ -736,8 +713,7 @@ class RasterSynthesiser(_SlitRaster):
                              f"synthesised lines {list(settings.lines)}.")
         self.reference_line = reference_line
         self.vel_grid = settings.velocity_grid()
-        # The contribution functions are computed for the first strip's
-        # densities, and extended when a later strip needs others.
+        # Contribution functions, extended as later strips need other densities.
         self.goft: Optional[Dict[str, dict]] = None
         self.logT_grid = np.linspace(_LOGT_MIN, _LOGT_MAX, _N_T).astype(settings.precision)
         self.logN_grid: Optional[np.ndarray] = None
@@ -768,8 +744,8 @@ class RasterSynthesiser(_SlitRaster):
         self._synthesise_strip(snapshot, first, last)
 
     def _column_bytes(self) -> int:
-        # The temperature, density and velocity read, and the log cubes, of
-        # each cell of the column, and its spectra in float64.
+        # Temperature, density, velocity and two log cubes per cell, plus the
+        # spectra in float64.
         rows = self.series.y_edges.size - 1
         cells = (self.series.z_edges.size - 1) * rows
         spectra = 8 * rows * self.vel_grid.size * len(self.lines)
@@ -806,8 +782,8 @@ class RasterSynthesiser(_SlitRaster):
                 print(f"  CHIANTI database: {self.goft_dbase_root}")
                 self._density_points = (first, last)
                 continue
-            # Each density is computed independently, so the new ones are
-            # simply joined onto either end of the table.
+            # Densities are computed independently, so new ones join either
+            # end of the table.
             below = first < self._density_points[0]
             for name, info in goft.items():
                 parts = [info["g_tn"], self.goft[name]["g_tn"]]
@@ -823,7 +799,7 @@ class RasterSynthesiser(_SlitRaster):
         return list(self.settings.lines if self.goft is None else self.goft)
 
     def _reaching_the_window(self, goft: Dict[str, dict]) -> Dict[str, dict]:
-        """The lines of `goft` whose wavelengths reach the reference line's window, if any."""
+        """Lines of `goft` reaching the reference line's window; all without one."""
         if self.reference_line is None:
             return goft
 
@@ -881,11 +857,9 @@ class RasterSynthesiser(_SlitRaster):
         """
         One cube per line for one raster of the plan, `(rows, exposures, wavelength)`.
 
-        The columns are the raster's exposures in order, at slit positions
-        advancing by the step. A sit-and-stare is a raster of one exposure,
-        so its cube has one column, as wide as the slit, and its repeats are
-        separate cubes, one per exposure. `across_slit` and `extend` are as
-        for :meth:`columns_seen`.
+        The columns are the raster's exposures in order. A sit-and-stare
+        gives one column, as wide as the slit, and each repeat is a separate
+        cube. `across_slit` and `extend` are as for :meth:`columns_seen`.
         """
         collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat,
                                                                  across_slit, extend)
@@ -896,8 +870,8 @@ class RasterSynthesiser(_SlitRaster):
         for name in self.lines:
             data = np.stack([c[name] for c in collected], axis=1)
             wl_grid = self._wl_grids[name].to(u.cm)
-            # Reference pixel at the middle of each spatial axis, with the grid
-            # value there, as in the line cubes of a static synthesis.
+            # Reference pixel at the middle of each spatial axis, as for a
+            # static synthesis.
             wcs = WCS(naxis=3)
             wcs.wcs.ctype = ["WAVE", "SOLX", "SOLY"]
             wcs.wcs.cunit = ["cm", "Mm", "Mm"]
@@ -938,9 +912,8 @@ class SynthesisRaster(_SlitRaster):
     """
     Reads the spectra a slit sees over a plan from a series of synthesis files.
 
-    The columns are read before each raster, a strip at a time, and cached
-    in ECLIPSE's radiance unit, so a sweep over exposure times or slit
-    widths reads each column once while the cache has room.
+    Columns are read a strip at a time and cached in ECLIPSE's radiance
+    unit, so a sweep reads each column once while the cache has room.
 
     Parameters
     ----------
@@ -975,12 +948,10 @@ class SynthesisRaster(_SlitRaster):
         """
         One raster of the plan as a synthesis, and the raster metadata for its cube.
 
-        The synthesis columns are the raster's exposures, at slit positions
-        advancing by the step. A sit-and-stare is a raster of one exposure,
-        so its image has one column, as wide as the slit. The synthesis is
-        put on the detector like a single snapshot, with the raster entries
-        in the cube's metadata to keep one column per exposure. `across_slit`
-        and `extend` are as for :meth:`columns_seen`.
+        The columns are the raster's exposures in order; a sit-and-stare has
+        one, as wide as the slit. The synthesis goes on the detector like a
+        single snapshot, and the raster metadata keeps one column per
+        exposure. `across_slit` and `extend` are as for :meth:`columns_seen`.
         """
         collected, positions, pitch, meta_raster = self._observe(plan, slit_width, expos, repeat,
                                                                  across_slit, extend)
