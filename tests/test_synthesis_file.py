@@ -489,6 +489,7 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
     assert list(saved) == ["line_cubes", "dem_map", "em_tv", "electron_density", "logT_grid",
                            "vel_grid", "logN_grid", "goft", "voxel_sizes", "dynamic_mode",
                            "atmosphere", "config"]
+    assert saved["em_tv"].shape[2:] == (saved["logT_grid"].size, saved["vel_grid"].size)
     # Including the contribution functions, as older versions kept them.
     assert {"si", "wl_grid"} <= set(saved["goft"][LINE])
     assert np.array_equal(saved["line_cubes"][LINE].data,
