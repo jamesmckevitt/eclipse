@@ -612,8 +612,9 @@ def describe_atmosphere_file(path: str | Path) -> str:
                                  f"the edges bound (nz, ny, nx) = {shape} cells.")
             unit = _dataset_unit(f, name)
             if not unit.is_equivalent(UNITS[name]):
-                raise u.UnitConversionError(f"{name} in {path} must be in a unit convertible "
-                                            f"to {UNITS[name]}, got {unit}.")
+                raise u.UnitConversionError(
+                    f"{name} in {path} must be in a unit of {UNITS[name].physical_type}, "
+                    f"such as {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
         if "mass_density" not in cubes and "electron_density" not in cubes:
