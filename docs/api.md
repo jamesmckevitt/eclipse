@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`. The [example gallery](gallery/index.md) shows some of them in use.
+Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`. Some of them are used in [Other quick examples](gallery/index.md).
 
 ## The instrument
 

@@ -124,4 +124,4 @@ import eclipse
 print(output.synthesis, output.results)
 ```
 
-`eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do one step each. The [example gallery](gallery/index.md) shows other parts of the package in use.
+`eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do one step each. More of the package is used in [Other quick examples](gallery/index.md).

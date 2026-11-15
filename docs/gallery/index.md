@@ -1,4 +1,4 @@
-# Example gallery
+# Other quick examples
 
 Short scripts that use the `eclipse` package from Python. Each page shows a script's code and its figure, and links to the script. The [API reference](../api.md) lists everything they use, and [Run files](../run-files.md#running-it-elsewhere) shows how to run a run file from Python.
 

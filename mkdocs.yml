@@ -29,7 +29,7 @@ theme:
 nav:
   - Home: index.md
   - Worked example: worked-example.ipynb
-  - Example gallery: gallery/index.md
+  - Other quick examples: gallery/index.md
   - Using ECLIPSE:
       - Run files: run-files.md
       - On a cluster: cluster.md
@@ -67,7 +67,7 @@ nav:
 # docs/internal/ holds pages for the instrument team, reached only by a link.
 # They stay out of the nav, and out of the site search, Read the Docs' search
 # and search engines through their front matter, .readthedocs.yaml and
-# overrides/main.html. The gallery's examples are reached from its index page.
+# overrides/main.html. The quick examples are reached from their index page.
 not_in_nav: |
   /internal/
   /gallery/
@@ -111,7 +111,7 @@ plugins:
   # whether it is a notebook, through pandoc where pandoc is installed, as it
   # is on Read the Docs, and pandoc stalls on the API page's ::: lines. Only
   # the ignore list is checked before a page is read. It would also make the
-  # gallery's scripts into pages.
+  # quick examples' scripts into pages.
   - mkdocs-jupyter:
       ignore: ["*.md", "*.py"]
       include_source: true
