@@ -63,9 +63,12 @@ def _intensity_cube(n_slit=3, n_scan=2, n_wave=16, peak=2.0e4):
 
 
 def test_simulating_ahead_of_the_fits_gives_the_same_monte_carlo(monkeypatch):
-    from eclipse import monte_carlo as mc
+    import importlib
+
     from eclipse.config import Detector_SWC, Simulation, Telescope_EUVST
 
+    # The module, not the function `eclipse.monte_carlo` of the same name.
+    mc = importlib.import_module("eclipse.monte_carlo")
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     runs = []
