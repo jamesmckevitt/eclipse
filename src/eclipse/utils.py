@@ -5,6 +5,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 from __future__ import annotations
 import contextlib
 import functools
+import importlib
 import difflib
 import dataclasses
 import subprocess
@@ -228,6 +229,70 @@ def debug_on_error(func):
 
 # Cache for element_data, keyed by symbol, atomic number and the lookup key.
 _ELEMENTS: dict = {}
+
+
+# fiasco's ratio of proton to electron density, keyed by temperature grid and
+# atomic data settings, for proton_electron_ratio_once.
+_PROTON_ELECTRON_RATIOS: dict = {}
+
+
+def _settings_key(kwargs: dict) -> str:
+    """
+    A key for fiasco's atomic data settings: arrays by their bytes, not their
+    shortened repr, and the database by its size and time as well as its
+    path, so a database rebuilt in place is not taken for the old one.
+    """
+    settings = []
+    for name, value in sorted(kwargs.items()):
+        if np.ndim(value):
+            array = np.asarray(value)
+            value = (str(getattr(value, "unit", "")), array.dtype.str,
+                     repr(value) if array.dtype == object else array.tobytes())
+        elif name == "hdf5_dbase_root" and value is not None and Path(value).exists():
+            status = Path(value).stat()
+            value = (str(value), status.st_size, status.st_mtime_ns)
+        settings.append((name, value))
+    return repr(settings)
+
+
+@contextlib.contextmanager
+def proton_electron_ratio_once(temperature_K: np.ndarray):
+    """
+    Within the block, fiasco works out the ratio of proton to electron density once per process.
+
+    fiasco works the ratio out from every element's ions for each new Ion,
+    including the next ion it makes for each density in its two-ion model,
+    and that can take longer than the rest of an ion's work. The ratio
+    depends only on temperature and the atomic data, and fiasco interpolates
+    it point by point. So within the block it is worked out once on all of
+    `temperature_K`, and an Ion whose temperatures are all on that grid gets
+    the values there. Any other Ion gets fiasco's own. Use it from one thread
+    at a time, as it swaps a function in fiasco.ions for the block.
+    """
+    try:
+        ions = importlib.import_module("fiasco.ions")
+        original = ions.proton_electron_ratio
+    except (ImportError, AttributeError):
+        yield
+        return
+    grid = np.unique(np.asarray(temperature_K, dtype=float))
+    grid_key = grid.tobytes()
+
+    def ratio(temperature, **kwargs):
+        values = np.asarray(u.Quantity(temperature).to_value(u.K), dtype=float)
+        index = np.searchsorted(grid, values.ravel())
+        if not np.all(index < grid.size) or not np.array_equal(grid[index], values.ravel()):
+            return original(temperature, **kwargs)
+        key = (grid_key, _settings_key(kwargs))
+        if key not in _PROTON_ELECTRON_RATIOS:
+            _PROTON_ELECTRON_RATIOS[key] = original(grid * u.K, **kwargs)
+        return _PROTON_ELECTRON_RATIOS[key][index].reshape(values.shape)
+
+    ions.proton_electron_ratio = ratio
+    try:
+        yield
+    finally:
+        ions.proton_electron_ratio = original
 
 
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:

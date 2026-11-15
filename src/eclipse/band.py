@@ -25,6 +25,7 @@ import astropy.constants as const
 import astropy.units as u
 
 from .continuum import bins_to_cover
+from .utils import proton_electron_ratio_once
 
 FORMAT_NAME = "eclipse-band-lines"
 FORMAT_VERSION = 1
@@ -212,8 +213,10 @@ def _ion_band_lines(args):
     fiasco_logger = logging.getLogger("fiasco")
     previous = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
+    _, _, temperature_K, *_ = args
     try:
-        return _band_lines_of_ion(*args)
+        with proton_electron_ratio_once(temperature_K):
+            return _band_lines_of_ion(*args)
     finally:
         fiasco_logger.setLevel(previous)
 
