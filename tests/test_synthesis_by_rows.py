@@ -69,10 +69,11 @@ def test_plasma_beyond_the_velocity_grid_is_warned_of_once_with_the_whole_fracti
 
 
 @pytest.mark.parametrize("view", ["z", "-x"])
-def test_g_by_rows_is_g_from_the_whole_box(view, monkeypatch):
-    whole, _, _, _ = _synthesise(view, keep_em_tv=True)
+@pytest.mark.parametrize("precision", [np.float32, np.float64])
+def test_g_by_rows_is_g_from_the_whole_box(view, precision, monkeypatch):
+    whole, _, _, _ = _synthesise(view, keep_em_tv=True, precision=precision)
     monkeypatch.setattr(synthesis, "EM_BLOCK_BYTES", 1)
-    by_rows, _, _, _ = _synthesise(view, keep_em_tv=False)
+    by_rows, _, _, _ = _synthesise(view, keep_em_tv=False, precision=precision)
     for name in whole:
         assert by_rows[name]["g"].dtype == whole[name]["g"].dtype
         assert np.array_equal(by_rows[name]["g"], whole[name]["g"])

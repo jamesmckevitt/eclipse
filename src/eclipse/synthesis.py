@@ -966,6 +966,13 @@ def compute_dem(
     avg_ne : np.ndarray
         Mean electron density per T-bin [cm^-3]. Same shape as `dem_map`.
     """
+    dem, avg_ne, _ = _compute_dem(logT_cube, logN_cube, voxel_dh_cm, logT_grid,
+                                  integration_axis, sky)
+    return dem, avg_ne
+
+
+def _compute_dem(logT_cube, logN_cube, voxel_dh_cm, logT_grid, integration_axis, sky):
+    """`compute_dem`, with each cell's n_e^2 dh, which `build_em_tv` takes."""
     nT = len(logT_grid)
     axis, _ = view_axis_and_side(integration_axis)
 
@@ -1004,7 +1011,7 @@ def compute_dem(
     # leaves uninitialised memory there, which ends up in the saved G
     # diagnostic.
     avg_ne = np.divide(em_n, em, out=np.zeros_like(em), where=em > 0.0)
-    return dem, avg_ne
+    return dem, avg_ne, w2
 
 
 def _temperature_bins(logT_grid: np.ndarray) -> Tuple[float, np.ndarray]:
@@ -1082,8 +1089,8 @@ def _log_cubes(temperature: np.ndarray, electron_density: np.ndarray,
     return logT_cube, logN_cube
 
 
-def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density,
-                       precision: type, slab: int = 32) -> Tuple[np.ndarray, np.ndarray]:
+def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, precision: type,
+                       slab: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     `_log_cubes`, a slab of the first axis at a time, so the electron
     density, which can be float64, is never held for the whole box.
@@ -1092,6 +1099,9 @@ def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density,
     """
     logT_cube = np.empty(temperature.shape, dtype=precision)
     logN_cube = np.empty(temperature.shape, dtype=precision)
+    if slab is None:
+        # Planes whose few float64 arrays fit in EM_BLOCK_BYTES.
+        slab = max(1, int(EM_BLOCK_BYTES // (4 * 8 * temperature[0].size)))
     for first in range(0, temperature.shape[0], slab):
         cut = slice(first, first + slab)
         logT_cube[cut], logN_cube[cut] = _log_cubes(
@@ -1235,15 +1245,15 @@ def interpolate_g_on_dem(
     precision : type, optional
         `np.float32` (default) or `np.float64`.
     """
-    for name, g in _g_on_pixels(goft, avg_ne, logT_grid, logN_grid, logT_goft,
-                                precision).items():
+    lines = _g_on_pixels(goft, avg_ne, logT_grid, logN_grid, logT_goft, precision)
+    for name, g in tqdm(lines, total=len(goft), desc="interpolating G", unit="line",
+                        leave=False):
         goft[name]["g"] = g
 
 
 def _g_on_pixels(goft: Dict[str, dict], avg_ne: np.ndarray, logT_grid: np.ndarray,
-                 logN_grid: np.ndarray, logT_goft: np.ndarray,
-                 precision: type) -> Dict[str, np.ndarray]:
-    """Each line's G, by name, as `interpolate_g_on_dem` stores it."""
+                 logN_grid: np.ndarray, logT_goft: np.ndarray, precision: type):
+    """Each line's name and G, one line at a time, as `interpolate_g_on_dem` stores it."""
     nT, n_rows, n_cols = len(logT_grid), *avg_ne.shape[:2]
 
     # Build query points for interpolation
@@ -1253,15 +1263,13 @@ def _g_on_pixels(goft: Dict[str, dict], avg_ne: np.ndarray, logT_grid: np.ndarra
                                (nT, n_rows, n_cols)).ravel()
     query_pts = np.column_stack((logNe_flat, logT_flat))
 
-    g = {}
     for name, info in goft.items():
         rgi = RegularGridInterpolator(
             (logN_grid, logT_goft), info["g_tn"],
             method="linear", bounds_error=False, fill_value=0.0
         )
         g_flat = rgi(query_pts)
-        g[name] = g_flat.reshape(nT, n_rows, n_cols).transpose(1, 2, 0).astype(precision)
-    return g
+        yield name, g_flat.reshape(nT, n_rows, n_cols).transpose(1, 2, 0).astype(precision)
 
 
 ##############################################################################
@@ -1607,22 +1615,21 @@ def _synthesise_by_rows(lines: Dict[str, dict], logT_cube: np.ndarray, logN_cube
         data["si"] = np.zeros((n_rows, n_cols, vel_grid.size))
         profiles[name] = _line_profiles(data, vel_grid, logT_grid)
     los_velocity = np.broadcast_to(los_velocity, shape)
-    dh = along_line_of_sight(dh_cm, axis)
     beyond, seen = 0.0, 0.0
     for first in tqdm(range(0, n_rows, step), desc="rows", unit="block", leave=False):
         rows = slice(first, min(first + step, n_rows))
         cut = (slice(None),) * row_axis + (rows,)
         logT_rows, logN_rows = logT_cube[cut], logN_cube[cut]
-        dem_map[rows], avg_ne[rows] = compute_dem(logT_rows, logN_rows, dh_cm, logT_grid,
-                                                  integration_axis)
-        g = _g_on_pixels(lines, avg_ne[rows], logT_grid, logN_grid, logT_grid, precision)
-        ne_sq_dh = (10.0 ** logN_rows.astype(np.float64)) ** 2 * dh
+        dem_map[rows], avg_ne[rows], ne_sq_dh = _compute_dem(
+            logT_rows, logN_rows, dh_cm, logT_grid, integration_axis, None)
         em_tv, more, total = _em_tv(logT_rows, los_velocity[cut], logT_grid, vel_grid,
                                     ne_sq_dh, integration_axis, None)
+        del ne_sq_dh
         beyond, seen = beyond + more, seen + total
-        for name, data in lines.items():
-            data["g"][rows] = g[name]
-            data["si"][rows] = _line_spectra(em_tv, g[name], profiles[name])
+        for name, g in _g_on_pixels(lines, avg_ne[rows], logT_grid, logN_grid, logT_grid,
+                                    precision):
+            lines[name]["g"][rows] = g
+            lines[name]["si"][rows] = _line_spectra(em_tv, g, profiles[name])
     _warn_beyond_velocity_grid(beyond, seen, vel_grid)
     return dem_map, avg_ne
 
@@ -1745,12 +1752,10 @@ def _synthesise_from_logs(logT_cube, logN_cube, los_velocity, dh_cm, goft, logT_
     """
     lines = {name: dict(info) for name, info in goft.items()}
     if keep_em_tv or sky is not None:
-        dem_map, avg_ne_map = compute_dem(logT_cube, logN_cube, dh_cm, logT_grid,
-                                          integration_axis, sky=sky)
+        dem_map, avg_ne_map, ne_sq_dh = _compute_dem(logT_cube, logN_cube, dh_cm, logT_grid,
+                                                     integration_axis, sky)
         _warn_off_density_grid(dem_map, avg_ne_map, logN_grid)
         interpolate_g_on_dem(lines, avg_ne_map, logT_grid, logN_grid, logT_grid, precision)
-        ne_sq_dh = ((10.0 ** logN_cube.astype(np.float64)) ** 2
-                    * along_line_of_sight(dh_cm, view_axis_and_side(integration_axis)[0]))
         em_tv = build_em_tv(logT_cube, los_velocity, logT_grid, vel_grid, ne_sq_dh,
                             integration_axis, sky=sky)
         del ne_sq_dh
@@ -3071,7 +3076,7 @@ def main(args=None) -> None:
             print(f"  Cropped cubes to shape: {temp_cube.data.shape}")
         
         reference_cube = temp_cube
-        rho = u.Quantity(rho_cube.data, rho_cube.unit)
+        rho = rho_cube.data << rho_cube.unit
 
         # Dynamic mode metadata for output (no spatial rebinning in synthesis)
         dynamic_mode_metadata = {
@@ -3213,7 +3218,7 @@ def main(args=None) -> None:
         mass_per_electron_source = "not needed: the atmosphere gives the electron density"
         print("Electron density taken from the atmosphere")
     # The mass or electron density is not needed once its log is taken.
-    rho = ne_values = atmosphere = None
+    rho = ne_values = atmosphere = rho_cube = None
 
     # The velocity files hold the velocity along each axis; the Doppler shift
     # needs the velocity away from the observer. Along a slanted line of
@@ -3239,7 +3244,8 @@ def main(args=None) -> None:
         image_columns = (columns.start, n_columns)
         if sky is None:
             logT_cube, logN_cube, vel_data = (
-                image_strip(cube, view, columns) for cube in (logT_cube, logN_cube, vel_data))
+                image_strip(cube, view, columns).copy()
+                for cube in (logT_cube, logN_cube, vel_data))
         print(f"  Image columns {columns.start} to {columns.stop - 1} of {n_columns} kept")
 
     band_lines = None
