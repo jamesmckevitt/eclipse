@@ -213,9 +213,9 @@ def _ion_band_lines(args):
     fiasco_logger = logging.getLogger("fiasco")
     previous = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
+    _, _, temperature_K, *_ = args
     try:
-        # args[2] holds the temperatures.
-        with proton_electron_ratio_once(args[2]):
+        with proton_electron_ratio_once(temperature_K):
             return _band_lines_of_ion(*args)
     finally:
         fiasco_logger.setLevel(previous)

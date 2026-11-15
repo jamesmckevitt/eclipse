@@ -4,8 +4,9 @@ import types
 
 import astropy.units as u
 import numpy as np
+import pytest
 
-from eclipse.utils import _PROTON_ELECTRON_RATIOS, proton_electron_ratio_once
+from eclipse.utils import proton_electron_ratio_once
 
 GRID = 10.0 ** np.linspace(4.0, 9.0, 101)
 
@@ -51,6 +52,47 @@ def test_other_temperatures_and_settings_are_worked_out_by_fiasco(monkeypatch):
 
 def test_without_fiasco_the_block_runs_unchanged(monkeypatch):
     monkeypatch.setitem(sys.modules, "fiasco.ions", None)
+    ran = []
     with proton_electron_ratio_once(GRID):
-        pass
-    assert isinstance(_PROTON_ELECTRON_RATIOS, dict)
+        ran.append(True)
+    assert ran == [True]
+
+
+def test_a_decreasing_grid_is_used_as_well(monkeypatch):
+    ions, original, calls = _fake_ions(monkeypatch)
+    expected = original(GRID[10:20] * u.K)
+    calls.clear()
+    with proton_electron_ratio_once(GRID[::-1]):
+        got = ions.proton_electron_ratio(GRID[10:20] * u.K)
+    assert np.array_equal(got.value, expected.value) and calls == [GRID.size]
+
+
+@pytest.mark.chianti
+def test_fiascos_own_ions_get_the_same_ratio_and_contribution_function_in_the_block():
+    import fiasco
+    import fiasco.ions
+
+    temperature = 10.0 ** np.linspace(5.8, 6.6, 9)
+    density = [1e9, 1e10] * u.cm**-3
+    plain = fiasco.Ion("Fe 12", temperature[2:5] * u.K, abundance="sun_coronal_2021_chianti")
+    expected_ratio = plain.proton_electron_ratio
+    expected_g = plain.contribution_function(density)
+    calls = []
+    original = fiasco.ions.proton_electron_ratio
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    fiasco.ions.proton_electron_ratio = counted
+    try:
+        with proton_electron_ratio_once(temperature):
+            ion = fiasco.Ion("Fe 12", temperature[2:5] * u.K,
+                             abundance="sun_coronal_2021_chianti")
+            ratio = ion.proton_electron_ratio
+            g = ion.contribution_function(density)
+    finally:
+        fiasco.ions.proton_electron_ratio = original
+    assert np.array_equal(ratio.value, expected_ratio.value)
+    assert np.array_equal(g.value, expected_g.value)
+    assert len(calls) == 1

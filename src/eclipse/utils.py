@@ -237,11 +237,22 @@ _PROTON_ELECTRON_RATIOS: dict = {}
 
 
 def _settings_key(kwargs: dict) -> str:
-    """A key for fiasco's atomic data settings; arrays by their bytes, not their shortened repr."""
-    return repr(sorted(
-        (name, (str(getattr(value, "unit", "")), np.asarray(value).tobytes())
-         if np.ndim(value) else value)
-        for name, value in kwargs.items()))
+    """
+    A key for fiasco's atomic data settings: arrays by their bytes, not their
+    shortened repr, and the database by its size and time as well as its
+    path, so a database rebuilt in place is not taken for the old one.
+    """
+    settings = []
+    for name, value in sorted(kwargs.items()):
+        if np.ndim(value):
+            array = np.asarray(value)
+            value = (str(getattr(value, "unit", "")), array.dtype.str,
+                     repr(value) if array.dtype == object else array.tobytes())
+        elif name == "hdf5_dbase_root" and value is not None and Path(value).exists():
+            status = Path(value).stat()
+            value = (str(value), status.st_size, status.st_mtime_ns)
+        settings.append((name, value))
+    return repr(settings)
 
 
 @contextlib.contextmanager
@@ -254,8 +265,9 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
     and that can take longer than the rest of an ion's work. The ratio
     depends only on temperature and the atomic data, and fiasco interpolates
     it point by point. So within the block it is worked out once on all of
-    `temperature_K`, which must increase, and an Ion whose temperatures are
-    all on that grid gets the values there. Any other Ion gets fiasco's own.
+    `temperature_K`, and an Ion whose temperatures are all on that grid gets
+    the values there. Any other Ion gets fiasco's own. Use it from one thread
+    at a time, as it swaps a function in fiasco.ions for the block.
     """
     try:
         ions = importlib.import_module("fiasco.ions")
@@ -263,14 +275,15 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
     except (ImportError, AttributeError):
         yield
         return
-    grid = np.asarray(temperature_K, dtype=float)
+    grid = np.unique(np.asarray(temperature_K, dtype=float))
+    grid_key = grid.tobytes()
 
     def ratio(temperature, **kwargs):
         values = np.asarray(u.Quantity(temperature).to_value(u.K), dtype=float)
         index = np.searchsorted(grid, values.ravel())
         if not np.all(index < grid.size) or not np.array_equal(grid[index], values.ravel()):
             return original(temperature, **kwargs)
-        key = (grid.tobytes(), _settings_key(kwargs))
+        key = (grid_key, _settings_key(kwargs))
         if key not in _PROTON_ELECTRON_RATIOS:
             _PROTON_ELECTRON_RATIOS[key] = original(grid * u.K, **kwargs)
         return _PROTON_ELECTRON_RATIOS[key][index].reshape(values.shape)
