@@ -36,6 +36,10 @@ Short scripts that use the `eclipse` package from Python. Each page shows a scri
 
 <div class="grid cards" markdown>
 
+-   [![Fe XII 195.12 in a 20 s exposure through the 0.2, 0.4, 0.8 and 1.6 arcsec slits, without noise](images/slit_width.png)](slit-width.md)
+
+    [Slit width](slit-width.md)
+
 -   [![A simulated 20 s exposure of Fe XII 195.12 through the 0.2 arcsec slit, in DN, with the fitted Gaussian](images/one_exposure.png)](one-exposure.md)
 
     [One exposure](one-exposure.md)
