@@ -68,9 +68,12 @@ def test_a_decreasing_grid_is_used_as_well(monkeypatch):
 
 
 @pytest.mark.chianti
-def test_fiascos_own_ions_get_the_same_ratio_and_contribution_function_in_the_block():
+def test_fiascos_own_ions_get_the_same_ratio_and_contribution_function_in_the_block(monkeypatch):
     import fiasco
     import fiasco.ions
+
+    # Earlier tests in the process may have worked the ratio out already.
+    monkeypatch.setattr(sys.modules["eclipse.utils"], "_PROTON_ELECTRON_RATIOS", {})
 
     temperature = 10.0 ** np.linspace(5.8, 6.6, 9)
     density = [1e9, 1e10] * u.cm**-3
