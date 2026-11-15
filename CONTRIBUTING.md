@@ -12,6 +12,10 @@ To add a setting, give its field a `source`, and a `unit` if it is a quantity. T
 
 After changing a default or a source, run the script, and edit any Default cell it lists. The tests fail until the page agrees with the code.
 
+## The example gallery
+
+Each example in `docs/gallery/` is a script, such as `dark_current.py`, shown by a page of the same name with hyphens, `dark-current.md`, and given a card on `docs/gallery/index.md`. `python tools/docs_gallery.py` runs the scripts and saves their figures in `docs/gallery/images/`. Give it the names of scripts to run only those. `tests/test_docs_gallery.py` checks that every script runs and has its page, figure and card.
+
 ## Releases
 
 ### Release when

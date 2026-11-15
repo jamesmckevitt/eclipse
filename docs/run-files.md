@@ -113,4 +113,15 @@ The last six need an `atmosphere`. The instrument settings come from the run's o
 
 ## Running it elsewhere
 
-[On a cluster](cluster.md) runs the steps on different nodes, or on many at once. [From Python](python.md#running-a-run-file) runs a run file from a script.
+[On a cluster](cluster.md) runs the steps on different nodes, or on many at once.
+
+From Python, `eclipse.run` runs a run file, with any settings changed:
+
+```python
+import eclipse
+
+[output] = eclipse.run("job.yaml", n_iter=10, simulation={"expos": "5 s"})
+print(output.synthesis, output.results)
+```
+
+`eclipse.synthesise`, `eclipse.observe` and `eclipse.make_frame` do one step each. The [example gallery](gallery/index.md) shows other parts of the package in use.

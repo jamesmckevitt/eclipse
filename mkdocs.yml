@@ -29,10 +29,10 @@ theme:
 nav:
   - Home: index.md
   - Worked example: worked-example.ipynb
+  - Example gallery: gallery/index.md
   - Using ECLIPSE:
       - Run files: run-files.md
       - On a cluster: cluster.md
-      - From Python: python.md
   - 1. Make the emission:
       - From another code: emission/other-codes.md
       - From a single intensity: emission/single-intensity.md
@@ -67,9 +67,10 @@ nav:
 # docs/internal/ holds pages for the instrument team, reached only by a link.
 # They stay out of the nav, and out of the site search, Read the Docs' search
 # and search engines through their front matter, .readthedocs.yaml and
-# overrides/main.html.
+# overrides/main.html. The gallery's examples are reached from its index page.
 not_in_nav: |
   /internal/
+  /gallery/
 
 # The notes beside the logo files are for the repository, not the site.
 exclude_docs: |
@@ -97,6 +98,8 @@ markdown_extensions:
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
+  - pymdownx.snippets:
+      check_paths: true
   - pymdownx.tabbed:
       alternate_style: true
   - tables
@@ -107,9 +110,10 @@ plugins:
   # Notebooks only. Otherwise the plugin reads every Markdown page to see
   # whether it is a notebook, through pandoc where pandoc is installed, as it
   # is on Read the Docs, and pandoc stalls on the API page's ::: lines. Only
-  # the ignore list is checked before a page is read.
+  # the ignore list is checked before a page is read. It would also make the
+  # gallery's scripts into pages.
   - mkdocs-jupyter:
-      ignore: ["*.md"]
+      ignore: ["*.md", "*.py"]
       include_source: true
   # Pages that were moved or merged into others, so that links to them still
   # land.
@@ -133,6 +137,7 @@ plugins:
         files.md: files/synthesis.md
         line-names.md: reference/line-names.md
         older-versions.md: reference/older-versions.md
+        python.md: gallery/index.md
   - mkdocstrings:
       handlers:
         python:

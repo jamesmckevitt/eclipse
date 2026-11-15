@@ -226,9 +226,9 @@ What the frame holds, and the spectrum of the whole band that the camera records
 </div>
 
 <div class="also" markdown>
-**All three steps run from one file:** [Run files](run-files.md) | [On a cluster](cluster.md) | [From Python](python.md)
+**All three steps run from one file:** [Run files](run-files.md) | [On a cluster](cluster.md)
 
-**To learn more:** [Worked example](worked-example.ipynb) | [The instrument model](background/instrument-model.md) | [Run file settings](reference/run-file-settings.md)
+**To learn more:** [Worked example](worked-example.ipynb) | [Example gallery](gallery/index.md) | [The instrument model](background/instrument-model.md) | [Run file settings](reference/run-file-settings.md)
 </div>
 
 </div>
