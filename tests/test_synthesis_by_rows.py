@@ -43,13 +43,17 @@ def _synthesise(view, keep_em_tv, precision=np.float64, fast=False):
 
 
 @pytest.mark.parametrize("view", ["z", "-x", "y", "-z"])
-def test_the_spectra_by_rows_are_those_from_the_whole_emission_measure(view, monkeypatch):
-    whole, dem, em_tv, density = _synthesise(view, keep_em_tv=True)
+@pytest.mark.parametrize("precision", [np.float32, np.float64])
+def test_the_spectra_by_rows_are_those_from_the_whole_emission_measure(view, precision,
+                                                                       monkeypatch):
+    whole, dem, em_tv, density = _synthesise(view, keep_em_tv=True, precision=precision)
     # One image row per block, so every block boundary is crossed.
     monkeypatch.setattr(synthesis, "EM_BLOCK_BYTES", 1)
-    by_rows, dem_rows, none, density_rows = _synthesise(view, keep_em_tv=False)
+    by_rows, dem_rows, none, density_rows = _synthesise(view, keep_em_tv=False,
+                                                        precision=precision)
     assert none is None
     for name in whole:
+        assert by_rows[name]["si"].dtype == whole[name]["si"].dtype == precision
         assert np.array_equal(by_rows[name]["si"], whole[name]["si"])
         assert np.array_equal(by_rows[name]["wl_grid"], whole[name]["wl_grid"])
     assert np.array_equal(dem_rows, dem) and np.array_equal(density_rows, density)

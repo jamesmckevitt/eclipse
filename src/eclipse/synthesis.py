@@ -1138,7 +1138,7 @@ def _synthesise_by_rows(lines: Dict[str, dict], logT_cube: np.ndarray, logN_cube
     for name, data in lines.items():
         data["wl_grid"] = (vel_grid * data["wl0"] / const.c + data["wl0"]).cgs
         data["g"] = np.empty((n_rows, n_cols, nT), dtype=precision)
-        data["si"] = np.zeros((n_rows, n_cols, vel_grid.size))
+        data["si"] = np.zeros((n_rows, n_cols, vel_grid.size), dtype=precision)
         profiles[name] = _line_profiles(data, vel_grid, logT_grid)
     los_velocity = np.broadcast_to(los_velocity, shape)
     beyond, seen = 0.0, 0.0
@@ -1286,6 +1286,8 @@ def _synthesise_from_logs(logT_cube, logN_cube, los_velocity, dh_cm, goft, logT_
                             integration_axis, sky=sky)
         del ne_sq_dh
         synthesise_spectra(lines, em_tv, vel_grid, logT_grid)
+        for name in goft:
+            lines[name]["si"] = lines[name]["si"].astype(precision, copy=False)
         if not keep_em_tv:
             em_tv = None
     else:
