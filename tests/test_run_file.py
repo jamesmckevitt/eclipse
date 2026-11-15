@@ -521,3 +521,12 @@ def test_a_frame_seen_from_a_position_synthesises_the_strip_under_the_slit(tmp_p
     assert args.position == ["600 arcsec", "0 arcsec"]
     assert [u.Quantity(edge).to_value(u.arcsec) for edge in args.image_x] == pytest.approx(
         [-0.1, 0.1])
+
+
+def test_a_partial_synthesis_keeps_its_ending_and_is_hidden(tmp_path):
+    """synthesise-spectra reads the ending as the file's kind, and *.h5 must not match it."""
+    from eclipse.atmosphere import _new_partial
+
+    partial = _new_partial(tmp_path / "job.h5", ".h5")
+    assert partial.name.startswith(".job.h5.") and partial.suffix == ".h5"
+    assert list(tmp_path.glob("*.h5")) == []

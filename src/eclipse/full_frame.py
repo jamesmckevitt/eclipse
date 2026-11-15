@@ -163,17 +163,17 @@ def _scene_light(scene: _Scene, telescope, solid_angle: float) -> list:
     """
     The part of :func:`_rates` both CCDs share: for each spectrum of the
     scene, its bins' lower and upper edges and middles, and the photons per
-    second per pixel each image row sends in each bin.
+    second per pixel per unit radiance in each bin.
     """
     lights = []
-    for edges, radiance in zip(scene.edges, scene.radiance):
+    for edges in scene.edges:
         low, high = edges[:-1], edges[1:]
         middle = (low + high) / 2
         # Photons per second per pixel per unit radiance in each bin: its
         # width in cm, through the pixel's solid angle.
         collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
             photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
-        lights.append((low, high, middle, radiance * collected))
+        lights.append((low, high, middle, collected))
     return lights
 
 
@@ -200,13 +200,14 @@ def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, t
     row_edges, order = _sorted_rows(focal_plane, ccd)
     shape = (scene.y_edges.size - 1, focal_plane.n_rows)
     totals = tuple(np.zeros(shape) for _ in range(3))
-    for low, high, middle, light in lights:
+    for (low, high, middle, collected), radiance in zip(lights, scene.radiance):
         if blur is None:
             sigma = box = 0.0
         else:
             sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
                                    middle)
         onto_rows = light_onto_pixels(low, high, row_edges, sigma, box)   # (rows, bins)
+        light = radiance * collected
         for total, power in zip(totals, (0, 1, 2)):
             total[:, order] += (onto_rows @ (light / middle**power).T).T
     first, last = focal_plane.lit_rows(ccd)

@@ -402,13 +402,15 @@ def _new_partial(path: Path, ending: str = "") -> Path:
     It is created normally, so the umask and the directory's default
     permissions apply to it, and so to `path`, as colleagues sharing a
     project directory expect. Its name ends in `ending`, for a writer that
-    checks the name.
+    checks the name, and then starts with a dot, so a pattern such as
+    `*.h5` does not take it for a finished file.
     """
+    prefix = "." if ending else ""
     while True:
         suffix = f".{secrets.token_hex(4)}.part{ending}"
         # Truncate the stem so the name fits the 255 bytes most filesystems allow.
-        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
-        partial = path.with_name(stem + suffix)
+        stem = path.name.encode()[:255 - len(prefix) - len(suffix)].decode(errors="ignore")
+        partial = path.with_name(prefix + stem + suffix)
         try:
             os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
         except FileExistsError:
