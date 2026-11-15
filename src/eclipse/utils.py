@@ -5,6 +5,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 from __future__ import annotations
 import contextlib
 import functools
+import importlib
 import difflib
 import dataclasses
 import subprocess
@@ -228,6 +229,57 @@ def debug_on_error(func):
 
 # Cache for element_data, keyed by symbol, atomic number and the lookup key.
 _ELEMENTS: dict = {}
+
+
+# fiasco's ratio of proton to electron density, keyed by temperature grid and
+# atomic data settings, for proton_electron_ratio_once.
+_PROTON_ELECTRON_RATIOS: dict = {}
+
+
+def _settings_key(kwargs: dict) -> str:
+    """A key for fiasco's atomic data settings; arrays by their bytes, not their shortened repr."""
+    return repr(sorted(
+        (name, (str(getattr(value, "unit", "")), np.asarray(value).tobytes())
+         if np.ndim(value) else value)
+        for name, value in kwargs.items()))
+
+
+@contextlib.contextmanager
+def proton_electron_ratio_once(temperature_K: np.ndarray):
+    """
+    Within the block, fiasco works out the ratio of proton to electron density once per process.
+
+    fiasco works the ratio out from every element's ions for each new Ion,
+    including the next ion it makes for each density in its two-ion model,
+    and that can take longer than the rest of an ion's work. The ratio
+    depends only on temperature and the atomic data, and fiasco interpolates
+    it point by point. So within the block it is worked out once on all of
+    `temperature_K`, which must increase, and an Ion whose temperatures are
+    all on that grid gets the values there. Any other Ion gets fiasco's own.
+    """
+    try:
+        ions = importlib.import_module("fiasco.ions")
+        original = ions.proton_electron_ratio
+    except (ImportError, AttributeError):
+        yield
+        return
+    grid = np.asarray(temperature_K, dtype=float)
+
+    def ratio(temperature, **kwargs):
+        values = np.asarray(u.Quantity(temperature).to_value(u.K), dtype=float)
+        index = np.searchsorted(grid, values.ravel())
+        if not np.all(index < grid.size) or not np.array_equal(grid[index], values.ravel()):
+            return original(temperature, **kwargs)
+        key = (grid.tobytes(), _settings_key(kwargs))
+        if key not in _PROTON_ELECTRON_RATIOS:
+            _PROTON_ELECTRON_RATIOS[key] = original(grid * u.K, **kwargs)
+        return _PROTON_ELECTRON_RATIOS[key][index].reshape(values.shape)
+
+    ions.proton_electron_ratio = ratio
+    try:
+        yield
+    finally:
+        ions.proton_electron_ratio = original
 
 
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:

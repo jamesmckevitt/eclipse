@@ -15,7 +15,8 @@ import dill
 import h5py
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import (angle_to_distance, element_data, require_uniform_grid,
+from .utils import (angle_to_distance, element_data, proton_electron_ratio_once,
+                    require_uniform_grid,
                     require_downsample_divides, velocity_centers_to_edges, velocity_grid,
                     view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, write_line_cubes,
@@ -634,31 +635,32 @@ def _compute_single_ion(args):
 
     g_parts = {}
     try:
-        for start in range(0, n_temperatures, step):
-            ion = fiasco.Ion(f'{elem} {stage}',
-                             temperature_K[start:start + step] * u.K,
-                             abundance=abundance, **ion_kwargs)
+        with proton_electron_ratio_once(temperature_K):
+            for start in range(0, n_temperatures, step):
+                ion = fiasco.Ion(f'{elem} {stage}',
+                                 temperature_K[start:start + step] * u.K,
+                                 abundance=abundance, **ion_kwargs)
 
-            g = ion.contribution_function(densities)
-            pe_ratio = ion.proton_electron_ratio
-            g = g * pe_ratio[:, np.newaxis, np.newaxis]
+                g = ion.contribution_function(densities)
+                pe_ratio = ion.proton_electron_ratio
+                g = g * pe_ratio[:, np.newaxis, np.newaxis]
 
-            # The transitions do not depend on temperature, so the lines are
-            # matched once, on the first chunk.
-            if start == 0:
-                bound = ion.transitions.is_bound_bound
-                bb_wl = ion.transitions.wavelength[bound]
-                # CHIANTI stores theoretical wavelengths as negative numbers;
-                # fiasco gives them positive and marks observed ones with this
-                # flag.
-                observed = np.asarray(ion.transitions.is_observed[bound])
-                matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
-                           for line_name, _ in lines}
-                g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
-                           for idx in indices}
-            for (line_name, idx), parts in g_parts.items():
-                parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
-            del g
+                # The transitions do not depend on temperature, so the lines are
+                # matched once, on the first chunk.
+                if start == 0:
+                    bound = ion.transitions.is_bound_bound
+                    bb_wl = ion.transitions.wavelength[bound]
+                    # CHIANTI stores theoretical wavelengths as negative numbers;
+                    # fiasco gives them positive and marks observed ones with this
+                    # flag.
+                    observed = np.asarray(ion.transitions.is_observed[bound])
+                    matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
+                               for line_name, _ in lines}
+                    g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
+                               for idx in indices}
+                for (line_name, idx), parts in g_parts.items():
+                    parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+                del g
     finally:
         fiasco_logger.setLevel(prev_level)
 
