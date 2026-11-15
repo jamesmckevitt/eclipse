@@ -37,7 +37,8 @@ from .radiometric import (
     spectral_psf_reach,  # noqa: F401
 )
 from .deprecated import apply_spectral_psf  # noqa: F401  (deprecated)
-from .readout import FocalPlane_SWC, expose, expose_serial_overscan
+from .readout import (FocalPlane_SWC, _along_columns, _along_register, _check_rate,
+                      _warn_of_a_partial_clear, expose, expose_serial_overscan)
 from .sampling import (_REACH_IN_SIGMA, _carry_photon_wavelengths, light_onto_pixels,
                        points_onto_pixels)
 from .utils import angle_to_distance
@@ -469,11 +470,59 @@ def expose_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity, exposure: 
         raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
     own = _per_pixel(wavelength, rate.shape)
     rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
-    n_more = sequence.parallel_overscan_rows
-    fallback = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])
     photons, mean, rms = _carry_photon_wavelengths(
-        lambda values: expose(values, exposure, sequence), rate, own, rms, fallback)
+        lambda values: expose(values, exposure, sequence), rate, own, rms,
+        _image_fill(own, sequence))
     return photons, mean * u.Angstrom, rms * u.Angstrom
+
+
+def _image_fill(own: np.ndarray, sequence) -> np.ndarray:
+    """Wavelength of a pixel no photons reach: its own, or the last image row's in the overscan."""
+    return np.concatenate([own, np.repeat(own[-1:], sequence.parallel_overscan_rows, axis=0)])
+
+
+def _serial_overscan_fill(own: np.ndarray, sequence) -> np.ndarray:
+    """Wavelength of a serial overscan sample no photons reach: the image pixel's next to it."""
+    # The image columns next to each half's overscan. A CCD one column wide
+    # has only the first half, whose column stands in for both.
+    half = (own.shape[1] + 1) // 2
+    edges = _image_fill(own, sequence)[:, [half - 1, min(half, own.shape[1] - 1)]]
+    return np.repeat(edges, sequence.serial_overscan, axis=1)
+
+
+def expose_with_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity,
+                                                 exposure: u.Quantity, sequence,
+                                                 rms_wavelength: Optional[u.Quantity] = None
+                                                 ) -> tuple:
+    """
+    :func:`expose_with_wavelengths` and
+    :func:`expose_serial_overscan_with_wavelengths` together, from one
+    transfer of the charge rather than two.
+
+    Returns
+    -------
+    tuple
+        The image's `(photons, wavelength, rms_wavelength)`, then the serial
+        overscan's, as the two functions return them.
+    """
+    rate = np.asarray(rate, dtype=float)
+    if rate.ndim != 2:
+        raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
+    if sequence.cte_serial == 1 or sequence.serial_overscan == 0:
+        return (expose_with_wavelengths(rate, wavelength, exposure, sequence, rms_wavelength),
+                expose_serial_overscan_with_wavelengths(rate, wavelength, exposure, sequence,
+                                                        rms_wavelength))
+    _check_rate(rate)
+    if not sequence.shutter:
+        _warn_of_a_partial_clear(sequence, rate.shape[0], "smear")
+    own = _per_pixel(wavelength, rate.shape)
+    rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
+    parts = _carry_photon_wavelengths(
+        lambda values: _along_register(_along_columns(values, exposure, sequence), sequence,
+                                       overscan=sequence.serial_overscan),
+        rate, own, rms, (_image_fill(own, sequence), _serial_overscan_fill(own, sequence)))
+    return tuple((photons, mean * u.Angstrom, rms * u.Angstrom)
+                 for photons, mean, rms in parts)
 
 
 def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quantity,
@@ -499,16 +548,9 @@ def expose_serial_overscan_with_wavelengths(rate: np.ndarray, wavelength: u.Quan
         raise ValueError(f"A frame has two axes, rows and columns, not {rate.ndim}.")
     own = _per_pixel(wavelength, rate.shape)
     rms = own if rms_wavelength is None else _per_pixel(rms_wavelength, rate.shape)
-    n_more, overscan = sequence.parallel_overscan_rows, sequence.serial_overscan
-    # The image columns next to each half's overscan. A CCD one column wide
-    # has only the first half, whose column stands in for both.
-    half = (rate.shape[1] + 1) // 2
-    edges = np.concatenate([own, np.repeat(own[-1:], n_more, axis=0)])[
-        :, [half - 1, min(half, rate.shape[1] - 1)]]
-    fallback = np.repeat(edges, overscan, axis=1)
     photons, mean, rms = _carry_photon_wavelengths(
         lambda values: expose_serial_overscan(values, exposure, sequence), rate, own, rms,
-        fallback)
+        _serial_overscan_fill(own, sequence))
     return photons, mean * u.Angstrom, rms * u.Angstrom
 
 

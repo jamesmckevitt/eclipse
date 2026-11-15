@@ -17,7 +17,7 @@ import numpy as np
 
 from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
                          _text_attribute, _write_dataset)
-from .utils import require_uniform_grid
+from .utils import checked_quantity, require_uniform_grid
 
 __all__ = ["FORMAT_NAME", "FORMAT_VERSION", "EmissionMeasure", "read_emission_measure",
            "read_emission_measure_layout", "write_emission_measure",
@@ -30,21 +30,6 @@ FORMAT_VERSION = 1
 UNITS = {"emission_measure": u.cm**-5, "temperature": u.K, "velocity": u.km / u.s,
          "electron_density": u.cm**-3, "x_edges": u.Mm, "y_edges": u.Mm, "time": u.s}
 EDGES = ("x_edges", "y_edges")
-
-
-def _checked(value, name: str, kinds: tuple, ndim: Optional[tuple] = None) -> u.Quantity:
-    """`value`, checked to be a finite Quantity of one of the physical types `kinds`."""
-    if not isinstance(value, u.Quantity):
-        raise TypeError(f"{name} must be an astropy Quantity, got {type(value).__name__}.")
-    if not any(value.unit.is_equivalent(kind) for kind in kinds):
-        raise u.UnitConversionError(
-            f"{name} must be in a unit such as {UNITS[name]}, got {value.unit}.")
-    if ndim is not None and value.ndim not in ndim:
-        raise ValueError(f"{name} must have {' or '.join(str(n) for n in ndim)} dimensions, "
-                         f"got {value.ndim}.")
-    if not np.all(np.isfinite(value.value)):
-        raise ValueError(f"{name} contains NaN or infinite values.")
-    return value
 
 
 @dataclass(frozen=True)
@@ -88,15 +73,15 @@ class EmissionMeasure:
     time: Optional[u.Quantity] = None
 
     def __post_init__(self):
-        em = _checked(self.emission_measure, "emission_measure", (u.cm**-5,), ndim=(3, 4))
+        em = checked_quantity(self.emission_measure, "emission_measure", (u.cm**-5,), ndim=(3, 4))
         if np.any(em.value < 0):
             raise ValueError("emission_measure has negative values.")
-        temperature = _checked(self.temperature, "temperature", (u.K,), ndim=(1,))
+        temperature = checked_quantity(self.temperature, "temperature", (u.K,), ndim=(1,))
         if temperature.size < 2 or np.any(temperature.value <= 0):
             raise ValueError("temperature must have two or more values above zero.")
         require_uniform_grid(np.log10(temperature.to_value(u.K)), "log10 of temperature")
         for name in EDGES:
-            edges = _checked(getattr(self, name), name, (u.Mm, u.arcsec), ndim=(1,))
+            edges = checked_quantity(getattr(self, name), name, (u.Mm, u.arcsec), ndim=(1,))
             require_uniform_grid(edges.value, name)
         shape = (self.y_edges.size - 1, self.x_edges.size - 1, temperature.size)
         if em.shape[:3] != shape:
@@ -107,14 +92,14 @@ class EmissionMeasure:
             raise ValueError("A VDEM has a velocity axis, (ny, nx, n_temperatures, "
                              "n_velocities), and its velocity bin centres; a DEM has neither.")
         if self.velocity is not None:
-            velocity = _checked(self.velocity, "velocity", (u.km / u.s,), ndim=(1,))
+            velocity = checked_quantity(self.velocity, "velocity", (u.km / u.s,), ndim=(1,))
             if velocity.size != em.shape[3]:
                 raise ValueError(f"emission_measure has {em.shape[3]} velocity bins, but "
                                  f"velocity has {velocity.size} values.")
             if np.any(np.diff(velocity.value) <= 0):
                 raise ValueError("velocity must increase.")
         if self.electron_density is not None:
-            density = _checked(self.electron_density, "electron_density", (u.cm**-3,))
+            density = checked_quantity(self.electron_density, "electron_density", (u.cm**-3,))
             if density.shape not in ((), shape[:2], shape):
                 raise ValueError(
                     f"electron_density must be one value, or shaped (ny, nx) = {shape[:2]} "
@@ -122,7 +107,7 @@ class EmissionMeasure:
             if np.any(density.value <= 0):
                 raise ValueError("electron_density must be above zero.")
         if self.time is not None:
-            _checked(self.time, "time", (u.s,), ndim=(0,))
+            checked_quantity(self.time, "time", (u.s,), ndim=(0,))
         if not isinstance(self.source, str):
             raise TypeError(f"source must be a string, got {type(self.source).__name__}.")
 

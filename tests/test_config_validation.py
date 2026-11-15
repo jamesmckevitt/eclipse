@@ -200,7 +200,8 @@ def test_suggest_returns_none_when_nothing_is_close():
 # --- the key lists have to agree with what main() reads ----------------------
 
 # main() and the helpers it passes the parsed config to.
-_CONFIG_READERS = ("run_config", "_parse_pinhole_config", "_parse_fitting_config",
+_CONFIG_READERS = ("run_config", "_top_level_settings", "_observed_input",
+                   "_parse_pinhole_config", "_parse_fitting_config",
                    "_parse_synthesis_settings", "_parse_raster_plan",
                    "_series_paths", "_reference_line")
 

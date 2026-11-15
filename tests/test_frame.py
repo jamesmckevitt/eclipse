@@ -755,3 +755,31 @@ def test_a_lines_rows_are_never_below_zero(spectral_psf):
                 * photons_per_energy(telescope, 211.317 * u.Angstrom)[0]).to_value(u.s**-1)
     assert rows.sum() == pytest.approx(expected, rel=1e-3)
     np.random.default_rng(0).poisson(rows)
+
+
+@pytest.mark.parametrize("shutter, columns", [(False, 12), (True, 12), (False, 11)])
+def test_one_transfer_gives_the_image_and_overscan_two_transfers_give(shutter, columns):
+    """Every value, bit for bit, with the charge left behind along columns and register."""
+    from eclipse.frame import (expose_serial_overscan_with_wavelengths,
+                               expose_with_serial_overscan_with_wavelengths,
+                               expose_with_wavelengths)
+    from eclipse.readout import ReadoutSequence
+
+    sequence = ReadoutSequence(shutter=shutter, row_transfer_time=15.0 * u.us,
+                               pixel_period=500.0 * u.ns, serial_prescan=2,
+                               serial_image_pixels=6, serial_overscan=3,
+                               parallel_overscan_rows=2, dump_rows=0, windows=[],
+                               cte_parallel=0.999, cte_serial=0.99)
+    generator = np.random.default_rng(4)
+    rate = generator.uniform(0.0, 50.0, (9, columns))
+    rate[3, 4] = 0.0
+    wavelength = generator.uniform(190.0, 200.0, rate.shape) * u.AA
+    rms = wavelength * 1.001
+    one = expose_with_serial_overscan_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence,
+                                                       rms_wavelength=rms)
+    two = (expose_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence, rms_wavelength=rms),
+           expose_serial_overscan_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence,
+                                                   rms_wavelength=rms))
+    for together, apart in zip(one, two):
+        for got, want in zip(together, apart):
+            assert np.array_equal(u.Quantity(got).value, u.Quantity(want).value)

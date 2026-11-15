@@ -5,6 +5,7 @@ Utility functions for coordinate transformations, unit conversions, and general 
 from __future__ import annotations
 import contextlib
 import functools
+import importlib
 import difflib
 import dataclasses
 import subprocess
@@ -18,7 +19,6 @@ import astropy.constants as const
 import joblib
 from scipy import sparse
 from tqdm import tqdm
-from mendeleev import element
 
 
 # Global debug flag - can be set by command line or configuration
@@ -230,6 +230,70 @@ def debug_on_error(func):
 _ELEMENTS: dict = {}
 
 
+# fiasco's ratio of proton to electron density, keyed by temperature grid and
+# atomic data settings, for proton_electron_ratio_once.
+_PROTON_ELECTRON_RATIOS: dict = {}
+
+
+def _settings_key(kwargs: dict) -> str:
+    """
+    A key for fiasco's atomic data settings: arrays by their bytes, not their
+    shortened repr, and the database by its size and time as well as its
+    path, so a database rebuilt in place is not taken for the old one.
+    """
+    settings = []
+    for name, value in sorted(kwargs.items()):
+        if np.ndim(value):
+            array = np.asarray(value)
+            value = (str(getattr(value, "unit", "")), array.dtype.str,
+                     repr(value) if array.dtype == object else array.tobytes())
+        elif name == "hdf5_dbase_root" and value is not None and Path(value).exists():
+            status = Path(value).stat()
+            value = (str(value), status.st_size, status.st_mtime_ns)
+        settings.append((name, value))
+    return repr(settings)
+
+
+@contextlib.contextmanager
+def proton_electron_ratio_once(temperature_K: np.ndarray):
+    """
+    Within the block, fiasco works out the ratio of proton to electron density once per process.
+
+    fiasco works the ratio out from every element's ions for each new Ion,
+    including the next ion it makes for each density in its two-ion model,
+    and that can take longer than the rest of an ion's work. The ratio
+    depends only on temperature and the atomic data, and fiasco interpolates
+    it point by point. So within the block it is worked out once on all of
+    `temperature_K`, and an Ion whose temperatures are all on that grid gets
+    the values there. Any other Ion gets fiasco's own. Use it from one thread
+    at a time, as it swaps a function in fiasco.ions for the block.
+    """
+    try:
+        ions = importlib.import_module("fiasco.ions")
+        original = ions.proton_electron_ratio
+    except (ImportError, AttributeError):
+        yield
+        return
+    grid = np.unique(np.asarray(temperature_K, dtype=float))
+    grid_key = grid.tobytes()
+
+    def ratio(temperature, **kwargs):
+        values = np.asarray(u.Quantity(temperature).to_value(u.K), dtype=float)
+        index = np.searchsorted(grid, values.ravel())
+        if not np.all(index < grid.size) or not np.array_equal(grid[index], values.ravel()):
+            return original(temperature, **kwargs)
+        key = (grid_key, _settings_key(kwargs))
+        if key not in _PROTON_ELECTRON_RATIOS:
+            _PROTON_ELECTRON_RATIOS[key] = original(grid * u.K, **kwargs)
+        return _PROTON_ELECTRON_RATIOS[key][index].reshape(values.shape)
+
+    ions.proton_electron_ratio = ratio
+    try:
+        yield
+    finally:
+        ions.proton_electron_ratio = original
+
+
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:
     """
     Atomic number and atomic weight (atomic mass units) of an element.
@@ -244,6 +308,10 @@ def element_data(symbol_or_number: str | int) -> tuple[int, float]:
         If there is no such element.
     """
     if symbol_or_number not in _ELEMENTS:
+        # Imported here: mendeleev brings in pandas and SQLAlchemy, which
+        # most uses of the package never need.
+        from mendeleev import element
+
         atom = element(symbol_or_number)
         data = (atom.atomic_number, atom.atomic_weight)
         for key in (atom.symbol, atom.atomic_number, symbol_or_number):
@@ -976,6 +1044,30 @@ def check_config_keys(provided, allowed, context: str,
 # be off by. MURaM's float32 heights are up to 1.4 ULP from even (7 m at
 # 42 Mm), and edges computed from such centres add their own rounding.
 _SINGLE_PRECISION_ULPS = 4
+
+
+def checked_quantity(value, name: str, units=None, ndim=None) -> u.Quantity:
+    """
+    `value`, checked to be a finite Quantity.
+
+    With `units`, its unit must convert to one of them. With `ndim`, a
+    number or several, it must have that many axes.
+    """
+    if not isinstance(value, u.Quantity):
+        raise TypeError(f"{name} must be an astropy Quantity, got {type(value).__name__}.")
+    if units is not None and not any(value.unit.is_equivalent(unit) for unit in units):
+        kinds = [str(unit.physical_type) for unit in units]
+        kind = "" if "unknown" in kinds else f" of {' or '.join(kinds)},"
+        raise u.UnitConversionError(
+            f"{name} must be in a unit{kind} such as {' or '.join(str(unit) for unit in units)}, "
+            f"got {value.unit}.")
+    allowed = (ndim,) if isinstance(ndim, int) else ndim
+    if allowed is not None and value.ndim not in allowed:
+        raise ValueError(f"{name} must have {' or '.join(str(n) for n in allowed)} dimensions, "
+                         f"got {value.ndim}.")
+    if not np.all(np.isfinite(value.value)):
+        raise ValueError(f"{name} contains NaN or infinite values.")
+    return value
 
 
 def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:

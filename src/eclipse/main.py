@@ -20,6 +20,7 @@ from .data_processing import (_whole_pixels, crop_to_the_slit, load_atmosphere, 
                               create_uniform_intensity_cube, pad_spectral_axis, rebin_spectra)
 from .raster import AtmosphereSeries, RasterSynthesiser, SynthesisRaster, SynthesisSeries
 from .atmosphere import _is_pickle
+from .deprecated import _check_dynamic_mode_synthesis
 from .readout import FocalPlane_SWC
 from .synthesis_file import (is_synthesis_file, read_synthesis, read_synthesis_layout,
                              read_synthesis_products, synthesis_line_names)
@@ -513,35 +514,12 @@ def main() -> None:
     run_config(config, config_path.stem, source=args.config, debug=args.debug)
 
 
-def run_config(config: dict, name: str, *, source: str | None = None,
-               debug: bool = False) -> Path:
+def _set_up_process(debug: bool) -> tuple:
     """
-    Observe what a configuration describes, and write the results.
-
-    Runs every combination of the configuration's settings, as `eclipse
-    observe` does for a run file.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration, as read from its YAML file.
-    name : str
-        Name of the run; the results are written to `run/result/<name>.h5`.
-    source : str, optional
-        Where the configuration came from, for error messages. Default
-        `name`.
-    debug : bool, optional
-        Open an IPython debugger where an error happens. Default False.
-
-    Returns
-    -------
-    Path
-        The results file.
+    Quieten astropy's WCS warnings, set the debug mode and, under MPI, this
+    rank's CPUs and output. Returns this rank and the number of ranks.
     """
     global _STARTING_STDERR
-    source = name if source is None else source
-    results_path = Path(f"run/result/{name}.h5")
-
     # Suppress noisy astropy WCS warnings
     for msg in [
         "target cannot be converted to ICRS",
@@ -558,7 +536,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     # MPI auto-detection: when launched by srun or mpirun with several tasks,
     # the Monte Carlo iterations are split across the ranks.
     from .utils import _get_mpi_info
-    _comm, _mpi_rank, _mpi_size = _get_mpi_info()
+    _, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
         # Intel MPI pins each rank to cores, which breaks joblib/loky. Widen
         # the affinity to this rank's share of the job step's CPUs on the
@@ -589,7 +567,11 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             # objects are later garbage-collected.
             sys.stdout = open(1, "w", closefd=False)
             sys.stderr = open(2, "w", closefd=False)
+    return _mpi_rank, _mpi_size
 
+
+def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> tuple:
+    """The configuration's instrument, iterations and CPUs, checked."""
     # An empty file parses to None, which would otherwise fail later with an
     # AttributeError.
     if config is None:
@@ -655,20 +637,28 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                 ncpu = available_cpus
         if _mpi_rank == 0:
             print(f"MPI: ncpu={ncpu} per rank")
+    return instrument, n_iter, ncpu
 
+
+def _observed_input(config: dict) -> tuple:
+    """
+    Whether the run observes a uniform intensity, a series of atmosphere
+    files or a series of synthesis files, after checking that only one is
+    given and that the sections given belong to it.
+    """
     # Simulation mode. A time series is either atmosphere files, synthesised
     # in this run, or synthesis files made beforehand.
     uniform_intensity_mode = "uniform_intensity" in config
     if uniform_intensity_mode and "synthesis_file" in config:
         warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
-                      UserWarning, stacklevel=2)
+                      UserWarning, stacklevel=3)
     # These describe the line of a uniform intensity; other modes observe the
     # spectra they are given.
     for key in ("rest_wavelength", "thermal_width"):
         if key in config and not uniform_intensity_mode:
             warnings.warn(f"'{key}' is ignored: it describes the line of a 'uniform_intensity', "
                           f"and this run observes the spectra it is given.",
-                          UserWarning, stacklevel=2)
+                          UserWarning, stacklevel=3)
     atmosphere_series_mode = "atmosphere_series" in config
     synthesis_series_mode = "synthesis_series" in config
     raster_mode = atmosphere_series_mode or synthesis_series_mode
@@ -682,6 +672,66 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     if not raster_mode and "raster" in config:
         raise ValueError("The 'raster:' section belongs to an 'atmosphere_series' or "
                          "'synthesis_series' run and would not be read here.")
+    return uniform_intensity_mode, atmosphere_series_mode, synthesis_series_mode
+
+
+def _move_aside_an_older_pickle(output_file: Path) -> None:
+    """
+    Move aside a results pickle of the same name left by an older version,
+    so it is not read in place of the results.
+    """
+    stale = output_file.with_suffix(".pkl")
+    if stale.is_file():
+        # Do not overwrite a file moved aside before, which may be the
+        # only copy of even older results.
+        aside = stale.with_name(stale.name + ".old")
+        number = 0
+        while aside.exists():
+            number += 1
+            aside = stale.with_name(f"{stale.name}.old.{number}")
+        try:
+            os.replace(stale, aside)
+            print(f"Moved {stale}, from an older version, to {aside.name}")
+        except OSError as error:
+            print(f"Could not move {stale}, from an older version, aside ({error}); "
+                  f"the results are {output_file}, not it")
+
+
+def run_config(config: dict, name: str, *, source: str | None = None,
+               debug: bool = False) -> Path:
+    """
+    Observe what a configuration describes, and write the results.
+
+    Runs every combination of the configuration's settings, as `eclipse
+    observe` does for a run file.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration, as read from its YAML file.
+    name : str
+        Name of the run; the results are written to `run/result/<name>.h5`.
+    source : str, optional
+        Where the configuration came from, for error messages. Default
+        `name`.
+    debug : bool, optional
+        Open an IPython debugger where an error happens. Default False.
+
+    Returns
+    -------
+    Path
+        The results file.
+    """
+    source = name if source is None else source
+    results_path = Path(f"run/result/{name}.h5")
+
+    _mpi_rank, _mpi_size = _set_up_process(debug)
+
+    instrument, n_iter, ncpu = _top_level_settings(config, source, _mpi_rank, _mpi_size)
+
+    uniform_intensity_mode, atmosphere_series_mode, synthesis_series_mode = (
+        _observed_input(config))
+    raster_mode = atmosphere_series_mode or synthesis_series_mode
 
     if atmosphere_series_mode:
         series_paths = _series_paths(config, "atmosphere_series")
@@ -1096,54 +1146,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         else:
             cube_sim, dynamic_mode_info = load_atmosphere(synthesis_file, reference_line)
 
-        is_dynamic_mode = dynamic_mode_info.get("enabled", False)
-        if is_dynamic_mode:
-            print("Synthesis was done in DYNAMIC MODE (time-varying atmosphere)")
-            print(f"  Slit width: {dynamic_mode_info['slit_width']}")
-            print(f"  Slit rest time: {dynamic_mode_info['slit_rest_time']}")
-            print(f"  Timesteps used: {len(dynamic_mode_info['available_timesteps'])}")
-
-            synth_slit_width = dynamic_mode_info["slit_width"]
-            synth_rest_time = dynamic_mode_info["slit_rest_time"]
-
-            slit_width_vals = sweep_dims.get(
-                "simulation.slit_width", [sim_fixed["slit_width"]]
-            )
-            expos_vals = sweep_dims.get(
-                "simulation.expos", [sim_fixed["expos"]]
-            )
-
-            if len(slit_width_vals) != 1:
-                raise ValueError(
-                    f"Dynamic mode synthesis requires exactly one slit width. "
-                    f"Config specifies {len(slit_width_vals)}: {slit_width_vals}. "
-                    f"Please provide only the synthesis slit width: {synth_slit_width}"
-                )
-            if not np.isclose(
-                slit_width_vals[0].to_value(u.arcsec),
-                synth_slit_width.to_value(u.arcsec),
-                rtol=1e-6,
-            ):
-                raise ValueError(
-                    f"Slit width mismatch: synthesis was done with {synth_slit_width}, "
-                    f"but config specifies {slit_width_vals[0]}."
-                )
-            if len(expos_vals) != 1:
-                raise ValueError(
-                    f"Dynamic mode synthesis requires exactly one exposure time. "
-                    f"Config specifies {len(expos_vals)}: {expos_vals}. "
-                    f"Please provide only the synthesis slit rest time: {synth_rest_time}"
-                )
-            if not np.isclose(
-                expos_vals[0].to_value(u.s),
-                synth_rest_time.to_value(u.s),
-                rtol=1e-6,
-            ):
-                raise ValueError(
-                    f"Exposure time mismatch: synthesis was done with {synth_rest_time}, "
-                    f"but config specifies {expos_vals[0]}."
-                )
-            print("  Dynamic mode parameters validated successfully!")
+        _check_dynamic_mode_synthesis(dynamic_mode_info, sweep_dims, sim_fixed)
 
     # Main sweep loop
     all_results = {}
@@ -1663,23 +1666,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         output_file = save_results(output_file, save_data)
 
         print(f"Saved results to {output_file} ({os.path.getsize(output_file) / 1e6:.1f} MB)")
-        # Move aside a results pickle of the same name left by an older
-        # version, so it is not read in place of these results.
-        stale = output_file.with_suffix(".pkl")
-        if stale.is_file():
-            # Do not overwrite a file moved aside before, which may be the
-            # only copy of even older results.
-            aside = stale.with_name(stale.name + ".old")
-            number = 0
-            while aside.exists():
-                number += 1
-                aside = stale.with_name(f"{stale.name}.old.{number}")
-            try:
-                os.replace(stale, aside)
-                print(f"Moved {stale}, from an older version, to {aside.name}")
-            except OSError as error:
-                print(f"Could not move {stale}, from an older version, aside ({error}); "
-                      f"the results are {output_file}, not it")
+        _move_aside_an_older_pickle(output_file)
         print(f"Software version: {software_version}  |  Git commit: {git_commit_id}")
         print(f"Instrument response simulation complete! Total combinations: {total_combinations}")
     return results_path

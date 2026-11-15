@@ -26,7 +26,8 @@ import numpy as np
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from .utils import element_data, require_downsample_divides, require_uniform_grid
+from .utils import (checked_quantity, element_data, require_downsample_divides,
+                    require_uniform_grid)
 
 __all__ = [
     "FORMAT_NAME",
@@ -71,29 +72,9 @@ UNITS = {
 _ABUNDANCE_PROBE_TEMPERATURE = 1.0e6 * u.K
 
 
-def _quantity(value, name: str, ndim: Optional[int] = None) -> u.Quantity:
-    """
-    `value`, checked to be a finite Quantity of the right kind for `name`.
-
-    `ndim`, if given, is the number of axes it must have.
-    """
-    unit = UNITS[name]
-    if not isinstance(value, u.Quantity):
-        raise TypeError(f"{name} must be an astropy Quantity in a unit "
-                        f"convertible to {unit}, got {type(value).__name__}.")
-    if not value.unit.is_equivalent(unit):
-        raise u.UnitConversionError(
-            f"{name} must be in a unit convertible to {unit}, got {value.unit}.")
-    if ndim is not None and value.ndim != ndim:
-        raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}.")
-    if not np.all(np.isfinite(value.value)):
-        raise ValueError(f"{name} contains NaN or infinite values.")
-    return value
-
-
 def _check_edges(edges, name: str) -> u.Quantity:
     """Check that cell edges increase and bound at least one cell."""
-    edges = _quantity(edges, name, ndim=1)
+    edges = checked_quantity(edges, name, (UNITS[name],), ndim=1)
     if edges.size < 2:
         raise ValueError(f"{name} must bound at least 1 cell, so have "
                          f"at least 2 values, got {edges.size}.")
@@ -183,7 +164,7 @@ class Atmosphere:
             cube = getattr(self, name)
             if cube is None:
                 continue
-            _quantity(cube, name, ndim=3)
+            checked_quantity(cube, name, (UNITS[name],), ndim=3)
             if cube.shape != shape:
                 raise ValueError(
                     f"{name} has shape {cube.shape} but the edges bound "
@@ -203,7 +184,7 @@ class Atmosphere:
             raise ValueError("An atmosphere needs a mass_density or an "
                              "electron_density.")
         if self.time is not None:
-            _quantity(self.time, "time", ndim=0)
+            checked_quantity(self.time, "time", (UNITS["time"],), ndim=0)
         if not isinstance(self.source, str):
             raise TypeError(f"source must be a string, got "
                             f"{type(self.source).__name__}.")
@@ -581,7 +562,7 @@ def read_time(path: str | Path) -> Optional[u.Quantity]:
             return None
         time = _read_dataset(f, "time")
     try:
-        return _quantity(time, "time", ndim=0)
+        return checked_quantity(time, "time", (UNITS["time"],), ndim=0)
     except ValueError as error:
         raise ValueError(f"{path}: {error}") from None
 
@@ -631,8 +612,9 @@ def describe_atmosphere_file(path: str | Path) -> str:
                                  f"the edges bound (nz, ny, nx) = {shape} cells.")
             unit = _dataset_unit(f, name)
             if not unit.is_equivalent(UNITS[name]):
-                raise u.UnitConversionError(f"{name} in {path} must be in a unit convertible "
-                                            f"to {UNITS[name]}, got {unit}.")
+                raise u.UnitConversionError(
+                    f"{name} in {path} must be in a unit of {UNITS[name].physical_type}, "
+                    f"such as {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
         if "mass_density" not in cubes and "electron_density" not in cubes:
@@ -641,7 +623,7 @@ def describe_atmosphere_file(path: str | Path) -> str:
         time = _read_dataset(f, "time") if "time" in f else None
         if time is not None:
             try:
-                time = _quantity(time, "time", ndim=0)
+                time = checked_quantity(time, "time", (UNITS["time"],), ndim=0)
             except ValueError as error:
                 raise ValueError(f"{path}: {error}") from None
         source = _text_attribute(f.attrs, "source", "")
