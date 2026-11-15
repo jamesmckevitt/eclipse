@@ -38,7 +38,8 @@ from .synthesis import (
     line_of_sight_velocity,
     synthesise_cubes,
 )
-from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _same_grid, _to_length,
+from .synthesis_file import (RADIANCE_UNIT, SpectralLine, Synthesis, _reaches, _same_grid,
+                             _to_length,
                              read_synthesis, read_synthesis_layout, read_synthesis_products)
 from .sampling import pixel_weights
 from .utils import (VELOCITY_CONVENTION, _fwhm_to_sigma, angle_to_distance, require_uniform_grid,
@@ -719,11 +720,21 @@ class RasterSynthesiser(_SlitRaster):
     ----------
     series : AtmosphereSeries
     settings : SynthesisSettings
+    reference_line : str, optional
+        Line whose window is observed. Once the contribution functions give
+        each line's wavelengths, only the lines reaching that window are
+        synthesised, and the line cubes are of those lines alone. Default
+        None, every line.
     """
 
-    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings):
+    def __init__(self, series: AtmosphereSeries, settings: SynthesisSettings,
+                 reference_line: Optional[str] = None):
         super().__init__(series)
         self.settings = settings
+        if reference_line is not None and reference_line not in settings.lines:
+            raise ValueError(f"The reference line {reference_line!r} is not among the "
+                             f"synthesised lines {list(settings.lines)}.")
+        self.reference_line = reference_line
         self.vel_grid = settings.velocity_grid()
         # The contribution functions are computed for the first strip's
         # densities, and extended when a later strip needs others.
@@ -761,7 +772,7 @@ class RasterSynthesiser(_SlitRaster):
         # each cell of the column, and its spectra in float64.
         rows = self.series.y_edges.size - 1
         cells = (self.series.z_edges.size - 1) * rows
-        spectra = 8 * rows * self.vel_grid.size * len(self.settings.lines)
+        spectra = 8 * rows * self.vel_grid.size * len(self.lines)
         return 5 * cells * np.dtype(self.settings.precision).itemsize + spectra
 
     def _cover_densities(self, temperature: np.ndarray, electron_density: np.ndarray) -> None:
@@ -780,16 +791,17 @@ class RasterSynthesiser(_SlitRaster):
             missing = ([(needed[0], have[0] - 1)] if needed[0] < have[0] else []) + (
                 [(have[1] + 1, needed[1])] if needed[1] > have[1] else [])
         for first, last in missing:
-            print(f"Computing contribution functions via fiasco for {len(settings.lines)} lines "
+            names = self.lines
+            print(f"Computing contribution functions via fiasco for {len(names)} lines "
                   f"at 10^{_density_point(first):.1f} to 10^{_density_point(last):.1f} cm^-3")
             goft, self.logT_grid, logN_grid = compute_goft_fiasco(
-                list(settings.lines), abundance=settings.abundance,
+                names, abundance=settings.abundance,
                 logN_min=_density_point(first), logN_max=_density_point(last),
                 nN=last - first + 1, precision=settings.precision,
                 n_workers=settings.n_workers, hdf5_dbase_root=settings.hdf5_dbase_root,
                 temperature_chunk=settings.goft_temperature_chunk)
             if self.goft is None:
-                self.goft, self.logN_grid = goft, logN_grid
+                self.goft, self.logN_grid = self._reaching_the_window(goft), logN_grid
                 self.goft_dbase_root = next(iter(goft.values()))["hdf5_dbase_root"]
                 print(f"  CHIANTI database: {self.goft_dbase_root}")
                 self._density_points = (first, last)
@@ -804,6 +816,22 @@ class RasterSynthesiser(_SlitRaster):
             self.logN_grid = np.concatenate(parts if below else parts[::-1])
             self._density_points = (min(first, self._density_points[0]),
                                     max(last, self._density_points[1]))
+
+    @property
+    def lines(self) -> List[str]:
+        """Lines synthesised: all of them, or those reaching the reference line's window."""
+        return list(self.settings.lines if self.goft is None else self.goft)
+
+    def _reaching_the_window(self, goft: Dict[str, dict]) -> Dict[str, dict]:
+        """The lines of `goft` whose wavelengths reach the reference line's window, if any."""
+        if self.reference_line is None:
+            return goft
+
+        def wavelengths(info):
+            return (self.vel_grid * info["wl0"] / const.c + info["wl0"]).cgs
+
+        window = wavelengths(goft[self.reference_line])
+        return {name: info for name, info in goft.items() if _reaches(wavelengths(info), window)}
 
     def _synthesise_strip(self, snapshot: int, first: int, last: int) -> None:
         """Synthesise columns `first` to `last` - 1 of one snapshot into the cache."""
@@ -865,7 +893,7 @@ class RasterSynthesiser(_SlitRaster):
         row_pitch = self._row_pitch.to(u.Mm)
         n_columns, n_rows = positions.size, rows.size
         cubes = {}
-        for name in self.settings.lines:
+        for name in self.lines:
             data = np.stack([c[name] for c in collected], axis=1)
             wl_grid = self._wl_grids[name].to(u.cm)
             # Reference pixel at the middle of each spatial axis, with the grid
@@ -897,6 +925,10 @@ class RasterSynthesiser(_SlitRaster):
         if reference_line not in self.settings.lines:
             raise ValueError(f"The reference line {reference_line!r} is not among the "
                              f"synthesised lines {list(self.settings.lines)}.")
+        if self.reference_line not in (None, reference_line):
+            raise ValueError(f"This raster synthesises the lines reaching the window of "
+                             f"{self.reference_line}, so it cannot sum them onto "
+                             f"{reference_line}'s.")
         return sum_line_cubes(self.line_cubes(plan, slit_width, expos, repeat,
                                               across_slit=across_slit, extend=extend),
                               reference_line)

@@ -356,21 +356,18 @@ def _write_with_key(path: Path, keys: dict, write) -> None:
     the same file at the same time, leaves no file that looks finished.
     """
     import h5py
-    import uuid
 
-    path = Path(os.path.realpath(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.partial{path.suffix}")
-    try:
+    from .atmosphere import _replacing
+
+    # The partial name keeps the file's ending, which synthesise-spectra
+    # reads as the file's kind.
+    with _replacing(Path(path), ending=Path(path).suffix) as partial:
         write(partial)
-        if not partial.is_file():
+        if not h5py.is_hdf5(partial):
             raise FileNotFoundError(f"Nothing was written to {partial}.")
         with h5py.File(partial, "a") as file:
             for name, key in keys.items():
                 file.attrs[name] = key
-        os.replace(partial, path)
-    finally:
-        partial.unlink(missing_ok=True)
 
 
 def _reusable(path: Path, key: str, what: str) -> bool:
@@ -458,7 +455,14 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     So a mistake in the observation's or the frame's settings is found
     before an atmosphere is synthesised, which can take hours.
     """
+    _check(config, name, steps)
+
+
+def _check(config: dict, name: str, steps: tuple) -> Optional[dict]:
+    """`check`, returning the frame's settings if `steps` makes one, so they are read once."""
     from .main import _validate_config_keys
+
+    frame = None
 
     if synthesises(config):
         # A frame synthesises its own band, so it needs no lines.
@@ -470,7 +474,8 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
             raise FileNotFoundError(f"{key.replace('_', ' ').capitalize()} file not found: "
                                     f"{source}")
     if "frame" in config and "frame" in steps:
-        band = _frame_settings(config, name).get("band")
+        frame = _frame_settings(config, name)
+        band = frame.get("band")
         if band is not None:
             key, source = synthesised_from(band)
             if not Path(source).is_file() and not _made_already(band, name, warn=False):
@@ -479,6 +484,7 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     observed = observation_config(config, name)
     if "observe" in steps:
         _validate_config_keys(observed, str(observed.get("instrument", "SWC")).upper())
+    return frame
 
 
 def _observe_one(config: dict, name: str, source: Optional[str] = None,
@@ -642,9 +648,10 @@ def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
     return {**config, "synthesis": section, "synthesis_file": str(settings["synthesis"])}
 
 
-def _frame_one(config: dict, name: str) -> Path:
+def _frame_one(config: dict, name: str, settings: Optional[dict] = None) -> Path:
     """
-    Make the full-CCD frame a run's `frame:` section describes.
+    Make the full-CCD frame a run's `frame:` section describes, from its
+    `settings` if they have been read already.
 
     Returns
     -------
@@ -654,7 +661,7 @@ def _frame_one(config: dict, name: str) -> Path:
     from .config import AluminiumFilter, Detector_SWC, Telescope_EUVST
     from .full_frame import full_ccd_frame, write_full_frame
 
-    settings = _frame_settings(config, name)
+    settings = _frame_settings(config, name) if settings is None else settings
     if "band" in settings:
         _synthesise_one(settings["band"], name)
     elif not settings["synthesis"].is_file():
@@ -733,13 +740,14 @@ STEPS = {"run": ("synthesise", "observe", "frame"), "synthesise": ("synthesise",
 
 
 def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = None,
-              debug: bool = False) -> RunOutput:
+              debug: bool = False, frame_settings: Optional[dict] = None) -> RunOutput:
     """
     One run's steps, from `"synthesise"`, `"observe"` and `"frame"`.
 
     The synthesis is made only if the run names an atmosphere, and reused
     if its file already holds it. The frame is made only if the run has a
-    `frame:` section. The run is checked first by :func:`run_all`.
+    `frame:` section, from `frame_settings` if they have been read
+    already. The run is checked first by :func:`run_all`.
     """
     synthesis = results = frame = None
     if synthesises(config):
@@ -751,16 +759,21 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
     if "observe" in steps:
         results = _observe_one(config, name, source=source, debug=debug)
     if "frame" in steps and "frame" in config:
-        frame = _first_rank(_frame_one, config, name)
+        if frame_settings is None:
+            frame_settings = _frame_settings(config, name)
+        frame = _first_rank(_frame_one, config, name, frame_settings)
         if steps == ("frame",) and synthesises(config):
             # The frame alone synthesises only the band it is made from.
-            synthesis = _frame_settings(config, name)["synthesis"]
+            synthesis = frame_settings["synthesis"]
     return RunOutput(name, synthesis, results, frame)
 
 
-def _check_files_apart(found: list, steps: tuple) -> None:
-    """Refuse runs that would write different things to the same file."""
-    syntheses, frames = {}, {}
+def _check_files_apart(found: list, steps: tuple, frames: dict) -> None:
+    """
+    Refuse runs that would write different things to the same file. `frames`
+    holds each run's frame settings, by run name.
+    """
+    syntheses, outputs = {}, {}
     for run_name, config in found:
         if synthesises(config):
             path = synthesis_path(config, run_name).resolve()
@@ -771,9 +784,9 @@ def _check_files_apart(found: list, steps: tuple) -> None:
                                  f"differently into {path}; give each its own "
                                  f"'synthesis_file'.")
         if "frame" in config and "frame" in steps:
-            settings = _frame_settings(config, run_name)
+            settings = frames[run_name]
             path = settings["output"].resolve()
-            other = frames.setdefault(path, run_name)
+            other = outputs.setdefault(path, run_name)
             if other != run_name:
                 raise ValueError(f"The runs {other} and {run_name} would both write their "
                                  f"frame to {path}; give each its own 'frame.output'.")
@@ -816,13 +829,15 @@ def run_all(source, command: str, *, settings=(), only: Optional[str] = None,
                 else ": the run file has no 'runs:'."))
         found = picked
     steps = STEPS[command]
+    frames = {}
     for run_name, run_config in found:
-        check(run_config, run_name, steps)
+        frames[run_name] = _check(run_config, run_name, steps)
         if command == "frame" and "frame" not in run_config:
             raise ValueError(f"The run {run_name} has no 'frame:' section saying what frame "
                              f"to make.")
-    _check_files_apart(found, steps)
-    return [run_steps(run_config, run_name, steps, source=label, debug=debug)
+    _check_files_apart(found, steps, frames)
+    return [run_steps(run_config, run_name, steps, source=label, debug=debug,
+                      frame_settings=frames[run_name])
             for run_name, run_config in found]
 
 

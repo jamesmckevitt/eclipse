@@ -457,30 +457,36 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
     with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
-        edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
-        if columns is not None:
-            nx = edges["x_edges"].size - 1
-            first = 0 if columns.start is None else columns.start
-            last = nx if columns.stop is None else columns.stop
-            if columns.step not in (None, 1) or not 0 <= first < last <= nx:
-                raise ValueError(f"columns must be a slice of neighbouring pixels among the "
-                                 f"{nx} along x, got {columns}.")
-            edges["x_edges"] = edges["x_edges"][first:last + 1]
-            columns = slice(first, last)
-        group, names = _lines_reaching(f, path, reference_line)
-        lines = {}
-        for name in names:
-            entry = group[name]
-            fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
-                      "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
-                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
-                      **_identity(entry)}
-            try:
-                lines[name] = SpectralLine(**fields)
-            except (TypeError, ValueError) as error:
-                raise type(error)(f"{path}, line {name!r}: {error}") from None
-        source, integration_axis = _source(f), _integration_axis(f)
-        time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
+        return _synthesis_in(f, path, reference_line, columns)
+
+
+def _synthesis_in(f, path: Path, reference_line: Optional[str],
+                  columns: Optional[slice]) -> Synthesis:
+    """`read_synthesis`, from a synthesis file already open and checked."""
+    edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
+    if columns is not None:
+        nx = edges["x_edges"].size - 1
+        first = 0 if columns.start is None else columns.start
+        last = nx if columns.stop is None else columns.stop
+        if columns.step not in (None, 1) or not 0 <= first < last <= nx:
+            raise ValueError(f"columns must be a slice of neighbouring pixels among the "
+                             f"{nx} along x, got {columns}.")
+        edges["x_edges"] = edges["x_edges"][first:last + 1]
+        columns = slice(first, last)
+    group, names = _lines_reaching(f, path, reference_line)
+    lines = {}
+    for name in names:
+        entry = group[name]
+        fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
+                  "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
+                  "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
+                  **_identity(entry)}
+        try:
+            lines[name] = SpectralLine(**fields)
+        except (TypeError, ValueError) as error:
+            raise type(error)(f"{path}, line {name!r}: {error}") from None
+    source, integration_axis = _source(f), _integration_axis(f)
+    time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
     try:
         return Synthesis(lines=lines, source=source, time=time,
                          integration_axis=integration_axis, **edges)

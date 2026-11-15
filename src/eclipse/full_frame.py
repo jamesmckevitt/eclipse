@@ -131,26 +131,55 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
         blur to bring in, and the slit's light only from its part inside
         them. Default False, for dark.
     """
-    from .synthesis_file import read_synthesis, read_synthesis_layout
+    from .atmosphere import _check_format, _open_to_read
+    from .synthesis_file import (FORMAT_NAME, FORMAT_VERSION, RADIANCE_UNIT, _synthesis_in,
+                                 read_synthesis_layout)
 
     path = Path(path).expanduser()
     layout = read_synthesis_layout(path)
     columns, weights = _slit_columns(layout["x_edges"], slit_position, slit_width,
                                      psf_across_slit, extend)
-    # One column at a time, as a band's spectrum is large.
+    # One column at a time, as a band's spectrum is large, from the file
+    # opened once.
     edges, radiance = {}, {}
-    for column, weight in zip(range(columns.start, columns.stop), weights):
-        for name, line in read_synthesis(path, columns=slice(column, column + 1)).lines.items():
-            part = weight * line.radiance().value[:, 0, :]
-            radiance[name] = radiance[name] + part if name in radiance else part
-            edges[name] = _bin_edges(line.wavelength.to_value(u.Angstrom))
+    with _open_to_read(path, "synthesis") as f:
+        _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
+                      format_version=FORMAT_VERSION)
+        for column, weight in zip(range(columns.start, columns.stop), weights):
+            synthesis = _synthesis_in(f, path, None, slice(column, column + 1))
+            for name, line in synthesis.lines.items():
+                # Spectra already in ECLIPSE's radiance unit need no converting,
+                # which would copy a band's large spectrum three times.
+                values = (line.intensity.value if line.intensity.unit == RADIANCE_UNIT
+                          else line.radiance().value)
+                part = weight * values[:, 0, :]
+                radiance[name] = radiance[name] + part if name in radiance else part
+                edges[name] = _bin_edges(line.wavelength.to_value(u.Angstrom))
     return _Scene(y_edges=_centred(layout["y_edges"]), names=list(radiance),
                   edges=list(edges.values()), radiance=list(radiance.values()))
 
 
-def _rates(scene: _Scene, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
-           slit_width: u.Quantity, blur: Optional[str],
-           solid_angle: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _scene_light(scene: _Scene, telescope, solid_angle: float) -> list:
+    """
+    The part of :func:`_rates` both CCDs share: for each spectrum of the
+    scene, its bins' lower and upper edges and middles, and the photons per
+    second per pixel per unit radiance in each bin.
+    """
+    lights = []
+    for edges in scene.edges:
+        low, high = edges[:-1], edges[1:]
+        middle = (low + high) / 2
+        # Photons per second per pixel per unit radiance in each bin: its
+        # width in cm, through the pixel's solid angle.
+        collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
+            photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
+        lights.append((low, high, middle, collected))
+    return lights
+
+
+def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, telescope,
+           det, slit_width: u.Quantity,
+           blur: Optional[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Photons per second in each row of one CCD from each image row under the slit.
 
@@ -171,19 +200,13 @@ def _rates(scene: _Scene, focal_plane: FocalPlane_SWC, ccd: str, telescope, det,
     row_edges, order = _sorted_rows(focal_plane, ccd)
     shape = (scene.y_edges.size - 1, focal_plane.n_rows)
     totals = tuple(np.zeros(shape) for _ in range(3))
-    for edges, radiance in zip(scene.edges, scene.radiance):
-        low, high = edges[:-1], edges[1:]
-        middle = (low + high) / 2
+    for (low, high, middle, collected), radiance in zip(lights, scene.radiance):
         if blur is None:
             sigma = box = 0.0
         else:
             sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
                                    middle)
         onto_rows = light_onto_pixels(low, high, row_edges, sigma, box)   # (rows, bins)
-        # Photons per second per pixel per unit radiance in each bin: its
-        # width in cm, through the pixel's solid angle.
-        collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
-            photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
         light = radiance * collected
         for total, power in zip(totals, (0, 1, 2)):
             total[:, order] += (onto_rows @ (light / middle**power).T).T
@@ -551,9 +574,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     blur = spectral_psf if psf else None
     solid_angle = pixel_solid_angle(focal_plane, slit_width).to_value(u.sr)
     totals = tuple({} for _ in range(3))
+    lights = _scene_light(scene, telescope, solid_angle)
     for ccd in CCDS:
-        parts = _rates(scene, focal_plane, ccd, telescope, det, u.Quantity(slit_width), blur,
-                       solid_angle)
+        parts = _rates(scene, lights, focal_plane, ccd, telescope, det, u.Quantity(slit_width),
+                       blur)
         for total, part in zip(totals, parts):
             total[ccd] = along @ part                               # (columns, rows)
     rate, per_wavelength, per_square = totals

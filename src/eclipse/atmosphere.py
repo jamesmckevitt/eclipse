@@ -395,19 +395,22 @@ def require_mass_per_electron(value) -> float:
 # ----------------------------------------------------------------------
 # HDF5
 # ----------------------------------------------------------------------
-def _new_partial(path: Path) -> Path:
+def _new_partial(path: Path, ending: str = "") -> Path:
     """
     New empty file with a unique name beside `path`, to write `path` into.
 
     It is created normally, so the umask and the directory's default
     permissions apply to it, and so to `path`, as colleagues sharing a
-    project directory expect.
+    project directory expect. Its name ends in `ending`, for a writer that
+    checks the name, and then starts with a dot, so a pattern such as
+    `*.h5` does not take it for a finished file.
     """
+    prefix = "." if ending else ""
     while True:
-        suffix = f".{secrets.token_hex(4)}.part"
+        suffix = f".{secrets.token_hex(4)}.part{ending}"
         # Truncate the stem so the name fits the 255 bytes most filesystems allow.
-        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
-        partial = path.with_name(stem + suffix)
+        stem = path.name.encode()[:255 - len(prefix) - len(suffix)].decode(errors="ignore")
+        partial = path.with_name(prefix + stem + suffix)
         try:
             os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
         except FileExistsError:
@@ -416,13 +419,14 @@ def _new_partial(path: Path) -> Path:
 
 
 @contextmanager
-def _replacing(path: Path):
+def _replacing(path: Path, ending: str = ""):
     """
     New file beside `path` to write, which replaces `path` once written.
 
     A write cut short by an error, a full disk or the job being killed
     leaves any file already at `path` unchanged. Writing over it directly
-    would leave a broken file and lose the old one.
+    would leave a broken file and lose the old one. The new file's name ends
+    in `ending`.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Follow a symlink to its target, as writing to the link would.
@@ -430,7 +434,7 @@ def _replacing(path: Path):
     # Refuse to replace a read-only file, as writing into it would fail.
     if destination.exists() and not os.access(destination, os.W_OK):
         raise PermissionError(f"{destination} is read-only, so it is not written over.")
-    partial = _new_partial(destination)
+    partial = _new_partial(destination, ending)
     try:
         yield partial
         os.replace(partial, destination)

@@ -99,7 +99,8 @@ def load_instrument_response_results(filepath: str | Path,
                     raise ValueError(f"{filepath}: the {kind} signal's unit is of type "
                                      f"{type(unit).__name__}, not a unit.")
                 if (id(signal), unit) not in signals:
-                    signals[id(signal), unit] = signal * unit
+                    # A view of the stored values, not a second copy of them.
+                    signals[id(signal), unit] = signal << unit
                 combination_results[f"first_{kind}_signal"] = NDCube(
                     signals[id(signal), unit], wcs=combination_results["first_signal_wcs"])
     except (KeyError, TypeError, AttributeError, IndexError) as error:
