@@ -365,25 +365,25 @@ def test_a_line_name_is_read_as_its_element_stage_and_wavelength():
     assert _parse_line_name("Fe27_1.78") == ("Fe", 27, 1.78)
 
 
-def test_each_element_is_read_from_mendeleev_once(monkeypatch):
-    import mendeleev
+def test_each_element_is_looked_up_once(monkeypatch):
+    import plasmapy.particles
 
     from eclipse import utils
     from eclipse.synthesis import _parse_line_name
 
     looked_up = []
-    real_element = mendeleev.element
+    real_symbol = plasmapy.particles.atomic_symbol
 
-    def counting_element(symbol_or_number):
+    def counting_symbol(symbol_or_number):
         looked_up.append(symbol_or_number)
-        return real_element(symbol_or_number)
+        return real_symbol(symbol_or_number)
 
-    monkeypatch.setattr(mendeleev, "element", counting_element)
+    monkeypatch.setattr(plasmapy.particles, "atomic_symbol", counting_symbol)
     monkeypatch.setattr(utils, "_ELEMENTS", {})
     for _ in range(3):
         _parse_line_name("Fe12_195.1190")
         _parse_line_name("Fe9_171.073")
-    iron = (26, real_element("Fe").atomic_weight)
+    iron = (26, plasmapy.particles.standard_atomic_weight("Fe").to_value(u.u))
     assert utils.element_data("Fe") == iron
     assert utils.element_data(26) == iron
     assert looked_up == ["Fe"]

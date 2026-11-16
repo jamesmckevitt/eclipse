@@ -153,7 +153,7 @@ Then in Python:
 import astropy.constants as const
 import astropy.units as u
 import numpy as np
-from mendeleev import element
+from plasmapy.particles import standard_atomic_weight
 from scipy.io import readsav
 from scipy.special import erf
 from eclipse import SpectralLine, Synthesis, write_synthesis
@@ -168,7 +168,7 @@ radiance = poa["flx"] / (4 * np.pi) * u.erg / (u.s * u.cm**2 * u.sr)
 # temperature, on the grid in log T.
 weight = poa["ff"] * poa["dem"] * 10.0 ** poa["logt"]  # (line, temperature)
 temperature = 10.0 ** poa["logt"] * u.K
-mass = np.array([element(int(z)).atomic_weight for z in poa["z"]]) * u.u
+mass = u.Quantity([standard_atomic_weight(int(z)) for z in poa["z"]]).to(u.u)
 
 # Each line is thermally broadened at every temperature it forms at, as in
 # ECLIPSE's own synthesis, and integrated over each bin of a grid much finer

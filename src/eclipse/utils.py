@@ -285,11 +285,10 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
 
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:
     """
-    Atomic number and atomic weight, in atomic mass units, of an element.
+    Atomic number and standard atomic weight, in atomic mass units, of an element.
 
     The element is given by its symbol, such as `"Fe"`, or its atomic
-    number. A lookup in mendeleev takes a fraction of a second, so each
-    element is cached under its symbol and its atomic number.
+    number. Each element is cached under its symbol and its atomic number.
 
     Raises
     ------
@@ -297,13 +296,22 @@ def element_data(symbol_or_number: str | int) -> tuple[int, float]:
         If there is no such element.
     """
     if symbol_or_number not in _ELEMENTS:
-        # Imported here: mendeleev brings in pandas and SQLAlchemy, which
-        # most uses of the package never need.
-        from mendeleev import element
+        from plasmapy.particles import atomic_number, atomic_symbol, standard_atomic_weight
+        from plasmapy.particles.exceptions import MissingParticleDataError, ParticleError
 
-        atom = element(symbol_or_number)
-        data = (atom.atomic_number, atom.atomic_weight)
-        for key in (atom.symbol, atom.atomic_number, symbol_or_number):
+        try:
+            symbol = atomic_symbol(symbol_or_number)
+            # plasmapy also reads isotopes and ions, such as "D" or "Fe 3+".
+            if isinstance(symbol_or_number, str) and symbol != symbol_or_number:
+                raise ParticleError
+        except ParticleError:
+            raise ValueError(f"{symbol_or_number!r} is not an element.") from None
+        try:
+            weight = standard_atomic_weight(symbol).to_value(u.u)
+        except MissingParticleDataError:
+            raise ValueError(f"{symbol} has no standard atomic weight.") from None
+        data = (int(atomic_number(symbol)), float(weight))
+        for key in (symbol, data[0], symbol_or_number):
             _ELEMENTS[key] = data
     return _ELEMENTS[symbol_or_number]
 
