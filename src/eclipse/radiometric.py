@@ -387,7 +387,7 @@ def add_telescope_throughput(ph_flux: NDCube, tel) -> NDCube:
     """
     wl0 = ph_flux.meta['rest_wav']
     wl_axis = ph_flux.axis_world_coords_values(2)[0]
-    throughput = np.array([tel.ea_and_throughput(wl).cgs.value for wl in wl_axis]) * u.cm**2
+    throughput = tel.ea_and_throughput(wl_axis).to(u.cm**2)
     # Beyond the throughput tables there is no detector. Zero there would
     # pull the fit, and NaN would spread through the blur, so refuse it.
     outside = ~np.isfinite(throughput.value)

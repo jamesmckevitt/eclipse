@@ -464,9 +464,9 @@ def _check_method(method: str) -> str:
 def _interpolator(method: str, date_str: str, band: str):
     """Callable EA(wavelength_aa), built once per calibration, date and band.
 
-    Cached, as `radiometric.add_telescope_throughput` evaluates the response
-    one wavelength at a time on every Monte Carlo iteration. Warnings are
-    left to :func:`effective_area`, as a cached call would not repeat them.
+    Cached, as the response is evaluated on every Monte Carlo iteration.
+    Warnings are left to :func:`effective_area`, as a cached call would not
+    repeat them.
     """
     return _METHODS[_check_method(method)](date_str, band)
 
