@@ -1,6 +1,6 @@
 # Run files
 
-A run file is a YAML file that describes a whole job: the simulation to synthesise, how to observe it, and the full-CCD frame to make. One command does every step:
+A run file is a YAML file that describes a whole job. It gives the simulation to synthesise, how to observe it, and the full-CCD frame to make. One command does every step:
 
 ```bash
 eclipse run job.yaml
@@ -52,7 +52,7 @@ The synthesis goes to `run/input/<run file name>.h5`, unless `synthesis_file` na
 
 ## Sweeping a setting
 
-A setting given as a list of values is swept: ECLIPSE runs every combination; see [The run file](observe/simulate.md#the-run-file).
+A setting given as a list of values is swept, and ECLIPSE runs every combination. See [The run file](observe/simulate.md#the-run-file).
 
 ## Changing a setting from the command line
 

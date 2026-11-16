@@ -66,7 +66,7 @@ pip install eclipse
 <path data-from="atmosphere" data-to="mhd" d="M62.5 0 L62.5 40"/>
 <path data-from="measure" data-to="dem" d="M87.5 0 L87.5 40"/>
 </svg></div>
-<div class="label" data-tier="1"><span class="step">1</span>Make the emission</div>
+<div class="label" data-tier="1"><span class="step">1</span>Making emission</div>
 <div class="tier four" markdown>
 
 <div class="box card" data-tier="1" data-id="one" data-route="one" data-to="obs" markdown>
@@ -75,7 +75,7 @@ pip install eclipse
 
 Give only a line's brightness, for the quickest estimate of how precisely it is measured.
 
-[From a single intensity](emission/single-intensity.md){ data-routes="one" }
+[A single intensity](emission/single-intensity.md){ data-routes="one" }
 {: .card-links }
 
 </div>
@@ -141,7 +141,7 @@ ECLIPSE works out the spectra from the emission measure at each temperature, and
 <path data-from="synth" data-to="obs" d="M62.5 0 C62.5 20 25 20 25 40"/>
 <path data-from="synth" data-to="frame" d="M62.5 0 C62.5 20 75 20 75 40"/>
 </svg></div>
-<div class="label" data-tier="2"><span class="step">2</span>Observe it</div>
+<div class="label" data-tier="2"><span class="step">2</span>Observing emission</div>
 <div class="tier four" markdown>
 
 <div class="box card c12" data-tier="2" data-id="obs" data-to="analysis" markdown>
@@ -192,7 +192,7 @@ Everything both CCDs read out at one slit position, from the spectra in the synt
 <path data-from="results" data-to="analysis" d="M25 0 L25 40"/>
 <path data-from="framefile" data-to="frameview" d="M75 0 L75 40"/>
 </svg></div>
-<div class="label" data-tier="3"><span class="step">3</span>Analyse your measurements</div>
+<div class="label" data-tier="3"><span class="step">3</span>Analysing results</div>
 <div class="tier four" markdown>
 
 <div class="box card c12" data-tier="3" data-id="analysis" markdown>
@@ -223,12 +223,6 @@ What the frame holds, and the spectrum of the whole band that the camera records
 
 </div>
 
-</div>
-
-<div class="also" markdown>
-**All three steps run from one file:** [Run files](run-files.md) | [On a cluster](cluster.md)
-
-**To learn more:** [Worked example](worked-example.ipynb) | [Other quick examples](gallery/index.md) | [The instrument model](background/instrument-model.md) | [Run file settings](reference/run-file-settings.md)
 </div>
 
 </div>

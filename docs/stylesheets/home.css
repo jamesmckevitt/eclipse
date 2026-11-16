@@ -281,8 +281,6 @@
 .md-typeset .guide.four .card h3 { font-size: 0.9rem; }
 .md-typeset .guide.four .card-links a { display: block; margin: 0 0 0.3rem; position: relative; padding-left: 0.75rem; }
 .md-typeset .guide.four .card-links a::before { position: absolute; left: 0; top: 0.42em; margin: 0; }
-.md-typeset .guide .also { margin: 1.4rem 0 0; padding-top: 0.8rem; border-top: 0.05rem solid var(--md-default-fg-color--lightest); font-size: 0.75rem; }
-.md-typeset .guide .also p { margin: 0.2rem 0; }
 @media screen and (max-width: 44.9375em) {
   .md-typeset .guide.four .tier.four, .md-typeset .guide.four .files.four { grid-template-columns: 1fr; }
   .md-typeset .guide.four .c12, .md-typeset .guide.four .c34, .md-typeset .guide.four .c3 { grid-column: auto; }

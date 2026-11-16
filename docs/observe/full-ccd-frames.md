@@ -23,7 +23,7 @@ A [frame file](../files/frame.md) in `run/result/`
 </div>
 </div>
 
-A full-CCD frame is what the SW camera reads out at one slit position: both CCDs, with prescan and overscan. It holds the spectra of a synthesis file.
+A full-CCD frame is what the SW camera reads out at one slit position, from both CCDs, with prescan and overscan. It holds the spectra of a synthesis file.
 
 ![On the left, Fe XII 195.12 over the active region, with the slit and its fiducials marked; on the right, what both CCDs read out at that slit position](../images/example-slit-and-frame.png)
 

@@ -4,7 +4,7 @@
 <div markdown>
 **You need**
 
-Your code's spectra: the intensity at each wavelength, in each pixel
+Your code's spectra, the intensity at each wavelength in each pixel
 </div>
 <div markdown>
 **You run**
@@ -48,7 +48,7 @@ write_synthesis(synthesis, "my_code.h5")
 
 The intensity can be in any unit of spectral radiance, and the wavelengths need not be evenly spaced. x runs across the slit and y along it, as lengths on the Sun or angles from 1 AU. An entry can be a whole window with its blends, [fitted](../observe/fitting.md) together.
 
-## Worked example: FoMo
+## Worked example with FoMo
 
 [FoMo](https://github.com/TomVeeDee/FoMo) ([Van Doorsselaere et al. 2016](https://doi.org/10.3389/fspas.2016.00004)) synthesises optically thin lines from an MHD simulation, from any viewing angle.
 
@@ -127,7 +127,7 @@ write_synthesis(synthesis, "fomo.h5")
 
 `read_fomo` reads FoMo's text or binary output, gzipped or not. Observe it with `synthesis_file: ./fomo.h5`.
 
-## Worked example: PINTofALE
+## Worked example with PINTofALE
 
 [PINTofALE](https://hea-www.harvard.edu/PINTofALE/) ([Kashyap & Drake 2000](https://ui.adsabs.harvard.edu/abs/2000BASI...28..475K)) gives one intensity per line for a DEM. To observe a DEM with ECLIPSE's own atomic data, use the [DEM route](dem.md) instead. To keep PINTofALE's, turn its lines into a synthesis file.
 

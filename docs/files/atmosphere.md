@@ -1,6 +1,6 @@
 # Atmosphere files
 
-An atmosphere file holds one snapshot of a simulation: temperature, density and velocity on a grid of cells, for [synthesis](../emission/mhd.md) or a [raster](../observe/rasters.md).
+An atmosphere file holds the temperature, density and velocity of one snapshot of a simulation, on a grid of cells, for [synthesis](../emission/mhd.md) or a [raster](../observe/rasters.md).
 
 ## What one holds
 

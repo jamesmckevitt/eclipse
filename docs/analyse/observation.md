@@ -18,7 +18,7 @@ Each line's precision, maps, and the exposure each pixel needs
 </div>
 </div>
 
-The examples read the sweep from [Simulating an observation](../observe/simulate.md): the [worked example](../worked-example.ipynb)'s active region, with eight combinations of settings.
+The examples read the sweep from [Simulating an observation](../observe/simulate.md), which observes the [worked example](../worked-example.ipynb)'s active region with eight combinations of settings.
 
 ## Loading the results
 
@@ -68,7 +68,7 @@ print(f"{np.nanmedian(stats['v_std']):.2f}")
 | --- | --- |
 | `v_first`, `w_first`, `i_first` | The velocity, width and intensity from the first Monte Carlo iteration |
 | `v_mean`, `w_mean`, `i_mean` | Their means over the iterations |
-| `v_std`, `w_std`, `i_std` | Their standard deviations over the iterations: how precisely they were measured |
+| `v_std`, `w_std`, `i_std` | Their standard deviations over the iterations, which show how precisely they were measured |
 | `v_true`, `w_true` | The true velocity and width |
 | `v_err` | The true velocity minus the mean measured velocity |
 | `failed_fits`, `n_iterations` | The number of fits that failed, and the number of iterations |
@@ -148,7 +148,7 @@ It takes `data_type` and `component` too. These are `total_dn` and `velocity_std
 
 ![The intensity of Fe XII 195.12 and how precisely its velocity is measured, over the simulated active region](../images/example-precision.png)
 
-Given the combinations at each exposure as `exposure_time_results`, it also makes an `exposure_time` map: the shortest exposure that measures each pixel's velocity to within `precision_requirement`. From [an exposure sweep](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml):
+Given the combinations at each exposure as `exposure_time_results`, it also makes an `exposure_time` map of the shortest exposure that measures each pixel's velocity to within `precision_requirement`. From [an exposure sweep](https://github.com/jamesmckevitt/eclipse/blob/master/tools/docs_examples/muram_ar_exposures.yaml):
 
 ```python
 results = load_instrument_response_results("run/result/muram_ar_exposures.h5")

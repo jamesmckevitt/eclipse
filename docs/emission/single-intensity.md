@@ -1,57 +1,35 @@
-# From a single intensity
+# A single intensity
 
 <div class="glance" markdown>
 <div markdown>
 **You need**
 
-A line's total intensity
+A line's total intensity, rest wavelength and width
 </div>
 <div markdown>
 **You run**
 
-`eclipse run`
+Nothing yet. The line goes in the run file.
 </div>
 <div markdown>
 **You get**
 
-A [results file](../files/results.md) straight away; there is no synthesis file
+No synthesis file, as the run file holds the line
 </div>
 <div markdown>
 **Next**
 
-[Analysing an observation](../analyse/observation.md)
+[Simulating an observation](../observe/simulate.md#a-single-intensity)
 </div>
 </div>
 
-ECLIPSE observes one Gaussian line of known total intensity, given in the [run file](../observe/simulate.md#the-run-file). All the scatter in the results then comes from the instrument, which suits uncertainty budgets, and there is no synthesis, so it is fast.
+ECLIPSE can observe one Gaussian line of known total intensity, given in the [run file](../run-files.md). All the scatter in the results then comes from the instrument, which suits uncertainty budgets, and there is no synthesis, so it is fast.
 
 ```yaml
 instrument: SWC
 uniform_intensity: 5000 erg / (s cm2 sr)   # units are required
 rest_wavelength: 195.119 AA
 thermal_width: 20 km/s                     # 1-sigma width, as a velocity
-
-n_iter: 500
-ncpu: -1
-
-simulation:
-  slit_width: [0.2 arcsec, 0.4 arcsec]
-  expos: [5 s, 20 s, 80 s, 320 s]
-  psf: True
 ```
 
-```bash
-eclipse run configs/uniform.yaml
-```
-
-The velocity's standard deviation over the iterations:
-
-![Velocity precision against exposure time for the 0.2 and 0.4 arcsec slits](../images/example-uniform.png)
-
-## Off-chip binning
-
-[`offchip_bin_slit`](../observe/simulate.md#off-chip-slit-binning) works here too.
-
-## The point spread function
-
-With `psf: True` the line is blurred in wavelength only, as it is the same all along the slit.
+[Simulating an observation](../observe/simulate.md#a-single-intensity) shows how to observe it.

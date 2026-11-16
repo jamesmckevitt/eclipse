@@ -1,6 +1,6 @@
 # Emission measure files
 
-An emission measure file holds a DEM or a VDEM over an image: how much plasma there is at each temperature, and velocity, in each pixel. [From a DEM or VDEM](../emission/dem.md) synthesises the spectra it emits.
+An emission measure file holds a DEM or a VDEM over an image, which gives how much plasma there is at each temperature, and velocity, in each pixel. [From a DEM or VDEM](../emission/dem.md) synthesises the spectra it emits.
 
 [From a DEM or VDEM](../emission/dem.md#writing-an-emission-measure-file) shows how to write one in Python, with `write_emission_measure`. This is the layout, for writing one with any HDF5 library.
 

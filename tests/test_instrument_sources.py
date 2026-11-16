@@ -1,4 +1,4 @@
-"""Every instrument setting has a source, and docs/background/instrument-sources.md shows the code's."""
+"""Every instrument setting has a source, and docs/reference/instrument-sources.md shows the code's."""
 import dataclasses
 import importlib.util
 import re
@@ -298,7 +298,7 @@ def test_dispersion_and_tilt_rows_match_the_code():
 def test_jitter_scan_and_slit_rows_match_the_code():
     budget = Telescope_EUVST().resolution_budget
     jitter = _read("SWC", "`telescope.pointing_jitter`",
-                   r"none: the budget's NUM arcsec, or no jitter with `resolution_budget: none`")
+                   r"none, so the budget's NUM arcsec, or no jitter with `resolution_budget: none`")
     assert budget in resolution_budget.BUDGETS[:2], (
         f"Edit the pointing_jitter row of {tool.PAGE_NAME}: the default budget is {budget}.")
     row = resolution_budget.SPATIAL_ROWS[resolution_budget.JITTER_ROW]

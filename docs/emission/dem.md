@@ -76,7 +76,7 @@ eclipse run dem.yaml
 
 The contribution functions are taken at `electron_density`, or at each temperature's density for a `pressure` such as `1e15 K cm-3`. A density in the file, shaped `(y, x)` or `(y, x, temperature)`, is used if neither is given.
 
-## With velocities: a VDEM
+## With velocities (a VDEM)
 
 A VDEM has a `velocity`, the centres of its velocity bins, and an emission measure with one more axis:
 

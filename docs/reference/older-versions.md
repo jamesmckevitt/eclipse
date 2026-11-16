@@ -15,7 +15,7 @@ Uninstall first, or the commands go too; `pip install --force-reinstall --no-dep
 
 ## The package's name
 
-`import euvst_response` is now `import eclipse`. The code is in the clone's `src` folder: rerun `pip install -e .` after updating, or put `<clone>/src` on `PYTHONPATH`. Rename any `eclipse.py` of your own, or it is imported instead.
+`import euvst_response` is now `import eclipse`. The code is in the clone's `src` folder, so rerun `pip install -e .` after updating, or put `<clone>/src` on `PYTHONPATH`. Rename any `eclipse.py` of your own, or it is imported instead.
 
 ## Synthesis files
 

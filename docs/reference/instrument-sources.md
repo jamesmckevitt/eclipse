@@ -1,6 +1,6 @@
 # Instrument sources
 
-Each instrument setting's default and the document it comes from. [Run file settings](../reference/run-file-settings.md) describes the settings.
+Each instrument setting's default and the document it comes from. [Run file settings](run-file-settings.md) describes the settings.
 
 RSC numbers are SOLAR-C documents, SOLC-EUVST-MSSL numbers are the SW camera's, and TASI-SCE-SSS-0001 and EUVST-CNR-REQ-001 are the slit assembly's requirements. RSC-2022021C is the optical design summary of March 2025, for design version 20230909.
 
@@ -17,9 +17,9 @@ RSC numbers are SOLAR-C documents, SOLC-EUVST-MSSL numbers are the SW camera's, 
 | `telescope.grating_table` | packaged table | RSC-2022035A, Sensitivity Budget (13 Dec 2024) |
 | `telescope.psf_params`, through `telescope.field_of_view` | 0.423 arcsec along the slit for the default 280 x 280 arcsec field (0.195 and 0.161 for the smaller fields); 43.00 mA in wavelength with the 0.2 arcsec slit | RSC-2022021C |
 | `telescope.psf_slit_width` | 0.2 arcsec, the slit the spectral PSF above is given for | RSC-2022021C, Appendix A.2 |
-| `telescope.psf_across_slit` | none: across the slit only the budget terms below | Not recorded |
+| `telescope.psf_across_slit` | none, so only the budget terms below across the slit | Not recorded |
 | `telescope.resolution_budget` | `current_estimate` | RSC-2022033B rev. B (28 Oct 2025), Tables 3-1 and 4-1 |
-| `telescope.pointing_jitter` | none: the budget's 0.110 arcsec, or no jitter with `resolution_budget: none` | RSC-2022033B rev. B, Table 3-1 row 20 |
+| `telescope.pointing_jitter` | none, so the budget's 0.110 arcsec, or no jitter with `resolution_budget: none` | RSC-2022033B rev. B, Table 3-1 row 20 |
 | `simulation.slit_width` | 0.2 arcsec; the slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide | RSC-2022021C |
 | `telescope.slit_length` | 280 arcsec | EUVST-CNR-REQ-001 v4.72, R-SA-GEO-30, 3.80 mm; TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1160, gives 4.07 mm |
 | `telescope.fiducial_centres`, `telescope.fiducial_lengths` | -70 and +25 arcsec; 0.8 arcsec, 1.6 arcsec for the widest slit | TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170; EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40; direction from RSC-2022020A, RSC-2022021C, RSC-2023006A and NAOJ-TI-21015d |
@@ -82,7 +82,7 @@ Used by [full-CCD frames](../observe/full-ccd-frames.md); a run uses them only a
 | --- | --- | --- |
 | `detector.fano_factor` | 0.115, for silicon | Not recorded |
 | `detector.pair_energy_300k`, `detector.pair_energy_slope` | 3.71 eV and -0.0006 eV per K, for silicon | Not recorded |
-| `filter.visible_decade_thickness` | 170 Angstrom: visible light falls by a factor 10 per 170 Angstrom of aluminium, times the mesh | Not recorded |
+| `filter.visible_decade_thickness` | 170 Angstrom, so visible light falls by a factor 10 per 170 Angstrom of aluminium, times the mesh | Not recorded |
 | `simulation.pinhole_visible_wavelength` | 600 nm | Not recorded |
 
 ## Hinode/EIS

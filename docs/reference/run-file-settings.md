@@ -1,19 +1,19 @@
 # Run file settings
 
-Every setting of a run file, with its default. A value with units is a number and a unit, such as `0.4 arcsec`. A list of values sweeps a setting; see [The run file](../observe/simulate.md#the-run-file). [Instrument sources](../background/instrument-sources.md) gives where each instrument default comes from.
+Every setting of a run file, with its default. A value with units is a number and a unit, such as `0.4 arcsec`. A list of values sweeps a setting; see [The run file](../observe/simulate.md#the-run-file). [Instrument sources](instrument-sources.md) gives where each instrument default comes from.
 
 ## Top level
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `instrument` | `SWC` or `EIS`; see [The instruments](../background/instrument-model.md#the-instruments) | `SWC` |
+| `instrument` | `SWC` or `EIS`; see [The instruments](../instrument-model.md#the-instruments) | `SWC` |
 | `synthesis_file` | The synthesis file to observe | `./run/input/synthesised_spectra.h5` |
 | `reference_line` | The line whose window is observed, named as in [Naming spectral lines](line-names.md); blends in the window are included | the file's only line, or `Fe12_195.1190` |
 | `n_iter` | Monte Carlo iterations | `25` |
 | `ncpu` | CPU cores; `-1` for all | `-1` |
 | `offchip_bin_slit` | Pixels along the slit added after read-out; see [Off-chip slit binning](../observe/simulate.md#off-chip-slit-binning) | `1` |
 | `fit_signals` | `dn`, `photon` or `both`; see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted) | `both` |
-| `uniform_intensity` | A single line of this total intensity; see [From a single intensity](../emission/single-intensity.md) | none |
+| `uniform_intensity` | A single line of this total intensity; see [A single intensity](../emission/single-intensity.md) | none |
 | `rest_wavelength` | That line's rest wavelength | `195.119 AA` |
 | `thermal_width` | That line's 1-sigma width, as a velocity | `20 km/s` |
 | `pinhole_sizes` | Pinhole diameters (SWC); see [Pinholes](#pinholes) | none |
@@ -31,13 +31,13 @@ Every setting of a run file, with its default. A value with units is a number an
 | `slit_width` | 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec` |
 | `expos` | Exposure time | `1 s` |
 | `vis_sl` | Visible stray light, in photons per second per cm2, before the filter for SWC and at the CCD for EIS | `0 photon / (s cm2)` |
-| `psf` | Blur with the [PSF](../background/instrument-model.md#the-point-spread-function) | `False` |
-| `psf_boundary` | What the PSF brings in from beyond the atmosphere: `replicate` or `zero` | `replicate` |
-| `spectral_psf` | How the slit adds to the optics' blur: `quadrature` or `convolution` | `quadrature` |
-| `slit_mask` | Block the light at the [slit's ends and fiducials](../background/instrument-model.md#the-slits-fiducials) (SWC) | `False` |
-| `focal_plane_dispersion` | Take [each pixel's width in wavelength](../background/instrument-model.md#the-pixels-width-in-wavelength) from the focal plane (SWC) | `False` |
+| `psf` | Blur with the [PSF](../instrument-model.md#the-point-spread-function) | `False` |
+| `psf_boundary` | What the PSF brings in from beyond the atmosphere, `replicate` or `zero` | `replicate` |
+| `spectral_psf` | How the slit adds to the optics' blur, `quadrature` or `convolution` | `quadrature` |
+| `slit_mask` | Block the light at the [slit's ends and fiducials](../instrument-model.md#the-slits-fiducials) (SWC) | `False` |
+| `focal_plane_dispersion` | Take [each pixel's width in wavelength](../instrument-model.md#the-pixels-width-in-wavelength) from the focal plane (SWC) | `False` |
 | `noise` | `False` replaces every random draw by its mean; see [Turning the noise off](../observe/simulate.md#turning-the-noise-off) | `True` |
-| `readout_dark_current` | Also collect [dark current](../background/instrument-model.md#dark-current) while the CCD is cleared and read (SWC) | `True` |
+| `readout_dark_current` | Also collect [dark current](../instrument-model.md#dark-current) while the CCD is cleared and read (SWC) | `True` |
 | `enable_pinholes` | Model the pinholes (SWC) | `False` |
 | `pinhole_visible_wavelength` | Wavelength of the visible light through the pinholes (SWC) | `600 nm` |
 
@@ -72,7 +72,7 @@ Every setting of a run file, with its default. A value with units is a number an
 | `dispersion` | Wavelength in Angstrom against mm from the middle of the CCD gap, as polynomial coefficients | `[198.885944, 1.2516577, -1.361114e-4]` | - |
 | `wavelength_offset` | Shift added to every row's wavelength | `0 Angstrom` | - |
 | `lit_band` | Wavelengths that reach the CCDs | `[170.0 Angstrom, 212.3 Angstrom]` | - |
-| `slit_image_tilt` | Rows a line moves between the slit's middle and 140 arcsec from it: linear and quadratic terms | `[0, 0]` | - |
+| `slit_image_tilt` | Rows a line moves between the slit's middle and 140 arcsec from it, as linear and quadratic terms | `[0, 0]` | - |
 
 A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane settings other than the defaults. [Full-CCD frames](../observe/full-ccd-frames.md) use the focal plane, but not `slit_image_tilt`.
 
@@ -84,7 +84,7 @@ A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane sett
 | `microroughness_sigma` | RMS roughness of the primary mirror | `0.3 nm` | - |
 | `psf_type` | Only `gaussian` | `gaussian` | `gaussian` |
 | `psf_params` | PSF FWHMs in pixels, along the slit and in wavelength | from `field_of_view` | `[3 pix, 3 pix]` |
-| `field_of_view` | `280x280`, `100x100` or `70x70` arcsec; sets `psf_params`; see [The SW PSF along the slit](../background/instrument-model.md#the-sw-psf-along-the-slit) | `280x280` | - |
+| `field_of_view` | `280x280`, `100x100` or `70x70` arcsec; sets `psf_params`; see [The SW PSF along the slit](../instrument-model.md#the-sw-psf-along-the-slit) | `280x280` | - |
 | `resolution_budget` | `current_estimate`, `allocation` or `none` | `current_estimate` | - |
 | `pointing_jitter` | Pointing jitter FWHM, in place of the budget's | `0.110 arcsec` | - |
 | `psf_slit_width` | Slit the wavelength FWHM was measured with | `0.2 arcsec` | none |
@@ -93,7 +93,7 @@ A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane sett
 | `fiducial_centres` | Middle of each fiducial along the slit, positive towards solar north | `[-70 arcsec, 25 arcsec]` | - |
 | `fiducial_lengths` | Fiducial lengths for the 0.2, 0.4, 0.8 and 1.6 arcsec slits | `[0.8, 0.8, 0.8, 1.6] arcsec` | - |
 | `pm_table`, `grating_table` | Primary mirror reflectance and grating efficiency tables | packaged | - |
-| `calibration` | `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](../background/instrument-model.md#eis-effective-area) | - | `ground` |
+| `calibration` | `ground`, `dz2013`, `warren2014` or `dz2025`; see [EIS effective area](../instrument-model.md#eis-effective-area) | - | `ground` |
 | `date` | Date of the observation, for in-flight calibrations | - | none |
 
 `psf_params`, `psf_slit_width`, `fiducial_centres` and `fiducial_lengths` each take one value, not a sweep. A table has two columns, wavelength in nm and throughput from 0 to 1, and lines starting with `#` are skipped.

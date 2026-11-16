@@ -77,11 +77,40 @@ fitting:
       tie_width: 0
 ```
 
-A list of values is swept: every combination is run, here eight. At the top level only `offchip_bin_slit` sweeps, and `psf_params`, `psf_slit_width`, `fiducial_centres` and `fiducial_lengths` take one value. Four of the combinations, as the velocity's standard deviation over the iterations:
+A list of values is swept, and every combination is run, here eight. At the top level only `offchip_bin_slit` sweeps, and `psf_params`, `psf_slit_width`, `fiducial_centres` and `fiducial_lengths` take one value. Four of the combinations, as the velocity's standard deviation over the iterations:
 
 ![The velocity precision over the active region for the 0.2 and 0.4 arcsec slits, in 15 and 60 s exposures](../images/example-sweep.png)
 
 A setting outside its section, or a misspelt key, stops the run with an error.
+
+## A single intensity { data-routes="one" }
+
+A [single intensity](../emission/single-intensity.md) is observed in the same way, with the iterations and the instrument in the same run file:
+
+```yaml
+instrument: SWC
+uniform_intensity: 5000 erg / (s cm2 sr)
+rest_wavelength: 195.119 AA
+thermal_width: 20 km/s
+
+n_iter: 500
+ncpu: -1
+
+simulation:
+  slit_width: [0.2 arcsec, 0.4 arcsec]
+  expos: [5 s, 20 s, 80 s, 320 s]
+  psf: True
+```
+
+```bash
+eclipse run configs/uniform.yaml
+```
+
+The velocity's standard deviation over the iterations:
+
+![Velocity precision against exposure time for the 0.2 and 0.4 arcsec slits](../images/example-uniform.png)
+
+With `psf: True` the line is blurred in wavelength only, as it is the same all along the slit. [Off-chip binning](#off-chip-slit-binning) works here too.
 
 ## Off-chip slit binning
 

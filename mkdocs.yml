@@ -22,7 +22,6 @@ theme:
   features:
     - navigation.instant
     - navigation.tracking
-    - navigation.expand
     - content.code.copy
     - toc.follow
 
@@ -32,18 +31,19 @@ nav:
   - Other quick examples: gallery/index.md
   - Using ECLIPSE:
       - Run files: run-files.md
+      - Commands: commands.md
       - On a cluster: cluster.md
-  - 1. Make the emission:
+  - Making emission:
+      - A single intensity: emission/single-intensity.md
       - From another code: emission/other-codes.md
-      - From a single intensity: emission/single-intensity.md
       - From an MHD simulation: emission/mhd.md
       - From a DEM or VDEM: emission/dem.md
-  - 2. Observe it:
+  - Observing emission:
       - Simulating an observation: observe/simulate.md
       - Rasters and sit-and-stares: observe/rasters.md
       - Fitting the lines: observe/fitting.md
       - Full-CCD frames: observe/full-ccd-frames.md
-  - 3. Analyse your measurements:
+  - Analysing results:
       - Analysing an observation: analyse/observation.md
       - Analysing a full-CCD frame: analyse/frame.md
   - Files:
@@ -53,12 +53,10 @@ nav:
       - Results files: files/results.md
       - Frame files: files/frame.md
       - Band lines files: files/band-lines.md
-  - Background:
-      - The instrument model: background/instrument-model.md
-      - Instrument sources: background/instrument-sources.md
+  - Instrument model: instrument-model.md
   - Reference:
       - Run file settings: reference/run-file-settings.md
-      - Commands: reference/commands.md
+      - Instrument sources: reference/instrument-sources.md
       - Naming spectral lines: reference/line-names.md
       - API reference: api.md
       - Older versions: reference/older-versions.md
@@ -120,7 +118,7 @@ plugins:
   - redirects:
       redirect_maps:
         vdem-synthesis.md: emission/dem.md#with-velocities-a-vdem
-        instruments.md: background/instrument-model.md#the-instruments
+        instruments.md: instrument-model.md#the-instruments
         quickstart.md: run-files.md#installing
         synthesis.md: emission/mhd.md
         dem-synthesis.md: emission/dem.md
@@ -131,8 +129,7 @@ plugins:
         time-series.md: observe/rasters.md
         full-ccd-frame.md: observe/full-ccd-frames.md
         analysis.md: analyse/observation.md
-        instrument-model.md: background/instrument-model.md
-        instrument-sources.md: background/instrument-sources.md
+        instrument-sources.md: reference/instrument-sources.md
         configuration.md: reference/run-file-settings.md
         files.md: files/synthesis.md
         line-names.md: reference/line-names.md

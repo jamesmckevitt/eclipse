@@ -1,6 +1,6 @@
-# The instrument model
+# Instrument model
 
-ECLIPSE follows the light from the Sun through the telescope, the point spread function (PSF) and the slit, to the detector, which turns photons into electrons with their noise, adds dark current and read noise, and digitises them. This page covers the parts with settings of their own. [Run file settings](../reference/run-file-settings.md) lists every setting, and [Instrument sources](instrument-sources.md) where each default comes from.
+ECLIPSE follows the light from the Sun through the telescope, the point spread function (PSF) and the slit, to the detector, which turns photons into electrons with their noise, adds dark current and read noise, and digitises them. This page covers the parts with settings of their own. [Run file settings](reference/run-file-settings.md) lists every setting, and [Instrument sources](reference/instrument-sources.md) where each default comes from.
 
 ## The instruments
 
@@ -10,7 +10,7 @@ ECLIPSE follows the light from the Sun through the telescope, the point spread f
 
 The default settings describe EUVST-SW, as in [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000). Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide, and a wider slit gives coarser pixels across the slit:
 
-![The core of the active region, 30 arcsec across, through the 0.2, 0.4, 0.8 and 1.6 arcsec slits](../images/example-slits.png)
+![The core of the active region, 30 arcsec across, through the 0.2, 0.4, 0.8 and 1.6 arcsec slits](images/example-slits.png)
 
 ### Hinode/EIS
 
@@ -38,11 +38,11 @@ telescope:
 
 `simulation.psf: True` blurs the spectra along the slit and in wavelength. It is off by default.
 
-![Fe XII 195.12 over 20 by 20 arcsec of the active region's core, without and with the PSF](../images/example-psf.png)
+![Fe XII 195.12 over 20 by 20 arcsec of the active region's core, without and with the PSF](images/example-psf.png)
 
 ### The SW PSF along the slit
 
-The SW PSF is the worst case over `telescope.field_of_view`: `280x280` (default), `100x100` or `70x70` arcsec.
+The SW PSF is the worst case over `telescope.field_of_view`, which is `280x280` (default), `100x100` or `70x70` arcsec.
 
 ```yaml
 telescope:
@@ -53,7 +53,7 @@ simulation:
 
 ### The spectral PSF and the slit
 
-In wavelength, the optics' blur is combined with the slit's image: added in quadrature (`spectral_psf: quadrature`, the default), or convolved with it (`convolution`, SWC only).
+In wavelength, the optics' blur is combined with the slit's image, either added in quadrature (`spectral_psf: quadrature`, the default) or convolved with it (`convolution`, SWC only).
 
 ```yaml
 simulation:
@@ -64,7 +64,7 @@ simulation:
 
 ### The edges of the atmosphere
 
-`simulation.psf_boundary` sets what the blur brings in from beyond the atmosphere: more of the edge cells (`replicate`, the default), or nothing (`zero`), which darkens the pixels near the edges.
+`simulation.psf_boundary` sets what the blur brings in from beyond the atmosphere, either more of the edge cells (`replicate`, the default) or nothing (`zero`), which darkens the pixels near the edges.
 
 ## The slit's fiducials
 
@@ -77,11 +77,11 @@ simulation:
   slit_mask: True
 ```
 
-![The active region without and with the slit's mask, which cuts the map to the slit's length and adds two dark rows at the fiducials](../images/example-slit-mask.png)
+![The active region without and with the slit's mask, which cuts the map to the slit's length and adds two dark rows at the fiducials](images/example-slit-mask.png)
 
 ## Visible light
 
-`simulation.vis_sl` adds visible stray light, in photons per second per cm2: before the filter for SWC, and at the CCD for EIS. `simulation.enable_pinholes` adds light through pinholes in SWC's filter; see [Pinholes](../reference/run-file-settings.md#pinholes).
+`simulation.vis_sl` adds visible stray light, in photons per second per cm2, before the filter for SWC and at the CCD for EIS. `simulation.enable_pinholes` adds light through pinholes in SWC's filter; see [Pinholes](reference/run-file-settings.md#pinholes).
 
 ## Dark current
 

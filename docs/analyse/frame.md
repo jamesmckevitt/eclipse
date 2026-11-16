@@ -31,7 +31,7 @@ For each CCD, `"left"` and `"right"`:
 - `field_angle`: each column's angle along the slit, positive towards solar north
 - `photon_wavelength`, `photon_rms_wavelength`: the wavelengths of the mean and root mean square energies of each pixel's photons
 
-Each CCD's columns count from its left output: from the north end of the slit on the left CCD, and the south end on the right. `settings["spectra"]` names the entries of the synthesis file the frame holds.
+Each CCD's columns count from its left output, which is at the north end of the slit on the left CCD and at the south end on the right. `settings["spectra"]` names the entries of the synthesis file the frame holds.
 
 ## The spectrum of the band
 

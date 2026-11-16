@@ -610,7 +610,7 @@ def _fractions(values: list, name: str) -> list:
 
 # Each instrument setting's field metadata gives the `source` of its
 # default, and for a quantity the `unit` to show it in.
-# tools/update_instrument_sources.py writes them to docs/background/instrument-sources.md.
+# tools/update_instrument_sources.py writes them to docs/reference/instrument-sources.md.
 # These sources are shared.
 _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "
                             "1500 Angstrom aluminium foil")
