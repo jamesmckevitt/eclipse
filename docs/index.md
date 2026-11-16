@@ -42,60 +42,60 @@ pip install eclipse
 
 <div class="rows" markdown>
 <div></div>
-<div class="files four" markdown>
+<div class="files three" markdown>
 
-<div class="file c2" data-id="output" data-from="" data-to="spectra" data-have="spectra" markdown>
+<div class="file" data-id="output" data-from="" data-to="spectra" data-have="spectra" markdown>
 :material-file-code-outline:{ .ficon } **Your code's output**
-<span>The spectra your code makes, in its own format.</span>
+<span>Spectra from your own code, in whatever format it writes.</span>
 </div>
 
-<div class="file c3" data-id="atmosphere" data-from="" data-to="mhd" data-have="mhd" markdown>
+<div class="file" data-id="atmosphere" data-from="" data-to="mhd" data-have="mhd" markdown>
 :material-database-outline:{ .ficon } [**Atmosphere file**](files/atmosphere.md)
-<span>Your simulation's temperature, density and velocity, written in ECLIPSE's format.</span>
+<span>Your simulation's temperature, density and velocity, saved in ECLIPSE's format.</span>
 </div>
 
-<div class="file c4" data-id="measure" data-from="" data-to="dem" data-have="dem" markdown>
+<div class="file" data-id="measure" data-from="" data-to="dem" data-have="dem" markdown>
 :material-chart-histogram:{ .ficon } [**Emission measure file**](files/emission-measure.md)
-<span>The emission measure at each temperature, and velocity for a VDEM.</span>
+<span>How much plasma there is at each temperature, and at each velocity for a VDEM.</span>
 </div>
 
 </div>
 <div></div>
 <div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
-<path data-from="output" data-to="spectra" d="M37.5 0 L37.5 40"/>
-<path data-from="atmosphere" data-to="mhd" d="M62.5 0 L62.5 40"/>
-<path data-from="measure" data-to="dem" d="M87.5 0 L87.5 40"/>
+<path data-from="output" data-to="spectra" d="M16.67 0 L16.67 40"/>
+<path data-from="atmosphere" data-to="mhd" d="M50 0 L50 40"/>
+<path data-from="measure" data-to="dem" d="M83.33 0 L83.33 40"/>
 </svg></div>
 <div class="label" data-tier="1"><span class="step">1</span>Making emission</div>
-<div class="tier four" markdown>
+<div class="tier three" markdown>
 
-<div class="box card c2" data-tier="1" data-id="spectra" data-route="spectra" data-to="obs frame" markdown>
+<div class="box card" data-tier="1" data-id="spectra" data-route="spectra" data-to="obs frame" markdown>
 
 ### Another code's spectra
 
-Bring spectra that your own code has made, optically thin or thick.
+Use spectra you have made with your own code, optically thin or thick.
 
 [From another code](emission/other-codes.md){ data-routes="spectra" }
 {: .card-links }
 
 </div>
 
-<div class="box card c3" data-tier="1" data-id="mhd" data-route="mhd" data-to="obs frame" markdown>
+<div class="box card" data-tier="1" data-id="mhd" data-route="mhd" data-to="obs frame" markdown>
 
 ### An MHD simulation
 
-ECLIPSE works out the spectra a 3D simulation emits, seen from above or from the side.
+ECLIPSE works out the spectra your 3D simulation emits, viewed from above or from the side.
 
 [From an MHD simulation](emission/mhd.md){ data-routes="mhd" }
 {: .card-links }
 
 </div>
 
-<div class="box card c4" data-tier="1" data-id="dem" data-route="dem" data-to="obs frame" markdown>
+<div class="box card" data-tier="1" data-id="dem" data-route="dem" data-to="obs frame" markdown>
 
 ### A DEM or VDEM
 
-ECLIPSE works out the spectra from the emission measure at each temperature, and velocity if you have it.
+ECLIPSE works out the spectra from your emission measure, with velocities if you have them.
 
 [From a DEM or VDEM](emission/dem.md){ data-routes="dem" }
 {: .card-links }
@@ -106,29 +106,29 @@ ECLIPSE works out the spectra from the emission measure at each temperature, and
 <div class="divider"></div>
 <div></div>
 <div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
-<path data-from="spectra" data-to="synth" d="M37.5 0 C37.5 20 62.5 20 62.5 40"/>
-<path data-from="mhd" data-to="synth" d="M62.5 0 L62.5 40"/>
-<path data-from="dem" data-to="synth" d="M87.5 0 C87.5 20 62.5 20 62.5 40"/>
+<path data-from="spectra" data-to="synth" d="M16.67 0 C16.67 20 50 20 50 40"/>
+<path data-from="mhd" data-to="synth" d="M50 0 L50 40"/>
+<path data-from="dem" data-to="synth" d="M83.33 0 C83.33 20 50 20 50 40"/>
 </svg></div>
 <div></div>
 <div class="files four" markdown>
 
 <div class="file" data-id="one" data-route="one" data-from="" data-to="obs" data-have="one" markdown>
 :material-circle-medium:{ .ficon } [**A single intensity**](observe/simulate.md#a-single-intensity)
-<span>One line's total intensity, wavelength and width, given in the run file.</span>
+<span>Just a line's intensity, wavelength and width, written in the run file.</span>
 </div>
 
-<div class="file c234" data-id="synth" data-from="spectra mhd dem" data-to="obs frame" data-have="spectra mhd dem" markdown>
+<div class="file c23" data-id="synth" data-from="spectra mhd dem" data-to="obs frame" data-have="spectra mhd dem" markdown>
 :material-file-document-outline:{ .ficon } [**Synthesis file**](files/synthesis.md)
-<span>The emission spectra in each spatial pixel: a few lines to observe, or the whole band for a full-CCD frame.</span>
+<span>The spectra emitted in each pixel, either a few lines to observe or the whole band for a full-CCD frame.</span>
 </div>
 
 </div>
 <div></div>
 <div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
 <path data-from="one" data-to="obs" d="M12.5 0 C12.5 20 25 20 25 40"/>
-<path data-from="synth" data-to="obs" d="M62.5 0 C62.5 20 25 20 25 40"/>
-<path data-from="synth" data-to="frame" d="M62.5 0 C62.5 20 75 20 75 40"/>
+<path data-from="synth" data-to="obs" d="M50 0 C50 20 25 20 25 40"/>
+<path data-from="synth" data-to="frame" d="M50 0 C50 20 75 20 75 40"/>
 </svg></div>
 <div class="label" data-tier="2"><span class="step">2</span>Observing emission</div>
 <div class="tier four" markdown>
@@ -137,7 +137,7 @@ ECLIPSE works out the spectra from the emission measure at each temperature, and
 
 ### Simulate an observation
 
-The spectra pass through the telescope and detector, noise is added and the lines are fitted, for a snapshot, a raster or a sit-and-stare.
+Send the spectra through the telescope and detector, add noise and fit the lines, for a single snapshot, a raster or a sit-and-stare.
 
 [Simulating an observation](observe/simulate.md) [Rasters and sit-and-stares](observe/rasters.md){ data-routes="mhd spectra" } [Fitting the lines](observe/fitting.md)
 {: .card-links }
@@ -148,7 +148,7 @@ The spectra pass through the telescope and detector, noise is added and the line
 
 ### Make a full-CCD frame
 
-Everything both CCDs read out at one slit position, from the spectra in the synthesis file.
+See everything both CCDs read out at one slit position, from the spectra in your synthesis file.
 
 [Full-CCD frames](observe/full-ccd-frames.md){ data-routes="spectra mhd dem" }
 {: .card-links }
@@ -167,7 +167,7 @@ Everything both CCDs read out at one slit position, from the spectra in the synt
 
 <div class="file c12" data-id="results" data-from="obs" data-to="analysis" markdown>
 :material-file-chart-outline:{ .ficon } [**Results file**](files/results.md)
-<span>Fitted observations and the ground truth.</span>
+<span>The fitted observations, with the ground truth to compare against.</span>
 </div>
 
 <div class="file c34" data-id="framefile" data-from="frame" data-to="frameview" markdown>
@@ -188,9 +188,9 @@ Everything both CCDs read out at one slit position, from the spectra in the synt
 
 ### Analyse an observation
 
-How precisely each line is measured, maps of its intensity, velocity and width, and the exposure each pixel needs.
+See how precisely each line is measured, map its intensity, velocity and width, and find the exposure each pixel needs.
 
-![The Fe XII intensity as synthesised, the measured intensity, the measured velocity and its precision](images/example-stages.png)
+[![The Fe XII intensity as synthesised, the measured intensity, the measured velocity and its precision](images/example-stages.png) :material-arrow-expand:{ .zoom-mark }](images/example-stages.png){ .zoom title="Show full size" }
 
 [Analysing an observation](analyse/observation.md)
 {: .card-links }
@@ -201,9 +201,9 @@ How precisely each line is measured, maps of its intensity, velocity and width, 
 
 ### Analyse a full-CCD frame
 
-What the frame holds, and the spectrum of the whole band that the camera records.
+Look at what the frame holds, and the spectrum of the whole band the camera records.
 
-![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png)
+[![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png) :material-arrow-expand:{ .zoom-mark }](images/example-slit-and-frame.png){ .zoom title="Show full size" }
 
 [Analysing a full-CCD frame](analyse/frame.md){ data-routes="spectra mhd dem" }
 {: .card-links }

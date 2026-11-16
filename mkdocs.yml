@@ -29,6 +29,7 @@ nav:
   - Home: index.md
   - Worked example: worked-example.ipynb
   - Other quick examples: gallery/index.md
+  - Instrument model: instrument-model.md
   - Using ECLIPSE:
       - Run files: run-files.md
       - Commands: commands.md
@@ -52,7 +53,6 @@ nav:
       - Results files: files/results.md
       - Frame files: files/frame.md
       - Band lines files: files/band-lines.md
-  - Instrument model: instrument-model.md
   - Reference:
       - Run file settings: reference/run-file-settings.md
       - Instrument sources: reference/instrument-sources.md
@@ -80,6 +80,7 @@ extra_css:
 extra_javascript:
   - javascripts/guide3.js
   - javascripts/route.js
+  - javascripts/zoom.js
 
 markdown_extensions:
   - admonition

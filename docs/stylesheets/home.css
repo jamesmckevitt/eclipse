@@ -275,7 +275,6 @@
 .md-typeset .guide.four .tier.four, .md-typeset .guide.four .files.four { grid-template-columns: repeat(4, 1fr); }
 .md-typeset .guide.four .c12 { grid-column: 1 / span 2; }
 .md-typeset .guide.four .c34 { grid-column: 3 / span 2; }
-.md-typeset .guide.four .c3 { grid-column: 3; }
 .md-typeset .guide.four .file.c12, .md-typeset .guide.four .file.c34 { width: 44%; }
 .md-typeset .guide.four .file { width: 88%; }
 .md-typeset .guide.four .card h3 { font-size: 0.9rem; }
@@ -283,7 +282,7 @@
 .md-typeset .guide.four .card-links a::before { position: absolute; left: 0; top: 0.42em; margin: 0; }
 @media screen and (max-width: 44.9375em) {
   .md-typeset .guide.four .tier.four, .md-typeset .guide.four .files.four { grid-template-columns: 1fr; }
-  .md-typeset .guide.four .c12, .md-typeset .guide.four .c34, .md-typeset .guide.four .c3 { grid-column: auto; }
+  .md-typeset .guide.four .c12, .md-typeset .guide.four .c34 { grid-column: auto; }
   .md-typeset .guide.four .file, .md-typeset .guide.four .file.c12, .md-typeset .guide.four .file.c34 { width: auto; }
 }
 
@@ -292,12 +291,13 @@
 .md-typeset .glance p { margin: 0 0 0.15rem; }
 .md-typeset .glance strong { color: var(--md-default-fg-color--light); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em; }
 
-/* One synthesis file under the three boxes that make one. */
-.md-typeset .guide.four .c2 { grid-column: 2; }
-.md-typeset .guide.four .c4 { grid-column: 4; }
-.md-typeset .guide.four .c234 { grid-column: 2 / span 3; }
-.md-typeset .guide.four .file.c234 { width: 29.33%; }
+/* Three ways to make the emission, in thirds, and the one synthesis file
+   they make in the middle below them. */
+.md-typeset .guide.four .tier.three, .md-typeset .guide.four .files.three { grid-template-columns: repeat(3, 1fr); }
+.md-typeset .guide.four .c23 { grid-column: 2 / span 2; }
+.md-typeset .guide.four .file.c23 { width: 44%; }
 @media screen and (max-width: 44.9375em) {
-  .md-typeset .guide.four .c2, .md-typeset .guide.four .c4, .md-typeset .guide.four .c234 { grid-column: auto; }
-  .md-typeset .guide.four .file.c234 { width: auto; }
+  .md-typeset .guide.four .tier.three, .md-typeset .guide.four .files.three { grid-template-columns: 1fr; }
+  .md-typeset .guide.four .c23 { grid-column: auto; }
+  .md-typeset .guide.four .file.c23 { width: auto; }
 }
