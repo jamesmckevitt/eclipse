@@ -6,7 +6,7 @@ hide:
 <div class="home-aside" markdown>
 ![The ECLIPSE logo](images/logo/eclipse-logo-transparent.svg)
 
-Maintained at UCL Mullard Space Science Laboratory for SOLAR-C. Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See [LICENSE](https://github.com/jamesmckevitt/eclipse/blob/master/LICENSE) for usage terms.
+Maintained at UCL Mullard Space Science Laboratory for SOLAR-C. Contact: James McKevitt (jm2@mssl.ucl.ac.uk). Open source under the [BSD 3-Clause licence](https://github.com/jamesmckevitt/eclipse/blob/master/LICENSE). Forward modelling results for SOLAR-C/EUVST need the SOLAR-C SWG's approval before publication.
 </div>
 
 # ECLIPSE
