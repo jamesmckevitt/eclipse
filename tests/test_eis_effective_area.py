@@ -158,7 +158,7 @@ class TestTelescope:
             tel.ea_and_throughput(225.0 * u.AA)
 
     def test_scalar_in_scalar_out(self):
-        """radiometric.add_telescope_throughput feeds one wavelength at a time."""
+        """A scalar wavelength gives a scalar area, and an array an array."""
         tel = Telescope_EIS()
         assert tel.ea_and_throughput(195.0 * u.AA).isscalar
         assert not tel.ea_and_throughput([195.0, 196.0] * u.AA).isscalar
