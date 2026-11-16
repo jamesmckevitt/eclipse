@@ -26,6 +26,8 @@ pip install eclipse
 
 </div>
 
+ECLIPSE runs on Python 3.11 to 3.14. It will run on Python 3.15 once it is supported by h5py.
+
 If ECLIPSE contributed to a publication, please cite both:
 
 - [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000)
