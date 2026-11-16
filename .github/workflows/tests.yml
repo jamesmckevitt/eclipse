@@ -22,9 +22,8 @@ jobs:
       # has, since the usual cause is a dependency that dropped a version.
       fail-fast: false
       matrix:
-        # The versions pyproject.toml claims support for. Adding a classifier
-        # without adding it here would leave the claim untested.
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # The oldest version pyproject.toml allows, up to the newest released.
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
 
     steps:
       # Pinned to commit SHAs to match publish.yml, so that Dependabot's grouped
@@ -37,6 +36,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
+
+      # h5py has no wheels for Python 3.15 yet, so pip builds it against the
+      # system's HDF5 library.
+      - name: Install HDF5 to build h5py
+        if: matrix.python-version == '3.15'
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
 
       # The dev extra rather than pytest alone, because that is the install a
       # contributor is told to make and this is where it gets exercised. sunpy
