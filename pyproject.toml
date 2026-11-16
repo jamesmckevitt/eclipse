@@ -10,6 +10,7 @@ authors = [
 ]
 description = "ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST"
 readme = "README.md"
+license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 classifiers = [
