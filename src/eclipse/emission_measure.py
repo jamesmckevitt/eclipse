@@ -1,7 +1,7 @@
 """
 Emission measure files: a DEM or VDEM over an image, as HDF5.
 
-The layout is described on the Files page of the docs. The emission measure
+The layout is on the Emission measure files page of the docs. The emission measure
 is n_e^2 dh in each bin, in cm^-5, not per kelvin or per km/s.
 """
 

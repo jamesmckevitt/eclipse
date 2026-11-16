@@ -1,6 +1,7 @@
 *.png
 !docs/images/*.png
 !docs/images/logo/*.png
+!docs/gallery/images/*.png
 *.sav
 *.txt
 *.pdf

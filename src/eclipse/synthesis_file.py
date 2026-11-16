@@ -1,7 +1,7 @@
 """
 Synthesis files: the spectra the instrument simulation observes, as HDF5.
 
-The layout is described on the Files page of the docs. The view,
+The layout is on the Synthesis files page of the docs. The view,
 `integration_axis`, is `"x"`, `"y"` or `"z"` seen from +x, -y or above, or
 `"-x"`, `"+y"` or `"-z"` from the other side, where the image is mirrored
 left to right and `x_edges` change sign. A file without it is seen along z.

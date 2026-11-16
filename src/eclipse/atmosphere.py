@@ -4,7 +4,7 @@ Atmosphere input for the synthesis, and its HDF5 file.
 An `Atmosphere` holds the temperature, density and velocity of every cell
 and the cell edges, from any simulation code. Mass density is converted to
 electron density with the synthesis's abundances. The file layout is on the
-Files page of the docs.
+Atmosphere files page of the docs.
 """
 
 from __future__ import annotations
