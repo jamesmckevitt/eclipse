@@ -11,11 +11,11 @@
   overflow-x: auto;
 }
 
-/* A picture that opens full size when clicked, with a mark in its corner. */
-.md-typeset a.zoom { position: relative; display: block; cursor: zoom-in; }
+/* A picture that opens full size when clicked, with a mark on its corner. */
+.md-typeset a.zoom { position: relative; display: block; cursor: zoom-in; font-size: 0; line-height: 0; }
 .md-typeset a.zoom img { display: block; }
-.md-typeset a.zoom .zoom-mark { position: absolute; right: 0.4rem; bottom: 0.4rem; padding: 0.25rem; border-radius: 0.25rem; background: rgba(0, 0, 0, 0.6); line-height: 0; }
-.md-typeset a.zoom .zoom-mark svg { width: 1.2rem; height: 1.2rem; fill: #fff; }
-.md-typeset a.zoom:hover .zoom-mark { background: var(--md-primary-fg-color); }
+.md-typeset a.zoom .zoom-mark { position: absolute; right: 0.3rem; bottom: 0.3rem; width: 1.6rem; height: 1.6rem; }
+.md-typeset a.zoom .zoom-mark svg { width: 1.6rem; height: 1.6rem; max-height: none; fill: #fff; filter: drop-shadow(0 0 0.08rem rgba(0, 0, 0, 0.9)); transition: transform 0.2s; }
+.md-typeset a.zoom:hover .zoom-mark svg { transform: scale(1.15); }
 .zoom-view { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 2rem; background: rgba(0, 0, 0, 0.85); cursor: zoom-out; }
 .zoom-view img { max-width: 100%; max-height: 100%; background: #fff; }

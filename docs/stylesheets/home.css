@@ -54,6 +54,10 @@
 .md-typeset .guide.guided .card.is-open:hover,
 .md-typeset .guide.guided .card.is-other:hover { opacity: 1; filter: none; transform: translateY(-0.15rem); box-shadow: 0 0.5rem 1.2rem rgba(0, 0, 0, 0.18); animation: none; }
 .md-typeset .guide.guided .card.is-other { opacity: 0.7; transform: scale(0.97); filter: grayscale(0.6); cursor: pointer; }
+.md-typeset .guide.guided .card[data-tier="1"].is-other { opacity: 0.4; filter: grayscale(1); }
+.md-typeset .guide.guided .card[data-tier="1"].is-other :is(h3, p) { color: var(--md-default-fg-color--light); }
+.md-typeset .guide.guided .card[data-tier="1"].is-other:hover { opacity: 1; filter: none; }
+.md-typeset .guide.guided .card[data-tier="1"].is-other:hover :is(h3, p) { color: inherit; }
 .md-typeset .guide.guided .card.is-chosen { opacity: 1; transform: none; filter: none; cursor: pointer; border: 0.12rem solid var(--path); box-shadow: 0 0 0 0.15rem var(--path), 0 0.5rem 1.2rem rgba(0, 0, 0, 0.15); }
 
 /* A round mark in the corner: empty to pick, filled with a tick once picked. */

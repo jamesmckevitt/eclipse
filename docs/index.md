@@ -26,6 +26,11 @@ pip install eclipse
 
 </div>
 
+If ECLIPSE contributed to a publication, please cite both:
+
+- [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000)
+- [The DOI for the version of the code you used](https://zenodo.org/search?q=parent.id%3A17543844&f=allversions%3Atrue&l=list&p=1&s=10&sort=version).
+
 ## Where to start
 
 <div class="guide slim-steps four" data-v="3" data-fade-links data-global-route markdown>
@@ -46,7 +51,7 @@ pip install eclipse
 
 <div class="file" data-id="output" data-from="" data-to="spectra" data-have="spectra" markdown>
 :material-file-code-outline:{ .ficon } **Your code's output**
-<span>Spectra from your own code, in whatever format it writes.</span>
+<span>Spectra from your own code.</span>
 </div>
 
 <div class="file" data-id="atmosphere" data-from="" data-to="mhd" data-have="mhd" markdown>
@@ -73,7 +78,7 @@ pip install eclipse
 
 ### Another code's spectra
 
-Use spectra you have made with your own code, optically thin or thick.
+Use spectra you have made with another code, optically thin or thick.
 
 [From another code](emission/other-codes.md){ data-routes="spectra" }
 {: .card-links }
@@ -84,7 +89,7 @@ Use spectra you have made with your own code, optically thin or thick.
 
 ### An MHD simulation
 
-ECLIPSE works out the spectra your 3D simulation emits, viewed from above or from the side.
+ECLIPSE works out the optically-thin spectra your 3D simulation emits.
 
 [From an MHD simulation](emission/mhd.md){ data-routes="mhd" }
 {: .card-links }
@@ -95,7 +100,7 @@ ECLIPSE works out the spectra your 3D simulation emits, viewed from above or fro
 
 ### A DEM or VDEM
 
-ECLIPSE works out the spectra from your emission measure, with velocities if you have them.
+ECLIPSE works out the optically-thin spectra from your emission measure.
 
 [From a DEM or VDEM](emission/dem.md){ data-routes="dem" }
 {: .card-links }
@@ -115,12 +120,12 @@ ECLIPSE works out the spectra from your emission measure, with velocities if you
 
 <div class="file" data-id="one" data-route="one" data-from="" data-to="obs" data-have="one" markdown>
 :material-circle-medium:{ .ficon } [**A single intensity**](observe/simulate.md#a-single-intensity)
-<span>Just a line's intensity, wavelength and width, written in the run file.</span>
+<span>A line's intensity, wavelength and width.</span>
 </div>
 
 <div class="file c23" data-id="synth" data-from="spectra mhd dem" data-to="obs frame" data-have="spectra mhd dem" markdown>
 :material-file-document-outline:{ .ficon } [**Synthesis file**](files/synthesis.md)
-<span>The spectra emitted in each pixel, either a few lines to observe or the whole band for a full-CCD frame.</span>
+<span>The spectra in each pixel.</span>
 </div>
 
 </div>
@@ -137,7 +142,7 @@ ECLIPSE works out the spectra from your emission measure, with velocities if you
 
 ### Simulate an observation
 
-Send the spectra through the telescope and detector, add noise and fit the lines, for a single snapshot, a raster or a sit-and-stare.
+Observe the spectra through the telescope and detector, add noise and fit the lines.
 
 [Simulating an observation](observe/simulate.md) [Rasters and sit-and-stares](observe/rasters.md){ data-routes="mhd spectra" } [Fitting the lines](observe/fitting.md)
 {: .card-links }
@@ -148,7 +153,7 @@ Send the spectra through the telescope and detector, add noise and fit the lines
 
 ### Make a full-CCD frame
 
-See everything both CCDs read out at one slit position, from the spectra in your synthesis file.
+Everything both CCDs read out at one slit position.
 
 [Full-CCD frames](observe/full-ccd-frames.md){ data-routes="spectra mhd dem" }
 {: .card-links }
@@ -167,12 +172,12 @@ See everything both CCDs read out at one slit position, from the spectra in your
 
 <div class="file c12" data-id="results" data-from="obs" data-to="analysis" markdown>
 :material-file-chart-outline:{ .ficon } [**Results file**](files/results.md)
-<span>The fitted observations, with the ground truth to compare against.</span>
+<span>The fitted observations and ground truth.</span>
 </div>
 
 <div class="file c34" data-id="framefile" data-from="frame" data-to="frameview" markdown>
 :material-file-image-outline:{ .ficon } [**Frame file**](files/frame.md)
-<span>What both CCDs read out, in DN.</span>
+<span>Readout from both CCDs in DN.</span>
 </div>
 
 </div>
@@ -188,9 +193,9 @@ See everything both CCDs read out at one slit position, from the spectra in your
 
 ### Analyse an observation
 
-See how precisely each line is measured, map its intensity, velocity and width, and find the exposure each pixel needs.
+See the maps of intensity, velocity, and line width, and the instrument's measurement precision and required exposure times.
 
-[![The Fe XII intensity as synthesised, the measured intensity, the measured velocity and its precision](images/example-stages.png) :material-arrow-expand:{ .zoom-mark }](images/example-stages.png){ .zoom title="Show full size" }
+[![The Fe XII intensity as synthesised, the measured intensity, the measured velocity and its precision](images/example-stages.png) :material-fullscreen:{ .zoom-mark }](images/example-stages.png){ .zoom title="Show full size" }
 
 [Analysing an observation](analyse/observation.md)
 {: .card-links }
@@ -201,9 +206,9 @@ See how precisely each line is measured, map its intensity, velocity and width, 
 
 ### Analyse a full-CCD frame
 
-Look at what the frame holds, and the spectrum of the whole band the camera records.
+See the full CCD readout.
 
-[![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png) :material-arrow-expand:{ .zoom-mark }](images/example-slit-and-frame.png){ .zoom title="Show full size" }
+[![The slit over the active region, and what both CCDs read out through it](images/example-slit-and-frame.png) :material-fullscreen:{ .zoom-mark }](images/example-slit-and-frame.png){ .zoom title="Show full size" }
 
 [Analysing a full-CCD frame](analyse/frame.md){ data-routes="spectra mhd dem" }
 {: .card-links }
@@ -216,9 +221,3 @@ Look at what the frame holds, and the spectrum of the whole band the camera reco
 
 </div>
 
-## Citing ECLIPSE
-
-If ECLIPSE contributed to a publication, please cite both:
-
-- [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000)
-- [The DOI for the version of the code you used](https://zenodo.org/search?q=parent.id%3A17543844&f=allversions%3Atrue&l=list&p=1&s=10&sort=version).
