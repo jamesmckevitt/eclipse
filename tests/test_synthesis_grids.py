@@ -42,7 +42,7 @@ def test_arange_and_linspace_grids_are_accepted():
 
 
 def test_quantity_grids_are_accepted_and_keep_their_units():
-    """synthesise_spectra passes a Quantity, build_em_tv a bare array."""
+    """`synthesise_spectra` passes a Quantity, `build_em_tv` a bare array."""
     grid = np.arange(-100.0, 100.0 + 10.0, 10.0) * u.km / u.s
     assert require_uniform_grid(grid, "vel_grid") == pytest.approx(10.0)
     assert require_uniform_grid(grid.value, "vel_grid") == pytest.approx(10.0)
@@ -159,7 +159,7 @@ def test_create_line_cube_refuses_an_uneven_wavelength_grid():
 
 
 def test_a_uniform_grid_still_synthesises_end_to_end():
-    """The check must not block the grids people actually use."""
+    """The check passes the grids in normal use."""
     nz, ny, nx, n_temp = 4, 2, 3, 2
     logT_grid = np.array([6.0, 6.2])
     vel_grid = np.arange(-50.0, 50.0 + 25.0, 25.0) * u.km / u.s
@@ -209,7 +209,7 @@ def test_a_velocity_grid_that_cannot_be_built_is_refused_naming_the_option(res, 
 
 
 def test_a_velocity_grid_in_any_unit_shifts_the_lines_alike():
-    """Guards against a km/s grid read as cm/s, which shifted lines 1e5 times too little."""
+    """A km/s grid read as cm/s would shift lines 1e5 times too little."""
     ny, nx, n_temp = 1, 1, 2
     grid = velocity_grid(10 * u.km / u.s, 100 * u.km / u.s)
     em_tv = np.zeros((ny, nx, n_temp, grid.size))
@@ -256,7 +256,7 @@ def test_emission_beyond_the_velocity_grid_is_left_out_and_said_to_be():
 
 
 def test_the_density_of_a_temperature_with_no_plasma_is_zero():
-    """Not uninitialised memory left by the division, which reached the saved G diagnostic."""
+    """Not uninitialised memory left by the division, which would reach the saved G diagnostic."""
     logT = np.full((3, 4, 5), 6.0)
     logN = np.full((3, 4, 5), 9.0)
     _, avg_ne = compute_dem(logT, logN, 1.0e8, np.array([5.5, 6.0, 6.5]), "z")

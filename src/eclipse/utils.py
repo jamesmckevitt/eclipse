@@ -1,5 +1,5 @@
 """
-Utility functions for coordinate transformations, unit conversions, and general helpers.
+Helpers for coordinates, units, configuration and debugging.
 """
 
 from __future__ import annotations
@@ -21,13 +21,12 @@ from scipy import sparse
 from tqdm import tqdm
 
 
-# Global debug flag - can be set by command line or configuration
+# Set from the command line or configuration
 DEBUG_MODE = False
 
-# Recorded in every synthesised line cube. Cubes without it took the velocity
-# from the simulation's component along the integration axis, which is
-# opposite in sign to the velocity away from the observer for views along x
-# and z, and the same for views along y.
+# Recorded in every synthesised line cube. Cubes without it used the
+# simulation's velocity along the integration axis, which has the opposite
+# sign for views along x and z, and the same for views along y.
 VELOCITY_CONVENTION = "line-of-sight velocity, positive away from the observer"
 
 # Observer side for a view given only by its axis: +1 on the side of
@@ -85,9 +84,8 @@ def view_name(view: str) -> str:
     Name a view is recorded under.
 
     A view from the default side in :data:`OBSERVER_SIDE` is named by its
-    axis alone, as in files written before other sides could be chosen. A
-    view from the other side is named by its axis with the sign of its side,
-    such as `"-x"`.
+    axis alone, as in older files. A view from the other side adds the sign
+    of its side, such as `"-x"`.
     """
     axis, side = view_axis_and_side(view)
     return axis if side == OBSERVER_SIDE[axis] else ("+" if side > 0 else "-") + axis
@@ -97,10 +95,9 @@ def has_wrong_velocity_sign(meta) -> bool:
     """
     Whether a synthesised cube's Doppler shifts use the old sign convention.
 
-    A cube that records :data:`VELOCITY_CONVENTION` uses the current one. A
-    cube without it predates the switch to velocity away from the observer,
-    which reversed the sign for views along x and z but not y. A cube with
-    no integration axis predates the side views, so it is a view along z.
+    A cube recording :data:`VELOCITY_CONVENTION` uses the current one.
+    Without it, the sign is reversed for views along x and z but not y. A
+    cube with no integration axis is a view along z.
 
     Parameters
     ----------
@@ -118,11 +115,10 @@ def has_wrong_velocity_sign(meta) -> bool:
 
 
 def _get_mpi_info():
-    """Return (comm, rank, world_size) if MPI is active with multiple ranks.
+    """`(comm, rank, world_size)` if MPI runs more than one process.
 
-    MPI is used if `mpi4py` imports and the MPI world has more than one
-    process (launched with `srun` or `mpirun`). Otherwise this returns
-    `(None, 0, 1)` for a single process.
+    MPI is used if `mpi4py` imports and the world has more than one
+    process, as launched with `srun` or `mpirun`. Otherwise `(None, 0, 1)`.
     """
     try:
         from mpi4py import MPI
@@ -131,9 +127,8 @@ def _get_mpi_info():
         if size > 1:
             return comm, comm.Get_rank(), size
     except (ImportError, RuntimeError):
-        # ImportError: mpi4py not installed.
-        # RuntimeError: mpi4py installed but MPI library not loaded (e.g. on a
-        #   login node before 'module load intel-mpi').  Falls back to serial mode.
+        # mpi4py not installed, or its MPI library not loaded, such as on a
+        # login node before 'module load intel-mpi': run serially.
         pass
     return None, 0, 1
 
@@ -147,14 +142,13 @@ def set_debug_mode(enabled: bool):
 def debug_break(message: str = "Debug break triggered", locals_dict=None, globals_dict=None,
                 traceback=None):
     """
-    Break into IPython debugger if debug mode is enabled.
+    Break into IPython if debug mode is on.
 
     Without IPython, pdb opens `traceback` post mortem at the frame that
     raised, if given, and otherwise stops here.
-    
+
     Usage:
         debug_break("Check values here", locals(), globals())
-    or:
         debug_break("Error occurred")
     """
     if not DEBUG_MODE:
@@ -163,10 +157,8 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
     print(f"\n=== DEBUG BREAK: {message} ===")
     
     try:
-        # Try to import and start IPython
         from IPython import embed
         
-        # Prepare namespace for IPython
         # Globals first, so a local of the same name wins.
         user_ns = {}
         if globals_dict:
@@ -178,7 +170,6 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
         print("Available variables:", list(user_ns.keys()) if user_ns else "None provided")
         print("Type 'exit()' or Ctrl+D to continue execution")
         
-        # Start IPython with the provided namespace
         embed(user_ns=user_ns)
         
     except ImportError:
@@ -192,8 +183,8 @@ def debug_break(message: str = "Debug break triggered", locals_dict=None, global
 
 def debug_on_error(func):
     """
-    Decorator to automatically break into debugger on exceptions when debug mode is enabled.
-    
+    Decorator that breaks into the debugger on an exception in debug mode.
+
     Usage:
         @debug_on_error
         def my_function():
@@ -207,11 +198,9 @@ def debug_on_error(func):
             if DEBUG_MODE:
                 print(f"\n=== EXCEPTION IN {func.__name__}: {type(e).__name__}: {e} ===")
                 # Open the session, with the exception as `exception`, in the
-                # innermost ECLIPSE frame: the decorated function (the second
-                # frame of the traceback, after this wrapper) or a function
-                # it called. Frames in numpy or astropy say little about the
-                # run. Without IPython, pdb opens where the exception was
-                # raised and can go up.
+                # innermost ECLIPSE frame, from the decorated function (the
+                # traceback's second frame) down. Without IPython, pdb opens
+                # where the exception was raised.
                 package = __name__.split(".")[0]
                 frame = (e.__traceback__.tb_next or e.__traceback__).tb_frame
                 entry = e.__traceback__.tb_next
@@ -237,9 +226,11 @@ _PROTON_ELECTRON_RATIOS: dict = {}
 
 def _settings_key(kwargs: dict) -> str:
     """
-    A key for fiasco's atomic data settings: arrays by their bytes, not their
-    shortened repr, and the database by its size and time as well as its
-    path, so a database rebuilt in place is not taken for the old one.
+    Key for fiasco's atomic data settings.
+
+    Arrays are keyed by their bytes, not their shortened repr, and the
+    database by its size and time as well as its path, so a database
+    rebuilt in place is not taken for the old one.
     """
     settings = []
     for name, value in sorted(kwargs.items()):
@@ -257,16 +248,14 @@ def _settings_key(kwargs: dict) -> str:
 @contextlib.contextmanager
 def proton_electron_ratio_once(temperature_K: np.ndarray):
     """
-    Within the block, fiasco works out the ratio of proton to electron density once per process.
+    Within the block, fiasco's proton to electron density ratio is worked out once.
 
     fiasco works the ratio out from every element's ions for each new Ion,
-    including the next ion it makes for each density in its two-ion model,
-    and that can take longer than the rest of an ion's work. The ratio
-    depends only on temperature and the atomic data, and fiasco interpolates
-    it point by point. So within the block it is worked out once on all of
-    `temperature_K`, and an Ion whose temperatures are all on that grid gets
-    the values there. Any other Ion gets fiasco's own. Use it from one thread
-    at a time, as it swaps a function in fiasco.ions for the block.
+    which can take longer than the rest of an ion's work. It depends only on
+    temperature and the atomic data, so within the block it is worked out
+    once on `temperature_K`. An Ion whose temperatures are all on that grid
+    gets those values, and any other gets fiasco's own. Use it from one
+    thread at a time, as it swaps a function in `fiasco.ions`.
     """
     try:
         ions = importlib.import_module("fiasco.ions")
@@ -296,11 +285,11 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
 
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:
     """
-    Atomic number and atomic weight (atomic mass units) of an element.
+    Atomic number and atomic weight, in atomic mass units, of an element.
 
     The element is given by its symbol, such as `"Fe"`, or its atomic
-    number. A lookup in mendeleev's database takes a fraction of a second,
-    so each element is cached under both its symbol and its atomic number.
+    number. A lookup in mendeleev takes a fraction of a second, so each
+    element is cached under its symbol and its atomic number.
 
     Raises
     ------
@@ -362,18 +351,16 @@ def vel_to_wl(v: u.Quantity, wl0: u.Quantity) -> u.Quantity:
 
 
 def gaussian(wave, peak, centre, sigma, back):
-    """Gaussian function for spectral line fitting."""
+    """Gaussian plus a constant background."""
     return peak * np.exp(-0.5 * ((wave - centre) / sigma) ** 2) + back
 
 
 def multi_gaussian(wave, *params, n_components=1):
-    """Multi-component Gaussian plus constant background.
+    """Sum of Gaussians plus a constant background.
 
-    Parameters are ordered as::
+    The parameters, 3 * n_components + 1 of them, are ordered as::
 
         [peak_0, centre_0, sigma_0, peak_1, centre_1, sigma_1, ..., background]
-
-    Total number of parameters = 3 * n_components + 1.
     """
     result = np.zeros_like(wave, dtype=float)
     for i in range(n_components):
@@ -479,17 +466,16 @@ _PHOTON_META = ("photon_wavelength", "photon_rms_wavelength", "photon_filter_tra
 
 
 def rebin_slit_offchip(cube, n_bin: int):
-    """Sum adjacent pixels along the slit axis to simulate off-chip binning.
+    """Cube with adjacent pixels along the slit summed, as in off-chip binning.
 
     Off-chip (ground-based) binning sums pixels after read-out, so each
-    carries its own independent noise (read noise, dark current, etc.). The
-    signal grows by `n_bin` and uncorrelated noise adds in quadrature, so
-    the SNR improves by sqrt(n_bin).
+    brings its own read noise and dark current. The signal grows by `n_bin`
+    and the noise in quadrature, so the SNR improves by sqrt(n_bin).
 
     Parameters
     ----------
     cube : NDCube
-        Data cube with shape `(n_slit, n_scan, n_lambda)`.
+        Cube of shape `(n_slit, n_scan, n_lambda)`.
     n_bin : int
         Number of slit pixels to sum, >= 1. Pixels at the slit edge that do
         not fill a whole bin are discarded.
@@ -497,8 +483,9 @@ def rebin_slit_offchip(cube, n_bin: int):
     Returns
     -------
     NDCube
-        Rebinned cube with shape `(n_slit // n_bin, n_scan, n_lambda)`. The
-        slit pixel scale (CDELT) in the WCS is multiplied by `n_bin`.
+        Cube of shape `(n_slit // n_bin, n_scan, n_lambda)`, with the slit
+        axis's CDELT multiplied by `n_bin`. Per-pixel photon entries of
+        `meta` are dropped.
     """
     from ndcube import NDCube
 
@@ -516,15 +503,12 @@ def rebin_slit_offchip(cube, n_bin: int):
     trimmed = data[:n_keep, :, :]
     rebinned = trimmed.reshape(n_keep // n_bin, n_bin, n_scan, n_lam).sum(axis=1)
 
-    # Update WCS for the slit axis.
-    # Numpy axis 0 (slit) corresponds to WCS axis 2 (HPLT) in the
-    # reversed FITS convention (naxis-1-numpy_axis for a 3-axis WCS).
+    # Update WCS for the slit axis: data axis 0 is WCS axis 2 (HPLT).
     new_wcs = cube.wcs.deepcopy()
     slit_wcs_axis = 2  # HPLT-TAN
     new_wcs.wcs.cdelt[slit_wcs_axis] *= n_bin
-    # Map the original reference pixel to the new grid.
-    # FITS crpix is 1-based; the center-preserving mapping for binning
-    # anchored at pixel 1 is:  crpix_new = (crpix_old - 0.5) / n_bin + 0.5
+    # Reference pixel on the binned grid, with the bins starting at pixel 1's
+    # lower edge: crpix_new = (crpix_old - 0.5) / n_bin + 0.5
     new_wcs.wcs.crpix[slit_wcs_axis] = (
         new_wcs.wcs.crpix[slit_wcs_axis] - 0.5
     ) / n_bin + 0.5
@@ -596,11 +580,10 @@ def distance_to_angle(distance: u.Quantity) -> u.Quantity:
 
 
 def parse_yaml_input(val):
-    """Parse YAML input values - handle both single values and lists."""
+    """YAML value, with text read as a Quantity and a list of text as a list of them."""
     if isinstance(val, str):
         return u.Quantity(val)
     elif isinstance(val, (list, tuple)):
-        # Handle list of values
         if all(isinstance(v, str) for v in val):
             return [u.Quantity(v) for v in val]
         else:
@@ -610,7 +593,7 @@ def parse_yaml_input(val):
 
 
 def ensure_list(val):
-    """Ensure input is a list (for parameter sweeps)."""
+    """`val` as a list, for parameter sweeps."""
     if not isinstance(val, (list, tuple)):
         return [val]
     return list(val)
@@ -641,12 +624,11 @@ def load_maps(path: str | Path) -> dict:
 
 def get_git_commit_id() -> str:
     """
-    Get the last git commit ID from the package's git repository.
+    Git commit of the ECLIPSE checkout the package is installed from.
 
     Only a git checkout of ECLIPSE, with the package in its `src` folder,
-    has one. An environment inside another repository, such as a project's
-    .venv, is not part of it, and that repository's commit says nothing
-    about ECLIPSE.
+    has one. An install inside another repository, such as a project's
+    `.venv`, gets "unknown", not that repository's commit.
     """
     try:
         from importlib.resources import files
@@ -674,7 +656,7 @@ def get_git_commit_id() -> str:
 
 
 def _get_software_version() -> str:
-    """Get the installed package version."""
+    """Installed package version."""
     try:
         import eclipse
         return eclipse.__version__
@@ -684,19 +666,19 @@ def _get_software_version() -> str:
 
 def deduplicate_list(param_list, param_name):
     """
-    Remove duplicates from a parameter list and warn if duplicates were found.
+    Parameter values without duplicates, with a warning if there were any.
 
     Parameters
     ----------
     param_list : list
-        List of parameter values that may contain duplicates.
+        Parameter values.
     param_name : str
-        Name of the parameter for warning messages.
+        Parameter name, for the warning.
 
     Returns
     -------
     list
-        List with duplicates removed, preserving original order.
+        Values without duplicates, in their original order.
     """
     seen = set()
     deduplicated = []
@@ -730,8 +712,7 @@ def deduplicate_list(param_list, param_name):
     return deduplicated
 
 
-# List-type dataclass fields: treated as a single fixed value (not a sweep dimension)
-# even when the YAML value is a list.
+# List-valued fields, taken as one fixed value rather than a sweep.
 _SECTION_LIST_FIELDS = {
     "simulation": [],
     "detector": ["dispersion", "lit_band", "slit_image_tilt"],
@@ -739,14 +720,11 @@ _SECTION_LIST_FIELDS = {
     "filter": [],
 }
 
-# String-valued dataclass fields.  These bypass parse_yaml_input, which reads
-# every string as a Quantity and would raise on "gaussian" or "2012-06-03".
-# They can still be swept: a list of strings becomes a sweep dimension.
+# Text-valued fields. They skip parse_yaml_input, which would raise on
+# "gaussian" or "2012-06-03", and a list of them is still swept.
 _SECTION_STRING_FIELDS = {
-    # 'instrument' is left out on purpose. It is a Simulation field, but the
-    # top-level key chooses the instrument and main() builds both Simulation
-    # objects from it, so a value here would be parsed, swept and discarded.
-    # main() rejects it rather than let it appear to take effect.
+    # 'instrument' is left out: the top-level key sets it, and main()
+    # rejects it here rather than silently discard it.
     "simulation": ["psf_boundary", "spectral_psf"],
     "detector": ["material"],
     "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table",
@@ -787,17 +765,16 @@ def load_yaml_config(text: str):
 
 def _parse_section(section_dict: dict, class_name: str) -> tuple:
     """
-    Parse a YAML config section into fixed and sweep parameters.
+    Fixed and swept settings of a YAML config section.
 
-    Any field whose value is a list of more than one element becomes a sweep
-    dimension. Fields in `_SECTION_LIST_FIELDS` are always one fixed
-    (list-valued) parameter, and fields in `_SECTION_STRING_FIELDS` are taken
-    verbatim rather than parsed as quantities.
+    A list of more than one value is swept, except in the fields of
+    `_SECTION_LIST_FIELDS`, which take one list. Fields in
+    `_SECTION_STRING_FIELDS` are taken as text, not quantities.
 
     Parameters
     ----------
     section_dict : dict
-        YAML section content, e.g. `config["detector"]`.
+        YAML section, such as `config["detector"]`.
     class_name : str
         Section name: `"simulation"`, `"detector"`, `"telescope"` or
         `"filter"`.
@@ -805,9 +782,9 @@ def _parse_section(section_dict: dict, class_name: str) -> tuple:
     Returns
     -------
     fixed_params : dict
-        `{attr: value}`: single values used for every combination.
+        `{attr: value}`, used for every combination.
     sweep_params : dict
-        `{attr: [values]}`: lists of values to sweep over.
+        `{attr: [values]}`, to sweep over.
     """
     list_fields = _SECTION_LIST_FIELDS.get(class_name, [])
     string_fields = _SECTION_STRING_FIELDS.get(class_name, [])
@@ -864,14 +841,12 @@ def _to_canonical_scalar(val):
 
 def _params_to_key(params: dict) -> tuple:
     """
-    Convert a parameters dict to a hashable tuple key.
+    Hashable key of a parameters dict.
 
-    Quantities become canonical SI scalars, so the key does not depend on
-    the units in the YAML file. Parameters are sorted by name for a fixed
-    order.
-
+    Quantities become SI scalars, so the key does not depend on the units
+    in the YAML file, and parameters are sorted by name.
     `simulation.pinhole_sizes` and `simulation.pinhole_positions` are left
-    out because they are not sweep dimensions.
+    out, as they are not swept.
     """
     _skip = {"simulation.pinhole_sizes", "simulation.pinhole_positions"}
     items = {}
@@ -887,11 +862,10 @@ def _params_to_key(params: dict) -> tuple:
 
 def _extract_config_params(obj, section: str) -> dict:
     """
-    Extract all user-facing field values from a dataclass instance.
+    User-facing settings of a configuration object, keyed `section.name`.
 
-    Skips private fields (name starts with '_'), Path-valued fields (data file
-    paths), and fields whose value is itself a dataclass (nested objects are
-    stored under their own section).
+    Private fields, paths and nested configuration objects, which are
+    stored under their own section, are left out.
     """
     params = {}
     for f in dataclasses.fields(obj):
@@ -910,8 +884,7 @@ def _extract_config_params(obj, section: str) -> dict:
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
     """
-    Context manager that patches joblib so it uses the supplied tqdm
-    instance to report progress.
+    Report joblib's progress with `tqdm_object` within the block.
     """
     class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):  # type: ignore[attr-defined]
         def __call__(self, *args, **kwargs):
@@ -928,12 +901,11 @@ def tqdm_joblib(tqdm_object):
 
 
 def _fwhm_to_sigma(fwhm: float) -> float:
-    """Convert FWHM to Gaussian sigma: sigma = FWHM / (2 * sqrt(2 * ln2))."""
+    """Gaussian sigma of a FWHM: FWHM / (2 * sqrt(2 * ln2))."""
     return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
 
-# Keys that moved or were renamed, so an old config is told where the setting
-# went, not just that the key is unknown.
+# Keys that moved or were renamed, so an old config is told where each went.
 _RENAMED_CONFIG_KEYS = {
     "aluminium_thickness": "filter.al_thickness",
     "slit_bin_pairs": "offchip_bin_slit",
@@ -953,9 +925,8 @@ def suggest_config_key(key: str, allowed, elsewhere: dict | None = None):
     Best guess at what an unrecognised config key was meant to be.
 
     Looks for a rename, then the same name in another section, then a near
-    miss. The section lookup matters most in practice: the old flat layout
-    put keys such as `expos` and `ccd_temperature` at the top level, where
-    they are valid names at the wrong depth.
+    miss. The second catches keys such as `expos` and `ccd_temperature` at
+    the top level, where the old flat layout put them.
 
     Parameters
     ----------
@@ -970,7 +941,7 @@ def suggest_config_key(key: str, allowed, elsewhere: dict | None = None):
     Returns
     -------
     str or None
-        A phrase naming the suggestion, or None if nothing looks close.
+        Phrase naming the suggestion, or None if nothing is close.
     """
     if key in _RENAMED_CONFIG_KEYS:
         return f"'{_RENAMED_CONFIG_KEYS[key]}'"
@@ -996,9 +967,9 @@ def check_config_keys(provided, allowed, context: str,
     """
     Raise if `provided` has any key not in `allowed`.
 
-    An unread key is not a harmless typo: the run uses the default, gives
-    plausible output and says nothing. A sweep at the wrong depth is worse,
-    as it returns results that are identical for every combination.
+    An unread key would leave its setting at the default without any sign,
+    and a sweep at the wrong depth would give identical results for every
+    combination.
 
     Parameters
     ----------
@@ -1007,7 +978,7 @@ def check_config_keys(provided, allowed, context: str,
     allowed : iterable of str
         Keys that are valid here.
     context : str
-        Where the keys are, for the error message, e.g. `"top-level"`.
+        Where the keys are, for the error message, such as `"top-level"`.
     elsewhere : dict, optional
         Passed to :func:`suggest_config_key`.
 
@@ -1074,11 +1045,9 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     """
     Check that `values` is a finite, increasing, evenly spaced 1D grid.
 
-    The velocity binning and the wavelength WCS both take one spacing
-    and apply it everywhere, so an uneven grid is silently misread. A
-    decreasing grid is worse: the bin edges come out in descending order,
-    every `>= low & < high` test fails, and the emission measure is zero
-    everywhere.
+    The velocity binning and the wavelength WCS use one spacing everywhere,
+    so an uneven grid would be misread, and a decreasing one would leave
+    every bin empty.
 
     Parameters
     ----------
@@ -1087,18 +1056,17 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
     name : str
         Name to use in the error message.
     rtol : float, optional
-        Largest allowed offset of any value from the evenly spaced grid
-        through the first and last, relative to the spacing. The default
-        allows the rounding in `np.arange` and `np.linspace` but not a grid
-        built unevenly on purpose. Single-precision rounding, common in
-        simulation output, is allowed whatever `rtol`, as long as it is
-        under half a spacing.
+        Largest offset of any value from the even grid through the first and
+        last, relative to the spacing. The default allows the rounding of
+        `np.arange` and `np.linspace`. Single-precision rounding, common in
+        simulation output, is allowed whatever `rtol`, if under half a
+        spacing.
 
     Returns
     -------
     float
-        Mean spacing, in the units of `values`, which single-precision
-        rounding in one cell does not skew.
+        Mean spacing, in the unit of `values`, so rounding in one cell does
+        not skew it.
     """
     plain = np.asarray(getattr(values, "value", values), dtype=float)
 
@@ -1108,8 +1076,8 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
         raise ValueError(f"{name} must have at least 2 elements, "
                          f"got {plain.size}.")
 
-    # Comparisons with NaN are always false, so a NaN or inf in the grid can
-    # slip past the spacing checks below and come back as the spacing.
+    # A NaN or inf could slip past the spacing checks below and come back as
+    # the spacing.
     non_finite = np.flatnonzero(~np.isfinite(plain))
     if non_finite.size:
         first_bad = int(non_finite[0])
@@ -1124,11 +1092,9 @@ def require_uniform_grid(values, name: str, rtol: float = 1e-6) -> float:
         )
     step = float(plain[-1] - plain[0]) / (plain.size - 1)
 
-    # Single-precision values are off by up to a few units in the last place,
-    # about a part in 1e7 of the largest grid value, however fine the
-    # spacing. If that reaches half a spacing, single precision cannot hold
-    # the grid, as a value that far off lies in its neighbour's cell. Below
-    # that, every value stays in its own cell and the grid still increases.
+    # Single precision is off by a few units in the last place, about 1e-7
+    # of the largest value. Allow that if it is under half a spacing, so each
+    # value stays in its own cell.
     rounding = _SINGLE_PRECISION_ULPS * np.finfo(np.float32).eps * np.abs(plain).max()
     tolerance = max(rtol * step, rounding if rounding < step / 2 else 0.0)
     offsets = plain - (plain[0] + np.arange(plain.size) * step)
@@ -1152,10 +1118,8 @@ def velocity_grid(vel_res: u.Quantity, vel_lim: u.Quantity,
     Velocity bin centres `vel_res` apart, to at least `vel_lim` each way, in cm/s.
 
     The bins step out from zero both ways, so a static plasma is centred on
-    a bin whatever the two values. A grid built from -vel_lim has no bin at
-    zero when the limit is not a whole number of steps, and a static line
-    would come out Doppler shifted. `names` are the names used in the error
-    for a value that is not a positive velocity.
+    a bin and shows no Doppler shift. `names` are used in the error for a
+    value that is not a positive velocity.
     """
     values = []
     for value, name in zip((vel_res, vel_lim), names):
@@ -1165,24 +1129,24 @@ def velocity_grid(vel_res: u.Quantity, vel_lim: u.Quantity,
         values.append(value.to_value(u.cm / u.s))
     res, lim = values
     # Whole steps to reach lim, rounding up only when lim is not a whole
-    # number of steps, whatever rounding error the division has.
+    # number of steps, despite rounding in the division.
     steps = int(np.ceil(np.round(lim / res, 9)))
     return np.arange(-steps, steps + 1) * res * (u.cm / u.s)
 
 
 def velocity_centers_to_edges(vel_grid: np.ndarray) -> np.ndarray:
     """
-    Convert velocity grid centers to bin edges.
+    Bin edges of a velocity grid.
 
     Parameters
     ----------
     vel_grid : np.ndarray
-        1D array of velocity centers.  Must be evenly spaced and increasing.
+        1D bin centres, evenly spaced and increasing.
 
     Returns
     -------
     np.ndarray
-        1D array of velocity bin edges (length = len(vel_grid) + 1).
+        Bin edges, one more than the centres.
     """
     dv = require_uniform_grid(vel_grid, "vel_grid")
 
@@ -1196,16 +1160,15 @@ def require_downsample_divides(shape: tuple[int, ...], downsample: int) -> None:
     """
     Check that `downsample` divides every dimension of `shape`.
 
-    Downsampling keeps every `downsample`-th cell and gives each kept cell
-    `downsample` times the voxel size. If a dimension is not a multiple of
-    the factor, the last kept cell stands for fewer cells than that, so the
-    domain comes out too large, as does the emission measure when that axis
-    is the line of sight.
+    Downsampling keeps every `downsample`-th cell, each `downsample` times
+    the voxel size. Otherwise the last kept cell would stand for fewer
+    cells, making the domain too large, and the emission measure too if
+    that axis is the line of sight.
 
     Parameters
     ----------
     shape : tuple of int
-        Cube dimensions, in any order.
+        Cube shape, in any order.
     downsample : int
         Downsampling factor.
     """
@@ -1230,8 +1193,8 @@ def _unpickle(handle):
     """
     Object from an older version's pickle, which may name the package's former modules.
 
-    Those load through `euvst_response`, whose warning to change an import is
-    not for the reader of a file, so it is not shown here.
+    Those load through `euvst_response`, whose warning to change an import
+    is not shown, as it is not for the reader of a file.
     """
     import dill
 

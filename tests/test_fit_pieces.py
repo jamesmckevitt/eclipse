@@ -3,6 +3,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 from astropy.wcs import WCS
+from joblib import Parallel
 from ndcube import NDCube
 
 from eclipse import fitting
@@ -36,6 +37,8 @@ def test_the_fits_do_not_depend_on_the_pieces_each_row_is_cut_into(fit_config, m
     cube = _cube()
     uncertainty = np.sqrt(np.maximum(cube.data, 1.0))
     fits = []
+    # Every piece is fitted here, whatever the number of workers.
+    monkeypatch.setattr(fitting, "Parallel", lambda n_jobs: Parallel(n_jobs=1))
     for workers in (1, 100):
         # 1 worker gives one piece per row, 100 workers one piece per spectrum.
         monkeypatch.setattr(fitting, "effective_n_jobs", lambda n_jobs: workers)
@@ -45,6 +48,20 @@ def test_the_fits_do_not_depend_on_the_pieces_each_row_is_cut_into(fit_config, m
     assert np.array_equal(fits[0][0], fits[1][0], equal_nan=True)
     assert np.array_equal(fits[0][1], fits[1][1])
     assert fits[0][0].shape[:2] == cube.data.shape[:2]
+
+
+def test_a_few_spectra_start_no_more_workers_than_pieces(monkeypatch):
+    started = []
+
+    def parallel(n_jobs):
+        started.append(n_jobs)
+        return Parallel(n_jobs=1)
+
+    monkeypatch.setattr(fitting, "Parallel", parallel)
+    monkeypatch.setattr(fitting, "effective_n_jobs", lambda n_jobs: 100)
+    fit_cube_gauss(_cube(), n_jobs=-1)
+    # 21 spectra make 21 pieces, so 21 of the 100 workers.
+    assert started == [21]
 
 
 def _intensity_cube(n_slit=3, n_scan=2, n_wave=16, peak=2.0e4):
@@ -73,8 +90,8 @@ def test_simulating_ahead_of_the_fits_gives_the_same_monte_carlo(monkeypatch):
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1)
     runs = []
     for workers in (1, 2):
-        # Two workers make the next iteration be simulated in a thread; the
-        # fits themselves still run here, as ncpu is 1.
+        # With two workers the next iteration is simulated in a thread, and
+        # the fits still run here, as ncpu is 1.
         monkeypatch.setattr(mc, "effective_n_jobs", lambda n_jobs: workers)
         np.random.seed(11)
         runs.append(mc.monte_carlo(_intensity_cube(), 40 * u.s, det, tel, sim, n_iter=3))

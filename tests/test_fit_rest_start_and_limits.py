@@ -61,9 +61,9 @@ def _velocity(params):
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 def test_a_noisy_faint_blend_started_at_rest_and_limited_stays_on_its_line(backend):
     """
-    With a few dozen counts in the line, a search start lands some fits a
-    line spacing, 92 km/s, from the truth; at rest within eispac's limits
-    none do.
+    With a few dozen counts in the line, a search start puts some fits a line
+    spacing (92 km/s) from the truth; a rest start within eispac's limits
+    puts under a quarter as many.
     """
     rng = np.random.default_rng(3)
     truth = _blend(strong=30.0)
@@ -86,8 +86,8 @@ def test_a_noisy_faint_blend_started_at_rest_and_limited_stays_on_its_line(backe
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 def test_a_line_beyond_its_velocity_limit_is_fitted_at_the_limit(backend):
     """
-    The line is to the blue. To the red, the faint component, 92 km/s to the
-    red of the other, could reach it from inside the limits.
+    The line is to the blue, as to the red the faint component, 92 km/s
+    redward of the other, could reach it from inside the limits.
     """
     config = FitConfig(components=_components(**EISPAC), start="rest", backend=backend)
     data, _, failed = fit_cube_gauss(_cube([_blend(velocity=-80.0)]), n_jobs=1,
@@ -188,7 +188,7 @@ def test_the_settings_are_kept_in_a_results_file(tmp_path):
 
 
 def test_a_results_file_from_before_the_settings_loads_as_it_was_run(tmp_path):
-    """Earlier runs searched and had no limits, which is what the settings give, without a warning."""
+    """An older file loads with a search start and no limits, as it was run, without a warning."""
     import json
     import warnings
 

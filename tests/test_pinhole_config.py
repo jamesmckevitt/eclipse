@@ -25,7 +25,7 @@ def test_no_pinhole_keys_at_all_is_accepted():
 
 
 def test_positions_without_sizes_raises():
-    """The case from the issue, which must raise rather than run with no pinholes."""
+    """Positions alone raise rather than run with no pinholes."""
     with pytest.raises(ValueError, match="paired list"):
         _parse_pinhole_config({"pinhole_positions": [0.1, 0.2, 0.3]})
 
@@ -51,7 +51,7 @@ def test_a_single_pinhole_may_be_written_unwrapped():
 
 @pytest.mark.parametrize("bad", [-0.1, 1.5, 10])
 def test_positions_outside_the_detector_raise(bad):
-    """The issue's example uses 10, 20, 30, which are not fractions."""
+    """Positions are fractions, so values such as 10, 20, 30 are refused."""
     with pytest.raises(ValueError, match=r"must lie in \[0, 1\]"):
         _parse_pinhole_config({"pinhole_sizes": ["20 um"],
                                "pinhole_positions": [bad]})
@@ -90,8 +90,7 @@ def test_a_fully_specified_config_survives():
 
 
 def test_quoted_numbers_reach_the_pipeline_as_floats():
-    """A quoted '0.3' must become a float, since the diffraction code cannot
-    do arithmetic with a string."""
+    """A quoted '0.3' becomes a float, as the diffraction code needs a number."""
     config = dict(VALID, pinhole_positions=["0.3", "0.7"],
                   pinhole_positions_spectral=["0.1", "0.8"])
     _, positions, spectral = _parse_pinhole_config(config)
@@ -132,10 +131,10 @@ n_iter: 1
 
 
 def _run_main(tmp_path, monkeypatch, extra):
-    """Run main() on a uniform-intensity EIS config plus `extra` YAML.
+    """Run `main()` on a uniform-intensity EIS config plus `extra` YAML.
 
     Uniform-intensity mode needs no synthesis file, and every case here is
-    rejected during configuration, so nothing is simulated.
+    refused while the config is read, so nothing is simulated.
     """
     from eclipse.main import main
 

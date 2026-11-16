@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Command line interface for synthesis script.
+Command line entry point for `synthesise-spectra`.
 """
 
 import sys
 
 
 def main():
-    """Entry point for the synthesis command line script."""
+    """Entry point for `synthesise-spectra`."""
     from .synthesis import _config_option, main as run_synthesis, parse_arguments
 
     words = sys.argv[1:]
     config = _config_option(words)
-    # Given only a run file, the synthesis is the run's, made as 'eclipse
-    # synthesise' makes it, so it is reused while it holds the same spectra.
+    # With only a run file, synthesise as 'eclipse synthesise' does, so the
+    # synthesis is reused while its spectra are unchanged.
     if config is not None and words in (["--config", config], [f"--config={config}"]):
         from .run_file import load, run_all, runs
 

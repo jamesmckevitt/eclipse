@@ -45,10 +45,10 @@ def _shifted(rest, velocity):
 @pytest.mark.parametrize("backend, positive", [(None, False), (None, True), ("mpfit", False)])
 def test_a_noiseless_blend_is_fitted_to_where_it_is(backend, positive):
     """
-    The default scipy lm stopped over 4 km/s short on this untied pair.
+    A noiseless untied pair is fitted to within 1e-3 km/s.
 
-    Bounding the amplitudes positive switches the fit to trf, so its
-    tolerances are checked too.
+    With loose tolerances scipy's lm, the default, stops over 4 km/s short.
+    Positive amplitudes switch the fit to trf, so it is checked too.
     """
     velocity = 10 * u.km / u.s
     sigma = 0.03 * u.Angstrom

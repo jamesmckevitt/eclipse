@@ -79,7 +79,7 @@ def test_a_scene_that_goes_on_past_its_edges_is_as_bright_at_them():
 
 
 def _scene(data, cell, wavelength_step=0.0169 * u.AA / 10):
-    """A cube in the synthesis layout, with square cells `cell` across."""
+    """Cube in the synthesis layout, with square cells `cell` across."""
     ny, nx, nl = data.shape
     size = angle_to_distance(cell).to_value(u.Mm)
     wcs = WCS(naxis=3)
@@ -104,7 +104,7 @@ def test_structure_finer_than_a_pixel_is_averaged_over_it():
 
 
 def _narrow_line(offset_pixels, sigma_pixels=0.28, n_fine=301):
-    """A line narrower than a pixel, `offset_pixels` off a pixel's middle, in every cell."""
+    """Line narrower than a pixel, `offset_pixels` off a pixel's middle, in every cell."""
     pixel = 0.0169 * u.AA
     step = pixel / 10
     wavelength = REST + (np.arange(n_fine) - (n_fine - 1) / 2) * step
@@ -120,7 +120,7 @@ def _fitted_velocity(cube):
 
 
 def test_a_narrow_line_keeps_its_place_through_the_psf():
-    """Blurring on the pixels moved a line 0.28 pixels wide by 2 km/s."""
+    """Blurring after rebinning moves a line 0.28 pixels wide by 2 km/s."""
     det, tel = Detector_SWC(), Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, ncpu=1, psf=True)
     scene, truth = _narrow_line(0.3)

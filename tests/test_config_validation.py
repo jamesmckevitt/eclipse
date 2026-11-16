@@ -1,7 +1,7 @@
-"""Configuration keys ECLIPSE does not read are refused, not ignored.
+"""Configuration keys ECLIPSE does not read are refused.
 
-A real parameter name at the wrong depth would otherwise be ignored, and a
-sweep written that way would give the same results for every combination.
+Otherwise a real key at the wrong depth would be ignored, and a sweep over
+it would give the same results for every value.
 """
 import sys
 
@@ -35,7 +35,7 @@ def test_a_valid_config_passes():
 
 
 def test_the_old_flat_layout_is_rejected_with_the_right_place():
-    """The case from the issue: parameters one level too high."""
+    """Keys one level too high are pointed to their section."""
     config = dict(MINIMAL, expos=["5 s", "20 s"], ccd_temperature="-60 Celsius")
 
     with pytest.raises(ValueError) as excinfo:
@@ -66,21 +66,21 @@ def test_section_keys_are_checked_too():
 
 
 def test_simulation_rejects_keys_that_belong_at_the_top_level():
-    """n_iter under simulation: was parsed and then ignored."""
+    """`n_iter` under `simulation:` would be ignored."""
     with pytest.raises(ValueError, match="at the top level"):
         _validate_config_keys(
             dict(MINIMAL, simulation={"n_iter": 100}), "SWC")
 
 
 def test_simulation_rejects_the_pinhole_lists():
-    """They are top-level keys; main() never looks for them in the section."""
+    """They are top-level keys, so `main()` would ignore them here."""
     with pytest.raises(ValueError, match="at the top level"):
         _validate_config_keys(
             dict(MINIMAL, simulation={"pinhole_sizes": ["20 um"]}), "SWC")
 
 
 def test_telescope_rejects_a_nested_filter():
-    """main() builds the filter from the top-level section and drops this."""
+    """`main()` reads the filter only from the top-level `filter:` section."""
     with pytest.raises(ValueError, match="'telescope' section"):
         _validate_config_keys(
             dict(MINIMAL, telescope={"filter": {"al_thickness": "1500 AA"}}),
@@ -88,7 +88,7 @@ def test_telescope_rejects_a_nested_filter():
 
 
 def test_eis_and_swc_have_different_valid_keys():
-    """filter_distance is an SWC detector field; EIS has no filter."""
+    """`filter_distance` is an SWC detector field; EIS has no filter."""
     config = dict(MINIMAL, instrument="EIS",
                   detector={"filter_distance": "250 mm"})
     _validate_config_keys(dict(MINIMAL, detector={"filter_distance": "250 mm"}),
@@ -98,7 +98,7 @@ def test_eis_and_swc_have_different_valid_keys():
 
 
 def test_eis_still_accepts_the_keys_it_warns_about():
-    """microroughness_sigma and filter: are ignored with a warning."""
+    """EIS ignores `microroughness_sigma` and `filter:` with a warning."""
     _validate_config_keys(
         dict(MINIMAL, instrument="EIS",
              telescope={"microroughness_sigma": "0.3 nm"},
@@ -136,7 +136,7 @@ def test_a_section_that_is_not_a_mapping_is_rejected(name, value):
 
 
 def test_fitting_components_must_be_a_list_of_mappings():
-    """main() would otherwise fail on these with a TypeError, or skip fitting."""
+    """`main()` would otherwise fail with a TypeError or skip fitting."""
     with pytest.raises(ValueError, match="'fitting.components' must be a list"):
         _validate_config_keys(
             dict(MINIMAL, fitting={"components": {"wavelength": "195.119 AA"}}),
@@ -151,7 +151,7 @@ def test_fitting_components_must_be_a_list_of_mappings():
 
 
 def test_an_unknown_instrument_is_rejected():
-    """main() would build it as EIS; there are no valid keys to check against."""
+    """`main()` would build it as EIS, and there are no keys to check against."""
     with pytest.raises(ValueError, match="Unknown instrument 'FOO'"):
         _validate_config_keys(dict(MINIMAL, instrument="FOO"), "FOO")
 
@@ -167,7 +167,7 @@ def test_main_reports_a_simulation_section_that_is_not_a_mapping(
 
 
 def test_every_unknown_key_is_listed_at_once():
-    """One run per typo would be a poor way to migrate 160 configs."""
+    """Every typo is reported in one run, not one per run."""
     with pytest.raises(ValueError) as excinfo:
         _validate_config_keys(dict(MINIMAL, aaa=1, bbb=2, ccc=3), "SWC")
     message = str(excinfo.value)
@@ -180,7 +180,7 @@ def test_the_message_lists_what_is_valid():
 
 
 def test_private_fields_are_accepted_but_not_advertised():
-    """_dark_current_293k, the old name of dark_current_293k, still works but is not listed."""
+    """`_dark_current_293k`, the old name of `dark_current_293k`, works but is not listed."""
     _validate_config_keys(
         dict(MINIMAL, detector={"_dark_current_293k": 1.0}), "SWC")
     with pytest.raises(ValueError) as excinfo:
@@ -207,13 +207,12 @@ _CONFIG_READERS = ("run_config", "_top_level_settings", "_observed_input",
 
 
 def _keys_main_reads(*names, readers=_CONFIG_READERS):
-    """String keys main() looks up in any of the dicts named in `names`.
+    """Keys `main()` looks up in the dicts named in `names`.
 
-    Covers `d["key"]`, `d.get("key")`, `"key" in d` and the section helpers
-    `_quantity_or_none(d, "key", ...)` and `_range_or_none`, in the functions
-    `readers` (by default main() and the helpers it passes the config to). A
-    key taken from a loop over a tuple of names, or of tuples starting with a
-    name, stands for every name in it.
+    Covers `d["key"]`, `d.get("key")`, `"key" in d`, `_quantity_or_none` and
+    `_range_or_none`, in the functions `readers`. A key from a loop over a
+    tuple of names, or of tuples starting with a name, counts as every name
+    in it.
     """
     import ast
     import importlib
@@ -275,10 +274,10 @@ def _keys_main_reads(*names, readers=_CONFIG_READERS):
     (("section",), _RASTER_KEYS, ("_parse_raster_plan",)),
 ], ids=["top-level", "simulation", "fitting", "fitting.components", "synthesis", "raster"])
 def test_the_key_lists_match_what_main_reads(names, accepted, readers):
-    """The lists are written by hand, so a new key can be missed.
+    """The key lists are written by hand, so a new key can be missed.
 
-    For example, main() reads simulation.noise, and a key list written before
-    it existed would refuse every config that sets it.
+    A list without `simulation.noise`, say, would refuse every config that
+    sets it.
     """
     read = _keys_main_reads(*names, readers=readers)
     assert read - accepted == set(), (
@@ -293,8 +292,8 @@ def test_the_key_lists_match_what_main_reads(names, accepted, readers):
 def _doc_yaml_blocks():
     """Every config example in the docs, with its page.
 
-    These are the ```yaml blocks in pages and the notebook cells that write a
-    YAML file with %%writefile.
+    These are the yaml code blocks in pages and the notebook cells that
+    write a YAML file with `%%writefile`.
     """
     import json
     import re
@@ -303,8 +302,7 @@ def _doc_yaml_blocks():
 
     docs = Path(__file__).resolve().parent.parent / "docs"
     blocks = []
-    # Include the internal pages, which are not in the site navigation but are
-    # still used.
+    # The internal pages are not in the navigation but are still checked.
     for page in sorted(docs.rglob("*.md")):
         for match in re.finditer(r"```yaml\n(.*?)```", page.read_text(), re.S):
             blocks.append((str(page.relative_to(docs)), match.group(1)))
@@ -319,16 +317,9 @@ def _doc_yaml_blocks():
 
 
 def test_every_config_example_in_the_docs_is_valid():
-    """Otherwise the docs teach a config the code refuses.
+    """Config examples in the docs pass validation.
 
-    The examples are the closest thing to a corpus of real configs, so this
-    check would have caught an over-tight key list.
-
-    A block that names its instrument is checked against it. Several
-    examples are fragments showing one section and take their instrument
-    from the surrounding text, so they must pass for either instrument
-    rather than an assumed default. This still catches a key that no
-    instrument accepts, which is the mismatch that matters.
+    A block that names no instrument may pass as either SWC or EIS.
     """
     import yaml
 
@@ -344,8 +335,8 @@ def test_every_config_example_in_the_docs_is_valid():
         if not isinstance(config, dict):
             continue
 
-        # A run file's synthesis and frame are checked as a run checks them,
-        # and what each run observes as below.
+        # Check a run file's synthesis and frame as a run does, and each
+        # run's observation below.
         observed = []
         for name, run in runs(config, "example"):
             # A run with a frame and no lines is for `eclipse frame`, which

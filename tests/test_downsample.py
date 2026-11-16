@@ -1,8 +1,7 @@
-"""--downsample describes the same Sun as a full-resolution run (issue #72).
+"""`--downsample` gives the same Sun as a full-resolution run (issue #72).
 
 Each kept cell stands for `downsample` cells along each axis, so the cell
-sizes grow by that factor once: in the WCS, in the emission measure's path
-length and in the synthesis file.
+sizes in the WCS, the path length and the synthesis file grow by that factor.
 """
 import sys
 
@@ -40,7 +39,7 @@ def _write_muram_files(root, shape, suffix="0270000"):
 
 
 def _flat_goft(lines, **kwargs):
-    """A contribution function of 1 everywhere, in place of fiasco."""
+    """Contribution function of 1 everywhere, in place of fiasco."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(8.0, 10.0, 21)
     goft = {LINE: {
@@ -69,7 +68,7 @@ def _atmosphere_file(tmp_path, shape, suffix="0270000"):
 
 
 def _synthesise(tmp_path, monkeypatch, shape, downsample, extra=()):
-    """Run synthesis main() and return what it saved."""
+    """Run synthesis `main()` and return what it saved."""
     output_name = f"out_{downsample}_{len(extra)}.h5"
     argv = [
         "synthesise-spectra",
@@ -167,8 +166,7 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
     full = _synthesise(tmp_path, monkeypatch, shape, 1, crop)
     reduced = _synthesise(tmp_path, monkeypatch, shape, 2, crop)
 
-    # A box of fixed width spans about that width at any pixel size, so a
-    # wrong WCS shows up in how many simulation cells it keeps. Each
+    # A wrong WCS would change how many simulation cells the crop keeps. Each
     # downsampled cell stands for two, and striding moves the cell edges, so
     # allow one downsampled cell either way.
     full_cells = _intensity(full).shape[1]
@@ -178,7 +176,7 @@ def test_a_crop_selects_the_same_world_box_when_downsampled(tmp_path,
 
 
 def _write_muram_series(root, shape):
-    """Write two snapshots, with header files giving their times for dynamic mode."""
+    """Two snapshots, with header files giving their times for dynamic mode."""
     for suffix, time in [("0270000", 0.0), ("0280000", 1000.0)]:
         _write_muram_files(root, shape, suffix)
         header = root / "header" / f"Header.{suffix}"

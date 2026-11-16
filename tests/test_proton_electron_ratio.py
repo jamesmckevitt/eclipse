@@ -1,4 +1,4 @@
-"""fiasco's proton to electron ratio, worked out once per process within proton_electron_ratio_once."""
+"""`proton_electron_ratio_once` computes fiasco's proton to electron ratio once per process."""
 import sys
 import types
 
@@ -12,7 +12,7 @@ GRID = 10.0 ** np.linspace(4.0, 9.0, 101)
 
 
 def _fake_ions(monkeypatch):
-    """A stand-in fiasco.ions whose ratio, interpolated point by point like fiasco's, counts its calls."""
+    """Stand-in for `fiasco.ions`, interpolating per point like fiasco, that counts its calls."""
     calls = []
 
     def proton_electron_ratio(temperature, **kwargs):

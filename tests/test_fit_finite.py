@@ -27,7 +27,7 @@ def _wave(n=N_WAVE, first=0):
 
 
 def _line(wave, single):
-    """One line at 20 km/s, or the Fe XII 195.119 and 195.179 blend, 10:3, on a background of 10."""
+    """Line at 20 km/s, or the Fe XII 195.119 and 195.179 blend at 10:3, on a background of 10."""
     prof = 10.0 + 100.0 * np.exp(-0.5 * ((wave - 195.119e-8 * DOPPLER) / 0.03e-8) ** 2)
     if not single:
         prof += 30.0 * np.exp(-0.5 * ((wave - 195.179e-8 * DOPPLER) / 0.03e-8) ** 2)
@@ -69,8 +69,8 @@ def test_nan_pixels_at_the_ends_fit_as_a_shorter_window(single, backend, pixel_m
     """
     NaN in the first 3 and last 2 pixels gives the fit of the window without them.
 
-    The two cubes' wavelengths differ in their last bits, and the optimisers
-    stop at a relative tolerance near 1e-8, so the fits agree to about that.
+    The cubes' wavelengths differ in their last bits and the optimisers stop
+    at a relative tolerance near 1e-8, so the fits agree to about that.
     """
     noisy = _line(_wave(), single) + np.random.default_rng(3).normal(0, 3, N_WAVE)
     with_nan = noisy.copy()
@@ -146,8 +146,9 @@ def test_the_free_parameters_are_counted():
 
 def test_the_fit_is_tried_from_as_many_finite_pixels_as_free_parameters():
     """
-    A spectrum with NaN pixels is fitted from 4 finite pixels, not 3; one with
-    every pixel finite is always fitted, as the optimiser decides.
+    A spectrum with NaN pixels needs 4 finite pixels, not 3, to be fitted.
+
+    One with every pixel finite is always tried, and the optimiser decides.
     """
     tried = []
 
@@ -198,15 +199,13 @@ def test_exactly_as_many_finite_pixels_as_free_parameters_are_fitted(backend):
 
 def test_a_centre_in_nan_pixels_at_the_end_fails():
     """
-    A centre beyond the finite pixels was fitted with no data there.
+    A centre more than half a pixel into NaN pixels at an end fails.
 
-    Spectra: all finite, NaN in the last 10 pixels, NaN in the first 10,
-    and NaN in one pixel inside. The centres are in the middle, and 0.4 and
-    0.6 pixels past the last (or before the first) finite pixel of the
-    spectra with NaN ends. Only a centre in the NaN pixels at an end, more
-    than half a pixel past the last finite one, fails. A centre past the
-    whole window fails only if the spectrum's pixels at that end are NaN,
-    and a centre on a NaN pixel inside is kept.
+    The spectra are all finite, NaN in the last 10 pixels, NaN in the first
+    10, or NaN in one pixel inside. Centres are in the middle, and 0.4 and
+    0.6 pixels beyond the end finite pixel of the spectra with NaN ends. A
+    centre past the whole window fails only if the pixels at that end are
+    NaN, and a centre on a NaN pixel inside is kept.
     """
     wave = _wave()
     after = [wave[20], wave[-11] + 0.4 * STEP, wave[-11] + 0.6 * STEP]
@@ -299,7 +298,7 @@ def test_weighted_and_poisson_fits_leave_out_nan_pixels_at_the_ends(single, back
 
 @pytest.mark.parametrize("backend", ["scipy", "mpfit"])
 def test_a_pixel_with_a_nan_uncertainty_is_left_out_of_a_weighted_fit(backend):
-    """The data of that pixel, though finite, is not used: a spike there does not move the fit."""
+    """A spike in that pixel's finite data does not move the fit."""
     clean = _line(_wave(), False)
     spiked = clean.copy()
     spiked[25] += 500.0

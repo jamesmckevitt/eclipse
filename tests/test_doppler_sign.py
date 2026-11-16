@@ -1,8 +1,7 @@
 """A simulated flow has the Doppler shift its observer sees.
 
 Simulation velocities are positive towards increasing coordinate, so an
-upflow seen from above is blueshifted. The synthesis runs on small uniform
-atmospheres with a flat contribution function.
+upflow seen from above is blueshifted.
 """
 import sys
 import warnings
@@ -69,7 +68,7 @@ def _flat_goft(lines, **kwargs):
 
 
 def _atmosphere_file(tmp_path, axis, suffix="0270000"):
-    """Write the MURaM files above as an atmosphere file, placed as in dynamic mode."""
+    """Atmosphere file from the MURaM files, placed as in dynamic mode."""
     root = tmp_path / "atmosphere"
     files = {"temperature": ("temp/eosT", u.K),
              "mass_density": ("rho/result_prim_0", u.g / u.cm**3),
@@ -84,7 +83,7 @@ def _atmosphere_file(tmp_path, axis, suffix="0270000"):
 
 
 def _synthesise(tmp_path, monkeypatch, axis, extra=()):
-    """Run synthesis main() and return the path it saved to."""
+    """Run synthesis `main()` and return the saved path."""
     argv = [
         "synthesise-spectra",
         "--output-dir", str(tmp_path / "out"),
@@ -148,12 +147,11 @@ def test_an_upflow_seen_from_above_is_blueshifted(tmp_path, monkeypatch):
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
 def test_the_observer_is_where_the_map_is_the_right_way_round(
         tmp_path, monkeypatch, axis):
-    """A flow along the line of sight is blueshifted when it moves towards that observer.
+    """A flow towards the observer of the map is blueshifted.
 
-    The line cube's columns run left to right and its rows bottom to top, so
-    the column axis crossed with the row axis points at the observer who sees
-    the map that way round. The expected shift comes from the cube's own WCS,
-    not from ECLIPSE's table of observers.
+    Columns run left to right and rows bottom to top, so the column axis
+    crossed with the row axis points at the observer. The expected shift
+    comes from the cube's WCS, not from ECLIPSE's table of observers.
     """
     flow_vector = FLOW.value * np.array(UNIT_VECTORS[f"SOL{axis.upper()}"])
     _write_muram_files(tmp_path / "atmosphere",
@@ -183,9 +181,8 @@ def test_dynamic_mode_has_the_same_sign(tmp_path, monkeypatch):
         -FLOW.value, abs=0.1)
 
 
-# For each axis: the slice, in the files' (nx, nz, ny) layout, where a flow
-# along it fills the image columns of lowest coordinate; and the view from
-# the other side.
+# Per axis: the slice, in the files' (nx, nz, ny) layout, of the image
+# columns of lowest coordinate, and the view from the other side.
 HALF_ALONG_COLUMNS = {"x": np.s_[:, :, :SHAPE[2] // 2], "y": np.s_[:SHAPE[0] // 2],
                       "z": np.s_[:SHAPE[0] // 2]}
 OTHER_SIDE = {"x": "-x", "y": "+y", "z": "-z"}
@@ -194,11 +191,10 @@ OTHER_SIDE = {"x": "-x", "y": "+y", "z": "-z"}
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
 def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
         tmp_path, monkeypatch, axis):
-    """Walking round the box mirrors the image, and turns an approaching flow into a receding one.
+    """The view from the other side is mirrored, with the opposite shift.
 
-    The flow fills the half of the box whose image columns have the lowest
-    coordinate, so it is on the left of the view the axis names and on the
-    right of the view from the other side.
+    The flow fills the half with the lowest column coordinate, so it is on
+    the left of the named view and on the right of the other.
     """
     velocity = np.zeros(SHAPE)
     velocity[HALF_ALONG_COLUMNS[axis]] = FLOW.to_value(u.cm / u.s)
@@ -208,9 +204,8 @@ def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
     other = _load(_synthesise(tmp_path, monkeypatch, OTHER_SIDE[axis]))
     named_cube, other_cube = named["line_cubes"][LINE], other["line_cubes"][LINE]
 
-    # From the side the axis names, the flow is on the left and moves as
-    # OBSERVER_SIDE says. From the other side it is on the right and moves
-    # the other way.
+    # The named side sees the flow on the left, moving as OBSERVER_SIDE
+    # says; the other side sees it on the right, moving the other way.
     towards = -synthesis.OBSERVER_SIDE[axis] * FLOW.value
     half = named_cube.data.shape[1] // 2
     assert _doppler_velocity(named_cube)[:, :half] == pytest.approx(towards, abs=0.1)
@@ -218,14 +213,14 @@ def test_the_view_from_the_other_side_is_mirrored_with_the_opposite_shift(
     assert _doppler_velocity(other_cube)[:, -half:] == pytest.approx(-towards, abs=0.1)
     assert _doppler_velocity(other_cube)[:, :-half] == pytest.approx(0.0, abs=0.1)
 
-    # Each spectrum is mirrored about the rest wavelength, since the velocity
-    # grid is centred on zero, and so is the emission measure.
+    # Spectra and emission measure are mirrored about the rest wavelength,
+    # as the velocity grid is centred on zero.
     assert other_cube.data == pytest.approx(named_cube.data[:, ::-1, ::-1], rel=1e-9)
     assert other["em_tv"] == pytest.approx(named["em_tv"][:, ::-1, :, ::-1], rel=1e-9)
     assert other["dem_map"] == pytest.approx(named["dem_map"][:, ::-1], rel=1e-9)
 
-    # The columns follow the box's coordinate with its sign flipped, so they
-    # still increase to the observer's right. The rows are unchanged.
+    # Columns take the box coordinate with its sign flipped, so they still
+    # increase to the observer's right. Rows are unchanged.
     def columns(cube):
         return cube.wcs.low_level_wcs.pixel_to_world_values(
             0, np.arange(cube.data.shape[1]), 0)[1]
@@ -279,14 +274,13 @@ def test_dynamic_mode_looks_only_from_the_side_the_axis_names(tmp_path, monkeypa
 @pytest.mark.parametrize("axis, refused", [("x", True), ("y", False), ("z", True)])
 def test_synthesis_files_from_before_the_change_are_refused_where_their_sign_differs(
         tmp_path, monkeypatch, axis, refused):
-    """Views along y kept their sign, so older files agree and still load."""
+    """Older files viewed along y have the same sign and still load."""
     _write_muram_files(tmp_path / "atmosphere", {})
     path = _synthesise(tmp_path, monkeypatch, axis)
     saved = _load(path)
     assert saved["config"]["velocity_convention"] == VELOCITY_CONVENTION
 
-    # The same line cubes pickled as by an older version, which did not record
-    # the convention.
+    # Pickle the line cubes without the convention, as older versions did.
     del saved["line_cubes"][LINE].meta["velocity_convention"]
     old = tmp_path / "old.pkl"
     with open(old, "wb") as f:
@@ -299,7 +293,7 @@ def test_synthesis_files_from_before_the_change_are_refused_where_their_sign_dif
 
 
 def _write_results_file(path, meta):
-    """Results file whose atmosphere cube has `meta`; None means uniform intensity mode."""
+    """Results file whose atmosphere cube has `meta`; `None` for uniform intensity mode."""
     cube_sim = None if meta is None else NDCube(np.ones((2, 2, 3)),
                                                 wcs=WCS(naxis=3), meta=meta)
     return save_results(path, {"results": {"all_combinations": {}, "fit_weighted": True},
@@ -308,7 +302,7 @@ def _write_results_file(path, meta):
 
 @pytest.mark.parametrize("meta", [
     {"integration_axis": "x"},
-    {},  # written before the side views existed, so a view along z
+    {},  # an older file with no axis recorded, viewed along z
 ], ids=["x", "no axis"])
 def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta):
     written = _write_results_file(tmp_path / "written.h5", meta)
@@ -318,7 +312,7 @@ def test_results_from_before_the_fix_are_refused_unless_asked_for(tmp_path, meta
         dill.dump({"results": {"all_combinations": {}},
                    "cube_sim": NDCube(np.ones((2, 2, 3)), wcs=WCS(naxis=3), meta=meta)}, f)
     for path in (written, pickled):
-        # Ignore the pickle's own warning, which is not the one tested here.
+        # Ignore the pickle's own warning.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             with pytest.raises(ValueError, match="opposite signs"):

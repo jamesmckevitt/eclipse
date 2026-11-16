@@ -1,5 +1,5 @@
 """
-Data processing functions for atmosphere cubes and spectral resampling.
+Synthetic spectra put on the detector's wavelength and spatial pixels.
 """
 
 from __future__ import annotations
@@ -24,13 +24,12 @@ from .utils import (_PHOTON_META, _bin_edges, _unpickle, distance_to_angle, _fwh
 
 def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     """
-    Read one spectral window of a synthesis file as a single cube, blends included.
+    One spectral window of a synthesis file as a single cube, blends included.
 
-    Every line in the file within the window of `metadata_line` is added
-    onto that line's wavelengths at its own brightness. This is what
-    `eclipse` observes for `reference_line`. Synthesis pickles from ECLIPSE
-    0.11.0 and earlier can also be read. Reading a pickle runs any code it
-    holds, so only read pickles you trust.
+    Every line in the window of `metadata_line` is added onto that line's
+    wavelengths. This is what `eclipse` observes for `reference_line`.
+    Synthesis pickles from ECLIPSE 0.11.0 and earlier are also read. Reading
+    a pickle runs any code it holds, so only read pickles you trust.
 
     Parameters
     ----------
@@ -72,7 +71,6 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     with open(pkl_file, "rb") as f:
         tmp = _unpickle(f)
     
-    # Handle new synthesis format
     if "line_cubes" not in tmp:
         raise ValueError("File does not contain synthesis results with line_cubes")
         
@@ -80,13 +78,10 @@ def load_atmosphere(pkl_file: str, metadata_line: str = None) -> tuple:
     if not line_cubes:
         raise ValueError("No line cubes found in synthesis results")
     
-    # Get dynamic mode info if present
     dynamic_mode_info = tmp.get("dynamic_mode", {"enabled": False})
     
-    # Get the line names
     line_names = list(line_cubes.keys())
 
-    # Choose metadata source line
     if metadata_line is None:
         metadata_line = line_names[0]
     elif metadata_line not in line_names:
@@ -103,9 +98,8 @@ def check_old_line_cubes(line_cubes: dict, path) -> None:
     """Refuse line cubes written by older ECLIPSE versions in a form now misread."""
     for cube in line_cubes.values():
         meta = cube.meta or {}
-        # Refuse files from before the axis order changed (issue #12). They
-        # store (x, y, wavelength), not (y, x, wavelength), so would come out
-        # transposed. The WCS axis order tells the two apart.
+        # Refuse (x, y, wavelength) cubes from before issue #12, which would
+        # come out transposed. The WCS axis order tells them apart.
         old_first_spatial = {"z": "SOLY", "x": "SOLZ", "y": "SOLZ"}
         axis = meta.get("integration_axis")
         if axis in old_first_spatial and cube.wcs.wcs.ctype[1] == old_first_spatial[axis]:
@@ -133,26 +127,21 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
     """
     Every line's cube summed onto the wavelength grid of `reference_line`.
 
-    Each cube is averaged onto the reference bins, conserving flux and
-    taken as zero outside its own grid, so lines outside the reference
-    window add nothing. The result keeps the reference cube's WCS, unit and
-    metadata, plus the names of the lines it holds.
+    Each cube is averaged onto the reference bins, conserving flux, and
+    taken as zero outside its own grid. The result keeps the reference
+    cube's WCS, unit and metadata, plus the names of the lines it holds.
     """
     ref_cube = line_cubes[reference_line]
     ref_wavelengths = ref_cube.axis_world_coords_values(-1)[0]
     line_names = list(line_cubes.keys())
 
-    # Get spatial dimensions from reference cube
     ny, nx, nw = ref_cube.data.shape
 
-    # Initialize summed data with the reference wavelength grid
     summed_data = np.zeros((ny, nx, nw))
 
     for line_name, cube in tqdm(line_cubes.items(), desc="Summing line cubes", unit="line", leave=False):
-        # Get wavelength grid for this cube
         cube_wavelengths = cube.axis_world_coords_values(-1)[0]
 
-        # Check spatial dimensions match
         ny_cube, nx_cube, _ = cube.data.shape
         if ny_cube != ny or nx_cube != nx:
             raise ValueError(f"Spatial dimensions mismatch for {line_name}: expected ({ny}, {nx}), got ({ny_cube}, {nx_cube})")
@@ -161,7 +150,6 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
                                             cube_wavelengths.to_value(ref_wavelengths.unit),
                                             ref_wavelengths.value)
 
-    # Create new metadata combining info from all lines
     combined_meta = ref_cube.meta.copy()
     combined_meta.update({
         "combined_lines": line_names,
@@ -170,7 +158,6 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
         "summed_intensity": True,
     })
 
-    # Create the summed cube using the reference cube's WCS
     return NDCube(
         summed_data,
         wcs=ref_cube.wcs,
@@ -181,39 +168,37 @@ def sum_line_cubes(line_cubes: dict, reference_line: str) -> NDCube:
 
 def resample_ndcube_spectral_axis(ndcube, spectral_axis, output_resolution, ncpu=-1):
     """
-    Resample the spectral axis of an NDCube conserving flux, as in :func:`resample_spectra`.
+    Cube with its spectral axis resampled conserving flux, as by :func:`resample_spectra`.
 
     Parameters
     ----------
     ndcube : NDCube
         Input cube.
     spectral_axis : int
-        Index of the spectral axis (e.g. 0, 1 or 2).
+        Index of the spectral axis, 0, 1 or 2.
     output_resolution : astropy.units.Quantity
-        Output spectral resolution (e.g. 0.01 * u.nm).
+        Spacing of the new grid, such as `0.01 * u.nm`.
     ncpu : int, optional
-        Unused, kept for existing calls. The resampling is one matrix
-        product, which uses the threads numpy is given.
+        Unused, kept for existing calls. The resampling uses the threads
+        numpy is given.
 
     Returns
     -------
     NDCube
-        New cube with the spectral axis resampled.
+        Resampled cube.
     """
-    # Get the world coordinates of the spectral axis
     spectral_world = ndcube.axis_world_coords_values(spectral_axis)[0]
 
     # Move spectral axis last, as resample_spectra expects
     data = np.moveaxis(ndcube.data, spectral_axis, -1)
     resampled, new_spec_grid = resample_spectra(data, spectral_world, output_resolution)
 
-    # Move spectral axis back to original position
     resampled = np.moveaxis(resampled, -1, spectral_axis)
 
     # Update WCS for new spectral axis
     new_wcs = ndcube.wcs.deepcopy()
 
-    wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # Reverse axis order for WCS
+    wcs_axis = new_wcs.wcs.naxis - 1 - spectral_axis  # WCS lists axes in reverse
     unit = new_wcs.wcs.cunit[wcs_axis]
     (new_wcs.wcs.crpix[wcs_axis], new_wcs.wcs.crval[wcs_axis],
      new_wcs.wcs.cdelt[wcs_axis]) = _even_grid_wcs(new_spec_grid, unit)
@@ -225,9 +210,8 @@ def _even_grid_wcs(grid: u.Quantity, unit) -> tuple:
     """CRPIX, CRVAL and CDELT, in `unit`, of the evenly spaced `grid`."""
     cdelt = (grid[1] - grid[0]).to_value(unit)
     # The reference pixel is the centre of the axis, between two pixels for
-    # an even number of them. CRVAL must be the wavelength at that point, not
-    # at the pixel below, or the axis is labelled half a pixel low and every
-    # fitted velocity comes out half a pixel blue.
+    # an even count. CRVAL must be the wavelength there, not at the pixel
+    # below, or fitted velocities come out half a pixel blue.
     center_pixel = (len(grid) + 1) / 2  # 1-based index (FITS convention)
     return center_pixel, grid[0].to_value(unit) + (center_pixel - 1) * cdelt, cdelt
 
@@ -238,8 +222,8 @@ def resample_spectra(data: np.ndarray, spectral_world: u.Quantity,
     Spectra resampled onto an evenly spaced wavelength grid, conserving flux.
 
     Each input wavelength covers the interval halfway to its neighbours, and
-    each new pixel gets the mean of what overlaps it, so the integral over
-    wavelength is kept exactly, out to the outermost intervals.
+    each new pixel gets the mean of what overlaps it. The integral over
+    wavelength is kept exactly.
 
     Parameters
     ----------
@@ -250,10 +234,9 @@ def resample_spectra(data: np.ndarray, spectral_world: u.Quantity,
         necessarily evenly spaced.
     output_resolution : astropy.units.Quantity
         Spacing of the new grid. The grid starts at the first wavelength and
-        steps in whole pixels until it passes the last, so its last pixel
-        can lie beyond the outermost interval and stay empty. Where the
-        outermost intervals of a coarse grid reach past either end, whole
-        pixels are added there too.
+        steps until it passes the last, so its last pixel can be empty.
+        Where a coarse input's outermost intervals reach past either end,
+        whole pixels are added there.
 
     Returns
     -------
@@ -276,10 +259,9 @@ def _spectral_grid(centres: np.ndarray, step: float, margin: int = 0) -> np.ndar
     at each end.
     """
     grid = np.arange(centres.min(), centres.max() + step, step)
-    # Where the input is coarser than the pixels at its ends, its outermost
-    # intervals reach past the first and last pixels, and their light would
-    # be lost, so pixels are added either side without moving the grid. A
-    # reach under a part in 1e9 of a pixel is rounding.
+    # Add pixels either side, without moving the grid, where a coarse
+    # input's outermost intervals reach past the ends, or their light would
+    # be lost. A reach under 1e-9 of a pixel is rounding.
     edges = _bin_edges(centres)
     below = margin + max(0, int(np.ceil((grid[0] - step / 2 - edges[0]) / step - 1e-9)))
     above = margin + max(0, int(np.ceil((edges[-1] - (grid[-1] + step / 2)) / step - 1e-9)))
@@ -291,10 +273,9 @@ def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
     """
     Number of whole pixels of `pitch` in `extent`.
 
-    A field of view of a whole number of pixels, as round angles often are,
-    is off by a rounding error after conversion to a length and back. A
-    count within a part in 1e9 of the next whole number is therefore taken
-    as reaching it, so the last pixel is not lost.
+    A count within a part in 1e9 of the next whole number is taken as
+    reaching it, as converting an angle to a length and back leaves a
+    rounding error.
     """
     ratio = (extent / pitch).decompose().value
     return int(np.floor(ratio * (1 + 1e-9)))
@@ -303,29 +284,27 @@ def _whole_pixels(extent: u.Quantity, pitch: u.Quantity) -> int:
 def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, ncpu=-1, *,
                                                      sigma_x=0.0, sigma_y=0.0, extend=False,
                                                      openings=None):
-    """Reproject an NDCube from heliocentric to helioprojective coordinates.
+    """Reproject a cube from heliocentric to helioprojective coordinates.
 
     Pixels are the plate scale apart along the slit and the slit width
     apart across it; a raster keeps its own columns. Each pixel holds the
-    mean of the cells over its footprint, each cell taken as uniform, so
-    structure finer than a pixel is averaged as the detector averages it.
+    mean of the cells over its footprint, each cell taken as uniform.
 
     Parameters
     ----------
     new_cube_spec : NDCube
-        Input NDCube in heliocentric coordinates
+        Cube in heliocentric coordinates.
     sim : Simulation
-        Simulation configuration object
+        Simulation settings.
     det : Detector
-        Detector configuration object
+        Detector.
     ncpu : int, optional
-        Unused, kept for existing calls. The averaging is a matrix product,
-        which uses the threads numpy is given.
+        Unused, kept for existing calls. The averaging uses the threads
+        numpy is given.
     sigma_x, sigma_y : float, optional
-        Standard deviations in arcsec of a Gaussian blur across and along
-        the slit, applied to the scene before pixel averaging. A raster gets
-        no blur across the slit, as its columns have already been through
-        the slit.
+        Gaussian blur across and along the slit, as standard deviations in
+        arcsec, applied before the pixel averaging. A raster gets none
+        across the slit, as its columns have already been through it.
     extend : bool, optional
         Extend the scene past its edges with its edge cells, for the blur
         to bring in.
@@ -344,9 +323,8 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     x_angle = distance_to_angle(dx)
     y_angle = distance_to_angle(dy)
 
-    # The reference pixel is put at the middle of each spatial axis below, so
-    # CRVAL must be the input's coordinate there, wherever the input's own
-    # reference pixel is.
+    # The reference pixel goes at the middle of each spatial axis, so CRVAL
+    # is the input's coordinate there.
     crval_x_hc = (wcs_hc.wcs.crval[1] + ((nx + 1) / 2 - wcs_hc.wcs.crpix[1])
                   * wcs_hc.wcs.cdelt[1]) * u.Unit(wcs_hc.wcs.cunit[1])
     crval_y_hc = (wcs_hc.wcs.crval[2] + ((ny + 1) / 2 - wcs_hc.wcs.crpix[2])
@@ -367,8 +345,8 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     ny_in, nx_in, nl_in = new_cube_spec_hp.shape
     fov_x = nx_in * x_angle
     fov_y = ny_in * y_angle
-    # A raster already has one column per slit position, so its scan axis is
-    # kept and only the slit axis is put on the plate scale.
+    # A raster already has one column per slit position, so only its slit
+    # axis is put on the plate scale.
     raster = bool((new_cube_spec.meta or {}).get("raster"))
     pitch_x = x_angle if raster else sim.slit_width
     pitch_y = det.plate_scale_angle
@@ -394,9 +372,8 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
                         pitch_x.to_value(u.arcsec),
                         (det.plate_scale_angle * u.pix).to_value(u.arcsec)]
 
-    # Each pixel holds the mean of the uniform cells over its footprint,
-    # after the optics blur if given. Both grids are centred on the middle
-    # of the input.
+    # Each pixel is the mean of the uniform cells over it, after any blur.
+    # Both grids are centred on the middle of the input.
     cell_rows = centred_edges(ny_in, y_angle.to_value(u.arcsec))
     pixel_rows = centred_edges(ny_out, (pitch_y * u.pix).to_value(u.arcsec))
     if openings is None:
@@ -419,12 +396,11 @@ def reproject_ndcube_heliocentric_to_helioprojective(new_cube_spec, sim, det, nc
     # metadata is carried with the same weights.
     data, meta = _carry_photon_meta(onto_pixels, new_cube_spec)
     meta = dict(meta or {})
-    # Put the WCS in wcslib's own units, metres and degrees, as reprojected
-    # cubes are expected to be.
+    # Put the WCS in wcslib's units, metres and degrees, as for any
+    # reprojected cube.
     wcs_tgt.wcs.set()
-    # Record the scene's extent along the slit, which gives the rows it
-    # covers at any plate scale, for main to check off-chip binning against,
-    # and whether the slit's ends and fiducials were cut out.
+    # Record the scene's extent along the slit, which main checks the
+    # off-chip binning against, and whether the slit mask was applied.
     return NDCube(data, wcs=wcs_tgt, unit=new_cube_spec.unit,
                   meta={**meta, "fov_along_slit": fov_y.to(u.arcsec),
                         **({"slit_mask_applied": True} if openings is not None else {})})
@@ -445,24 +421,21 @@ def _spectra_on_the_detector(data: np.ndarray, spectral_world: u.Quantity, det, 
     Spectra laid onto the detector's wavelength pixels in one step.
 
     The spectra go from their own wavelengths onto the pixels, through the
-    spectral PSF if `sim.psf` is on. Blurring them on the pixels, as the
-    Monte Carlo does for a cube without `psf_applied`, moves a line narrower
-    than a pixel toward its middle; here each wavelength keeps its place.
-    The pixels extend :func:`~eclipse.radiometric.spectral_psf_margin`
-    further at each end, as :func:`pad_spectral_axis` does for a PSF on the
-    pixels.
+    spectral PSF if `sim.psf` is on. Blurring on the pixels instead, as the
+    Monte Carlo does for a cube without `psf_applied`, would move a line
+    narrower than a pixel toward its middle. The pixels extend
+    :func:`~eclipse.radiometric.spectral_psf_margin` further at each end,
+    as :func:`pad_spectral_axis` does for a PSF on the pixels.
 
-    Each wavelength's light is converted to photons at that wavelength,
-    with the telescope's area and the photon energy there
-    (:func:`~eclipse.radiometric.photons_per_energy`), before the
-    blur. The Monte Carlo counts a pixel's photons at the pixel's
-    wavelength, so the returned spectra are the radiance that gives each
-    pixel its photons that way. A photon frees electrons by its own energy,
-    so the wavelengths of the mean and RMS photon energies in each pixel are
-    returned too. With the pinholes on, so are the share of the photons'
-    light the filter passed, and the wavelengths of the mean and RMS
-    energies of the light it blocked, which a pinhole lets through, each
-    worked out at its own wavelength.
+    Each wavelength's light is converted to photons at that wavelength
+    (:func:`~eclipse.radiometric.photons_per_energy`) before the blur. The
+    returned spectra are the radiance that gives each pixel its photons at
+    the pixel's wavelength, as the Monte Carlo counts them. As a photon
+    frees electrons by its own energy, the wavelengths of the mean and RMS
+    photon energies in each pixel are returned too. With the pinholes on,
+    so are the share of the light the filter passed, and the wavelengths of
+    the mean and RMS energies of the light it blocked, which a pinhole lets
+    through.
 
     Returns `(spectra, grid, meta)`, with the grid in cm and `meta` the
     cube's photon `meta` entries, named as in
@@ -509,9 +482,8 @@ def _cells_onto_pixels(data, centres: np.ndarray, cells: np.ndarray, grid: np.nd
     meta = {"photon_wavelength": with_own(photon_wavelength),
             "photon_rms_wavelength": with_own(rms_wavelength)}
     if _pinholes_on(sim):
-        # Photons the filter blocked from each cell's light, which a pinhole
-        # lets through: the passed photons divided by the transmission, less
-        # the passed photons.
+        # Photons the filter blocked, which a pinhole lets through: passed
+        # photons / transmission - passed photons.
         passed = _filter_transmission(tel, centres * u.cm)
         blocked = in_cells * np.divide(1.0 - passed, passed, out=np.zeros(passed.shape),
                                        where=passed > 0)
@@ -528,7 +500,7 @@ def _cells_onto_pixels(data, centres: np.ndarray, cells: np.ndarray, grid: np.nd
 def _slit_openings(tel, sim) -> dict:
     """
     Stretches where light gets through the slit, for
-    `reproject_ndcube_heliocentric_to_helioprojective`, when `sim.slit_mask`
+    `reproject_ndcube_heliocentric_to_helioprojective`, if `sim.slit_mask`
     is on.
     """
     if not getattr(sim, "slit_mask", False):
@@ -552,7 +524,7 @@ def crop_to_the_slit(cube: NDCube, tel, det, slit_width: u.Quantity) -> NDCube:
     det : Detector_SWC
         Detector, for the plate scale.
     slit_width : u.Quantity
-        Slit in use.
+        Slit width.
 
     Returns
     -------
@@ -596,27 +568,26 @@ def _spatial_blur(tel, det, sim) -> dict:
 
 def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
     """
-    Rebin synthetic atmosphere cube to instrument resolution and spatial sampling.
+    Synthetic cube rebinned to the instrument's spectral and spatial pixels.
 
     Each detector pixel holds the mean of the scene over its footprint, in
-    wavelength and in space. Given `tel`, each wavelength's light is counted
-    in photons at its own wavelength. The cube's `meta` then holds
-    `photon_wavelength` and `photon_rms_wavelength`, the wavelengths of the
-    mean and RMS energies of each pixel's photons, and, with the pinholes of
-    `sim` on, what they need of the light the filter blocked. With `sim.psf`
-    on as well, the focusing optics' PSF blurs the scene on its own grids
-    before the pixels average it, which is exact however fine the scene is.
-    `meta` records this in `psf_applied`, so the Monte Carlo does not blur
-    it again.
+    wavelength and in space. Given `tel`, light is counted in photons at
+    its own wavelength, and `meta` holds `photon_wavelength` and
+    `photon_rms_wavelength`, the wavelengths of the mean and RMS energies of
+    each pixel's photons. With the pinholes on, it also holds what they need
+    of the light the filter blocked. With `sim.psf` on as well, the optics'
+    PSF blurs the scene before the pixels average it, which is exact however
+    fine the scene is. `meta["psf_applied"]` records this, so the Monte
+    Carlo does not blur it again.
 
     Parameters
     ----------
     cube_sim : NDCube
-        Input synthetic atmosphere cube
+        Synthetic cube.
     det : Detector_SWC or Detector_EIS
-        Detector configuration
+        Detector.
     sim : Simulation
-        Simulation configuration
+        Simulation settings.
     use_dask : bool, optional
         Unused, kept for existing calls.
     tel : Telescope_EUVST or Telescope_EIS, optional
@@ -626,7 +597,7 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
     Returns
     -------
     NDCube
-        Rebinned cube at instrument resolution
+        Cube on the detector's pixels.
     """
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
     if tel is None:
@@ -656,14 +627,12 @@ def rebin_atmosphere(cube_sim, det, sim, use_dask=False, *, tel=None):
 def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=None, *,
                   tel=None) -> NDCube:
     """
-    A synthesis file's spectra at instrument resolution and spatial sampling.
+    A synthesis file's spectra on the instrument's spectral and spatial pixels.
 
     The lines reaching the window of `reference_line` are summed on its
-    wavelengths, as in :func:`sum_line_cubes`. They then go through the
-    same two steps as in :func:`rebin_atmosphere`, with wavelengths from the
-    file rather than a WCS: a flux-conserving resampling straight from their
-    own grid, which need not be evenly spaced, then rebinning onto the plate
-    scale and the slit.
+    wavelengths, as in :func:`sum_line_cubes`, then rebinned as in
+    :func:`rebin_atmosphere`. The wavelengths come from the file, so they
+    need not be evenly spaced.
 
     Parameters
     ----------
@@ -672,9 +641,9 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     reference_line : str
         Line whose window is observed and whose velocity is measured.
     det : Detector_SWC or Detector_EIS
-        Detector configuration
+        Detector.
     sim : Simulation
-        Simulation configuration
+        Simulation settings.
     summed : u.Quantity, optional
         `synthesis.summed(reference_line)`, if already computed.
     meta : dict, optional
@@ -688,7 +657,7 @@ def rebin_spectra(synthesis, reference_line: str, det, sim, summed=None, meta=No
     Returns
     -------
     NDCube
-        Rebinned cube at instrument resolution
+        Cube on the detector's pixels.
     """
     print("  Spectral rebinning to instrument resolution (ny,nx,*nl*)...")
     reference = synthesis.lines[reference_line]
@@ -729,11 +698,9 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
     """
     `cube` with `n` empty pixels added at each end of its wavelength axis.
 
-    Wavelength is the last data axis, as in every detector-grid cube, and
-    so the first WCS axis, since the WCS lists axes in reverse. The
-    reference pixel moves with the data, so existing pixels keep their
-    wavelengths. Used to widen a synthesis window for a spectral PSF that
-    reaches beyond its margin
+    Wavelength must be the last data axis, and so the first WCS axis.
+    Existing pixels keep their wavelengths. Used to widen a synthesis window
+    for a spectral PSF that reaches beyond its margin
     (:func:`~eclipse.radiometric.spectral_psf_margin`).
     """
     if n < 0:
@@ -750,22 +717,22 @@ def pad_spectral_axis(cube: NDCube, n: int) -> NDCube:
     return NDCube(data, wcs=wcs, unit=cube.unit, meta=cube.meta)
 
 
-# Cells per detector pixel a uniform-intensity line is laid on, with the PSF.
-# With 64 the pixels change by under 2e-5 of the peak, and the photon
-# wavelengths by under 1e-4 pixel, against 256.
+# Cells per pixel for a uniform-intensity line with the PSF. Against 256, 64
+# changes the pixels by under 2e-5 of the peak and the photon wavelengths by
+# under 1e-4 pixel.
 _CELLS_PER_PIXEL = 64
 
 
 def _line_in_cells(centre: float, sigma: float, n_pix_half: int, step: float,
                    offset: float = 0.0) -> tuple:
     """
-    Cell edges over `2 * n_pix_half + 1` pixels of width `step` centred on
-    `centre`, `_CELLS_PER_PIXEL` cells to a pixel, and the share of a
-    Gaussian line of `sigma` pixels in each.
+    Cell edges around `centre`, and the share of a Gaussian line in each cell.
 
-    The line is `offset` pixels above `centre`. A `sigma` of 0 puts the
-    line in the cell holding its centre, or half in each cell if it sits on
-    the edge between two.
+    The cells cover `2 * n_pix_half + 1` pixels of width `step`,
+    `_CELLS_PER_PIXEL` to a pixel. The line has a `sigma` in pixels and is
+    `offset` pixels above `centre`. A `sigma` of 0 puts the line in the
+    cell holding its centre, or half in each of two cells if it sits on
+    their edge.
     """
     in_pixels = (np.arange((2 * n_pix_half + 1) * _CELLS_PER_PIXEL + 1) / _CELLS_PER_PIXEL
                  - n_pix_half - 0.5)
@@ -788,27 +755,23 @@ def create_uniform_intensity_cube(
     tel=None,
 ) -> NDCube:
     """
-    Make a cube of one Gaussian line of known total intensity on the detector pixels.
+    Cube of one Gaussian line of known total intensity on the detector's pixels.
 
-    This is the cube `eclipse` observes for a single line of known intensity,
-    ready for `monte_carlo` or `simulate_once`. Without the PSF, each
-    wavelength pixel holds the line integrated over that pixel, so the cube
-    holds all of the line within its wavelengths, however narrow the line.
-    The tails beyond `n_sigma_extent` are left out.
+    The cube `eclipse` observes for a single line, ready for `monte_carlo`
+    or `simulate_once`. Without the PSF, each pixel holds the line
+    integrated over it, so a narrow line is not lost. The tails beyond
+    `n_sigma_extent` are left out.
 
-    With `tel` given and `sim.psf` on, the line is laid onto the pixels as
-    a synthesis is by :func:`rebin_spectra`: its photons are counted at
-    their own wavelengths, then blurred by the spectral response
-    (:func:`~eclipse.radiometric.spectral_psf_fwhm`, with
-    `sim.spectral_psf`) and integrated over the pixels. The pixels then hold
-    the radiance that gives each pixel's photons at the pixel's wavelength,
-    so they add up to `total_intensity` closely but not exactly, as the
-    effective area and photon energy change across the line. `meta` holds the photon
-    entries this gives, such as `photon_wavelength`, records the blur in
-    `psf_applied`, so the Monte Carlo does not blur it again, and records
-    the response in `spectral_response`. The line is uniform along the
-    slit, so it needs no blur there. Observe the cube with the same
-    telescope, slit and `spectral_psf`.
+    With `tel` given and `sim.psf` on, the line is blurred by the spectral
+    response before it is integrated over the pixels, as in
+    :func:`rebin_spectra`. Each pixel then holds the radiance that gives
+    its photons at the pixel's wavelength, so the pixels add up to
+    `total_intensity` closely but not exactly, as the effective area and
+    photon energy change across the line. `meta` gets the photon entries,
+    such as `photon_wavelength`, `meta["psf_applied"]` records the blur, so
+    the Monte Carlo does not blur it again, and `meta["spectral_response"]`
+    the response. Observe the cube with the same telescope, slit and
+    `spectral_psf`.
 
     Parameters
     ----------
@@ -830,9 +793,9 @@ def create_uniform_intensity_cube(
         binning, so each binned pixel sums that many, each with its own
         noise. Default 1.
     tel : Telescope_EUVST or Telescope_EIS, optional
-        Telescope. If given, the wavelength range is wide enough to hold the
-        line after the spectral PSF blurs it, and with `sim.psf` on the line
-        is blurred by it. Give it if the PSF will be on. Default None.
+        Telescope. If given, the wavelength range holds the line after the
+        spectral PSF, and with `sim.psf` on the line is blurred by it. Give
+        it if the PSF will be on. Default None.
 
     Returns
     -------
@@ -846,20 +809,15 @@ def create_uniform_intensity_cube(
     # --- Spectral grid --------------------------------------------------
     lam0 = rest_wavelength.to(u.cm)
 
-    # Convert velocity width to wavelength width: sigma_lam = lam0 * v / c
+    # Velocity width to wavelength width, sigma_lam = lam0 * v / c
     sigma_lam = (lam0 * thermal_width / const.c).to(u.cm)
 
     # Detector pixel pitch in cm
     dlam = det.wvl_res.to(u.cm / u.pix) * u.pix  # strip per-pixel to cm
 
-    # The grid must hold the line as measured, not as emitted, so add the
-    # spectral PSF to the thermal width in quadrature, as Gaussian widths
-    # add. The PSF is often the broader: at the default 20 km/s the line is
-    # 0.77 pixels against a PSF of 1.08. The grid is widened with psf on or
-    # off, so the line with and without the PSF is on the same pixels. The
-    # PSF is the one for this slit, with the slit added in quadrature, which
-    # is at least as broad as the slit convolved with the optics, so the
-    # grid holds the line under either spectral_psf.
+    # Widen the grid by the spectral PSF in quadrature, with psf on or off,
+    # so the line lands on the same pixels either way. The quadrature PSF is
+    # at least as broad as the convolution one, so it covers both.
     sigma_total = sigma_lam
     if tel is not None:
         sigma_psf = _spectral_response(tel, det, sim.slit_width, "quadrature")[0] * dlam
@@ -870,27 +828,17 @@ def create_uniform_intensity_cube(
     n_lam = 2 * n_pix_half + 1  # always odd, centred on rest wavelength
 
     # --- Gaussian profile -----------------------------------------------
-    # Without the PSF, each pixel holds the line integrated between its edges
-    # and divided by its width, as resample_spectra gives a synthesised
-    # spectrum, so the pixels sum to total_intensity less the tails beyond
-    # n_sigma_extent, whatever the line width. Sampling the Gaussian at pixel centres only
-    # does that for a sigma above about half a pixel: a line of 0.3 pixels
-    # centred on a pixel, such as Fe VIII 185.21 at its formation
-    # temperature, would come out 35 per cent too bright. Edges are counted
-    # in pixels from the line centre, since absolute wavelengths would lose
-    # a part in 1e12 of a pixel to rounding. Each pixel's upper edge is the
-    # next one's lower edge, so nothing is counted twice or missed.
+    # Without the PSF, each pixel holds the line integrated over it, as
+    # resample_spectra does for a synthesis. Sampling at pixel centres would
+    # make a line of 0.3 pixels centred on a pixel, such as Fe VIII 185.21,
+    # 35 per cent too bright. Edges are counted in pixels from the line
+    # centre, as absolute wavelengths would lose 1e-12 of a pixel to rounding.
     unit = u.erg / (u.s * u.cm**2 * u.sr * u.cm)
     blurred = _through_the_optics(tel, sim)
     photon_meta = {}
     if blurred:
-        # The line goes onto the pixels as a synthesis does: the photons of
-        # each cell at its own wavelength, then the spectral response. Each
-        # cell holds the line integrated over it, and the cells are fine
-        # enough that the result does not depend on them. The pixels then
-        # hold the radiance that gives their photons at their own
-        # wavelengths, so they add up to the intensity only where the
-        # effective area and photon energy do not change across the line.
+        # As for a synthesis: the photons of each fine cell at its own
+        # wavelength, then the spectral response.
         response = _spectral_response(tel, det, sim.slit_width, sim.spectral_psf)
         step = dlam.to_value(u.cm)
         cells, share = _line_in_cells(lam0.value, (sigma_lam / dlam).decompose().value,
@@ -905,15 +853,13 @@ def create_uniform_intensity_cube(
                  / (np.sqrt(2.0) * sigma_lam)).decompose().value
         share = 0.5 * np.diff(erf(edges))
         profile = (total_intensity * share / dlam).to(unit)
-    # Tile the profile along the slit axis. Every slit pixel holds the same
-    # intensity but gets its own noise downstream, which rebin_slit_offchip
-    # needs to sum them.
+    # Every slit pixel holds the same intensity and gets its own noise, which
+    # rebin_slit_offchip sums.
     data = np.tile(profile.value, (n_slit_pixels, 1, 1))  # shape (n_slit_pixels, 1, n_lam)
     photon_meta = {key: np.tile(value, (n_slit_pixels, 1, 1))
                    for key, value in photon_meta.items()}
 
     # --- WCS (matches reproject_ndcube output format) --------------------
-    # Axes: WAVE (cm), HPLN-TAN (arcsec), HPLT-TAN (arcsec)
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["cm", "arcsec", "arcsec"]

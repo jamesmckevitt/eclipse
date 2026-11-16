@@ -105,7 +105,7 @@ def test_a_primary_component_that_does_not_exist_is_refused():
 ])
 def test_bad_backend_and_max_iter_are_refused_without_components(settings,
                                                                  message):
-    """FitConfig checks these, so the checks apply without components."""
+    """`FitConfig` checks these, so they apply without components too."""
     with pytest.raises(ValueError, match=message):
         _parse_fitting_config({"fitting": settings})
 
@@ -114,8 +114,8 @@ def test_bad_backend_and_max_iter_are_refused_without_components(settings,
 
 def test_max_iter_reaches_the_single_gaussian_fit():
     """
-    With one iteration scipy runs out, returns its initial guess, and the fit is
-    reported as failed. With the default settings the fit recovers the line.
+    With one iteration scipy returns its initial guess and the fit is reported
+    as failed. With the defaults the fit recovers the line.
     """
     cube = _line_cube()
     wave = cube.axis_world_coords(2)[0].to_value(u.cm)

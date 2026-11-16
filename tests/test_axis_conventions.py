@@ -1,9 +1,9 @@
 """Cube axis conventions.
 
-Observation cubes are (row, column, wavelength), with rows along the slit
-and WCS axes (WAVE, HPLN, HPLT); simulation volumes are (z, y, x) with
-(SOLX, SOLY, SOLZ). Each test ties the chain to something absolute, as a
-consistent swap of the spatial axes would pass everything else.
+Observation cubes are (slit row, column, wavelength) with WCS axes (WAVE,
+HPLN, HPLT), and simulation volumes are (z, y, x) with (SOLX, SOLY, SOLZ).
+Each test checks against something absolute, as a consistent swap of the
+spatial axes would pass every other check.
 """
 import warnings
 
@@ -35,11 +35,10 @@ REST = 195.119 * u.Angstrom
 
 
 def test_load_cube_reads_the_file_into_z_y_x(tmp_path):
-    """A voxel at file position (ix, iz, iy) must land at data[iz, iy, ix].
+    """A voxel at file position (ix, iz, iy) lands at `data[iz, iy, ix]`.
 
-    Each voxel's value encodes its position, so the transpose can be read
-    back from the data. Distinct voxel sizes show which WCS entry each
-    physical axis is written to.
+    Each voxel's value encodes its position, and distinct voxel sizes show
+    which WCS entry each axis is written to.
     """
     nx, nz, ny = 3, 4, 5
     file_arr = np.empty((nx, nz, ny), dtype=np.float32)
@@ -87,15 +86,12 @@ def test_cropping_keeps_the_requested_world_box():
 
 
 def test_line_cube_is_row_column_wavelength():
-    """A feature at scene (row j, column i) must land at cube.data[j, i].
+    """A feature at scene (row j, column i) lands at `cube.data[j, i]`.
 
     X is FITS axis 1 of the volume (SOLX, SOLY, SOLZ) and FITS axis 2 of the
-    line cube (WAVE, SOLX, SOLY), once Z is integrated out.
-
-    The cube is built with synthesise_spectra from an emission measure whose
-    values encode their position, so the check reads the position from the
-    data rather than trusting any labels. Distinct x and y voxel sizes show
-    which spatial axis the WCS calls X.
+    line cube (WAVE, SOLX, SOLY) after integrating over Z. The emission
+    measure encodes each pixel's position, and distinct x and y voxel sizes
+    show which axis the WCS calls X.
     """
     nx, ny = 3, 5
     logT_grid = np.array([6.0, 6.2])
@@ -127,15 +123,13 @@ def test_line_cube_is_row_column_wavelength():
 
     assert cube.data.shape == (ny, nx, len(vel_grid))
 
-    # Emission is linear in the emission measure, so the intensity image
-    # divided by each pixel's weight is constant exactly when every value
-    # stayed at (row=j, col=i).
+    # Emission is linear in the emission measure, so image / weight is
+    # constant only if every pixel stayed in place.
     image = cube.data.sum(axis=-1)
     ratio = image / weight
     assert np.allclose(ratio, ratio[0, 0], rtol=1e-12)
 
-    # The WCS agrees: FITS axis 2 is X with the 2 Mm pitch, and FITS axis 3
-    # is Y with the 1 Mm pitch.
+    # FITS axis 2 is X (2 Mm pitch) and axis 3 is Y (1 Mm pitch).
     assert list(cube.wcs.wcs.ctype) == ["WAVE", "SOLX", "SOLY"]
     assert cube.wcs.wcs.cdelt[1] == pytest.approx(2.0)
     assert cube.wcs.wcs.cdelt[2] == pytest.approx(1.0)
@@ -149,9 +143,8 @@ def test_side_view_line_cubes_are_row_column_wavelength(axis, ctypes,
                                                         cdelt_col, cdelt_row):
     """The x and y integration views use the same (row, column) layout.
 
-    Looking along x or y, image rows are height Z and columns are the
-    remaining horizontal axis. The check is the same as for the top-down
-    view, with the voxel sizes showing which axis the WCS calls which.
+    Looking along x or y, rows are height Z and columns the other horizontal
+    axis. Checked as for the top-down view.
     """
     nx, ny, nz = 3, 4, 5
     n_cols = ny if axis == "x" else nx
@@ -221,7 +214,7 @@ def _detector_wcs(n_spec, cdelt_x=1.0, cdelt_y=0.5):
 
 
 def test_rebin_slit_offchip_sums_down_the_slit():
-    """Binning by 2 adds slit-adjacent rows and doubles the HPLT pixel scale."""
+    """Binning by 2 sums adjacent slit rows and doubles the HPLT pixel scale."""
     n_slit, n_scan, n_spec = 4, 2, 3
     data = np.arange(n_slit * n_scan * n_spec, dtype=float).reshape(
         (n_slit, n_scan, n_spec))
@@ -233,9 +226,8 @@ def test_rebin_slit_offchip_sums_down_the_slit():
     assert out.data.shape == (2, n_scan, n_spec)
     assert np.array_equal(out.data, data[0::2] + data[1::2])
 
-    # The slit is HPLT, FITS axis 3: its pitch doubles and the scan pitch
-    # does not. astropy converts angles to degrees along the way, so compare
-    # with units attached rather than raw cdelt values.
+    # The slit pitch (HPLT, FITS axis 3) doubles and the scan pitch does not.
+    # astropy converts angles to degrees, so compare with units attached.
     def cdelt_arcsec(wcs, k):
         return (wcs.wcs.cdelt[k] * u.Unit(str(wcs.wcs.cunit[k]))).to_value(
             u.arcsec)
@@ -245,11 +237,10 @@ def test_rebin_slit_offchip_sums_down_the_slit():
 
 
 def test_psf_blurs_within_one_scan_position():
-    """The focusing PSF acts on a detector frame, which is (slit, wavelength).
+    """The focusing PSF acts on each (slit, wavelength) frame alone.
 
-    Scan positions are exposed one after another, so optical blur cannot move
-    light between them. A point source at one scan position must spread along
-    the slit and wavelength, and leave the neighbouring scan positions dark.
+    Scan positions are exposed one after another, so a point source at one
+    spreads along the slit and wavelength and leaves its neighbours dark.
     """
     n_slit, n_scan, n_spec = 9, 3, 33
     data = np.zeros((n_slit, n_scan, n_spec))
@@ -271,10 +262,9 @@ def test_psf_blurs_within_one_scan_position():
 def test_maps_come_out_the_right_way_up():
     """A pixel at (row=j, col=i) of the cube is at (row=j, col=i) of the map.
 
-    Each pixel's value encodes its position, so a transposed map cannot pass.
-    The pixel pitch is 2 arcsec in x and 0.5 arcsec in y, which also checks
-    the WCS: SunPy reads its x scale from CDELT1, so consistently swapped
-    axes would show up as a 0.5 arcsec x scale.
+    Each pixel's value encodes its position. The pitch is 2 arcsec in x and
+    0.5 arcsec in y, and SunPy reads its x scale from CDELT1, so swapped
+    axes would show as a 0.5 arcsec x scale.
     """
     ny, nx, n_spec = 5, 3, 4
     value = (10.0 * np.arange(ny)[:, None] + np.arange(nx)[None, :]) + 1.0
@@ -303,9 +293,8 @@ def test_maps_come_out_the_right_way_up():
         },
     }
 
-    # date_obs is required (#40): a synthesised scene has no observation
-    # time, and sunpy would otherwise stamp the maps with the time the code
-    # ran.
+    # date_obs is required (#40), or sunpy would stamp the maps with the
+    # current time.
     maps = create_sunpy_maps_from_combo(combination_results,
                                         rest_wavelength=REST,
                                         data_type="dn",
@@ -350,12 +339,11 @@ def _write_synthesis_file(path, ctypes, integration_axis):
     ("y", ["WAVE", "SOLZ", "SOLX"], ["WAVE", "SOLX", "SOLZ"]),
 ])
 def test_old_synthesis_files_are_refused(tmp_path, axis, old_ctypes, new_ctypes):
-    """A pre-#12 synthesis file must raise, and a current one must load.
+    """A pre-#12 synthesis file raises, and a current one loads.
 
-    Old files are readable and differ only in which spatial axis comes first,
-    so without this check they would load transposed. Both cases are checked
-    for every integration axis, because each view writes a different pair of
-    spatial CTYPEs and only one of them moves.
+    Old files differ only in which spatial axis comes first, so they would
+    otherwise load transposed. Each integration axis writes a different pair
+    of spatial CTYPEs, so all three are checked.
     """
     old = _write_synthesis_file(tmp_path / f"old_{axis}.pkl", old_ctypes, axis)
     with pytest.raises(ValueError, match="older ECLIPSE"):
@@ -395,10 +383,10 @@ def _write_results_file(path, ctypes):
 
 
 def test_old_results_files_are_refused(tmp_path):
-    """A pre-#12 results file must raise, and a current one must load.
+    """A pre-#12 results file raises, and a current one loads.
 
-    Only the stored WCS tells the two apart: old files put HPLT on FITS axis
-    2 because the signal was (x, y, wavelength).
+    Only the stored WCS tells them apart: old files put HPLT on FITS axis 2,
+    as the signal was (x, y, wavelength).
     """
     for name in ("old.pkl", "old.h5"):
         old = _write_results_file(tmp_path / name, ["WAVE", "HPLT-TAN", "HPLN-TAN"])

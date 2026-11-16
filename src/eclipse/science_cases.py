@@ -2,7 +2,7 @@
 Science cases from the Concept Study Report, and ECLIPSE configurations for them.
 
 `data/science_cases.yaml` holds every case with all its lines. The functions
-here turn the lines ECLIPSE can currently simulate into uniform-intensity
+here turn the lines ECLIPSE can simulate into uniform-intensity
 configurations, and the `eclipse-science-cases` command writes them to files.
 """
 
@@ -95,12 +95,12 @@ def load_science_cases(path: str | Path | None = None) -> list[dict]:
 
 
 def line_label(line: dict) -> str:
-    """A line as written in the table, e.g. `Fe XII 195.119`."""
+    """Line as written in the table, e.g. `Fe XII 195.119`."""
     return f"{line['ion']} {line['wavelength'].split()[0]}"
 
 
 def line_id(line: dict) -> str:
-    """A line as used in file names, e.g. `fe12_195119`."""
+    """Line as used in file names, e.g. `fe12_195119`."""
     symbol, numeral = line["ion"].split()
     wavelength = u.Quantity(line["wavelength"]).to_value(u.AA)
     return f"{symbol.lower()}{_ROMAN[numeral]:02d}_{wavelength:.3f}".replace(".", "")
@@ -118,8 +118,8 @@ def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
     """
     Wavelength range ECLIPSE can simulate in the short wavelength channel.
 
-    This is where both the primary mirror and grating efficiency tables have
-    values; the effective area is undefined outside them.
+    Where both the primary mirror and grating efficiency tables have values;
+    the effective area is undefined outside them.
     """
     telescope = Telescope_EUVST()
     tables = [_load_throughput_table(table)[0]
@@ -186,8 +186,8 @@ def _chosen_lines(table: list[dict], cases: list[str] | None,
 def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     """One line's configuration: defaults, then the case, then the base settings."""
     value, unit = line["intensity"].split(maxsplit=1)
-    # Decimal keeps every digit of the table without binary rounding,
-    # e.g. 823 x 0.2 is 164.6, not 164.60000000000002.
+    # Decimal avoids binary rounding: 823 x 0.2 is 164.6, not
+    # 164.60000000000002.
     intensity = Decimal(value) * Decimal(str(case["filling_factor"]))
 
     settings = {**DEFAULT_SETTINGS, **base}
@@ -204,8 +204,7 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     }
     config.update({k: v for k, v in settings.items()
                    if isinstance(v, dict) and k != "simulation"})
-    # Deep copy, so no list or section is shared with the defaults or the
-    # other configurations.
+    # Deep copy, so no list or section is shared with another configuration.
     return copy.deepcopy(config)
 
 
@@ -217,7 +216,7 @@ def science_case_configs(cases: list[str] | None = None,
     """
     ECLIPSE configurations for the science case lines ECLIPSE can simulate.
 
-    Each uses uniform intensity mode: the line's intensity times the case's
+    Each observes a uniform intensity: the line's intensity times the case's
     filling factor, the thermal width at the line's T_max, and the case's
     exposure time and slit width.
 
@@ -262,8 +261,8 @@ def science_case_configs(cases: list[str] | None = None,
                 f"observes its line's intensity, not a time series."
             )
 
-    # The simulation section is merged with each case's settings, so check it
-    # here; the other sections are checked with the whole configuration.
+    # The simulation section is merged with each case's, so check it here; the
+    # others are checked with the whole configuration.
     if "simulation" in base:
         _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 

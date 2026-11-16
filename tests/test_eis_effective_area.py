@@ -1,7 +1,7 @@
 """
 Hinode/EIS effective area.
 
-The reference values are from IDL's eis_ea.pro on the pre-flight tables:
+Reference values are from IDL's `eis_ea.pro` on the pre-flight tables:
 0.301803 cm^2 at 195 Angstrom and 0.0413185 cm^2 at 284 Angstrom.
 """
 
@@ -43,12 +43,11 @@ def test_time_dependent_calibrations_require_a_date(method):
 
 @pytest.mark.parametrize("method", eis_calibration.TIME_DEPENDENT_CALIBRATIONS)
 def test_epoch_changes_the_answer(method):
-    """An in-flight calibration must change the area with time.
+    """An in-flight calibration lowers the long-wavelength area with time.
 
-    Checked on the long-wavelength channel, which every published
-    calibration finds decayed substantially. The direction is not checked
-    for the short-wavelength channel, where the in-flight calibrations raise
-    the pre-flight peak rather than lower it.
+    Every published calibration finds that channel decayed. The
+    short-wavelength channel is not checked, as the in-flight calibrations
+    raise its pre-flight peak.
     """
     early = eis_calibration.effective_area(284.0, date="2008-01-01", method=method)
     late = eis_calibration.effective_area(284.0, date="2018-01-01", method=method)
@@ -56,7 +55,7 @@ def test_epoch_changes_the_answer(method):
 
 
 def test_area_varies_strongly_across_a_band():
-    """This module exists to replace a flat effective area."""
+    """The area changes by more than a factor of 10 across a band."""
     wavelengths = np.array([181.9, 188.2, 195.119, 202.0, 211.3])
     area = eis_calibration.effective_area(wavelengths, method="ground")
     assert np.all(np.isfinite(area))
@@ -86,10 +85,9 @@ def test_unknown_calibration_is_rejected():
 
 
 def test_offset_dates_are_converted_not_relabelled():
-    """An ISO offset must shift the time, not just relabel it.
+    """An ISO offset shifts the time, not just its label.
 
-    replace(tzinfo=utc) would keep the local clock time, so a -05:00 date
-    would be five hours early in the degradation calculation.
+    Keeping the local clock time would make a -05:00 date five hours early.
     """
     utc = eis_calibration._parse_date("2012-06-03T00:00:00+00:00")
     minus5 = eis_calibration._parse_date("2012-06-03T00:00:00-05:00")
@@ -125,11 +123,10 @@ class TestTelescope:
             area.to_value(u.cm**2) / eis_calibration.QE_IN_TABLES, rel=1e-12)
 
     def test_table_qe_is_not_a_telescope_field(self):
-        """The QE included in the tables is a calibration constant.
+        """The QE in the tables is a calibration constant, not a telescope setting.
 
-        On the telescope, a caller could divide by one value while
-        `to_electrons` applied `Detector_EIS.qe_euv`, silently scaling the
-        whole response.
+        As a setting, it could differ from `Detector_EIS.qe_euv`, which
+        `to_electrons` applies, and scale the whole response.
         """
         assert not hasattr(Telescope_EIS(), "qe_euv")
         with pytest.raises(TypeError):
@@ -144,7 +141,7 @@ class TestTelescope:
             Telescope_EIS(calibration="dz2099", date="2012-06-03")
 
     def test_yaml_style_date_is_accepted(self):
-        """YAML turns an unquoted 2012-06-03 into a datetime.date."""
+        """YAML turns an unquoted 2012-06-03 into a `datetime.date`."""
         from datetime import date as date_type
 
         tel = Telescope_EIS(calibration="dz2025", date=date_type(2012, 6, 3))
@@ -158,7 +155,7 @@ class TestTelescope:
             tel.ea_and_throughput(225.0 * u.AA)
 
     def test_scalar_in_scalar_out(self):
-        """radiometric.add_telescope_throughput feeds one wavelength at a time."""
+        """A scalar wavelength gives a scalar area, and an array an array."""
         tel = Telescope_EIS()
         assert tel.ea_and_throughput(195.0 * u.AA).isscalar
         assert not tel.ea_and_throughput([195.0, 196.0] * u.AA).isscalar
@@ -167,12 +164,10 @@ class TestTelescope:
 # Areas from SolarSoft, IDL 8.8: eis_ea (ground), eis_ea_gdz, which is eis_ea
 # over eis_ltds's correction (dz2013), eis_ea_nrl (warren2014) and
 # interpol_eis_ea with the bundled smooth fit (dz2025). The points lie between
-# the table nodes, where each routine's interpolation sets the value: linear
-# interpolation in place of eis_ltds's splines gives dz2013 more than twice
-# SolarSoft's value near 168 A. In IDL's single precision, the spline solves
-# and dz2013's ratio of two splines build up to 2.2e-6 of rounding at these
-# points, which the tolerance allows for. The interpolations it tells apart
-# differ by 2.5 per cent or more.
+# the table nodes, so they test each routine's interpolation: linear in place
+# of eis_ltds's splines gives dz2013 over twice SolarSoft's value near 168 A.
+# IDL's single precision gives up to 2.2e-6 of rounding here, while other
+# interpolations differ by 2.5 per cent or more.
 IDL_RTOL = 5e-6
 IDL_BETWEEN_NODES = [
     ("ground", None, 172.5, 8.67057301e-04),

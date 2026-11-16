@@ -1,4 +1,4 @@
-"""Tests of the slit's ends and fiducials blocking the light.
+"""The slit's ends and fiducials blocking the light.
 
 With `simulation.slit_mask` on, the pixels along the slit average only the
 light that gets through, blurred along the slit before the slit.

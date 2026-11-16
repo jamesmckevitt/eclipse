@@ -54,9 +54,9 @@ def test_a_pixel_takes_the_dark_time_of_the_row_recording_its_wavelength(ccd, ro
 
 def test_reading_only_the_window_waits_far_less_than_reading_every_row():
     """
-    Read alone, the window of a line adds a few hundredths of a second with
-    the default timing, wherever it is. With every row read, the last row
-    would wait 1.15 s.
+    Reading only a line's window adds a few hundredths of a second with the
+    default timing, wherever it is. Reading every row, the last row waits
+    1.15 s.
     """
     assert (_per_row([])[-1] - EXPOSURE).to_value(u.s) == pytest.approx(1.15, abs=0.01)
     for wavelength in (172 * u.AA, 197 * u.AA, 205 * u.AA):

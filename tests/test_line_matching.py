@@ -1,8 +1,7 @@
 """A line name matches the line at its wavelength, or else the nearest observed line.
 
 Matching the nearest of all CHIANTI's lines, theoretical ones included, can
-pick a line up to 1e12 times fainter. Tests against CHIANTI are skipped
-without its database.
+pick a line up to 1e12 times fainter.
 """
 import sys
 import types
@@ -54,9 +53,8 @@ class _Ion:
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):
-    # Import the real fiasco first so that it creates its own "fiasco" logger.
-    # Created by the synthesis under the stand-in, it would be a plain logger,
-    # which the real fiasco fails to set up when a later test imports it.
+    # Import the real fiasco first, so it sets up its own "fiasco" logger. A
+    # logger made under the stand-in would break the real fiasco in later tests.
     import fiasco  # noqa: F401
     module = types.ModuleType("fiasco")
     module.Ion = _Ion

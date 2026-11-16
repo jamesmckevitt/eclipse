@@ -1,9 +1,9 @@
 """A single-Gaussian fit does not move when the last bits of a spectrum change.
 
-The two spectra are from the flare of Cheung et al. (2019) at snapshot
-300000, put onto SW's pixels with the 0.2 and 0.4 arcsec slits. Fitted in
-cgs units, multiplying them by 1 + 1e-14 moved their velocities by 0.51 and
-0.24 km/s. Each spectral axis is (CRVAL, CRPIX, CDELT) in m.
+The spectra are from the Cheung et al. (2019) flare at snapshot 300000, on
+SW's pixels with the 0.2 and 0.4 arcsec slits. Fitted in cgs units, a factor
+of 1 + 1e-14 moved their velocities by 0.51 and 0.24 km/s. Each spectral axis
+is (CRVAL, CRPIX, CDELT) in m.
 """
 import astropy.units as u
 import numpy as np

@@ -1,5 +1,5 @@
 """
-Configuration classes for instruments, detectors, and simulation parameters.
+Settings for the instruments, detectors and simulation.
 """
 
 from __future__ import annotations
@@ -23,10 +23,9 @@ from importlib.resources import files
 #  Detector materials and shared properties
 # ------------------------------------------------------------------
 
-# Properties of each detector material. A detector's `fano_factor`,
-# `pair_energy_300k` and `pair_energy_slope` default to its material's.
-# The energy to free one electron-hole pair in silicon is 3.71 eV at 300 K
-# and rises by 0.0006 eV per kelvin of cooling.
+# Properties of each detector material, the defaults for a detector's
+# `fano_factor`, `pair_energy_300k` and `pair_energy_slope`. In silicon the
+# pair energy is 3.71 eV at 300 K and rises by 0.0006 eV per kelvin of cooling.
 DETECTOR_MATERIALS = {
     "silicon": {
         "fano_factor": 0.115,
@@ -35,31 +34,30 @@ DETECTOR_MATERIALS = {
     }
 }
 
-# Wavelength in Angstrom against position along the dispersion, in mm from the
-# SW focal plane centre (the middle of the gap), positive toward longer
-# wavelength. Fitted to the RSC-2022021C positions of the two detector edges,
-# the focal plane centre, the chief ray and the dispersion there, and to the
-# ray-traced line positions on its SW footprint figure. A linear scale is not
-# good enough: the design runs from 17.0 mA per row at the short-wavelength
-# end to 16.8 at the long end, so the nominal 16.9 misplaces a line by up to
-# about seven rows.
+# Wavelength in Angstrom as a polynomial in position along the dispersion, in
+# mm from the SW focal plane centre (the middle of the gap), positive toward
+# longer wavelength, lowest order first. Fitted to the detector edges, focal
+# plane centre, chief ray and dispersion in RSC-2022021C, and to the ray-traced
+# line positions in its SW footprint figure. The dispersion runs from 17.0 mA
+# per row at the short end to 16.8 at the long end, so a linear scale at the
+# nominal 16.9 would misplace a line by up to about seven rows.
 DISPERSION_COEFFICIENTS = (198.885944, 1.2516577, -1.361114e-4)
 
-# A spectral line is an image of the slit, and the optics do not put it on
-# exactly one row: it drifts along the dispersion from one end of the slit to
-# the other. These are the row offsets at 140 arcsec from the field centre,
-# linear term then quadratic, measured from the ray-traced line positions on
-# the SW footprint figure of RSC-2022021C. All eleven lines drawn there agree
-# on them to a few tenths of a row. Set them as `Detector_SWC.slit_image_tilt`
-# to model the drift; by default a line lands on one row along the whole slit.
+# Row offsets of a line at 140 arcsec from the field centre, linear term then
+# quadratic. The optics do not image the slit onto one row, so a line drifts
+# along the dispersion from one end of the slit to the other. Measured from
+# the ray-traced line positions in the SW footprint figure of RSC-2022021C;
+# all eleven lines there agree to a few tenths of a row. Set them as
+# `Detector_SWC.slit_image_tilt` to model the drift; by default a line lands
+# on one row along the whole slit.
 MEASURED_SLIT_IMAGE_TILT = (0.991, 0.605)
 
-# The field angle those offsets are quoted at.
+# Field angle the offsets are quoted at.
 TILT_REFERENCE_ANGLE = 140.0 * u.arcsec
 
 
 def _material_value(det, name: str):
-    """Detector setting `name`, or its material's when the setting is None or missing."""
+    """Detector setting `name`, or the material's if it is None or missing."""
     value = getattr(det, name, None)
     material = getattr(det, "material", "silicon")
     return DETECTOR_MATERIALS[material][name] if value is None else value
@@ -74,13 +72,13 @@ def _pair_energy(det) -> u.Quantity:
 
 
 class _RenamedSetting:
-    """Old name of a setting, which reads and sets the new one with a FutureWarning."""
+    """Old name of a setting that reads and sets the new one, with a FutureWarning."""
 
     def __init__(self, old: str, new: str):
         self.old, self.new = old, new
 
     def warn(self, section: str = "") -> None:
-        """Warn that the old name is used; `section`, such as "detector.", prefixes it."""
+        """Warn that the old name is used, prefixed by `section` such as "detector."."""
         _warn_outside(f"{section}{self.old} is renamed {self.new}; the old name will be "
                       f"removed in a future release.")
 
@@ -96,10 +94,10 @@ class _RenamedSetting:
 def _old_names_used(cls, given, section: str = "", replacing: bool = False,
                     error=TypeError) -> dict:
     """
-    Old names of `cls`'s settings among the keys of `given`, mapped to their new names.
+    Old names of `cls`'s settings among the keys of `given`, mapped to the new names.
 
-    Each warns with a FutureWarning. Both names of one setting are refused
-    with `error`, unless `replacing`, when the old name's value is meant.
+    Each warns with a FutureWarning. Both names of one setting raise `error`,
+    unless `replacing`, when the old name's value is used.
     """
     used = {}
     for old, new in cls._OLD_NAMES.items():
@@ -113,12 +111,12 @@ def _old_names_used(cls, given, section: str = "", replacing: bool = False,
 
 def _keep_old_names(cls):
     """
-    Accept the names in `cls._OLD_NAMES` for their new ones, with a FutureWarning.
+    Accept the names in `cls._OLD_NAMES` for the new ones, with a FutureWarning.
 
-    They work as constructor arguments and attributes, and an object
-    pickled with an old name reads back with the new one.
-    `dataclasses.replace` with an old name passes both names, the new one
-    with the object's current value, so there the old name's value is used.
+    They work as constructor arguments and attributes, and an object pickled
+    with an old name reads back with the new one. `dataclasses.replace` with
+    an old name also passes the new one at its current value, so there the
+    old name's value is used.
     """
     init = cls.__init__
 
@@ -145,7 +143,7 @@ def _keep_old_names(cls):
 
 
 def _check_detector_material(det, section: str) -> None:
-    """Check the settings that default to the material's, and fill those left as None."""
+    """Check the settings that default to the material's and fill in those left as None."""
     fano = det.fano_factor
     if fano is not None and (isinstance(fano, bool)
                              or not isinstance(fano, (int, float, np.integer, np.floating))
@@ -164,7 +162,7 @@ def _check_detector_material(det, section: str) -> None:
     if not energy.value > 0:
         raise ValueError(f"{section}.pair_energy_300k and pair_energy_slope give {energy} per "
                          f"electron-hole pair at {det.ccd_temperature}; it must be above zero.")
-    # Filled in, so a run records the values it used.
+    # Fill in, so a run records the values it used.
     for name in ("fano_factor", "pair_energy_300k", "pair_energy_slope"):
         setattr(det, name, _material_value(det, name))
 
@@ -173,7 +171,8 @@ def _numbers(value, count, section: str, name: str, example: str) -> tuple:
     """
     `value` as a tuple of finite floats.
 
-    Refused unless `count`, a test of how many there are, is true of them.
+    `count` tests how many there are. Raises ValueError if it fails or an
+    item is not a finite number.
     """
     def number(item):
         if isinstance(item, u.Quantity) and item.unit == u.dimensionless_unscaled:
@@ -191,7 +190,7 @@ def _numbers(value, count, section: str, name: str, example: str) -> tuple:
     return numbers
 
 
-# The SW focal plane settings, which a detector and a focal plane both hold.
+# SW focal plane settings held by both a detector and a focal plane.
 _FOCAL_PLANE_SETTINGS = ("dispersion", "wavelength_offset", "lit_band", "slit_image_tilt")
 
 
@@ -207,7 +206,7 @@ def _one_length(value, zero: bool = False):
     """
     `value` as one length, read with `u.Quantity`, or None if it is not one.
 
-    With `zero`, a plain zero is taken as 0 Angstrom, as it adds to a wavelength.
+    With `zero`, a plain zero is taken as 0 Angstrom, for an offset to a wavelength.
     """
     if isinstance(value, str) and not value.strip():
         return None
@@ -230,7 +229,7 @@ def _one_length(value, zero: bool = False):
 
 
 def _check_focal_plane(det, section: str = "detector") -> None:
-    """Check the SW focal plane settings of a detector or focal plane; store the lists as tuples."""
+    """Check the SW focal plane settings of a detector or focal plane; store lists as tuples."""
     offset = _one_length(det.wavelength_offset, zero=True)
     if offset is None:
         raise ValueError(f"{section}.wavelength_offset must be one wavelength, such as "
@@ -255,16 +254,14 @@ def _check_focal_plane(det, section: str = "detector") -> None:
 def _check_settings(obj, section: str, positive: tuple = (), non_negative: tuple = (),
                     fractions: tuple = (), optional: tuple = ()) -> None:
     """
-    Refuse any setting of `obj` not of its default's kind, or out of range.
+    Raise ValueError for a setting of `obj` of the wrong kind or out of range.
 
-    A quantity needs a unit of the same kind as its default. A number with
-    no unit, or one of another kind, would be read in whatever unit the code
-    works in: a `D_ap` of 0.28, meant in metres, would give 1e4 times too
-    few photons. A switch must be true or false, and a number a number.
-    `positive`, `non_negative` and `fractions` name the fields that must be
-    above zero, at or above zero, or from 0 to 1; a value outside would run
-    to completion and save meaningless results. `optional` names those that
-    may also be None.
+    A quantity needs a unit of the same kind as its default, as a bare
+    number would be read in the code's own unit (a `D_ap` of 0.28 meant in
+    metres would give 1e4 times too few photons). A switch must be true or
+    false, and a number a number. `positive`, `non_negative` and `fractions`
+    name the fields that must be above zero, zero or more, or from 0 to 1.
+    `optional` names those that may also be None.
     """
     for f in dataclasses.fields(obj):
         if not f.init:
@@ -301,10 +298,9 @@ def _check_psf_params(tel, section: str = "telescope") -> None:
     """
     Check the PSF settings.
 
-    The PSF must be a Gaussian, `psf_params` two widths above zero in
-    pixels, along the slit and along the dispersion, and `psf_across_slit`
-    None or an angle above zero. Otherwise they would only be read part way
-    through a run, when the scene is laid onto the detector.
+    `psf_type` must be "gaussian", `psf_params` two widths above zero in
+    pixels (along the slit, then along the dispersion), and
+    `psf_across_slit` None or an angle above zero.
     """
     if not isinstance(tel.psf_type, str) or tel.psf_type.lower() != "gaussian":
         raise ValueError(f"{section}.psf_type must be 'gaussian', the only PSF there is; got "
@@ -325,9 +321,11 @@ def _check_psf_params(tel, section: str = "telescope") -> None:
 
 def _check_fiducials(tel, section: str = "telescope") -> None:
     """
-    Check the fiducials are angles along the slit, with one length for each
-    of the four slits, and each inside the slit and clear of the others at
-    the longest of those lengths.
+    Check the fiducial centres and lengths.
+
+    `fiducial_centres` must be angles along the slit and `fiducial_lengths`
+    one length for each of the four slits. At the longest of those lengths,
+    each fiducial must lie inside the slit and clear of the others.
     """
     def angles(value):
         return (isinstance(value, (list, tuple))
@@ -364,7 +362,7 @@ def _same_widths(given, widths) -> bool:
 
 
 def _check_resolution_budget(tel, section: str = "telescope") -> None:
-    """Check `resolution_budget` is one the budget has, and `pointing_jitter` None or an angle."""
+    """Check `resolution_budget` is a known budget and `pointing_jitter` None or an angle."""
     from .resolution_budget import BUDGETS
 
     if not isinstance(tel.resolution_budget, str) or tel.resolution_budget not in BUDGETS:
@@ -380,11 +378,10 @@ def _check_resolution_budget(tel, section: str = "telescope") -> None:
 
 def _check_tables(obj, names: tuple, section: str) -> None:
     """
-    Check each of `names` is a table path; text, as from a configuration, becomes a Path.
+    Check each of `names` is a table path, turning text into a Path.
 
-    Whether the table exists is only checked when it is read, since a
-    results file made on another machine rebuilds these with that machine's
-    paths.
+    Whether the table exists is checked only when it is read, as a results
+    file made on another machine rebuilds these with that machine's paths.
     """
     for name in names:
         value = getattr(obj, name)
@@ -396,7 +393,7 @@ def _check_tables(obj, names: tuple, section: str) -> None:
 
 
 def _check_detector(det, section: str = "detector") -> None:
-    """Checks both detectors share: kinds, ranges, temperature above 0 K and a known material."""
+    """Checks common to both detectors: kinds, ranges, temperature above 0 K, material."""
     _check_settings(det, section,
                     positive=("gain_e_per_dn", "max_dn", "full_well", "pix_size", "wvl_res",
                               "plate_scale_angle", "filter_distance", "ccd_gap",
@@ -414,37 +411,38 @@ def _check_detector(det, section: str = "detector") -> None:
 
 def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: str = "NIMO") -> u.Quantity:
     """
-    Calculate dark current based on CCD temperature and type.
-    
+    Dark current at a CCD temperature.
+
+    Temperatures below 198 K are taken as 198 K, from MSSL test results.
+
     Parameters
     ----------
     temp : u.Quantity
-        CCD temperature with units (e.g., -60 * u.deg_C)
+        CCD temperature, e.g. -60 * u.deg_C.
     q_d0_293k : u.Quantity
-        Dark current at 293K in electrons per pixel per second
+        Dark current at 293 K in electrons per pixel per second.
     ccd_type : str
-        "NIMO" (non-inverted mode), "AIMO" (advanced inverted mode)
-        
+        "NIMO" (non-inverted mode) or "AIMO" (advanced inverted mode).
+
     Returns
     -------
     dark_current : u.Quantity
-        Dark current in electrons per pixel per second
-        
+        Dark current in electrons per pixel per second.
+
     Raises
     ------
     ValueError
-        If temperature is above 300K (27 deg C) or unknown CCD type
+        If the temperature is above 300 K (27 deg C) or `ccd_type` is unknown.
     """
     temp_kelvin = temp.to(u.Kelvin, equivalencies=u.temperature())
     max_temp = 300 * u.K
     min_temp = 198 * u.K
     
-    # Check temperature limits
     if temp_kelvin > max_temp:
         raise ValueError(f"Cannot calculate dark current at {temp_kelvin}. "
                        f"Maximum temperature is {max_temp}")
     
-    # Apply minimum temperature limit (clamp to 198K; based on MSSL test results)
+    # Clamp at 198 K, from MSSL test results.
     if temp_kelvin < min_temp:
         temp_kelvin = min_temp
     
@@ -452,10 +450,8 @@ def calculate_dark_current(temp: u.Quantity, q_d0_293k: u.Quantity, ccd_type: st
     T = temp_kelvin.value
     
     if ccd_type.upper() == "NIMO":
-        # Q_d = Q_d0 * 122 * T^3 * exp(-6400/T)
         dark_current = Q_d0 * 122 * T**3 * np.exp(-6400/T)
     elif ccd_type.upper() == "AIMO":
-        # Q_d = Qd0 * 1.14e6 * T^3 * exp(-9080/T)
         dark_current = Q_d0 * 1.14e6 * T**3 * np.exp(-9080/T)
     else:
         raise ValueError(f"Unknown CCD type: {ccd_type}. Must be 'NIMO' or 'AIMO'.")
@@ -482,35 +478,30 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
     """
     Wavelength (nm) and throughput arrays from a two-column text table.
 
-    Comment lines are skipped. Each table is read once and cached: the
-    effective area is evaluated at every wavelength of a spectrum, and
-    rereading five tables each time would make a spectrum take minutes. The
-    arrays are shared, so they are read-only.
+    Comment lines are skipped. Each table is read once and cached, as
+    rereading the tables at every wavelength of a spectrum would take
+    minutes. The cached arrays are read-only.
     """
     key = str(path)
     if key not in _THROUGHPUT_TABLES:
-        # Text becomes a Path; a packaged table may be a resource inside an
-        # archive, which can read itself but is not a path.
+        # A packaged table may be a resource in an archive, which has
+        # `read_text` but is not a path.
         content = (path if hasattr(path, "read_text") else Path(path)).read_text()
-        # The header is every line before the data that is not two numbers,
-        # however many there are, rather than a fixed count, which would drop
-        # data rows from a table with a shorter header. A line that is not
-        # two numbers once the data has begun is an error in the table, which
-        # would otherwise change the curve.
+        # The header is every line before the data, not a fixed count. A line
+        # that is not two numbers once the data has begun is an error.
         data = []
         for number, line in enumerate(content.splitlines(), start=1):
             text = line.strip()
             if not text or text.startswith('#'):
                 continue
-            # A data line is all numbers, the first two being wavelength and
+            # A data line is all numbers, the first two wavelength and
             # throughput.
             try:
                 row = [float(x) for x in text.split()]
             except ValueError:
                 row = []
             if len(row) >= 2:
-                # A throughput in per cent, or a NaN, would make every value
-                # of the effective area meaningless.
+                # Refuse a throughput in per cent, or a NaN.
                 wavelength, throughput = row[:2]
                 if not (np.isfinite(wavelength) and wavelength > 0
                         and np.isfinite(throughput) and 0 <= throughput <= 1):
@@ -521,9 +512,8 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
                 raise ValueError(f"{path}, line {number}: {text!r} is not a wavelength and a "
                                  f"throughput, and the table's data had begun.")
             elif _starts_with_a_number(text):
-                # A line before the data is a header, as in the packaged
-                # tables, but one starting with a number may be a first data
-                # line with an error in it, which would change the curve's end.
+                # A header line starting with a number may be a first data
+                # line with a slip in it.
                 warnings.warn(f"{path}, line {number}: {text!r} is taken as a header, but it "
                               f"begins with a number. If it is a line of data, it has a slip "
                               f"in it; if it is a header, a # in front of it says so.",
@@ -545,8 +535,8 @@ def _load_throughput_table(path) -> tuple[u.Quantity, np.ndarray]:
 def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float | np.ndarray:
     """Linear interpolation: a float for one wavelength, an array for several."""
     f = scipy.interpolate.interp1d(wl_tab, tr_tab, bounds_error=False, fill_value=np.nan)
-    # Snap to the table's ends: a change of unit can put an end wavelength a
-    # part in 1e16 beyond it, as 214 Angstrom becomes 21.400000000000002 nm.
+    # Snap to the table's ends, as a change of unit can put an end a part in
+    # 1e16 beyond it (214 Angstrom becomes 21.400000000000002 nm).
     wavelength_nm = np.asarray(wavelength_nm, dtype=float)
     ends = np.asarray(wl_tab.value if hasattr(wl_tab, "value") else wl_tab, dtype=float)
     for end in (ends[0], ends[-1]):
@@ -558,15 +548,14 @@ def _interp_tr(wavelength_nm, wl_tab: np.ndarray, tr_tab: np.ndarray) -> float |
 
 def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[list, list]:
     """
-    Validate the paired pinhole lists and return the positions as floats.
+    Check the paired pinhole lists and return the positions as floats.
 
-    Used for both configuration files and a directly built `Simulation`, so
-    they agree on what a valid pinhole is.
+    Used for both configuration files and a directly built `Simulation`.
 
     Parameters
     ----------
     sizes, positions : list
-        Pinhole diameters and positions along the slit, one entry per pinhole.
+        Pinhole diameters and positions along the slit, one per pinhole.
     spectral : list
         Positions along the spectral axis, one per pinhole, or empty to put
         every pinhole at the centre of the spectral window.
@@ -574,10 +563,9 @@ def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[l
     Returns
     -------
     tuple of list
-        `(positions, spectral)`, each entry converted to float.
+        `(positions, spectral)` as floats.
     """
-    # Always compared: guarding this on the sizes would let positions without
-    # sizes through, and the run would silently produce no pinholes.
+    # Checked even with no sizes, as positions alone would give no pinholes.
     if len(sizes) != len(positions):
         raise ValueError(
             f"pinhole_sizes and pinhole_positions are a paired list, one entry "
@@ -595,12 +583,12 @@ def check_pinhole_lists(sizes: list, positions: list, spectral: list) -> tuple[l
 
 
 def _fractions(values: list, name: str) -> list:
-    """Return `values` as floats, rejecting any outside [0, 1].
+    """`values` as floats, refusing any outside [0, 1].
 
-    Both position lists are fractions of the way across the detector. A
-    value out of range puts the pinhole off the detector, where it looks like
-    a working pinhole whose light is missing. Converting also stops a quoted
-    YAML value such as '0.3' reaching the diffraction code as a string.
+    Both position lists are fractions of the way across the detector, and a
+    value outside would put the pinhole off it without a warning. Converting
+    also stops a quoted YAML value such as '0.3' reaching the diffraction
+    code as a string.
     """
     out = []
     for idx, value in enumerate(values):
@@ -620,10 +608,10 @@ def _fractions(values: list, name: str) -> list:
     return out
 
 
-# Each instrument setting gives where its default comes from, as `source` in
-# its field's metadata, and a quantity also the `unit` to show it in.
+# Each instrument setting's field metadata gives the `source` of its
+# default, and for a quantity the `unit` to show it in.
 # tools/update_instrument_sources.py writes them to docs/background/instrument-sources.md.
-# These sources are shared by several settings.
+# These sources are shared.
 _FILTER_THICKNESS_SOURCE = ("Not recorded. SOLC-EUVST-MSSL-RP-0007 v1.2, Table 6-2, gives a "
                             "1500 Angstrom aluminium foil")
 _HENKE = "Henke filter transmission calculator (henke.lbl.gov)"
@@ -649,9 +637,8 @@ class AluminiumFilter:
     """
     EUVST-SW filter: aluminium, aluminium oxide and carbon layers on a mesh.
 
-    Each layer's transmission is the tabulated one for a thickness of
-    `table_thickness`, raised to the power of the layer's thickness over
-    `table_thickness`.
+    Each layer's transmission is the tabulated one raised to the power of
+    the layer's thickness over `table_thickness`.
 
     Parameters
     ----------
@@ -759,8 +746,8 @@ class Detector_SWC:
     dark_current_293k : u.Quantity
         Dark current at 293 K, scaled to `ccd_temperature` by the
         non-inverted mode law of :func:`calculate_dark_current`. Default
-        20000 electron per pixel per second. `_dark_current_293k` is an old
-        name for it, which still works with a FutureWarning.
+        20000 electron per pixel per second. The old name
+        `_dark_current_293k` still works, with a FutureWarning.
     gain_e_per_dn : u.Quantity
         Electrons per DN. Default 2.78.
     max_dn : u.Quantity
@@ -782,10 +769,9 @@ class Detector_SWC:
     shutter : bool
         Whether frames are taken with the mechanical shutter, which keeps the
         CCDs dark while a frame is cleared and read. Default True. An
-        instrument run models frames taken with it and refuses False; the
-        read-out model, :mod:`eclipse.readout`, takes either. Keyword
-        only, as are the settings below, which describe the SW camera's CCDs
-        and their read-out.
+        instrument run refuses False; the read-out model,
+        :mod:`eclipse.readout`, takes either. Keyword only, as are the
+        settings below for the SW camera's CCDs and read-out.
     n_rows, n_columns : int
         Pixels of each CCD along the dispersion and along the slit. Default
         2048 by 2048 (SOLC-EUVST-MSSL-SP-0001 v1.4).
@@ -795,24 +781,23 @@ class Detector_SWC:
     row_transfer_time : u.Quantity
         Time to move every row one step towards the serial register.
         Default 15 us, as in the SWC modes table and the read-out times of
-        SOLC-EUVST-MSSL-RP-0007 v1.2 Table 5-11. It can be changed in
-        flight.
+        SOLC-EUVST-MSSL-RP-0007 v1.2 Table 5-11. Can be changed in flight.
     pixel_period : u.Quantity
         Time to move one pixel along the serial register and digitise it.
         Default 500 ns (SOLC-EUVST-MSSL-RS-0002 v2.0).
     serial_prescan, serial_overscan : int
         Samples each output digitises before and after the image pixels of
-        each row it reads. Default 50 and 20. Each can be set in flight,
-        from 0 to 200.
+        each row. Default 50 and 20. Each can be set in flight, from 0 to
+        200.
     parallel_overscan_rows : int
         Rows clocked and read after the last image row. Default 20.
     cte_parallel, cte_serial : float
         Charge transfer efficiency along the columns and along the serial
-        register: the fraction of a packet's charge one transfer moves, the
-        rest being left to the next packet. Default 1, a perfect transfer.
-        SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than 0.999993
-        at -60 Celsius at the start of the mission, and
-        SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6.1 gives 0.99999 as typical for
+        register: the fraction of a packet's charge moved by one transfer,
+        the rest being left to the next packet. Default 1, a perfect
+        transfer. SOLC-EUVST-MSSL-SP-0001 v1.4 CCD-4.5.1 requires more than
+        0.999993 at -60 Celsius at the start of the mission;
+        SOLC-EUVST-MSSL-RP-0007 v1.2 Table 6-1 gives 0.99999 as typical for
         both.
     fano_factor : float or None
         Fano factor, which sets the spread in electrons per photon. Default
@@ -820,7 +805,7 @@ class Detector_SWC:
         silicon).
     pair_energy_300k, pair_energy_slope : u.Quantity or None
         Energy to free one electron-hole pair at 300 K, and its change per
-        kelvin; it sets the electrons each photon frees. Default None, for
+        kelvin, which set the electrons each photon frees. Default None, for
         the material's in :data:`DETECTOR_MATERIALS` (3.71 eV and -0.0006 eV
         per kelvin for silicon).
     dispersion : tuple of float
@@ -843,13 +828,13 @@ class Detector_SWC:
     Notes
     -----
     `dispersion`, `wavelength_offset`, `lit_band` and `slit_image_tilt`
-    describe the SW focal plane, which
-    :class:`eclipse.readout.FocalPlane_SWC` models. An instrument run
-    takes its wavelengths from `wvl_res`, not from the focal plane. It uses
-    the focal plane only to find the row recording each wavelength, for the
-    dark current, and, with `Simulation.focal_plane_dispersion`, the width
-    of its pixels. It refuses values other than the defaults, which would
-    make these disagree with its wavelengths.
+    describe the SW focal plane, modelled by
+    :class:`eclipse.readout.FocalPlane_SWC`. An instrument run takes its
+    wavelengths from `wvl_res`. It uses the focal plane only to find the row
+    of each wavelength, for the dark current, and, with
+    `Simulation.focal_plane_dispersion`, the width of its pixels. It refuses
+    values other than the defaults, which would disagree with its
+    wavelengths.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -882,8 +867,7 @@ class Detector_SWC:
     # resolution begins to degrade: 150 ke- typical, 80 ke- minimum (Teledyne
     # e2v CCD42-40 BSI datasheet, 1B300000-A1A version 1, January 2024). It is
     # below the 182 ke- the FEE accepts, so a pixel fills before the digitiser
-    # does. Nothing is clipped or spilled at it; it only shows which pixels a
-    # frame would saturate. Keyword-only, so the fields after it keep their
+    # does. Nothing is clipped at it. Keyword only, so later fields keep their
     # places in the constructor.
     full_well: u.Quantity = field(
         default=150000 * u.electron / u.pixel, kw_only=True,
@@ -904,9 +888,9 @@ class Detector_SWC:
     material: str = "silicon"
     filter_distance: u.Quantity = field(default=250 * u.mm,
                                         metadata={"source": _NOT_RECORDED, "unit": "mm"})
-    # Settings of the camera's CCDs and their read-out, which
-    # eclipse.readout models. An instrument run uses only their timing, for
-    # the dark current collected during the clear and the read-out.
+    # CCD and read-out settings, modelled by eclipse.readout. An instrument
+    # run uses only their timing, for the dark current during the clear and
+    # read-out.
     shutter: bool = field(
         default=True, kw_only=True,
         metadata={"source": "SOLC-EUVST-MSSL-RP-0007 v1.2, Sec. 6.1.2: the SW CCD uses a "
@@ -945,7 +929,7 @@ class Detector_SWC:
     pair_energy_slope: u.Quantity | None = field(
         default=None, kw_only=True,
         metadata={"source": _NOT_RECORDED, "unit": "eV per K"})
-    # The SW focal plane, which eclipse.readout models.
+    # SW focal plane, modelled by eclipse.readout.
     dispersion: tuple = field(
         default=DISPERSION_COEFFICIENTS, kw_only=True,
         metadata={"source": "Fitted to RSC-2022021C: the detector edges, the focal plane "
@@ -1036,11 +1020,11 @@ class Detector_EIS:
     The pixel, noise and gain settings of `Detector_SWC`, with EIS values:
     quantum efficiency 0.64 for EUV and 0.65 for visible light, read noise 5
     electron per pixel, 6.3 electron per DN, 22.3 mA per pixel and 1 arcsec
-    per pixel along the slit. Its `dark_current_293k` is 250 electron per
-    pixel per second, scaled by the advanced inverted mode law of
+    per pixel along the slit. `dark_current_293k` is 250 electron per pixel
+    per second, scaled by the advanced inverted mode law of
     :func:`calculate_dark_current`. `fano_factor`, `pair_energy_300k` and
-    `pair_energy_slope` are as for `Detector_SWC`. It has none of SWC's
-    full-well, filter, shutter, focal plane or CCD read-out settings.
+    `pair_energy_slope` are as for `Detector_SWC`. There are no full-well,
+    filter, shutter, focal plane or CCD read-out settings.
     """
     _OLD_NAMES = {"_dark_current_293k": "dark_current_293k"}
 
@@ -1159,11 +1143,11 @@ class Telescope_EUVST:
     slit_length : u.Quantity
         Length of the slits. Default 280 arcsec. Keyword only.
     fiducial_centres : list of u.Quantity
-        Middle of each fiducial along the slit, from the slit's centre.
-        Positive is towards increasing y of the synthesis, which is solar north
-        in nominal observations. A fiducial is a short gap in the slit, used
-        to co-align observations made with different slits. Default -70 and
-        25 arcsec. Keyword only.
+        Middle of each fiducial along the slit, from the slit's centre. A
+        fiducial is a short gap in the slit, used to co-align observations
+        made with different slits. Positive is towards increasing y of the
+        synthesis, solar north in nominal observations. Default -70 and 25
+        arcsec. Keyword only.
     fiducial_lengths : list of u.Quantity
         Fiducial length for the 0.2, 0.4, 0.8 and 1.6 arcsec slits, in that
         order. Default 0.8, 0.8, 0.8 and 1.6 arcsec. Keyword only.
@@ -1183,20 +1167,19 @@ class Telescope_EUVST:
     # field_of_view (FIELDS_OF_VIEW).
     psf_params: list | None = field(default=None,
                                     metadata={"source": "RSC-2022021C"})
-    # Slit width the spectral FWHM in psf_params is for. RSC-2022021C quotes
-    # the spectral resolution for the 0.2 arcsec slit as the optics FWHM after
-    # the slit (0.352 arcsec at 212.3 A) added in quadrature to the slit width
-    # (giving 0.405 arcsec, 43.00 mA). The spectral PSF for any other slit is
-    # derived from it; see radiometric.spectral_psf_fwhm.
+    # Slit width for the spectral FWHM in psf_params. RSC-2022021C gives the
+    # spectral resolution for the 0.2 arcsec slit as the optics FWHM after the
+    # slit (0.352 arcsec at 212.3 A) added in quadrature to the slit width
+    # (0.405 arcsec, 43.00 mA). Other slits are derived from it in
+    # radiometric.spectral_psf_fwhm.
     psf_slit_width: u.Quantity = field(
         default=0.2 * u.arcsec,
         metadata={"source": "RSC-2022021C, Appendix A.2", "unit": "arcsec"})
-    # Telescope optics' blur across the slit: the FWHM of their image at the
-    # slit, which sets how much light from beside the slit falls into it. None
-    # leaves it out; the resolution budget's blur before the slit still
-    # applies (radiometric.across_slit_fwhm). This is not psf_params[0], the
-    # blur along the slit measured at the detector, which includes the
-    # spectrograph after the slit.
+    # FWHM of the telescope's image at the slit, which sets how much light
+    # from beside the slit falls into it. None leaves it out, but the
+    # resolution budget's blur before the slit still applies
+    # (radiometric.across_slit_fwhm). Not psf_params[0], the blur along the
+    # slit at the detector, which includes the spectrograph.
     psf_across_slit: u.Quantity | None = field(
         default=None, kw_only=True,
         metadata={"source": _NOT_RECORDED, "unit": "arcsec"})
@@ -1208,30 +1191,30 @@ class Telescope_EUVST:
     pointing_jitter: u.Quantity | None = field(
         default=None, kw_only=True,
         metadata={"source": "RSC-2022033B rev. B, Table 3-1 row 20", "unit": "arcsec"})
-    # The slits are 3.80 mm long, 280 arcsec at the slit's 13.57 um per arcsec
+    # The slits are 3.80 mm long, 280 arcsec at 13.57 um per arcsec
     # (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-30). Each has two fiducials, gaps
     # 10.9 um (0.8 arcsec) long in the three narrow slits and 21.8 um (1.6
-    # arcsec) in the widest (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170).
-    # They are centred -340 um (-25 arcsec) and +950 um (+70 arcsec) from the
-    # slit's centre along the y-axis of the slit's frame
-    # (EUVST-CNR-REQ-001 v4.72, R-SA-GEO-40).
+    # arcsec) in the widest (TASI-SCE-SSS-0001 issue 1, R-SA-SYS-REQ-1170),
+    # centred -340 um (-25 arcsec) and +950 um (+70 arcsec) from the slit's
+    # centre along the slit frame's y-axis (EUVST-CNR-REQ-001 v4.72,
+    # R-SA-GEO-40).
     #
     # Here positive is increasing y of the synthesis, solar north in nominal
     # observations. The slit's +y is south, so the fiducials are at +25 and
     # -70 arcsec. The slit's +y points from the slit centre to the telescope's
-    # Z-axis. That direction is global +Y (RSC-2022020A, Sects. 3.2 and 3.4;
-    # the slit's rotation matrix in RSC-2022021C, Sect. 5). The slit's +x then
-    # points to global -X, towards the slit-jaw imager (NAOJ-TI-21015d). The
-    # pointing frame's +Y is the same direction, and is solar north in nominal
+    # Z-axis, which is global +Y (RSC-2022020A, Sects. 3.2 and 3.4; the slit's
+    # rotation matrix in RSC-2022021C, Sect. 5). The slit's +x then points to
+    # global -X, towards the slit-jaw imager (NAOJ-TI-21015d). The pointing
+    # frame's +Y is the same direction and is solar north in nominal
     # observations (RSC-2023006A, Table 3-1A). The primary mirror inverts the
     # image, so north on the sky lands at the slit's -y.
     #
-    # The grating's magnification of -6.239 (RSC-2022021C) inverts the slit
-    # image again, so north is at the detector's +y, towards global +Y
-    # (RSC-2022020A, Sect. 3.6). The left CCD's left output reads that end of
-    # the slit (EUVST SWC FPGA Requirements Specification, SolC-FPGA-RS-060).
-    # The right CCD faces the other way, with its serial register on its own
-    # outer edge, so its right output reads it.
+    # The grating's magnification of -6.239 (RSC-2022021C) inverts the image
+    # again, so north is at the detector's +y, towards global +Y (RSC-2022020A,
+    # Sect. 3.6). The left CCD's left output reads that end of the slit (EUVST
+    # SWC FPGA Requirements Specification, SolC-FPGA-RS-060). The right CCD
+    # faces the other way, with its serial register on its own outer edge, so
+    # its right output reads it.
     slit_length: u.Quantity = field(default=280.0 * u.arcsec, kw_only=True,
                                     metadata={"source": _SLIT_REQUIREMENTS, "unit": "arcsec"})
     fiducial_centres: list = field(
@@ -1278,12 +1261,12 @@ class Telescope_EUVST:
 
     def slit_openings(self, slit_width: u.Quantity) -> u.Quantity:
         """
-        Stretches of the slit that let light through: its length less its fiducials.
+        Open stretches of the slit: its length less the fiducials.
 
         Parameters
         ----------
         slit_width : u.Quantity
-            Slit, 0.2, 0.4, 0.8 or 1.6 arcsec, which sets the fiducial length.
+            Slit width, 0.2, 0.4, 0.8 or 1.6 arcsec, which sets the fiducial length.
 
         Returns
         -------
@@ -1305,8 +1288,8 @@ class Telescope_EUVST:
 
     @property
     def collecting_area(self) -> u.Quantity:
-        """Aperture area feeding the SW channel: half of the total."""
-        return 0.5 * np.pi * (self.D_ap / 2) ** 2  # Accounting for 50% loss due to beam division between SW and LW channels.
+        """Aperture area feeding the SW channel: half, as the beam is split between SW and LW."""
+        return 0.5 * np.pi * (self.D_ap / 2) ** 2
 
     def primary_mirror_efficiency(self, wl0: u.Quantity) -> float | np.ndarray:
         """
@@ -1350,8 +1333,8 @@ class Telescope_EUVST:
         """
         Fraction of light the primary mirror's roughness leaves in the image.
 
-        This is `exp(-(4 pi sigma / lambda)**2)` for RMS roughness sigma
-        (`microroughness_sigma`) at wavelength lambda.
+        The Debye-Waller factor `exp(-(4 pi sigma / lambda)**2)` for RMS
+        roughness sigma (`microroughness_sigma`) at wavelength lambda.
 
         Parameters
         ----------
@@ -1363,14 +1346,11 @@ class Telescope_EUVST:
         float or np.ndarray
             Fraction, one value or one per wavelength.
         """
-        # Convert both wavelength and sigma to the same units (nm for convenience)
         wl_nm = wl0.to(u.nm)
         sigma_nm = self.microroughness_sigma.to(u.nm)
         
-        # Calculate (4*pi*sigma/lambda)^2
         roughness_term = (4 * np.pi * sigma_nm / wl_nm) ** 2
         
-        # Return exp(-(4*pi*sigma/lambda)^2)  [Debye-Waller specular efficiency]
         return np.exp(-roughness_term.value)
 
     def throughput(self, wl0: u.Quantity) -> u.Quantity:
@@ -1387,14 +1367,11 @@ class Telescope_EUVST:
         u.Quantity
             Dimensionless throughput, one value or one per wavelength.
         """
-        # Get wavelength-dependent efficiencies
         pm_eff_wl = self.primary_mirror_efficiency(wl0)
         grat_eff_wl = self.grating_efficiency(wl0)
         
-        # Apply microroughness efficiency to primary mirror efficiency
         pm_eff_with_roughness = pm_eff_wl * self.microroughness_efficiency(wl0)
         
-        # Calculate total throughput
         return pm_eff_with_roughness * grat_eff_wl * self.filter.total_throughput(wl0)
 
     def ea_and_throughput(self, wl0: u.Quantity) -> u.Quantity:
@@ -1422,9 +1399,8 @@ class Telescope_EIS:
     """
     Hinode/EIS telescope.
 
-    The effective area comes from the EIS calibration tables, so it varies
-    with wavelength and, for the in-flight calibrations, with the date of the
-    observation.
+    The effective area comes from the EIS calibration tables. It varies with
+    wavelength and, for the in-flight calibrations, with the observation date.
 
     Parameters
     ----------
@@ -1456,12 +1432,12 @@ class Telescope_EIS:
     psf_params: list = field(default_factory=lambda: [3.0 * u.pixel, 3.0 * u.pixel],  # [spatial_fwhm, spectral_fwhm] in pixels
                              metadata={"source": "Ugarte-Urra (2016), EIS Software Note 2",
                                        "unit": "pixels"})
-    # The EIS PSF is not tied to a slit width, so its spectral FWHM is the
-    # same for every slit. Setting this gives the slit psf_params was measured
-    # with, and the spectral PSF then follows the slit as for SWC.
+    # None gives every slit the same spectral FWHM. Set it to the slit
+    # psf_params was measured with to make the spectral PSF follow the slit,
+    # as for SWC.
     psf_slit_width: u.Quantity | None = None
-    # Telescope blur across the slit, the FWHM of its image at the slit, as
-    # for Telescope_EUVST. None leaves it out.
+    # FWHM of the telescope's image at the slit, as for Telescope_EUVST. None
+    # leaves it out.
     psf_across_slit: u.Quantity | None = field(default=None, kw_only=True)
     calibration: str = field(
         default="ground",
@@ -1486,8 +1462,7 @@ class Telescope_EIS:
                              f"{self.psf_slit_width!r}.")
         if self.date is not None:
             self.date = eis_calibration.normalise_date(self.date)
-            # Parse the date now, rather than part-way through a run when the
-            # effective area is first needed.
+            # Parse now, not part-way through a run.
             try:
                 eis_calibration._parse_date(self.date)
             except ValueError:
@@ -1506,8 +1481,8 @@ class Telescope_EIS:
         """
         EIS effective area, including the detector quantum efficiency.
 
-        This is the effective area as published by the EIS calibrations.
-        Wavelengths outside the two EIS bands are refused.
+        As published by the EIS calibrations. Wavelengths outside the two EIS
+        bands raise ValueError.
 
         Parameters
         ----------
@@ -1541,7 +1516,7 @@ class Telescope_EIS:
         EIS effective area without the detector quantum efficiency.
 
         ECLIPSE applies the quantum efficiency, `Detector_EIS.qe_euv`, in the
-        detector, so this is the area the rest of the simulation uses.
+        detector, so this is the area the simulation uses.
 
         Parameters
         ----------
@@ -1553,11 +1528,10 @@ class Telescope_EIS:
         u.Quantity
             Area, one value or one per wavelength.
         """
-        # The tabulated areas include the QE the EIS calibration is quoted
-        # against. ECLIPSE applies the QE separately, so it is divided out
-        # here. This is the table constant on purpose, not a setting: dividing
-        # by a settable value while to_electrons applies Detector_EIS.qe_euv
-        # would silently scale the whole response.
+        # The tables include the QE the EIS calibration is quoted against,
+        # divided out here as ECLIPSE applies the QE in the detector. It is the
+        # tables' constant, not a setting, so changing qe_euv changes the
+        # response.
         # https://hinode.nao.ac.jp/en/for-researchers/instruments/eis/fact-sheet/
         # https://solarb.mssl.ucl.ac.uk/SolarB/eis_docs/eis_notes/02_RADIOMETRIC_CALIBRATION/eis_swnote_02.pdf
         return self.effective_area(wl0) / eis_calibration.QE_IN_TABLES
@@ -1597,24 +1571,22 @@ class Simulation:
     slit_mask : bool
         Whether the slit's ends and fiducials block the light (SWC only). A
         run then keeps only the rows along the slit, and blanks the fits in
-        the rows behind a fiducial.
-        Default False. Keyword only.
+        the rows behind a fiducial. Default False. Keyword only.
     focal_plane_dispersion : bool
-        Whether the width in wavelength of the pixels is that of the SW
-        focal plane where the observed line lands, from
+        Whether the pixels' width in wavelength is that of the SW focal
+        plane where the observed line lands, from
         :meth:`eclipse.readout.FocalPlane_SWC.pixel_width`, rather than the
-        detector's `wvl_res` (SWC only). An instrument run sets the
-        detector's `wvl_res` to it; a `Simulation` given to the functions
-        directly leaves `wvl_res` as it is. Default False. Keyword only.
+        detector's `wvl_res` (SWC only). An instrument run sets `wvl_res` to
+        it; a `Simulation` given to the functions directly leaves `wvl_res`
+        as it is. Default False. Keyword only.
     noise : bool
         If False, every random draw in the detector is replaced by its mean.
         Default True.
     readout_dark_current : bool
         Whether each pixel also collects dark current while the CCD is
         cleared before the exposure and while it waits to be read out
-        afterwards, as in a full-CCD frame (SWC only). Without it, dark
-        current is collected over the exposure only. Default True. Keyword
-        only.
+        afterwards, as in a full-CCD frame (SWC only). Without it, only over
+        the exposure. Default True. Keyword only.
     enable_pinholes : bool
         Whether to model pinholes in the filter (SWC only). Default False.
     pinhole_sizes : list of u.Quantity
@@ -1628,54 +1600,44 @@ class Simulation:
         Wavelength of the visible light through the pinholes, which sets its
         diffraction. Default 600 nm. Keyword only.
     """
-    expos: u.Quantity = 1.0 * u.s  # Single exposure time
+    expos: u.Quantity = 1.0 * u.s
     n_iter: int = 10
     slit_width: u.Quantity = field(
         default=0.2 * u.arcsec,
         metadata={"source": "RSC-2022021C", "unit": "arcsec"})
     ncpu: int = -1
     instrument: str = "SWC"
-    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)  # Visible stray light flux before SWC's filter; at EIS's CCD
+    vis_sl: u.Quantity = 0 * u.photon / (u.s * u.cm**2)
     psf: bool = False
-    # What the spatial PSF convolution assumes beyond the ends of the slit.
-    # "replicate" extends the edge rows outward, assuming the Sun looks much
-    # as it does at the edge of the field. "zero" treats everything outside
-    # as dark, which removes real signal from the outermost rows. The
-    # spectral direction is zero-filled either way: the wavelength grid runs
-    # several sigma past the line, so nothing is lost at its ends.
+    # Beyond the ends of the slit, "replicate" extends the edge rows outward
+    # and "zero" takes the Sun as dark, which removes signal from the
+    # outermost rows. The spectral direction is zero-filled either way, as
+    # the wavelength grid runs several sigma past the line.
     psf_boundary: str = "replicate"
-    # How the slit enters the spectral PSF. "quadrature" keeps the PSF a
-    # Gaussian and adds the slit width to the optics FWHM in quadrature, as
-    # RSC-2022021C quotes the spectral resolution. "convolution" convolves
-    # the optics Gaussian with the slit's rectangular image, as the same
-    # document defines the line profile; it gives the flat-topped profile of
-    # a wide slit, and a narrower profile than quadrature for the 0.2 arcsec
-    # slit. See radiometric.spectral_line_spread.
+    # "quadrature" keeps the PSF a Gaussian, adding the slit width to the
+    # optics FWHM in quadrature, as RSC-2022021C quotes the spectral
+    # resolution. "convolution" convolves the optics Gaussian with the slit's
+    # rectangular image, as the same document defines the line profile; it
+    # gives a wide slit's flat top, and a narrower profile than quadrature
+    # for the 0.2 arcsec slit. See radiometric.spectral_line_spread.
     spectral_psf: str = "quadrature"
-    # With slit_mask True, no light gets through beyond the slit's ends or in
-    # its fiducials, as set in the telescope. The slit's centre is the middle
-    # of the scene along the slit. The blur along the slit comes before the
-    # slit, so a fiducial's edges are as sharp as the pixels sampling them.
+    # The slit's centre is the middle of the scene along the slit. The blur
+    # along the slit comes before the slit, so a fiducial's edges are as sharp
+    # as the pixels sampling them.
     slit_mask: bool = field(default=False, kw_only=True)
-    # The focal plane's width is used for every pixel of the window, though
-    # it changes by about 2 parts in 10,000 across 60 pixels.
+    # One width is used for the whole window; it changes by about 2 parts in
+    # 10,000 across 60 pixels.
     focal_plane_dispersion: bool = field(default=False, kw_only=True)
-    # With noise False, every random draw in the detector chain is replaced by
-    # its mean, so the run gives the signal the instrument would measure on
-    # average. Quantisation stays: DN are still rounded and still clipped at
-    # the digitiser maximum, max_dn.
+    # With noise False, DN are still rounded and clipped at max_dn.
     noise: bool = True
-    # A run takes only the rows of its own wavelengths to be read. The clear
-    # and the read-out then add 0.03 to 0.05 s for 32 rows with the default
-    # timing.
+    # A run reads only the rows of its own wavelengths, so the clear and
+    # read-out add 0.03 to 0.05 s for 32 rows at the default timing.
     readout_dark_current: bool = field(default=True, kw_only=True)
     enable_pinholes: bool = False
     pinhole_sizes: List[u.Quantity] = field(default_factory=list)
     pinhole_positions: List[float] = field(default_factory=list)
-    # Position along the spectral axis, as a fraction (0.0 to 1.0) of the
-    # detector width, one per pinhole. Empty (the default) puts every pinhole
-    # at the centre of the spectral window. On a slit-scan spectrograph this
-    # fraction decides which emission lines a pinhole contaminates.
+    # A fraction of the detector width. On a slit-scan spectrograph it decides
+    # which lines a pinhole contaminates.
     pinhole_positions_spectral: List[float] = field(default_factory=list)
     pinhole_visible_wavelength: u.Quantity = field(
         default=600.0 * u.nm, kw_only=True, metadata={"source": _NOT_RECORDED, "unit": "nm"})
@@ -1695,8 +1657,7 @@ class Simulation:
             if not (isinstance(size, u.Quantity) and size.unit.is_equivalent(u.um) and size > 0):
                 raise ValueError(f"pinhole_sizes[{index}] must be a diameter, a positive "
                                  f"length, such as 5 um; got {size!r}.")
-        # EIS has 1 and 2 arcsec slits, and 40 and 266 arcsec slots, which
-        # ECLIPSE does not model.
+        # EIS also has 40 and 266 arcsec slots, which ECLIPSE does not model.
         allowed_slits = {
             "EIS": [1, 2],
             "SWC": [0.2, 0.4, 0.8, 1.6],
@@ -1729,10 +1690,9 @@ class Simulation:
             raise ValueError("focal_plane_dispersion describes the SW focal plane, so it is "
                              "for SWC only.")
 
-        # Both pipelines zip the paired pinhole lists, and zip stops at the
-        # shortest, so a mismatch would silently drop pinholes. main() runs
-        # the same check on configuration files, but Simulation is also
-        # constructed directly.
+        # The pinhole lists are zipped, so a length mismatch would drop
+        # pinholes. Checked here as well as in main(), as a Simulation can be
+        # built directly.
         self.pinhole_positions, self.pinhole_positions_spectral = check_pinhole_lists(
             self.pinhole_sizes, self.pinhole_positions,
             self.pinhole_positions_spectral)

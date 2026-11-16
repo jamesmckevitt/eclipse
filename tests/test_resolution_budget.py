@@ -44,7 +44,7 @@ def test_the_spectral_rows_give_the_budgets_totals(optics, total):
 
 
 def test_the_spectral_estimate_follows_the_budgets_rules():
-    """Each allocation row is its spatial row by the rule in its note, so the estimate is too."""
+    """The estimate applies each row's note to its spatial row, as the allocation does."""
     estimate = {name: row[0] for name, row in resolution_budget.SPECTRAL_ROWS.items()}
     assert estimate["3-2: residual of 1G compensation (2/3 of #5-2)"] == pytest.approx(0.024)
     assert estimate["5: grating micro-vibrations (2/3 of #20)"] == pytest.approx(0.0733, abs=1e-4)
@@ -142,7 +142,7 @@ def test_the_convolved_profile_widens_with_the_budget():
 
 
 def test_a_telescope_from_before_the_budget_reads_back_without_it(tmp_path):
-    """Its runs had only the optical design, so it gets none, not today's default."""
+    """Its runs had only the optical design, so it gets `none`, not the current default."""
     encoded = results_file._jsonable(Telescope_EUVST(psf_params=[2.66 * u.pix, 2.54 * u.pix]))
     del encoded["fields"]["resolution_budget"], encoded["fields"]["field_of_view"]
     path = save_results(tmp_path / "hand.h5", {"instrument": "SWC"})

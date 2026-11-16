@@ -1,4 +1,4 @@
-"""The pixels' width in wavelength from the SW focal plane, with `focal_plane_dispersion`."""
+"""Pixel width in wavelength from the SW focal plane, with `focal_plane_dispersion`."""
 import sys
 
 import astropy.units as u

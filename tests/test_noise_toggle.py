@@ -56,7 +56,7 @@ def _electrons_per_photon(det, wavelength):
 
 
 def _intensity_cube(peak=2.0e4):
-    """A Gaussian line in the synthesis output units."""
+    """Gaussian line in synthesis output units."""
     lam = np.arange(NWAVE) - NWAVE / 2.0
     profile = peak * np.exp(-0.5 * (lam / 1.5) ** 2)
     data = np.tile(profile, (NSLIT, NSCAN, 1))
@@ -246,11 +246,7 @@ def test_a_noiseless_run_is_reproducible_end_to_end():
 
 
 def test_the_noiseless_signal_sits_where_the_noisy_ones_scatter():
-    """Noise off gives the mean of noise on.
-
-    Compared against the spread of the noisy runs rather than a fixed
-    tolerance, so the test checks the statistical claim itself.
-    """
+    """Noise off gives the mean of noise on, within the spread of the noisy runs."""
     det, tel = Detector_SWC(), Telescope_EUVST()
     noisy_sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec)
     quiet_sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec,
@@ -289,9 +285,8 @@ def test_dn_are_still_quantised_and_still_clip():
     tel = Telescope_EUVST()
     sim = Simulation(instrument="SWC", slit_width=0.2 * u.arcsec, noise=False)
 
-    # 1e12 erg/(s cm2 sr cm) gives only a few hundred DN through the real SWC
-    # effective area, so saturating the digitiser needs a line far brighter
-    # than any solar one.
+    # 1e12 erg/(s cm2 sr cm) gives only a few hundred DN, so saturating needs
+    # a line far brighter than any solar one.
     dn = simulate_once(_intensity_cube(peak=1.0e16), 40 * u.s, det, tel, sim)[-1]
     assert np.array_equal(dn.data, np.round(dn.data))
     assert dn.data.max() == det.max_dn.to_value(u.DN / u.pix)

@@ -1,6 +1,6 @@
 """Small fixes around the edges.
 
-The command line, --debug, the recorded git commit, `atmosphere info`, a
+The command line, `--debug`, the recorded git commit, `atmosphere info`, a
 script's old option name, the science-case tool and the deprecated dynamic
 mode.
 """
