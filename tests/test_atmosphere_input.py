@@ -11,7 +11,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 import pytest
-from mendeleev import element
+from plasmapy.particles import standard_atomic_weight
 
 from eclipse import synthesis
 from eclipse.atmosphere import (
@@ -446,10 +446,10 @@ def test_along_line_of_sight_lays_the_sizes_along_the_right_axis():
 # Mass per electron
 # ----------------------------------------------------------------------
 def test_the_mass_per_electron_follows_from_the_abundances():
-    hydrogen = element("H").atomic_weight
+    hydrogen = standard_atomic_weight("H").to_value(u.u)
     assert mass_per_electron_from_abundances({"H": 1.0}) == pytest.approx(hydrogen)
 
-    helium = element("He").atomic_weight
+    helium = standard_atomic_weight("He").to_value(u.u)
     expected = (hydrogen + 0.085 * helium) / (1.0 + 0.085 * 2)
     assert mass_per_electron_from_abundances({"H": 1.0, "He": 0.085}) == pytest.approx(expected)
     # Well between 1, for pure hydrogen, and the neutral-gas value of 1.29.
