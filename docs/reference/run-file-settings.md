@@ -13,7 +13,7 @@ Every setting of a run file, with its default. A value with units is a number an
 | `ncpu` | CPU cores; `-1` for all | `-1` |
 | `offchip_bin_slit` | Pixels along the slit added after read-out; see [Off-chip slit binning](../observe/simulate.md#off-chip-slit-binning) | `1` |
 | `fit_signals` | `dn`, `photon` or `both`; see [Which signals are fitted](../observe/fitting.md#which-signals-are-fitted) | `both` |
-| `uniform_intensity` | A single line of this total intensity; see [A single intensity](../emission/single-intensity.md) | none |
+| `uniform_intensity` | A single line of this total intensity; see [A single intensity](../observe/simulate.md#a-single-intensity) | none |
 | `rest_wavelength` | That line's rest wavelength | `195.119 AA` |
 | `thermal_width` | That line's 1-sigma width, as a velocity | `20 km/s` |
 | `pinhole_sizes` | Pinhole diameters (SWC); see [Pinholes](#pinholes) | none |

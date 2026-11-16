@@ -69,18 +69,7 @@ pip install eclipse
 <div class="label" data-tier="1"><span class="step">1</span>Making emission</div>
 <div class="tier four" markdown>
 
-<div class="box card" data-tier="1" data-id="one" data-route="one" data-to="obs" markdown>
-
-### A single intensity
-
-Give only a line's brightness, for the quickest estimate of how precisely it is measured.
-
-[A single intensity](emission/single-intensity.md){ data-routes="one" }
-{: .card-links }
-
-</div>
-
-<div class="box card" data-tier="1" data-id="spectra" data-route="spectra" data-to="obs frame" markdown>
+<div class="box card c2" data-tier="1" data-id="spectra" data-route="spectra" data-to="obs frame" markdown>
 
 ### Another code's spectra
 
@@ -91,7 +80,7 @@ Bring spectra that your own code has made, optically thin or thick.
 
 </div>
 
-<div class="box card" data-tier="1" data-id="mhd" data-route="mhd" data-to="obs frame" markdown>
+<div class="box card c3" data-tier="1" data-id="mhd" data-route="mhd" data-to="obs frame" markdown>
 
 ### An MHD simulation
 
@@ -102,7 +91,7 @@ ECLIPSE works out the spectra a 3D simulation emits, seen from above or from the
 
 </div>
 
-<div class="box card" data-tier="1" data-id="dem" data-route="dem" data-to="obs frame" markdown>
+<div class="box card c4" data-tier="1" data-id="dem" data-route="dem" data-to="obs frame" markdown>
 
 ### A DEM or VDEM
 
@@ -117,7 +106,6 @@ ECLIPSE works out the spectra from the emission measure at each temperature, and
 <div class="divider"></div>
 <div></div>
 <div class="links short"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
-<path data-from="one" data-to="obs" d="M12.5 0 L12.5 40"/>
 <path data-from="spectra" data-to="synth" d="M37.5 0 C37.5 20 62.5 20 62.5 40"/>
 <path data-from="mhd" data-to="synth" d="M62.5 0 L62.5 40"/>
 <path data-from="dem" data-to="synth" d="M87.5 0 C87.5 20 62.5 20 62.5 40"/>
@@ -125,9 +113,10 @@ ECLIPSE works out the spectra from the emission measure at each temperature, and
 <div></div>
 <div class="files four" markdown>
 
-<div class="links pass"><svg viewBox="0 0 100 40" preserveAspectRatio="none">
-<path data-from="one" data-to="obs" d="M50 0 L50 40"/>
-</svg></div>
+<div class="file" data-id="one" data-route="one" data-from="" data-to="obs" data-have="one" markdown>
+:material-circle-medium:{ .ficon } [**A single intensity**](observe/simulate.md#a-single-intensity)
+<span>One line's total intensity, wavelength and width, given in the run file.</span>
+</div>
 
 <div class="file c234" data-id="synth" data-from="spectra mhd dem" data-to="obs frame" data-have="spectra mhd dem" markdown>
 :material-file-document-outline:{ .ficon } [**Synthesis file**](files/synthesis.md)

@@ -11,13 +11,15 @@
     const boxes = Array.from(guide.querySelectorAll(".card"));
     const lines = Array.from(guide.querySelectorAll(".links path"));
     const labels = Array.from(guide.querySelectorAll(".label[data-tier]"));
+    const files = Array.from(guide.querySelectorAll(".file"));
     const chosen = [null, null, null];
     // What the reader has, from the "What do you have?" buttons. Without one,
-    // the box picked in step 1 gives the route it names.
+    // the box picked in step 1 gives the route it names. A route can also
+    // start at a file, such as a single intensity, which skips step 1.
     let have = null;
     const haveBox = {};
     const boxRoute = {};
-    boxes.forEach((b) => {
+    boxes.concat(files).forEach((b) => {
       if (b.dataset.route) {
         haveBox[b.dataset.route] = b.dataset.id;
         boxRoute[b.dataset.id] = b.dataset.route;
@@ -29,7 +31,6 @@
 
     const box = (id) => boxes.find((b) => b.dataset.id === id);
     const tierOf = (id) => Number(box(id).dataset.tier) - 1;
-    const files = Array.from(guide.querySelectorAll(".file"));
     const file = (id) => files.find((f) => f.dataset.id === id);
 
     // A file between two steps is on the path once the boxes on both sides
@@ -38,6 +39,8 @@
     function rawFileState(f) {
       // A file that belongs to another route is never on this one.
       if (f.dataset.have && route() && !f.dataset.have.split(" ").includes(route())) return "";
+      // A file a route starts at is its first step.
+      if (chosen[0] === f.dataset.id) return "chosen";
       const from = f.dataset.from.split(" ").filter(Boolean);
       const to = f.dataset.to.split(" ");
       // A file that goes into step 1, such as an atmosphere file, is on the
@@ -74,7 +77,7 @@
     const stateOf = (id) => (file(id) ? fileState(file(id)) : boxState(id));
     const reach = (id) => {
       if (!id) return [];
-      return box(id).dataset.to.split(" ").filter(Boolean);
+      return (box(id) || file(id)).dataset.to.split(" ").filter(Boolean);
     };
     // The path ends at step 2 when the box picked there leads nowhere.
     const endsEarly = () => !!chosen[1] && reach(chosen[1]).length === 0;
@@ -148,7 +151,9 @@
       labels.forEach((l) => {
         const tier = Number(l.dataset.tier) - 1;
         l.classList.toggle("is-active", on && tier === active);
-        l.classList.toggle("is-done", on && (!!chosen[tier] || (tier === 2 && endsEarly())));
+        // A route that starts at a file skips step 1.
+        const done = !!chosen[tier] && (tier > 0 || !!box(chosen[0]));
+        l.classList.toggle("is-done", on && (done || (tier === 2 && endsEarly())));
       });
 
       files.forEach((f) => {

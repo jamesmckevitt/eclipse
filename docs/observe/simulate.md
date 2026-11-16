@@ -4,7 +4,7 @@
 <div markdown>
 **You need**
 
-A [synthesis file](../files/synthesis.md), or a [single intensity](../emission/single-intensity.md)
+A [synthesis file](../files/synthesis.md), or a [single intensity](#a-single-intensity)
 </div>
 <div markdown>
 **You run**
@@ -85,13 +85,13 @@ A setting outside its section, or a misspelt key, stops the run with an error.
 
 ## A single intensity { data-routes="one" }
 
-A [single intensity](../emission/single-intensity.md) is observed in the same way, with the iterations and the instrument in the same run file:
+ECLIPSE can also observe one Gaussian line of known total intensity, given in the run file in place of a synthesis file. All the scatter in the results then comes from the instrument, which suits uncertainty budgets, and there is no synthesis, so it is fast.
 
 ```yaml
 instrument: SWC
-uniform_intensity: 5000 erg / (s cm2 sr)
+uniform_intensity: 5000 erg / (s cm2 sr)   # units are required
 rest_wavelength: 195.119 AA
-thermal_width: 20 km/s
+thermal_width: 20 km/s                     # 1-sigma width, as a velocity
 
 n_iter: 500
 ncpu: -1

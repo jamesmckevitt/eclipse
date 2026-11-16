@@ -28,7 +28,6 @@
     "observe/rasters/": "mhd spectra",
     "emission/dem/": "dem",
     "emission/other-codes/": "spectra",
-    "emission/single-intensity/": "one",
     "observe/full-ccd-frames/": "spectra mhd dem",
     "analyse/frame/": "spectra mhd dem",
     "files/atmosphere/": "mhd",
