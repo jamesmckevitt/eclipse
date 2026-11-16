@@ -1,15 +1,15 @@
-"""Compiled loop for `eclipse.projection`: how much of a shape falls in each pixel."""
+"""Compiled loops for `eclipse.projection`: how much of a shape falls in each pixel."""
 
 import numba
 import numpy as np
 
-# Cutting a face leaves rounding error in where the cut falls, about that of
-# one double precision number (2e-16) in the face's own coordinates. A sum
-# of face parts within this fraction of the faces' whole parts, a few hundred
-# times that, is taken as zero: the shadow only touches the pixel.
+# Cutting a face leaves a rounding error of about 2e-16 (double precision)
+# in the face's own coordinates. A sum within this fraction of the faces'
+# whole parts, a few hundred times that, is taken as zero: the shadow only
+# touches the pixel.
 ROUNDING = 1e-13
 
-# The face as a square of side one, in its own coordinates (s, t), corners in
+# A face as a square of side one in its own coordinates (s, t), corners in
 # order around it.
 _SQUARE_S = (-0.5, 0.5, 0.5, -0.5)
 _SQUARE_T = (-0.5, -0.5, 0.5, 0.5)
@@ -20,9 +20,9 @@ def _clip(xs, ys, count, out_x, out_y, normal_x, normal_y, bound):
     """
     Part of a convex polygon where `normal . (x, y) <= bound`.
 
-    The polygon's `count` vertices are in `xs` and `ys`, in order around it.
-    The part kept is written to `out_x` and `out_y`. Returns its number of
-    vertices.
+    The polygon's `count` vertices are in `xs` and `ys`, in order around
+    it. The part is written to `out_x` and `out_y`, and its number of
+    vertices returned.
     """
     kept = 0
     for i in range(count):
@@ -57,12 +57,12 @@ def _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
     """
     Share of one shape in each pixel near it.
 
-    Each face is seen as the parallelogram `middle + s a + t b`, with s and t
-    from -1/2 to 1/2 and `a` and `b` its sides. The part of it in front of a
-    pixel is cut out in (s, t), where the pixel's edges are straight lines,
-    so that the face's seen area is a factor of the integral, and a face
-    seen all but edge on adds no rounding error. `first` gets the first
-    pixel along u and v, and `shares` the share in each pixel from there.
+    Each face is the parallelogram `middle + s a + t b`, with s and t from
+    -1/2 to 1/2 and `a` and `b` its sides. The part in front of a pixel is
+    cut out in (s, t), where the pixel's edges are straight lines. The
+    face's seen area is then a factor of the integral, so a face seen
+    nearly edge on adds no rounding error. `first` gets the first pixel
+    along u and v, and `shares` the share in each pixel from there.
     """
     xs, ys, other_x, other_y = buffers[0], buffers[1], buffers[2], buffers[3]
     first_u = np.floor(centre_u - reach_u)
@@ -83,8 +83,7 @@ def _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
                 for k in range(4):
                     xs[k] = _SQUARE_S[k]
                     ys[k] = _SQUARE_T[k]
-                # u = middle_u + a_u s + b_u t from low_u to low_u + 1, and the
-                # same for v.
+                # Cut to low_u <= middle_u + a_u s + b_u t <= low_u + 1, then the same for v.
                 count = _clip(xs, ys, 4, other_x, other_y, -a_u, -b_u, middle[f, 0] - low_u)
                 count = _clip(other_x, other_y, count, xs, ys, a_u, b_u,
                               low_u + 1.0 - middle[f, 0])
@@ -104,8 +103,8 @@ def _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
                 moment_t /= 6.0
                 total += scale[f] * (depth[f, 0] * area + depth[f, 1] * moment_s
                                      + depth[f, 2] * moment_t)
-                # Cutting the face leaves rounding error in s and t, where the
-                # face is a square of side one, whatever the size of the part.
+                # The rounding error of the cuts is set by the whole face, the
+                # unit square in (s, t), not by the size of the part.
                 size += abs(scale[f]) * (abs(depth[f, 0])
                                          + 0.5 * (abs(depth[f, 1]) + abs(depth[f, 2])))
             # The near and far faces' parts cancel where the shadow only
@@ -117,14 +116,13 @@ def _shape_shares(n_faces, middle, sides, scale, depth, low_corner, high_corner,
 
 @numba.njit(parallel=True, cache=True)
 def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, shares, n_runs):
-    """Fill `first` and `shares` for `eclipse.projection._overlaps`: shapes seen the same way."""
+    """Fill `first` and `shares` for `eclipse.projection._overlaps`, shapes seen the same way."""
     n_faces = middle.shape[0]
     low_corner = np.empty((n_faces, 2))
     high_corner = np.empty((n_faces, 2))
     _bounds(n_faces, middle, sides, low_corner, high_corner)
     n_cells = centres.shape[0]
-    # Scratch space is made once for each of `n_runs` runs of cells, not for
-    # each cell.
+    # Scratch space is made once per run of cells, not per cell.
     for run in numba.prange(n_runs):
         buffers = np.empty((4, 16))
         for n in range(run * n_cells // n_runs, (run + 1) * n_cells // n_runs):
@@ -136,10 +134,10 @@ def _overlap_kernel(middle, sides, scale, depth, reach, span, centres, first, sh
 @numba.njit(cache=True)
 def _cell_faces(linear, cell, middle, sides, scale, depth):
     """
-    Faces of a cell's shadow; see `eclipse.projection._cell_faces`.
+    Faces of a cell's shadow, as in `eclipse.projection._cell_faces`.
 
-    Fills the arrays and returns the number of faces, with those seen edge
-    on left out.
+    Fills the arrays and returns the number of faces, leaving out those
+    seen edge on.
     """
     scaled = np.empty((3, 3))
     for i in range(3):
@@ -185,8 +183,7 @@ def _cell_overlap_kernel(linear, cell, centres, span, first, shares, n_runs):
     as for `eclipse.projection._cell_faces`.
     """
     n_cells = centres.shape[0]
-    # Scratch space is made once for each of `n_runs` runs of cells, not for
-    # each cell.
+    # Scratch space is made once per run of cells, not per cell.
     for run in numba.prange(n_runs):
         middle, sides = np.empty((6, 2)), np.empty((6, 2, 2))
         scale, depth = np.empty(6), np.empty((6, 3))
@@ -205,5 +202,5 @@ def _cell_overlap_kernel(linear, cell, centres, span, first, shares, n_runs):
 
 
 def runs(n_cells: int) -> int:
-    """How many runs of cells to share between the threads: a few for each."""
+    """Number of runs of cells to share between the threads, a few each."""
     return min(n_cells, 4 * numba.get_num_threads())

@@ -1,16 +1,16 @@
 """
-Results file: the instrument simulation's results as HDF5.
+Results of an instrument simulation as an HDF5 file.
 
-`eclipse --config run.yaml` writes `run/result/run.h5`, which
-:func:`eclipse.load_instrument_response_results` reads. Reading a
-file runs no code from it, and any language can read it.
+`eclipse run run.yaml` writes `run/result/run.h5`, which
+:func:`eclipse.load_instrument_response_results` reads. Reading a file
+runs no code from it, and any language can read it.
 
 File layout, version 1
 ----------------------
 Root attributes `format` (`"eclipse-results"`) and `version` (`1`). The
 results are a tree. An array with dimensions is a dataset, with a `unit`
-attribute if it is a quantity; a cube, or a mapping, list or tuple holding
-such arrays, is a group; anything else is a JSON attribute of its group.
+attribute if it is a quantity. A cube, or a mapping, list or tuple holding
+such arrays, is a group. Anything else is a JSON attribute of its group.
 
 A mapping keyed by names lists them in order, as JSON, in `eclipse_order`.
 Other groups have an `eclipse_type` (plain text, as are `eclipse_length`,
@@ -18,11 +18,11 @@ Other groups have an `eclipse_type` (plain text, as are `eclipse_length`,
 
 - `ndcube`: an NDCube's `data` with its `unit`, `wcs` and `meta`.
 - `map`: a mapping whose keys cannot name members, such as results keyed
-  by parameter tuples; the keys as JSON in `eclipse_keys`, the values as
+  by parameter tuples. The keys are JSON in `eclipse_keys`, the values
   members `0`, `1`, ...
 - `list`, `tuple`: the length in `eclipse_length`, the items as members.
-- `ref`: a value found in more than one place, written once and elsewhere
-  as a group whose `target` is the path it was written at.
+- `ref`: a value found in more than one place. It is written once, and
+  elsewhere as a group whose `target` is the path it was written at.
 
 Values JSON cannot hold are objects with an `__eclipse__` entry naming the
 kind: `float` (not finite), `numpy`, `quantity`, `array`, `unit`, `tuple`,
@@ -75,7 +75,7 @@ TAG = "__eclipse__"
 TYPE, ORDER, KEYS, LENGTH = "eclipse_type", "eclipse_order", "eclipse_keys", "eclipse_length"
 _RESERVED = {TYPE, ORDER, KEYS, LENGTH, "format", "version"}
 
-# Suffixes older versions and scripts gave pickles, as accepted by the synthesis.
+# Pickle suffixes, the same as the synthesis accepts.
 _PICKLE_SUFFIXES = (".pkl", ".pickle", ".dill")
 
 # Arrays with at least this many elements are compressed.
@@ -86,8 +86,8 @@ _COMPRESS_FROM = 1024
 def _dataclass_registry() -> dict:
     """Classes that may be rebuilt from a file, keyed by name.
 
-    Imported when first needed, since the time series settings import the
-    synthesis, which reading results does not otherwise need.
+    Imported on first use, as the time series settings import the
+    synthesis.
     """
     from .config import (AluminiumFilter, Detector_EIS, Detector_SWC,
                          Simulation, Telescope_EIS, Telescope_EUVST)
@@ -108,12 +108,11 @@ def _package_root() -> Path:
 
 def _moved_package_file(path):
     """
-    This installation's copy of a packaged table named under the package's former name.
+    This installation's copy of a packaged table named under `euvst_response`.
 
-    Older versions were installed as `euvst_response`, so their results can
-    name the packaged tables inside it, a folder an upgrade removes. None if
-    `path` exists, is not such a table, or the table is not in this installation.
-    A path that cannot be reached counts as missing.
+    Older versions were installed as `euvst_response`, a folder an upgrade
+    removes. None if `path` exists, is not such a table, or the table is not
+    in this installation. A path that cannot be reached counts as missing.
     """
     path = Path(os.fspath(path))
     parts = path.parts
@@ -134,15 +133,14 @@ def _wcs_to_tree(wcs: WCS) -> dict:
     """
     A WCS as a FITS header, plus the numbers of its axes unchanged.
 
-    A header gives the axes in SI units and to 14 digits, so a wavelength
-    axis in cm would come back in m, and a step of 0.2 arcsec as
-    0.2000000000000016. The coordinates agree to that precision, but not
-    the numbers a caller reads from `wcs.wcs`. So the units, reference
-    pixels and values, and the steps and rotation or CD matrix are kept
-    beside the header as given, and restored on reading.
+    A header gives the axes in SI units to 14 digits, so a wavelength axis
+    in cm would come back in m, and a step of 0.2 arcsec as
+    0.2000000000000016. The units, reference pixels and values, steps and
+    rotation or CD matrix are kept beside the header as given, and restored
+    on reading.
     """
     # Read these before to_header(), which normalises a WCS in place; it is
-    # called on a copy so that saving a cube leaves the caller's WCS alone.
+    # called on a copy to leave the caller's WCS alone.
     tree = {"cunit": [str(c) for c in wcs.wcs.cunit], "crpix": wcs.wcs.crpix.tolist(),
             "crval": wcs.wcs.crval.tolist()}
     # The rotation in the form the WCS uses, checked in wcslib's order:
@@ -162,11 +160,11 @@ def _wcs_to_tree(wcs: WCS) -> dict:
 
 
 # Header cards a WCS is rebuilt from: its axes, and any frame, time and
-# observer. The number of axes (wcslib allocates its square) and the steps
-# and rotation or CD matrix come from the values kept beside the header,
-# since a header gives a CD matrix as a PC matrix and steps, which would
-# take precedence. Other cards are left out, such as a distortion's, which
-# astropy tabulates at whatever size the header asks.
+# observer. The number of axes (wcslib allocates its square), steps and
+# rotation or CD matrix come from the values kept beside the header, as a
+# header gives a CD matrix as a PC matrix and steps, which would take
+# precedence. Other cards are left out, such as a distortion's, which
+# astropy tabulates at any size the header asks.
 _WCS_CARDS = re.compile(
     r"WCSNAME|(CTYPE|CUNIT|CRPIX|CRVAL|CNAME|CRDER|CSYER|CZPHS|CPERI)\d{1,2}"
     r"|(PV|PS)\d{1,2}_\d{1,2}|LONPOLE|LATPOLE|RADESYS|EQUINOX|RESTFRQ|RESTWAV|VELREF"
@@ -296,8 +294,8 @@ def _jsonable(value):
         if registry.get(type(value).__name__) is not type(value):
             raise TypeError(f"A {type(value).__name__} cannot be written to a results file: "
                             f"only {', '.join(sorted(registry))} are rebuilt when it is read.")
-        # Also keep the fields the object derives, such as a detector's dark
-        # current from its temperature, with the values the run used.
+        # Also keep derived fields, such as a detector's dark current, with
+        # the values the run used.
         derived = {field.name: getattr(value, field.name) for field in dataclasses.fields(value)
                    if not field.init and hasattr(value, field.name)}
         return {TAG: "dataclass", "class": type(value).__name__,
@@ -324,10 +322,9 @@ def _jsonable(value):
         return {TAG: "datetime", "value": value.isoformat()}
     if isinstance(value, datetime.date):
         return {TAG: "date", "value": value.isoformat()}
-    # Paths, and anything else with a place on the filesystem, such as the
-    # throughput tables found through importlib.resources, which need not be
-    # a pathlib.Path. A path inside the package is written relative to it, so
-    # the reader finds its own copy; any other is written as it is.
+    # Paths, including tables found through importlib.resources, which need
+    # not be a pathlib.Path. A path inside the package is written relative
+    # to it, so the reader finds its own copy.
     if isinstance(value, Path) or hasattr(value, "__fspath__"):
         try:
             relative = Path(os.fspath(value)).relative_to(_package_root()).as_posix()
@@ -347,10 +344,10 @@ def _jsonable(value):
     raise TypeError(f"Values of type {type(value).__name__} cannot be written to a results file.")
 
 
-# The value each setting had in runs made before it existed. An object or
-# file from then that lacks one gets this value, with a warning only where it
-# differs from today's default. Fits were unweighted before
-# FitConfig.weighted, and None is the detector material's value.
+# Value each setting had in runs made before it existed, given to an object
+# or file that lacks it, with a warning where it differs from today's
+# default. Fits were unweighted before FitConfig.weighted, and None means
+# the detector material's value.
 _MATERIAL = {"fano_factor": None, "pair_energy_300k": None, "pair_energy_slope": None}
 _EARLIER_VALUES = {
     "FitConfig": {"weighted": False, "start": "search"},
@@ -391,14 +388,10 @@ def _is_default(cls, name: str, value) -> bool:
 def _init_fields(value) -> dict:
     """Arguments a configuration object was made with, as far as it has them.
 
-    Fields derived in __post_init__, such as a detector's dark current from
-    its temperature, are written separately as `derived` and restored with
-    the run's values. An object from an older version's pickle may lack a
-    field added since. It then gets today's default, or, for fields in
-    `_EARLIER_VALUES` such as FitConfig's `weighted`, the value runs had
-    before the field existed. An object from another version may have a
-    setting this version lacks. It is written too, so that reading the file
-    reports that it is left out.
+    Fields derived in `__post_init__` are written separately, as `derived`.
+    A field missing from an older pickle's object gets today's default, or
+    its `_EARLIER_VALUES` entry. A setting this version lacks is written
+    too, so reading the file reports that it is left out.
     """
     fields, missing, earlier = {}, [], []
     # Use what the instance itself holds, so a missing field is not silently
@@ -489,8 +482,8 @@ def _unjson(value, reading: _Reading):
     if tag == "path":
         return Path(value["value"])
     if tag == "resource":
-        # Check the path as written, before touching the filesystem, so a
-        # file cannot make the reader look outside the package at all.
+        # Check the path before touching the filesystem, so a file cannot
+        # make the reader look outside the package.
         parts = _package_parts(value["value"])
         if parts is None:
             raise ValueError(f"The results file names a package file, {value['value']!r}, "
@@ -521,17 +514,15 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
     """
     Configuration object rebuilt from what a file stored.
 
-    The object is constructed again, so it is checked and computes its
-    derived fields, which are then set to the values the run had. If this
-    version would not make the object, because a setting has gone or a
-    check has been added since, the file still reads: the object is rebuilt
-    as stored, unchecked, with a warning given once `reading` is done.
+    The object is constructed again, so it is checked, and its derived
+    fields are then set to the run's values. If this version would not make
+    it, such as after a check was added, it is rebuilt as stored, unchecked,
+    with a warning once `reading` is done.
     """
     known = {field.name for field in dataclasses.fields(cls) if field.init}
     # A setting stored under an old name is read under its new one.
     stored = {getattr(cls, "_OLD_NAMES", {}).get(key, key): item for key, item in stored.items()}
-    # A setting in _EARLIER_VALUES that the file lacks gets the value runs
-    # had before it existed.
+    # A setting the file lacks gets its _EARLIER_VALUES entry.
     before = {name: item for name, item in _EARLIER_VALUES.get(cls.__name__, {}).items()
               if name not in stored}
     for name, item in before.items():
@@ -540,9 +531,8 @@ def _rebuild(cls, stored: dict, derived: dict, reading: _Reading):
         reading.notes[f"The {cls.__name__} in the results file has no {name}, which ECLIPSE "
                       f"added after it was made; it gets {item!r}, as runs then had."] = None
     stored = {**stored, **before}
-    # A setting added since the file was made gets today's default, with a
-    # warning, as the run did not have it. One with no default makes the
-    # construction below fail, and is reported there.
+    # A setting added since gets today's default, with a warning. One with
+    # no default fails the construction below, which reports it.
     missing = sorted(field.name for field in dataclasses.fields(cls)
                      if field.init and field.name not in stored
                      and (field.default is not dataclasses.MISSING
@@ -611,16 +601,16 @@ def _put(group: h5py.Group, name: str, value, compression, written: dict) -> Non
     Write `value` as member `name` of `group`.
 
     A value holding arrays becomes a dataset or group, and anything else a
-    JSON attribute. `written` maps the id of each object written so far as a
-    dataset or group to the object and its path, so an object that appears
-    again is written as a reference rather than written again.
+    JSON attribute. `written` maps the id of each dataset or group written
+    so far to the object and its path, so an object seen again is written
+    as a reference.
     """
     try:
         _put_value(group, name, value, compression, written)
     except _Unwritable:
         raise
     except (TypeError, RecursionError) as error:
-        # Give the value's path, which a save failing at the end of a run must report.
+        # Name the value's path, so a save failing at the end of a run says what failed.
         reason = ("A value that holds itself cannot be written to a results file."
                   if isinstance(error, RecursionError) else error)
         raise _Unwritable(f"{group.name.rstrip('/')}/{name}: {reason}") from error
@@ -735,8 +725,8 @@ def _get(group: h5py.Group, name: str, path: Path, reading: _Reading):
     link = group.get(name, getlink=True)
     if link is None:
         raise ValueError(f"{path}: {group.name} has no member {name!r}.")
-    # A link, or a dataset whose data lives elsewhere, would make the reader
-    # open another file, which a results file never needs.
+    # Only hard links, as an external link would make the reader open
+    # another file.
     if not isinstance(link, h5py.HardLink):
         raise ValueError(f"{path}: {group.name}/{name} is a link, which a results file "
                          f"does not hold.")
@@ -748,9 +738,9 @@ def _read(node, path: Path, reading: _Reading):
     if node.name in reading.done:
         return reading.done[node.name]
     # ECLIPSE writes each object once, so one reached twice other than by a
-    # reference is not ECLIPSE's: it would be read twice, or without end if
-    # reached from inside itself. Objects are tracked by their number in the
-    # file rather than kept open, since an open dataset keeps what it read.
+    # reference is refused, as it would be read twice or without end.
+    # Objects are tracked by their number in the file, as an open dataset
+    # keeps what it read.
     number = h5py.h5g.get_objinfo(node.id).objno
     if number in reading.seen:
         raise ValueError(f"{path}: {node.name} is reached from more than one place, which a "
@@ -800,11 +790,10 @@ _DEFLATE_MOST = 1032
 
 def _check_dataset(node: h5py.Dataset, path: Path, reading: _Reading) -> None:
     """
-    Refuse, before reading, a dataset that ECLIPSE would not have written.
+    Refuse, before reading, a dataset ECLIPSE would not have written.
 
-    What the file declares of its data is checked against what it stores,
-    since a crafted file could otherwise declare more than it holds, which
-    reading would make up, or have one stored piece read as many.
+    The declared data is checked against what is stored, so a crafted file
+    cannot declare more than it holds or have one stored piece read as many.
     """
     if node.is_virtual or node.external:
         raise ValueError(f"{path}: {node.name} keeps its data in another file, which a "
@@ -821,9 +810,9 @@ def _check_dataset(node: h5py.Dataset, path: Path, reading: _Reading) -> None:
     if node.chunks is None:
         stored = node.id.get_storage_size()
     else:
-        # Every chunk of the grid must be stored, as an unwritten one would
-        # read as made-up values. Count them first, so a grid declared far
-        # larger than the file holds is not looped over.
+        # Every chunk must be stored, as an unwritten one reads as fill
+        # values. Count them first, so a huge declared grid is not looped
+        # over.
         steps = node.chunks
         grid = [-(-size // step) for size, step in zip(node.shape, steps)]
         whole = node.id.get_num_chunks() == math.prod(grid)
@@ -883,7 +872,7 @@ def _get_group(group: h5py.Group, path: Path, reading: _Reading):
 # ----------------------------------------------------------------------
 def is_results_file(path: str | Path) -> bool:
     """
-    Whether `path` is HDF5, as a results file is, rather than an older pickle.
+    Whether `path` is an HDF5 file rather than an older pickle.
 
     :func:`load_results` checks which kind of HDF5 file it is.
     """
@@ -898,14 +887,13 @@ def save_results(path: str | Path, payload: dict, *, compression: str | None = "
     ----------
     path : str or Path
         Where to write. An existing file is replaced only once the new one
-        is complete, so a failed write leaves it unchanged. A pickle suffix
-        such as `.pkl` is replaced with `.h5`, since the file is not a
-        pickle.
+        is complete. A pickle suffix such as `.pkl` becomes `.h5`.
     payload : dict
         Tree to write, keyed by strings that can name an HDF5 member.
     compression : {"gzip", None}, optional
-        Compress the larger arrays with gzip, which any HDF5 reader can
-        undo; None writes them uncompressed, which is faster for a large run.
+        "gzip" (default) compresses the larger arrays, which any HDF5 reader
+        can read. None leaves them uncompressed, which is faster for a large
+        run.
 
     Returns
     -------
@@ -954,14 +942,12 @@ _HDF5_SUFFIXES = (".h5", ".hdf5", ".hdf", ".he5")
 
 def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
     """
-    Read a results file, or a results pickle written by an older version.
+    Read a results file, or a results pickle from an older version.
 
-    A pickle still loads, with a warning, which also mentions a later run's
-    `.h5` beside it. A pickle named as an HDF5 file is refused, since a
-    reader would take it to be safe to open, and unpickling runs whatever
-    code the file holds. A `.pkl` path that does not exist, as a script
-    written for an older version may ask for, reads the `.h5` the
-    simulation writes in its place, also with a warning.
+    A pickle loads with a warning, which also mentions a newer `.h5` beside
+    it. A pickle named as an HDF5 file is refused, since a reader would take
+    it to be safe to open, and unpickling runs whatever code the file holds.
+    A missing `.pkl` path reads the `.h5` beside it, also with a warning.
 
     Parameters
     ----------
@@ -1021,9 +1007,9 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
                           stacklevel=_stacklevel)
         return payload
 
-    # A damaged or hand-made file can fail anywhere in the reading. Errors are
-    # raised again naming the file, as an OSError if the filesystem fails,
-    # except a MemoryError.
+    # A damaged or hand-made file can fail anywhere. Errors other than a
+    # MemoryError are raised again naming the file, as an OSError if the
+    # filesystem fails.
     reading = _Reading(size=path.stat().st_size)
     try:
         with h5py.File(path, "r") as f:
@@ -1047,8 +1033,7 @@ def load_results(path: str | Path, *, _stacklevel: int = 2) -> dict:
     except Exception as error:
         raise ValueError(f"{path} is not a results file this ECLIPSE can read: "
                          f"{type(error).__name__}: {error}") from error
-    # Give each warning from the reading once, as the caller's, such as for a
-    # configuration object this version would not make.
+    # Give each warning from the reading once, as the caller's.
     for message in reading.notes:
         warnings.warn(message, UserWarning, stacklevel=_stacklevel)
     if not isinstance(results, dict):
@@ -1068,9 +1053,8 @@ def _from_before_weighting(payload) -> bool:
     """
     Whether the results were made before fits could be weighted.
 
-    If so, their fits were unweighted, so `fit_weighted` is set to False. So
-    is `weighted` of a pickled FitConfig, which lacks it and would otherwise
-    read the class default.
+    If so, `fit_weighted` is set to False, as is `weighted` of a pickled
+    FitConfig, which would otherwise read the class default.
     """
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, dict) or "all_combinations" not in results:
@@ -1085,7 +1069,7 @@ def _from_before_weighting(payload) -> bool:
 
 
 def _configuration_objects(value, seen=None):
-    """Each configuration object in an unpickled payload, however deeply it is held."""
+    """Each configuration object in an unpickled payload, at any depth."""
     seen = set() if seen is None else seen
     if id(value) in seen:
         return
@@ -1110,9 +1094,8 @@ def _give_earlier_values(payload) -> None:
     """
     Give each configuration object in an unpickled payload the `_EARLIER_VALUES` it lacks.
 
-    An object pickled before a setting existed would otherwise read the
-    class default, such as a telescope's `resolution_budget`, which runs
-    then did not have.
+    Otherwise an object pickled before a setting existed would read the
+    class default, such as a telescope's `resolution_budget`.
     """
     for value in _configuration_objects(payload):
         own = value.__dict__
@@ -1123,7 +1106,7 @@ def _give_earlier_values(payload) -> None:
 
 def _move_old_tables(payload) -> None:
     """
-    Point missing packaged tables named under the former name at this installation's copies.
+    Point missing `euvst_response` tables at this installation's copies.
 
     Changes the configuration objects of an unpickled payload in place; see
     :func:`_moved_package_file`.
@@ -1154,25 +1137,23 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     Rewrite a results pickle from ECLIPSE 0.11.0 and earlier as a results file.
 
     Everything in the pickle is kept, and the new file is read back as a
-    check. A setting that did not exist when the pickle was made gets
-    today's default, with a warning, unless runs then had another value:
-    their fits were unweighted, so the file records `fit_weighted` False,
-    and `weighted` False for a FitConfig in it. Missing packaged tables
-    named in the former folder `euvst_response/data` are recorded as this
-    installation's copies. A pickle holding no results, such as a synthesis
-    pickle, is refused. Reading a pickle runs
-    whatever code it holds, so only convert files you trust.
+    check. A setting added since gets today's default, with a warning,
+    unless runs then had another value. Fits were then unweighted, so
+    `fit_weighted`, and `weighted` of a FitConfig, are recorded as False.
+    Missing packaged tables in the former folder `euvst_response/data` are
+    recorded as this installation's copies. A pickle with no results, such
+    as a synthesis pickle, is refused. Reading a pickle runs whatever code
+    it holds, so only convert files you trust.
 
     Parameters
     ----------
     pickle_path : str or Path
         Pickle to convert.
     path : str or Path, optional
-        Results file to write. Default None, which writes it beside the
-        pickle, with the same name ending in `.h5`.
+        Results file to write. Default the pickle's name ending in `.h5`,
+        beside it.
     overwrite : bool, optional
-        Replace a file already at `path`, which is otherwise refused.
-        Default False.
+        Replace a file already at `path`. Default False, which refuses it.
 
     Returns
     -------
@@ -1207,7 +1188,7 @@ def convert_results_pickle(pickle_path: str | Path, path: str | Path | None = No
     if _from_before_weighting(payload):
         warnings.warn(_BEFORE_WEIGHTING.format(path=pickle_path), UserWarning, stacklevel=2)
     # Write under a temporary name and read it back before replacing the
-    # target, so the result is never an unreadable file or a lost one.
+    # target, so the target is never left unreadable or lost.
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = _new_partial(target)
     try:

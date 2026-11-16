@@ -1,9 +1,8 @@
 """
 A box seen from a position on the solar disk, along a slanted line of sight.
 
-Each cell of the box is taken to be uniform. Its emission is shared between
-the sky pixels its column of sight passes through, in proportion to the part
-of the cell's volume in front of each pixel.
+Each cell is taken to be uniform, and its emission is shared between the
+sky pixels in proportion to the part of its volume in front of each.
 """
 
 import warnings
@@ -31,8 +30,7 @@ class DiskGeometry(NamedTuple):
     box_y: np.ndarray
     #: Along the local vertical there.
     up: np.ndarray
-    #: Rows: along the sky's x (west), y (north) and z (towards
-    #: the observer).
+    #: Rows: along the sky's x (west), y (north) and z (towards the observer).
     sky: np.ndarray
     #: Angle between the local vertical and the line of sight.
     heliocentric_angle: u.Quantity
@@ -41,13 +39,13 @@ class DiskGeometry(NamedTuple):
 def disk_geometry(x: u.Quantity, y: u.Quantity,
                   rotation: u.Quantity = 0 * u.deg) -> DiskGeometry:
     """
-    Where a box at a position on the solar disk sits, and how the sky is seen from there.
+    Orientation of a box at a position on the solar disk, and of the sky seen from there.
 
-    The box's z points up, along the local vertical at the position. With no
-    rotation its x points west and its y north. The sky's x points west, its
-    y north and its z towards the observer, who is 1 AU from the Sun above
-    its equator, with solar north up. Heliocentric coordinates have x west,
-    y north and z towards the observer, with the origin at the Sun's centre.
+    The box's z is the local vertical; with no rotation its x points west
+    and its y north. The sky's x points west, its y north and its z towards
+    the observer, 1 AU from the Sun above its equator with solar north up.
+    Heliocentric coordinates have x west, y north and z towards the
+    observer, from the Sun's centre.
 
     Parameters
     ----------
@@ -65,8 +63,6 @@ def disk_geometry(x: u.Quantity, y: u.Quantity,
     """
     observer = HeliographicStonyhurst(0 * u.deg, 0 * u.deg, const.au)
     sky = Helioprojective(observer=observer)
-    # Heliocentric coordinates: x west, y north and z towards the observer,
-    # with the origin at the Sun's centre.
     heliocentric = Heliocentric(observer=observer)
 
     def position(coordinate):
@@ -79,8 +75,7 @@ def disk_geometry(x: u.Quantity, y: u.Quantity,
         """Unit vector along the part of `vector` perpendicular to `normal`."""
         return unit(vector - (vector @ normal) * normal)
 
-    # Where the line of sight first meets the surface; NaN off the disk,
-    # which is reported below.
+    # Where the line of sight first meets the surface; NaN off the disk.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SunpyUserWarning)
         surface = SkyCoord(x, y, frame=sky).make_3d()
@@ -95,10 +90,9 @@ def disk_geometry(x: u.Quantity, y: u.Quantity,
                                   frame=HeliographicStonyhurst())))
     north = across(pole, up)
     west = np.cross(north, up)
-    # The sky's z is the line of sight from the position, which is parallel
-    # to within the box's size to the line of sight from every other point
-    # of it. The sky's y is the direction of increasing Ty there, towards
-    # the pole of the helioprojective frame.
+    # The sky's z is the line of sight from the position, parallel to within
+    # the box's size to that from any point of it. The sky's y points to
+    # increasing Ty, towards the pole of the helioprojective frame.
     sky_z = unit(position(observer) - point)
     sky_pole = position(SkyCoord(0 * u.deg, 90 * u.deg, const.au, frame=sky)) - position(observer)
     sky_y = across(sky_pole, sky_z)
@@ -116,10 +110,9 @@ def disk_frame(x: u.Quantity, y: u.Quantity,
     """
     Directions of a box at a position on the solar disk, as seen on the sky.
 
-    The box's z points up, along the local vertical at the position. With no
-    rotation its x points west and its y north. The sky's x points west, its
-    y north and its z towards the observer, who is 1 AU from the Sun above
-    its equator, with solar north up.
+    The box's z is the local vertical; with no rotation its x points west
+    and its y north. The sky's x points west, its y north and its z towards
+    the observer, 1 AU from the Sun above its equator with solar north up.
 
     Parameters
     ----------
@@ -150,11 +143,10 @@ def disk_frame(x: u.Quantity, y: u.Quantity,
 # ----------------------------------------------------------------------
 # How much of a shape falls in each pixel
 # ----------------------------------------------------------------------
-# A face of a shape's shadow, seen as the parallelogram `middle + s a + t b`
-# about the shape's centre, in pixels, with s and t from -1/2 to 1/2: its
-# middle, its sides a and b, the factor `scale` on its part, and the depth,
-# an affine function of s and t: its value at the middle and its change
-# along a and along b.
+# A face of a shape's shadow, the parallelogram `middle + s a + t b` about
+# the shape's centre in pixels, with s and t from -1/2 to 1/2. Holds the
+# middle, the sides a and b, a factor `scale` on its part, and the depth,
+# affine in s and t, as its value at the middle and its change along a and b.
 _Face = Tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]
 
 
@@ -162,11 +154,11 @@ def _cell_faces(linear: np.ndarray, cell: np.ndarray) -> Tuple[List[_Face], np.n
     """
     Faces of a cell's shadow, and its half extent along u and v.
 
-    The volume of the cell in front of a region of the sky is the integral
-    over the region of the depth of the cell, from its far faces to its near
-    ones (the divergence theorem). Each face's part is its seen area times
-    the integral of an affine function of s and t over the part of it in
-    front of the region. A face seen edge on has none.
+    The cell's volume in front of a region of the sky is the integral over
+    the region of the cell's depth, from its far faces to its near ones (the
+    divergence theorem). Each face adds its seen area times the integral of
+    an affine function of s and t over its part in front of the region. A
+    face seen edge on adds nothing.
 
     Parameters
     ----------
@@ -209,8 +201,8 @@ def _overlaps(faces: List[_Face], reach: np.ndarray,
     """
     Pixels a shape at each of `centres` falls on, and the share in each.
 
-    Each face is cut to each pixel near it, and the integral of its depth
-    over the part inside summed.
+    Each face is cut to each pixel near it, and the integrals of its depth
+    over the parts inside are summed.
 
     Parameters
     ----------
@@ -274,7 +266,7 @@ def _cell_overlaps(linear: np.ndarray, cell: np.ndarray,
 # The view
 # ----------------------------------------------------------------------
 class _SkyImage:
-    """The box's cells and the image's pixels, which every view has."""
+    """Box cells and image pixels, common to every view."""
 
     #: Whether the box is laid on the curved surface; see :class:`CurvedSkyView`.
     curved = False
@@ -293,10 +285,10 @@ class _SkyImage:
         Pixels of the image, reaching from `low` to `high` along u and v.
 
         `low` and `high` are in pixels from where the box's centre at z = 0
-        is seen. The pixels are centred there: their edges are on whole
-        multiples of the pitch from it when the base spans an even number of
-        pixels, `spans`, and halfway between for an odd one. In a view from
-        straight above they are the box's cells.
+        is seen, and the pixels are centred there. Their edges fall on whole
+        pitches from it when the base spans an even number of pixels,
+        `spans`, and halfway between for an odd one. Seen from straight
+        above they are the box's cells.
         """
         self._edge_offset = 0.5 * (spans % 2)
         # A rounding error does not add a pixel.
@@ -336,23 +328,20 @@ class SkyView(_SkyImage):
     How each cell of a box is shared between sky pixels, from a position on the disk.
 
     Each cell is taken to be uniform, and its emission is shared between the
-    pixels in proportion to the part of its volume in front of each. The sky
-    pixels are as big as the box's cells across, so the emission measure of
-    a pixel is the sum over cells of n_e^2 times their height times that
-    share. A slanted line of sight crosses more cells, so the sum grows as
-    one over the cosine of the heliocentric angle without any further factor.
+    pixels in proportion to the part of its volume in front of each. Sky
+    pixels are as wide as the cells, so a pixel's emission measure is the
+    sum over cells of n_e^2 times their height times that share. A slanted
+    line of sight crosses more cells, so the sum grows as one over the
+    cosine of the heliocentric angle with no further factor.
 
     Two projections are offered:
 
-    - `"two-step"` first shares each cell between the columns of the box,
-      along the line of sight, to where it meets the box's base at z = 0.
-      Every cell of a layer sits the same way on that grid, so this is
-      computed once per layer, exactly. The columns are then shared between
-      the sky pixels by area, each taken to be uniform across. That second
-      sharing softens detail by up to a pixel.
+    - `"two-step"` shares each cell along the line of sight between the
+      columns of the box's base at z = 0, exactly and once per layer, then
+      shares the columns between the sky pixels by area, each taken as
+      uniform. The second step softens detail by up to a pixel.
     - `"exact"` shares each cell between the sky pixels directly. It is
-      exact for uniform cells, and slower, since each cell sits differently
-      on the sky's pixels.
+      exact for uniform cells, and slower.
 
     At disk centre with no rotation both give the view from straight above.
 
@@ -364,10 +353,10 @@ class SkyView(_SkyImage):
         Edges of the box's cells. x and y must be evenly spaced.
     wrap : bool
         Take the box to repeat sideways, as MURaM and Bifrost boxes do, so
-        every line of sight crosses the box's full height. The image then
-        covers where the box's base at z = 0 is seen. Otherwise lines of
-        sight end at the box's sides, and the image covers every cell, with
-        part columns along its edges.
+        every line of sight crosses its full height. The image then covers
+        where the box's base at z = 0 is seen. Otherwise lines of sight end
+        at the box's sides, and the image covers every cell, with part
+        columns along its edges.
     projection : str, optional
         `"two-step"` (default) or `"exact"`.
 
@@ -378,7 +367,7 @@ class SkyView(_SkyImage):
     x_edges, y_edges : u.Quantity
         Edges of the image's pixels: west and north on the sky from where
         the box's centre at z = 0 is seen, plus the box's centre in x and
-        y, so that at disk centre they are the box's own.
+        y, so at disk centre they are the box's own.
     """
 
     def __init__(self, frame: np.ndarray, x_edges: u.Quantity, y_edges: u.Quantity,
@@ -390,8 +379,8 @@ class SkyView(_SkyImage):
         self.wrap = bool(wrap)
         self.projection = projection
         self._set_box(x_edges, y_edges, z_edges)
-        # A point of the box is seen where its line of sight meets the base,
-        # at z = 0: `lean` along x and y per unit height.
+        # A point is seen where its line of sight meets the base at z = 0,
+        # moved by `lean` along x and y per unit height.
         towards = self.frame[2]
         self._lean = -towards[:2] / towards[2]
 
@@ -421,9 +410,8 @@ class SkyView(_SkyImage):
 
     # -- Common geometry ------------------------------------------------
     def _across_sky(self, offset: np.ndarray) -> np.ndarray:
-        """How far, in pixels, vectors on the base, `(n, 2)` along x and y, are seen on the sky."""
-        # Written out rather than as a matrix product, whose BLAS threads would
-        # compete for the cores with the projection's own.
+        """Sky offsets in pixels of vectors on the base, `(n, 2)` along x and y."""
+        # Written out so BLAS threads do not compete with the projection's own.
         offset = np.atleast_2d(offset)
         return ((offset[:, :1] * self.frame[:2, 0] + offset[:, 1:] * self.frame[:2, 1])
                 / self._pitch)
@@ -533,8 +521,8 @@ class SkyView(_SkyImage):
         row, column = np.indices((ny, nx), dtype=np.int64)
         if self.projection == "two-step":
             rows, columns = self.grid_shape
-            # Neighbouring layers mostly sit the same way on the base, so the
-            # last layer's pixels are kept for the next.
+            # Reuse the last layer's pixels, as neighbouring layers mostly sit
+            # the same way on the base.
             pixels = {}
             for layer, steps in enumerate(self._layers):
                 kept = {}
@@ -584,21 +572,21 @@ class CurvedSkyView(_SkyImage):
     """
     How each cell of a box laid on the curved solar surface is shared between sky pixels.
 
-    The box is laid on the surface so that distances along it from the
-    box's centre are its own x and y: an azimuthal equidistant map, which
+    The box is laid on the surface by an azimuthal equidistant map, so
+    distances along the surface from its centre are its own x and y. This
     shortens lengths across the corners of a box 300 arcsec wide by under
     one per cent. Each column stands along its own local vertical, with its
-    cells at the solar radius plus their height. A cell keeps the emission
-    measure it has in the simulation, and takes the shape the map gives at
-    its centre; the curvature within one cell is left out. Its emission is
-    shared between the sky pixels in proportion to the part of it in front
-    of each, exactly, as with the `"exact"` projection of :class:`SkyView`.
-    The lines of sight are parallel, along the one to the box's centre, and
-    each cell's Doppler velocity is the flow along it in the cell's own axes.
+    cells at the solar radius plus their height. A cell keeps its emission
+    measure from the simulation and takes the shape the map gives at its
+    centre, without the curvature within it. Its emission is shared between
+    the sky pixels exactly, as with the `"exact"` projection of
+    :class:`SkyView`. The lines of sight are parallel to the one to the
+    box's centre, and each cell's Doppler velocity is the flow along it in
+    the cell's own axes.
 
-    The box must lie on the side of the Sun facing the observer. A box taken
-    to repeat sideways is laid on the surface again past each of its sides,
-    and its image must be on the disk, where the copies behind the limb are
+    The box must lie on the side of the Sun facing the observer. A box
+    taken to repeat sideways is laid down again past each of its sides, and
+    its image must be on the disk, where the copies behind the limb are
     hidden.
 
     Parameters
@@ -647,8 +635,8 @@ class CurvedSkyView(_SkyImage):
             np.column_stack([edge_x, np.full(edge_x.size, edge_y[-1])]),
             np.column_stack([np.full(edge_y.size, edge_x[0]), edge_y]),
             np.column_stack([np.full(edge_y.size, edge_x[-1]), edge_y])])
-        # In pixels from where the box's centre is seen, until the image's
-        # first pixel and edges are known below.
+        # Zero for now, so `_seen` gives pixels from where the box's centre is
+        # seen; `_set_image` sets them below.
         self._edge_offset = np.zeros(2)
         self._first = np.zeros(2, dtype=np.int64)
         outline_seen = self._seen(self._radius * self._columns(outline)[5])
@@ -659,9 +647,8 @@ class CurvedSkyView(_SkyImage):
                 raise ValueError(
                     "Part of the box is on the far side of the Sun, past the limb as seen "
                     "from the observer; move the position towards disk centre.")
-            # On the side facing the observer each point of the surface is seen
-            # at its own place, so the outermost cells are those of the box's
-            # outermost columns.
+            # On the facing side, the outermost cells seen are those of the
+            # box's outermost columns.
             sides = np.flatnonzero((self._row == 0) | (self._row == ny - 1)
                                    | (self._column == 0) | (self._column == nx - 1))
             low, high = np.full(2, np.inf), np.full(2, -np.inf)
@@ -686,7 +673,7 @@ class CurvedSkyView(_SkyImage):
     # -- Geometry --------------------------------------------------------
     def _columns(self, offset: np.ndarray):
         """
-        Each column of the base at `offset`, `(n, 2)` along x and y from its centre.
+        Geometry of the columns of the base at `offset`, `(n, 2)` along x and y from its centre.
 
         Returns the unit vertical, the surface's change per unit of x and of
         y (the map's Jacobian), the box's x and y axes carried there along
@@ -710,8 +697,7 @@ class CurvedSkyView(_SkyImage):
             return (_dot(away, axis)[:, np.newaxis] * away_there
                     + scale * _dot(across, axis)[:, np.newaxis] * across)
 
-        # Worked out without subtracting the two verticals, which are nearly
-        # equal near the centre.
+        # Avoids subtracting the two verticals, nearly equal near the centre.
         rise = -2.0 * np.sin(0.5 * angle) ** 2 * g.up + np.sin(angle) * away
         return (vertical, carried(g.box_x, shrink), carried(g.box_y, shrink),
                 carried(g.box_x, 1.0), carried(g.box_y, 1.0), rise)
@@ -723,7 +709,7 @@ class CurvedSkyView(_SkyImage):
 
     def _column_data(self, shift: np.ndarray, which: np.ndarray) -> dict:
         """
-        What the cells of columns `which`, moved by `shift` along x and y, need.
+        Geometry of the cells of columns `which`, moved by `shift` along x and y.
 
         Only the columns on the side of the Sun facing the observer are kept.
         """
@@ -763,7 +749,7 @@ class CurvedSkyView(_SkyImage):
             yield centres, 0.5 * np.abs(linear[:, :2] * cell).sum(axis=2)
 
     def _find_copies(self):
-        """The copies of the box that reach the image, with what their cells need."""
+        """Copies of the box that reach the image, with their cells' geometry."""
         everything = np.arange(self._row.size)
         if not self.wrap:
             return [self._column_data(np.zeros(2), everything)]

@@ -36,7 +36,7 @@ def _flat_goft_at(rest):
 def _synthesise(tmp_path, temperature, velocity=0.0, rest=REST, keep_vdem=True):
     """Synthesis of a corona at 1e9 cm^-3, 6 arcsec along the slit, moving at `velocity` km/s.
 
-    It holds one line, at `rest` Angstrom, with the contribution function `G0`.
+    One line, at `rest` Angstrom, with contribution function `G0`.
     """
     nz, ny, nx = temperature.size, 44, 6
     density = (1.0e9 / u.cm**3 * 1.2 * const.u).to(u.g / u.cm**3)
@@ -94,9 +94,9 @@ def sharp_frame(uniform_synthesis):
 def blurred_frame(uniform_synthesis):
     """Frame of the uniform corona with the PSF and no noise. Tests must not change it.
 
-    The exposure is long, 1000 s, so the read-out smear adds little light. The
-    telescope leaves out the resolution budget, whose blur across the slit would
-    carry light past the edges of this small scene.
+    The 1000 s exposure keeps the read-out smear small. The resolution budget
+    is left out, as its blur across the slit would carry light past the edges
+    of this small scene.
     """
     return full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1000 * u.s,
                           telescope=Telescope_EUVST(resolution_budget="none"), noise=False,
@@ -122,9 +122,10 @@ def _one_line(products, logN=None, g_off_the_synthesis=None, rest=REST):
 @pytest.mark.parametrize("psf", [False, True])
 def test_a_line_lands_on_the_rows_close_to_where_photons_from_lines_lays_it(uniform_synthesis,
                                                                            psf, request):
-    """The synthesis samples the line every 5 km/s, 3.3 mA, and each sample's light is spread
-    over its bin, so the rows agree with the line's exact integrals to a part in a hundred of
-    its peak, and hold the same light in all."""
+    """Rows match the line's exact integrals to 1% of its peak, and in total.
+
+    The synthesis samples the line every 5 km/s (3.3 mA), and spreads each sample over its bin.
+    """
     products = read_synthesis_products(uniform_synthesis)
     # The rate does not depend on the exposure, so the 1000 s frame serves.
     frame = request.getfixturevalue("blurred_frame" if psf else "sharp_frame")
@@ -196,9 +197,8 @@ def test_each_ccds_columns_count_from_its_left_output():
 @pytest.mark.parametrize("ccd, other", [("left", "right"), ("right", "left")])
 def test_each_ccds_columns_run_from_its_left_output(uniform_synthesis, right_synthesis, ccd,
                                                     other):
-    """With fiducials at uneven places along a short slit, a line's rate in each column
-    follows the open part of the slit at that column's angle counted from the CCD's left
-    output: the north end on the left CCD, the south end on the right CCD."""
+    """Each column's rate follows the open part of a short slit with uneven fiducials, at the
+    column's angle from the CCD's left output (north end on the left CCD, south on the right)."""
     path = uniform_synthesis if ccd == "left" else right_synthesis
     telescope = Telescope_EUVST(resolution_budget="none", slit_length=5 * u.arcsec,
                                 fiducial_centres=[-1.5 * u.arcsec, 0.8 * u.arcsec])
@@ -405,9 +405,9 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     psf, _ = _response(focal_plane, "left", None, tel, det, 0.2 * u.arcsec, "quadrature",
                        np.array([REST]))
     total = np.hypot(thermal, psf[0])
-    # The row three away gets the photons the blur brings from the line,
-    # more of them from its nearer side. Their mean wavelength is the line's,
-    # moved toward the row by the thermal share of the line's spread.
+    # The row three away gets light the blur brings from the line, more from
+    # its nearer side. Its mean wavelength is the line's, moved toward the
+    # row by the thermal share of the line's spread.
     a, b = (low - REST) / total, (high - REST) / total
     landed = REST + total * (norm.pdf(a) - norm.pdf(b)) / (norm.cdf(b) - norm.cdf(a))
     expected = REST + (thermal / total) ** 2 * (landed - REST)
@@ -415,9 +415,9 @@ def test_each_pixel_takes_the_wavelength_of_the_photons_reaching_it(uniform_synt
     assert frame.wavelength["left"][row].to_value(u.AA) == pytest.approx((low + high) / 2)
     assert reaching == pytest.approx(expected, abs=0.01 * abs(expected - REST))
     assert abs(reaching - REST) < 0.5 * abs((low + high) / 2 - REST)
-    # The root mean square energy gives the spread of their wavelengths: the
-    # thermal share of the blur's spread, plus how the place they land in
-    # the row moves their mean.
+    # The RMS energy gives the spread of the photons' wavelengths: the thermal
+    # share of the blur's spread, plus the shift in their mean with where
+    # they land in the row.
     z = norm.cdf(b) - norm.cdf(a)
     landing = total**2 * (1 + (a * norm.pdf(a) - b * norm.pdf(b)) / z
                           - ((norm.pdf(a) - norm.pdf(b)) / z) ** 2)
@@ -465,9 +465,9 @@ def test_the_continuum_lands_on_the_rows_as_photons_from_spectrum_lays_it(unifor
         spectral_psf="quadrature" if psf else None).to_value(1 / u.s)
     middle = focal_plane.n_columns // 2
     rate = frame.rate["left"][:, middle]
-    # The frame takes each wavelength to cover the bin halfway to its
-    # neighbours, and photons_from_spectrum the intervals between them, so
-    # they differ at the ends of the window, by half a bin, and nowhere else.
+    # The frame takes each sample to cover the bin halfway to its neighbours,
+    # and photons_from_spectrum the intervals between samples, so they
+    # differ only at the ends of the window, by half a bin.
     row = focal_plane.wavelength(np.arange(focal_plane.n_rows), "left").to_value(u.AA)
     inside = (row > 194.2) & (row < 195.8)
     assert np.allclose(rate[inside], expected[inside], rtol=1e-5, atol=0)

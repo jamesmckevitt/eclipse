@@ -74,9 +74,8 @@ GOFT = 1.0e-24  # erg cm^3 / s, the order of a strong coronal line's peak
 def _flat_goft(lines, logN_min=8.0, logN_max=10.0, nN=21, **kwargs):
     """Contribution function flat in temperature and density, replacing fiasco.
 
-    A column's intensity is then its emission measure. The value is
-    realistic, so the photon counts in an instrument run are ones a detector
-    can hold."""
+    A column's intensity then follows its emission measure. The value is
+    realistic, so an instrument run does not saturate the detector."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(logN_min, logN_max, nN)
     goft = {name: {"wl0": REST.to(u.cm), "g_tn": np.full((logN_grid.size, logT_grid.size), GOFT),
@@ -291,9 +290,9 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
     scan = rebinned.axis_world_coords(1)[0]
     assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
 
-    # A strip cropped to one 0.2 arcsec row along the slit is smaller than a
-    # 1 arcsec EIS pixel, and the rebinning says so rather than returning
-    # nothing. Two 1 arcsec slit positions keep the raster inside the box.
+    # A strip cropped to one 0.2 arcsec row is smaller than a 1 arcsec EIS
+    # pixel, and the rebinning raises rather than returning nothing. Two
+    # 1 arcsec slit positions keep the raster inside the box.
     from eclipse.config import Detector_EIS
     one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
     narrow = one_row.summed_cube(RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL),
@@ -536,10 +535,10 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
 # ----------------------------------------------------------------------
 # A series of synthesis files
 # ----------------------------------------------------------------------
-# On the detector, the two routes get the same wavelengths from WCSs with
-# different reference pixels, which differ in the last bit, about 4e-22 cm at
-# 195 Angstrom. That is about a part in 1e11 of a 5 km/s synthesis bin
-# (3e-11 cm), and the resampled spectra can differ by as much.
+# On the detector, the two routes get their wavelengths from WCSs with
+# different reference pixels, which differ in the last bit (about 4e-22 cm at
+# 195 Angstrom). That is about 1e-11 of a 5 km/s synthesis bin (3e-11 cm), and
+# the resampled spectra can differ by as much.
 DETECTOR_ROUNDING = 1e-10
 
 
@@ -978,8 +977,8 @@ def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_sn
     assert calls == [] and synthesiser.goft is None
     for snapshot in range(3):
         synthesiser._synthesise_strip(snapshot, 0, 1)
-    # 1e9 needs 10^8.8 and 10^9.1; 1e10 is a point, so 10^9.7 to 10^10.3;
-    # 1e7 likewise 10^6.7 to 10^7.3.
+    # 1e9 needs 10^8.8 to 10^9.1, 1e10 needs 10^9.7 to 10^10.3 and 1e7
+    # 10^6.7 to 10^7.3, and the grid grows without gaps.
     assert calls == [(8.8, 9.1), (9.4, 10.3), (6.7, 8.5)]
     assert np.allclose(synthesiser.logN_grid, np.arange(6.7, 10.35, 0.3))
     assert np.array_equal(synthesiser.goft[LINE]["g_tn"][:, 0], synthesiser.logN_grid)

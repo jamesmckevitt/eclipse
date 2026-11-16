@@ -44,7 +44,7 @@ def test_a_spectrum_with_nothing_above_its_background_starts_as_before():
 
 
 def test_at_a_peak_of_three_times_the_noise_no_fit_ends_far_away():
-    """From a simple start, 1 per cent ended over 300 km/s away; the rest scattered 37 km/s."""
+    """From a simple start, 1 per cent end over 300 km/s away and the rest scatter 37 km/s."""
     rng = np.random.default_rng(7)
     spectra = gaussian(WV, 30.0, REST, SIGMA, BACK) + 10.0 * rng.standard_normal((500, WV.size))
     fits = [_fit_one(WV, spectrum) for spectrum in spectra]

@@ -1,5 +1,5 @@
 """
-Main execution script for instrument response simulations.
+Instrument runs from a configuration file.
 """
 
 from __future__ import annotations
@@ -40,8 +40,7 @@ import dataclasses
 import numpy as np
 
 
-# Every top-level key main() reads. Any other key is rejected rather than
-# ignored.
+# Top-level keys main() reads. Any other key is refused.
 _TOP_LEVEL_KEYS = {
     "instrument", "n_iter", "ncpu",
     "uniform_intensity", "rest_wavelength", "thermal_width",
@@ -52,10 +51,9 @@ _TOP_LEVEL_KEYS = {
     "simulation", "detector", "telescope", "filter", "fitting",
 }
 
-# Keys of the 'synthesis:' section, the settings an atmosphere time series is
-# synthesised with (as in synthesise-spectra), and of the 'raster:' section,
-# the observing plan of an atmosphere or synthesis time series
-# (eclipse.raster.RasterPlan).
+# Keys of the 'synthesis:' section, the synthesis settings for an atmosphere
+# time series (as in synthesise-spectra), and of the 'raster:' section, the
+# observing plan of a time series (eclipse.raster.RasterPlan).
 _SYNTHESIS_KEYS = {"lines", "abundance", "vel_res", "vel_lim", "crop_y", "crop_z",
                    "precision", "mass_per_electron", "hdf5_dbase_root", "n_workers",
                    "goft_temperature_chunk"}
@@ -97,12 +95,11 @@ def _allowed_cpus(environ, cpuset, affinity) -> list:
     CPUs this job step has on its node, for its ranks to share.
 
     SLURM confines a step with a cpuset, which may be wider than the
-    `affinity` an MPI library gave a rank. The `cpuset` is used when it is
-    the step's: it has no more CPUs than SLURM_CPUS_ON_NODE and contains the
-    affinity. Otherwise the affinity is kept. Where SLURM does not confine
-    steps, the cpuset is the whole node and could include another job's
-    CPUs. The affinity is also kept when there is no cpuset or
-    SLURM_CPUS_ON_NODE is not set.
+    `affinity` an MPI library gave a rank. The `cpuset` is used if it is the
+    step's: no more CPUs than SLURM_CPUS_ON_NODE, and containing the
+    affinity. Otherwise, or with no cpuset or SLURM_CPUS_ON_NODE, the
+    affinity is kept, as where SLURM does not confine steps the cpuset is
+    the whole node and could include another job's CPUs.
     """
     on_node = environ.get("SLURM_CPUS_ON_NODE")
     if (cpuset and on_node is not None and on_node.isdigit()
@@ -116,9 +113,9 @@ def _rank_cpus(environ, allowed: list) -> list:
     CPUs for this MPI rank: its share of `allowed`, by local task id.
 
     Each task gets SLURM_CPUS_PER_TASK of `allowed`, in order. All of
-    `allowed` is returned if there are too few for every task on the node
-    to have its own. An empty list, which leaves the affinity alone, is
-    returned if SLURM does not say how many CPUs a task has.
+    `allowed` is returned if there are too few for each task on the node to
+    have its own, and an empty list, which leaves the affinity alone, if
+    SLURM does not give the CPUs per task.
     """
     per_task, local = environ.get("SLURM_CPUS_PER_TASK"), environ.get("SLURM_LOCALID")
     if per_task is None or local is None:
@@ -128,10 +125,8 @@ def _rank_cpus(environ, allowed: list) -> list:
     return share if len(share) == per_task else list(allowed)
 
 
-# main() builds the Simulation objects itself and takes only these keys from
-# the 'simulation:' section. The other Simulation fields (instrument, n_iter,
-# ncpu and the pinhole lists) are top-level keys; one written here would be
-# parsed and then dropped.
+# Keys main() takes from the 'simulation:' section. The other Simulation
+# fields (instrument, n_iter, ncpu and the pinhole lists) are top-level keys.
 _SIMULATION_KEYS = {"slit_width", "expos", "vis_sl", "psf", "psf_boundary",
                     "spectral_psf", "slit_mask", "focal_plane_dispersion", "noise",
                     "readout_dark_current", "enable_pinholes", "pinhole_visible_wavelength"}
@@ -165,15 +160,14 @@ def _require_mapping(value, what: str) -> None:
 
 def _validate_config_keys(config: dict, instrument: str) -> None:
     """
-    Reject any config key ECLIPSE does not read.
+    Refuse any config key ECLIPSE does not read.
 
-    Called before anything is loaded or computed, so a config written for an
-    older layout fails at once rather than after the atmosphere is loaded.
+    Called before anything is loaded, so a bad config fails at once.
 
     Parameters
     ----------
     config : dict
-        Whole parsed YAML config.
+        Parsed YAML config.
     instrument : str
         `"SWC"` or `"EIS"`, which have different detector and telescope
         parameters.
@@ -184,8 +178,8 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
         If the instrument is not supported, a key is not read, or a section
         that is present is not a mapping.
     """
-    # Checked first because the valid keys depend on it, and main() treats
-    # anything other than SWC as EIS.
+    # First, as the valid keys depend on it and main() treats anything but SWC
+    # as EIS.
     if instrument not in ("SWC", "EIS"):
         raise ValueError(
             f"Unknown instrument '{instrument}'. Supported values: 'SWC', 'EIS'."
@@ -198,11 +192,10 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
                                else Telescope_EUVST)
     fil_keys = _dataclass_keys(AluminiumFilter)
 
-    # 'filter' is a Telescope_EUVST field, but main() builds the filter from
-    # the top-level 'filter:' section and would drop a value given here.
+    # The filter comes from the top-level 'filter:' section, not this one.
     tel_keys.discard("filter")
     if instrument == "EIS":
-        # Allowed here; main() warns about it and ignores it.
+        # main() warns about it and ignores it.
         tel_keys.add("microroughness_sigma")
 
     sections = {
@@ -211,14 +204,13 @@ def _validate_config_keys(config: dict, instrument: str) -> None:
         "telescope": tel_keys,
         "filter": fil_keys,
     }
-    # Other places a key could belong, for the suggestions. The top level is
-    # included so a section key written at the wrong depth is reported as such.
+    # Other places a key could belong, for suggestions, including the top level
+    # for a key at the wrong depth.
     elsewhere = {"": _TOP_LEVEL_KEYS, **sections}
 
     check_config_keys(config, _TOP_LEVEL_KEYS, "top-level", sections)
 
-    # Checked by presence, not value, so an empty heading (which parses to
-    # None) gets a clear message here rather than an AttributeError later.
+    # By presence, not value, so an empty heading (None) gets a clear message.
     for name, allowed in sections.items():
         if name not in config:
             continue
@@ -311,8 +303,7 @@ def _parse_synthesis_settings(config: dict):
         settings["mass_per_electron"] = float(value)
     if section.get("hdf5_dbase_root") is not None:
         settings["hdf5_dbase_root"] = str(section["hdf5_dbase_root"])
-    # Require whole numbers rather than calling int(), which would truncate a
-    # fraction.
+    # Whole numbers only, as int() would truncate a fraction.
     for key, least in (("n_workers", 0), ("goft_temperature_chunk", 1)):
         value = section.get(key)
         if value is None:
@@ -380,10 +371,9 @@ def _reference_line(config: dict, synthesis_path) -> str:
     """
     Line to observe in a synthesis file.
 
-    This is 'reference_line' if set. If the key is present but empty, it is
-    the file's first line, as in older versions. If the key is absent, it is
-    the file's only line, or else the default line, which the file must then
-    hold.
+    `reference_line` if set. If the key is present but empty, the file's
+    first line. If the key is absent, the file's only line, or else the
+    default line, which the file must then hold.
     """
     if config.get("reference_line") is not None:
         return config["reference_line"]
@@ -402,15 +392,15 @@ def _reference_line(config: dict, synthesis_path) -> str:
 
 def _parse_pinhole_config(config: dict) -> tuple:
     """
-    Read and validate the pinhole lists from a YAML config.
+    Pinhole lists from a YAML config, checked.
 
-    The lists have one entry per pinhole, so a position list given without
-    the sizes describes no pinhole and is always a mistake.
+    The lists have one entry per pinhole, so positions without sizes are
+    refused.
 
     Parameters
     ----------
     config : dict
-        Whole parsed YAML config.
+        Parsed YAML config.
 
     Returns
     -------
@@ -424,8 +414,7 @@ def _parse_pinhole_config(config: dict) -> tuple:
     if "pinhole_positions" in config:
         pinhole_positions = ensure_list(config["pinhole_positions"])
 
-    # Optional spectral positions, one per pinhole, as a fraction (0.0-1.0) of
-    # the detector's spectral width. If omitted, every pinhole is projected to
+    # Fractions of the detector's spectral width, one per pinhole; by default
     # the centre of the spectral window.
     pinhole_positions_spectral = []
     if "pinhole_positions_spectral" in config:
@@ -442,14 +431,14 @@ def _parse_fitting_config(config: dict) -> FitConfig | None:
     """
     Fit configuration from the `fitting:` block of a YAML config.
 
-    A block with no components gives the single-Gaussian fit. FitConfig
+    A block with no components gives the single-Gaussian fit. `FitConfig`
     checks the values, including that there are no components or at least
     two.
 
     Parameters
     ----------
     config : dict
-        Whole parsed YAML config.
+        Parsed YAML config.
 
     Returns
     -------
@@ -498,9 +487,8 @@ def main() -> None:
     Run the `eclipse` simulation with arguments from `sys.argv`.
 
     Reads the config file given by `--config`, runs every combination of its
-    settings, and writes the results to `run/result/<config name>.h5`. The
-    `eclipse` command checks its arguments and handles errors before calling
-    this.
+    settings and writes the results to `run/result/<config name>.h5`. The
+    `eclipse` command checks the arguments and handles errors.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, help="YAML config file", required=True)
@@ -516,11 +504,12 @@ def main() -> None:
 
 def _set_up_process(debug: bool) -> tuple:
     """
-    Quieten astropy's WCS warnings, set the debug mode and, under MPI, this
-    rank's CPUs and output. Returns this rank and the number of ranks.
+    Set up warnings, debug mode and, under MPI, this rank's CPUs and output.
+
+    Returns this rank and the number of ranks.
     """
     global _STARTING_STDERR
-    # Suppress noisy astropy WCS warnings
+    # Quieten astropy's WCS warnings.
     for msg in [
         "target cannot be converted to ICRS",
         "target cannot be converted to ICRS, so will not be set on SpectralCoord",
@@ -533,15 +522,15 @@ def _set_up_process(debug: bool) -> tuple:
     if debug:
         print("Debug mode enabled - will break to IPython on errors")
 
-    # MPI auto-detection: when launched by srun or mpirun with several tasks,
-    # the Monte Carlo iterations are split across the ranks.
+    # Under srun or mpirun with several tasks, the Monte Carlo iterations are
+    # split across the ranks.
     from .utils import _get_mpi_info
     _, _mpi_rank, _mpi_size = _get_mpi_info()
     if _mpi_size > 1:
-        # Intel MPI pins each rank to cores, which breaks joblib/loky. Widen
-        # the affinity to this rank's share of the job step's CPUs on the
-        # node. CPUs 0 to n would be shared by every rank and, on a node
-        # shared with another job, need not be this job's.
+        # Intel MPI pins each rank to cores, which breaks joblib/loky, so widen
+        # the affinity to this rank's share of the step's CPUs on the node. Not
+        # CPUs 0 to n, which every rank would share and which, on a shared
+        # node, need not be this job's.
         _cpus = _rank_cpus(os.environ, _allowed_cpus(os.environ, _cpuset(),
                                                      sorted(os.sched_getaffinity(0))))
         if _cpus:
@@ -551,20 +540,17 @@ def _set_up_process(debug: bool) -> tuple:
             print(f"MPI distributed mode: {_mpi_size} processes "
                   f"(MC iterations will be split across ranks)")
         elif _STARTING_STDERR is None:
-            # Silence stdout and stderr on non-root ranks to avoid duplicated
-            # output. Redirect the OS file descriptors, not just the Python
-            # objects, because SLURM captures fd 1/2 directly and tqdm can
-            # bypass sys.stderr. The original stderr is kept for an error that
-            # must be reported before the run is aborted. A later run of the
-            # same run file finds them silenced already.
+            # Silence non-root ranks at the file descriptors, as SLURM captures
+            # fd 1 and 2 directly and tqdm can bypass sys.stderr. The original
+            # stderr is kept to report an error before the run is aborted. A
+            # later run of the same run file finds them silenced already.
             _STARTING_STDERR = os.dup(2)
             _devnull_fd = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(_devnull_fd, 1)  # redirect fd 1 (stdout)
-            os.dup2(_devnull_fd, 2)  # redirect fd 2 (stderr)
+            os.dup2(_devnull_fd, 1)
+            os.dup2(_devnull_fd, 2)
             os.close(_devnull_fd)
-            # Wrap the already-redirected fds rather than opening new devnull
-            # handles; closefd=False prevents a ResourceWarning when these
-            # objects are later garbage-collected.
+            # closefd=False avoids a ResourceWarning when these are
+            # garbage-collected.
             sys.stdout = open(1, "w", closefd=False)
             sys.stderr = open(2, "w", closefd=False)
     return _mpi_rank, _mpi_size
@@ -572,8 +558,7 @@ def _set_up_process(debug: bool) -> tuple:
 
 def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> tuple:
     """The configuration's instrument, iterations and CPUs, checked."""
-    # An empty file parses to None, which would otherwise fail later with an
-    # AttributeError.
+    # An empty file parses to None.
     if config is None:
         raise ValueError(f"Config file is empty: {source}")
     if not isinstance(config, dict):
@@ -581,9 +566,8 @@ def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> 
             f"Config file must be a mapping of keys to values, got "
             f"{type(config).__name__}: {source}"
         )
-    # The config is saved with the results, so a value the results file
-    # cannot hold, such as a YAML alias that refers to itself, is refused now
-    # rather than after the run.
+    # The config is saved with the results, so refuse now a value the results
+    # file cannot hold, such as a YAML alias that refers to itself.
     try:
         _to_json(config)
     except (TypeError, RecursionError) as error:
@@ -605,8 +589,7 @@ def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> 
         raise ValueError(f"'instrument' must be SWC or EIS, got {instrument!r}.")
     instrument = instrument.upper()
 
-    # Before anything is loaded, so a config written for an older layout fails
-    # here rather than after the atmosphere is loaded.
+    # Before anything is loaded, so a bad config fails at once.
     _validate_config_keys(config, instrument)
 
     n_iter = config.get("n_iter", 25)
@@ -623,9 +606,9 @@ def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> 
         raise ValueError(f"'ncpu' must be a whole number of CPUs, 1 or more, or -1 for all "
                          f"of them, got {ncpu!r}.")
 
-    # In MPI mode, cap a given ncpu at the CPUs available to this rank so
-    # joblib does not oversubscribe. ncpu=-1 is left alone: joblib uses the
-    # OS affinity mask, which I_MPI_PIN_DOMAIN=auto sets correctly.
+    # Under MPI, cap ncpu at this rank's CPUs so joblib does not oversubscribe.
+    # -1 is left alone, as joblib then uses the affinity mask, which
+    # I_MPI_PIN_DOMAIN=auto sets correctly.
     if _mpi_size > 1:
         if ncpu != -1:
             slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
@@ -642,18 +625,18 @@ def _top_level_settings(config, source: str, _mpi_rank: int, _mpi_size: int) -> 
 
 def _observed_input(config: dict) -> tuple:
     """
-    Whether the run observes a uniform intensity, a series of atmosphere
-    files or a series of synthesis files, after checking that only one is
-    given and that the sections given belong to it.
+    Whether the run observes a uniform intensity, an atmosphere or a synthesis series.
+
+    Checks that only one input is given and that the sections given belong
+    to it.
     """
-    # Simulation mode. A time series is either atmosphere files, synthesised
-    # in this run, or synthesis files made beforehand.
+    # A time series is atmosphere files, synthesised in this run, or synthesis
+    # files made beforehand.
     uniform_intensity_mode = "uniform_intensity" in config
     if uniform_intensity_mode and "synthesis_file" in config:
         warnings.warn("'synthesis_file' is ignored: 'uniform_intensity' says what is observed.",
                       UserWarning, stacklevel=3)
-    # These describe the line of a uniform intensity; other modes observe the
-    # spectra they are given.
+    # These describe the line of a uniform intensity only.
     for key in ("rest_wavelength", "thermal_width"):
         if key in config and not uniform_intensity_mode:
             warnings.warn(f"'{key}' is ignored: it describes the line of a 'uniform_intensity', "
@@ -677,8 +660,9 @@ def _observed_input(config: dict) -> tuple:
 
 def _move_aside_an_older_pickle(output_file: Path) -> None:
     """
-    Move aside a results pickle of the same name left by an older version,
-    so it is not read in place of the results.
+    Move aside a results pickle of the same name from an older version.
+
+    This stops it being read in place of the results.
     """
     stale = output_file.with_suffix(".pkl")
     if stale.is_file():
@@ -700,7 +684,7 @@ def _move_aside_an_older_pickle(output_file: Path) -> None:
 def run_config(config: dict, name: str, *, source: str | None = None,
                debug: bool = False) -> Path:
     """
-    Observe what a configuration describes, and write the results.
+    Observe what a configuration describes and write the results.
 
     Runs every combination of the configuration's settings, as `eclipse
     observe` does for a run file.
@@ -720,7 +704,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     Returns
     -------
     Path
-        The results file.
+        Results file.
     """
     source = name if source is None else source
     results_path = Path(f"run/result/{name}.h5")
@@ -765,8 +749,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             )
         uniform_rest_wavelength = parse_yaml_input(config.get("rest_wavelength", "195.119 AA"))
         uniform_thermal_width = parse_yaml_input(config.get("thermal_width", "20 km/s"))
-        # Each must be positive, in units of the right kind: a zero or negative
-        # width gives a nonsense fit, which would be saved as a result.
+        # Each must be positive, in units of the right kind, as a zero or
+        # negative width gives a meaningless fit.
         for key, value, kind, example in (
                 ("uniform_intensity", uniform_intensity, u.erg / (u.s * u.cm**2 * u.sr),
                  "5000 erg / (s cm2 sr)"),
@@ -782,8 +766,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         print(f"  Thermal width (1-sigma): {uniform_thermal_width}")
     else:
         synthesis_file = config.get("synthesis_file", DEFAULT_SYNTHESIS_FILE)
-        # Fall back to the pickle older versions wrote, for a run that leaves
-        # the synthesis file at its default.
+        # Fall back to the pickle older versions wrote when the synthesis file
+        # is left at its default.
         if "synthesis_file" not in config and Path(LEGACY_SYNTHESIS_FILE).is_file():
             if not Path(synthesis_file).is_file():
                 synthesis_file = LEGACY_SYNTHESIS_FILE
@@ -828,8 +812,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     tel_fixed, tel_sweep = _parse_section(config.get("telescope", {}), "telescope")
     fil_fixed, fil_sweep = _parse_section(config.get("filter", {}), "filter")
 
-    # The width of the pixels is taken where the observed line lands, which a
-    # run reads from a synthesis file or the uniform-intensity settings.
+    # The pixel width is taken where the observed line lands, read from a
+    # synthesis file or the uniform-intensity settings.
     focal_plane_dispersion = (sim_fixed.get("focal_plane_dispersion")
                               or True in sim_sweep.get("focal_plane_dispersion", []))
     if focal_plane_dispersion and instrument == "SWC" and (atmosphere_series_mode or not (
@@ -839,11 +823,9 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             "ECLIPSE reads from a synthesis file or the uniform-intensity settings, not yet from "
             "an atmosphere series or a synthesis pickle.")
 
-    # A run models frames taken with the shutter closed outside the exposure.
-    # Without a shutter, light falls on the CCDs while a frame is cleared and
-    # read, and every line in the band smears into the window. The run
-    # synthesises only the window, so it cannot model this, and refuses the
-    # setting rather than ignoring it.
+    # Without a shutter, every line in the band smears into the window while a
+    # frame is cleared and read. A run synthesises only the window, so it
+    # cannot model this.
     if "shutter" in det_sweep or det_fixed.get("shutter", True) is False:
         raise ValueError(
             "detector.shutter must be true for an instrument run, which models frames taken "
@@ -856,10 +838,10 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                 f"detector.{name} must be 1 for an instrument run, which does not model "
                 f"charge transfer. Charge left behind as a frame is read is modelled by "
                 f"eclipse.readout, which takes the detector's settings.")
-    # Nor does it take its wavelengths from the SW focal plane. It uses the focal
-    # plane only to find the row recording each wavelength, for the dark current,
-    # and, with focal_plane_dispersion, the width of its pixels. Other values
-    # would make these disagree with its wavelengths.
+    # Nor does it take its wavelengths from the SW focal plane, which it uses
+    # only to find each wavelength's row, for the dark current, and, with
+    # focal_plane_dispersion, the pixel width. Other values would disagree
+    # with its wavelengths.
     if instrument == "SWC":
         focal_plane = {name: det_fixed[name] for name in _FOCAL_PLANE_SETTINGS
                        if name in det_fixed}
@@ -873,10 +855,9 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                     f"plane, and needs the two to agree. Full-CCD frames, made by "
                     f"eclipse.full_frame, do.")
 
-    # The wavelength grids are cached by slit width and detector sampling, and
-    # sized for the slit's spectral PSF, which also depends on the slit
-    # psf_params was measured with. Like psf_params, that is a fixed property
-    # of the telescope, so it takes one value.
+    # The wavelength grids are cached by slit width and detector sampling and
+    # sized for the spectral PSF, which also depends on psf_slit_width, so it
+    # takes one value.
     if "psf_slit_width" in tel_sweep:
         raise ValueError(
             "telescope.psf_slit_width is the slit psf_params was measured with, "
@@ -907,8 +888,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                 )
                 tel_fixed.pop(key, None)
                 tel_sweep.pop(key, None)
-        # Any pinhole key, not just the sizes: positions given alone would
-        # otherwise be accepted and silently ignored.
+        # Any pinhole key, as positions given alone would otherwise be ignored.
         if (pinhole_sizes or pinhole_positions or pinhole_positions_spectral
                 or sim_fixed.get("enable_pinholes")
                 or any(sim_sweep.get("enable_pinholes", []))
@@ -952,10 +932,10 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     if fit_signals != "both":
         skipped = "photon" if fit_signals == "dn" else "dn"
         print(f"Fitting only '{fit_signals}' signal (skipping '{skipped}')")
-    # Unless the fitting block turns weighting off, the DN fits are weighted
-    # by each pixel's uncertainty and the photon fits maximise the Poisson
-    # likelihood. The ground truth is weighted like the DN fits, except when
-    # only photons are fitted, as no DN uncertainty is then worked out.
+    # Unless turned off, DN fits are weighted by each pixel's uncertainty and
+    # photon fits maximise the Poisson likelihood. The ground truth is weighted
+    # like the DN fits, except when only photons are fitted, as there is then
+    # no DN uncertainty.
     weighted_fits = fit_config is None or fit_config.weighted
     weighted_truth = weighted_fits and fit_signals != "photon"
     print("DN fits weighted by each pixel's uncertainty, photon fits by their Poisson "
@@ -972,9 +952,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                   f"of {truth_failed.size} pixels; their true velocity and "
                   f"width are NaN")
         return truth
-    # ensure_list wraps scalars in a list. Values must be plain ints (no
-    # units), not passed through int(), which would turn a fraction or a
-    # numeric string into one.
+    # Plain ints only, as int() would turn a fraction or a numeric string into
+    # one.
     if not offchip_bin_slits or any(isinstance(v, bool) or not isinstance(v, int) or v < 1
                                     for v in offchip_bin_slits):
         raise ValueError(f"'offchip_bin_slit' must be whole numbers of rows, 1 or more, got "
@@ -1062,8 +1041,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             "are off, so a sweep of it would repeat one run. Give it one value, or turn the "
             "pinholes on with enable_pinholes and pinhole_sizes.")
 
-    # Build sweep dimensions: every list-valued entry in a section becomes a named sweep dimension.
-    # Keys use "section.attribute" notation.
+    # Each list-valued entry becomes a sweep dimension, named
+    # "section.attribute".
     sweep_dims = {}
     for attr, vals in sim_sweep.items():
         sweep_dims[f"simulation.{attr}"] = vals
@@ -1092,12 +1071,12 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     raster_summed = {}
     raster_cubes = {}
     synthesis = None
-    # Metadata kept with the cubes from a single synthesis file, as with a
-    # pickle: its dynamic mode.
+    # Metadata kept with the cubes from a single synthesis file: its dynamic
+    # mode.
     file_meta = {}
     if uniform_intensity_mode:
-        # A uniform intensity has no position along the slit for the slit's
-        # fiducials to block, so the option is refused rather than ignored.
+        # A uniform intensity has no position along the slit for the
+        # fiducials to block.
         if sim_fixed.get("slit_mask") or True in sim_sweep.get("slit_mask", []):
             raise ValueError("simulation.slit_mask needs a scene along the slit, from a "
                              "synthesis or an atmosphere, not a uniform intensity.")
@@ -1159,7 +1138,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
     observed_cache = {}
     # Synthesis-series raster, its metadata and its summed spectra, by sampling.
     raster_syntheses = {}
-    # Keyed by slit_width_arcsec (first match) for convenient downstream access
+    # Keyed by slit_width_arcsec (first match).
     cube_reb_dict = {}
 
     # Add offchip_bin_slit as a sweep dimension if needed
@@ -1184,7 +1163,7 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         print(f"\nUpdated to {total_combinations} parameter combination(s) (one per raster repeat).")
 
     def _combinations():
-        """New iterator over the sweep's combinations, yielding one at a time."""
+        """New iterator over the sweep's combinations."""
         return itertools_product(*dim_values) if dim_names else iter([()])
 
     def _combination(combo_values):
@@ -1247,10 +1226,9 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             pinhole_visible_wavelength=all_sim.get("pinhole_visible_wavelength",
                                                    Simulation.pinhole_visible_wavelength),
         )
-        # The optics' spectral FWHM depends on the telescope and the detector
-        # together. Work it out here, not only once the scene is laid onto
-        # the detector. It is needed when psf_params is for a given slit, and
-        # always for the PSF convolved with the slit.
+        # Check the optics' spectral FWHM now, as it depends on the telescope
+        # and detector together. It is needed when psf_params is for a given
+        # slit, and always for the PSF convolved with the slit.
         if sim.focal_plane_dispersion:
             det = _with_focal_plane_width(det, all_det)
         if tel.psf_slit_width is not None or (sim.psf and sim.spectral_psf == "convolution"):
@@ -1293,14 +1271,12 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             observed_wavelength.append(u.Quantity(found).to(u.AA))
         return observed_wavelength[0]
 
-    # Check every combination before running any, so a bad value does not
-    # stop the sweep part-way and lose the earlier results, which are saved
-    # only at the end.
+    # Check every combination before running any, as results are saved only
+    # at the end.
     for combo_values in _combinations():
         _, _, _, _, tel, _, _ = _combination(combo_values)
-    # Read the throughput tables now too, so a missing or faulty table is
-    # found before the first photons are counted. They cannot be swept, so
-    # the last combination's tables are every combination's.
+    # Read the throughput tables now too. They cannot be swept, so the last
+    # combination's are every combination's.
     if instrument == "SWC":
         for table in (tel.pm_table, tel.grating_table, tel.filter.al_table,
                       tel.filter.oxide_table, tel.filter.c_table):
@@ -1337,22 +1313,19 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         noise = SIM.noise
         enable_pinholes = SIM.enable_pinholes
 
-        # Two-level rebinning cache: rebin_atmosphere does not depend on offchip_bin_slit,
-        # so cube_reb_cache is keyed by the sampling alone to avoid redundant rebin calls
-        # when sweeping multiple binning values at fixed spatial/spectral sampling.
-        # The spectral PSF's width sets how far the rebinned cube's wavelength
-        # grid reaches, and it changes with the telescope's resolution budget,
-        # which may be swept.
+        # Two-level cache: rebinning does not depend on offchip_bin_slit, so
+        # cube_reb_cache is keyed by the sampling alone. The spectral PSF's
+        # width is in the key, as it sets how far the wavelength grid reaches
+        # and changes with the resolution budget, which may be swept.
         sampling_key = (
             slit_width.to_value(u.arcsec),
             DET.plate_scale_angle.to_value(u.arcsec / u.pixel),
             DET.wvl_res.to_value(u.cm / u.pixel),
             spectral_psf_fwhm(TEL, DET, slit_width),
         )
-        # In uniform-intensity mode the cube has offchip_bin_slit pixels along the
-        # slit, giving rebin_slit_offchip independent noise realisations to sum, so
-        # the key includes offchip_bin_slit. A time series is synthesised per
-        # exposure time as well as per slit width.
+        # A uniform-intensity cube has offchip_bin_slit pixels along the slit,
+        # with independent noise to sum, so the key includes it. A time series
+        # is synthesised per exposure time as well as per slit width.
         if uniform_intensity_mode:
             cube_reb_key = (*sampling_key, offchip_bin_slit)
         elif raster_mode:
@@ -1425,9 +1398,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
                 cube_reb_cache[cube_reb_key] = pad_spectral_axis(
                     rebinned, spectral_psf_margin(TEL, DET, slit_width))
                 if not offchip_checked:
-                    # The scene has the same length along the slit for every
-                    # combination, so each one's number of rows is known now,
-                    # before any has run.
+                    # The scene's length along the slit is the same for every
+                    # combination, so all can be checked now.
                     _check_offchip_bins(cube_reb_cache[cube_reb_key].meta["fov_along_slit"])
                     offchip_checked = True
 
@@ -1445,10 +1417,9 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             ground_truth = (None if weighted_truth
                             else _fit_ground_truth(cube_reb_binned, offchip_bin_slit))
             rebin_cache[rebin_cache_key] = (cube_reb_binned, ground_truth)
-            # Key by (slit_width_arcsec, offchip_bin_slit) so sweeps over
-            # several binning factors at a fixed slit width keep all their
-            # cubes; a single key would silently keep only the first. A time
-            # series adds the exposure time, which changes the cube too.
+            # Key by (slit_width_arcsec, offchip_bin_slit) so a sweep over
+            # binning keeps every cube. A time series adds the exposure time,
+            # which changes the cube too.
             cube_key = ((sampling_key[0], expos.to_value(u.s), raster_repeat, offchip_bin_slit)
                         if raster_mode else (sampling_key[0], offchip_bin_slit))
             if "slit_mask" in sim_sweep or "slit_length" in tel_sweep:
@@ -1460,19 +1431,18 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         cube_reb_binned, ground_truth = rebin_cache[rebin_cache_key]
 
         # The cube the Monte Carlo observes: the scene laid onto the pixels
-        # through the telescope, with each photon counted at its own
-        # wavelength. With the PSF on, the scene is also blurred by the PSF
-        # before it is laid onto the pixels. This is exact, whereas blurring
-        # the pixels afterwards moves a narrow line within its pixel. With
-        # slit_mask on, the slit's ends and fiducials are cut out in the same
-        # step. The ground truth is the scene without any of these. A uniform
-        # intensity is made again through the spectral response, which
+        # through the telescope, each photon counted at its own wavelength.
+        # With the PSF on, the scene is blurred before it is laid onto the
+        # pixels, as blurring the pixels afterwards would move a narrow line
+        # within its pixel. With slit_mask on, the slit's ends and fiducials
+        # are cut out in the same step. The ground truth has none of these. A
+        # uniform intensity is remade through the spectral response, which
         # depends on the slit, the telescope and spectral_psf.
         cube_obs = cube_reb
-        # The observed cube includes the telescope's throughput as well as its
-        # PSF, so every telescope and filter setting is in the key, except the
-        # one for visible light, which the Monte Carlo adds. With the pinholes
-        # on, it also includes the light they let past the filter.
+        # The observed cube includes the telescope's throughput and PSF, so
+        # every telescope and filter setting is in the key except
+        # visible_decade_thickness, as the Monte Carlo adds the visible light.
+        # With the pinholes on, it also includes the light they let through.
         filter_params = (_extract_config_params(filter_obj, "filter")
                          if filter_obj is not None else {})
         filter_params.pop("filter.visible_decade_thickness", None)
@@ -1550,9 +1520,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             print(f"  Pinhole positions: {pinhole_positions}")
 
         if weighted_truth:
-            # Weight the ground truth by the DN uncertainty expected with no
-            # noise, so it is the same fit, of the same line, as for the
-            # measured spectra.
+            # Weight the ground truth by the expected DN uncertainty, so it is
+            # the same fit as for the measured spectra.
             expected = expected_dn_uncertainty(cube_obs, expos, DET, TEL, SIM, offchip_bin_slit,
                                                uniform_mode=uniform_intensity_mode)
             if expected.shape != cube_reb_binned.data.shape:
@@ -1574,15 +1543,13 @@ def run_config(config: dict, name: str, *, source: str | None = None,
 
         # Only store results on rank 0 (MPI-aware)
         if _mpi_rank == 0 and first_dn_signal is not None:
-            # Build parameters dict from actual config objects so all fields
-            # (including those using class defaults) are recorded.
+            # From the config objects, so defaults are recorded too.
             parameters = {}
             parameters.update(_extract_config_params(SIM, "simulation"))
             parameters.update(_extract_config_params(DET, "detector"))
             if instrument == "SWC":
                 parameters.update(_extract_config_params(filter_obj, "filter"))
             parameters.update(_extract_config_params(TEL, "telescope"))
-            # Add offchip_bin_slit to the parameters dict
             parameters["offchip_bin_slit"] = offchip_bin_slit
             if raster_mode:
                 parameters["raster.repeat"] = raster_repeat
@@ -1630,8 +1597,8 @@ def run_config(config: dict, name: str, *, source: str | None = None,
             "fit_config": fit_config,
             "fit_signals": fit_signals,
             # Whether the fits were weighted: DN by each pixel's uncertainty,
-            # photons by their Poisson likelihood. Results made before this was
-            # recorded were unweighted.
+            # photons by their Poisson likelihood. Results without this key
+            # were unweighted.
             "fit_weighted": weighted_fits,
         }
 

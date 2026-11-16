@@ -1,8 +1,7 @@
 """A configuration that cannot run is refused before anything runs.
 
-That includes a quantity without a unit or of the wrong kind, a value
-outside its range, a repeated YAML key, an empty value, and a sweep value
-that cannot run.
+This covers a quantity without a unit or of the wrong kind, a value out of
+range, a repeated YAML key, an empty value and a sweep value that cannot run.
 """
 import sys
 
@@ -69,7 +68,7 @@ def test_a_setting_of_the_wrong_kind_or_out_of_range_is_refused(build, message):
 
 
 def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
-    """A path given as text failed to parse as a quantity, and a one-line header lost a row."""
+    """A path given as text is read, and a one-line header costs no row."""
     rows = "17.0 0.097\n17.2 0.103\n17.4 0.110\n"
     for name, text in (("one.dat", "# reflectance\n" + rows), ("none.dat", rows)):
         (tmp_path / name).write_text(text)
@@ -80,7 +79,7 @@ def test_a_table_named_in_a_configuration_reads_whatever_its_header(tmp_path):
 
 
 def test_a_table_inside_an_archive_is_read_as_a_packaged_one_may_be(tmp_path):
-    """importlib.resources gives a zipped package's tables as readable resources, not paths."""
+    """`importlib.resources` gives a zipped package's tables as resources, not paths."""
     import zipfile
 
     with zipfile.ZipFile(tmp_path / "package.zip", "w") as archive:
@@ -114,7 +113,7 @@ def test_a_slip_in_a_tables_data_is_refused_not_skipped(tmp_path):
 @pytest.mark.parametrize("row", ["17.2 10.3", "17.2 -0.1", "17.2 nan", "17.2 inf", "0 0.103",
                                  "-17.2 0.103", "nan 0.103"])
 def test_a_table_row_out_of_range_is_refused(tmp_path, row):
-    """A reflectance in per cent gave 100 times the signal, and a nan gave none."""
+    """A reflectance in per cent would give 100 times the signal, and a nan none."""
     (tmp_path / "range.dat").write_text(f"# reflectance\n17.0 0.097\n{row}\n17.4 0.110\n")
     with pytest.raises(ValueError, match=rf"line 3: '{row}' needs a wavelength above zero, "
                                          rf"in nm, and a throughput from 0 to 1"):
@@ -123,7 +122,7 @@ def test_a_table_row_out_of_range_is_refused(tmp_path, row):
 
 def test_a_line_before_the_data_that_begins_with_a_number_is_said_to_be_taken_as_a_header(
         tmp_path):
-    """It may be a first data line with a slip in it; the packaged tables' headers are words."""
+    """It may be a data line with a slip in it. The packaged tables' headers are words."""
     import shutil
     import warnings
     from importlib.resources import files
@@ -167,7 +166,7 @@ def test_the_psf_widths_and_the_tables_are_checked_when_built(build, message):
 ])
 def test_a_table_that_cannot_be_read_is_refused_before_the_first_combination_runs(
         tmp_path, monkeypatch, capsys, text, error, message):
-    """It was read only when the first combination's photons were counted."""
+    """The table is read up front, not when the first photons are counted."""
     table = tmp_path / "missing.dat"
     if text is not None:
         table.write_text(text)
@@ -267,7 +266,7 @@ def test_a_top_level_value_that_cannot_be_run_is_refused(tmp_path, monkeypatch, 
 
 def test_every_combination_of_a_sweep_is_checked_before_the_first_runs(tmp_path, monkeypatch,
                                                                          capsys):
-    """There is no 0.3 arcsec slit; found at its turn, it ended the sweep and lost the rest."""
+    """There is no 0.3 arcsec slit; found at its turn, it would end the sweep and lose the rest."""
     with pytest.raises(ValueError, match="slit_width must be 0.2, 0.4, 0.8, or 1.6"):
         _run(tmp_path, monkeypatch, {**UNIFORM, "simulation": {
             "expos": ["5 s", "10 s"], "slit_width": ["0.2 arcsec", "0.3 arcsec"]}})
@@ -292,7 +291,7 @@ def test_a_spectral_psf_the_telescope_and_detector_cannot_give_is_refused_before
 
 def test_off_chip_binning_beyond_the_scene_is_refused_before_the_first_combination_runs(
         tmp_path, monkeypatch, capsys):
-    """A one-row scene can be binned by 1 but not 2; 2 was found only when its turn came."""
+    """A one-row scene can be binned by 1 but not 2, and 2 is refused before 1 runs."""
     from eclipse.synthesis_file import SpectralLine, Synthesis, write_synthesis
 
     edges = np.arange(3) * 0.1 * u.Mm
@@ -324,7 +323,7 @@ def test_the_line_of_a_uniform_intensity_is_said_to_be_ignored_elsewhere(tmp_pat
 
 
 def test_an_atmosphere_below_absolute_zero_or_of_negative_density_is_refused():
-    """Such cells were silently dropped from the synthesis."""
+    """Such cells would be silently left out of the synthesis."""
     edges = {axis: np.arange(3) * u.Mm for axis in ("x_edges", "y_edges", "z_edges")}
     temperature = np.full((2, 2, 2), 1e6) * u.K
     density = np.full((2, 2, 2), 1e9) / u.cm**3

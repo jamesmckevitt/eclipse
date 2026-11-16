@@ -83,9 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
-    """Main CLI entry point."""
+    """Entry point for `eclipse`."""
     argv = list(sys.argv[1:] if argv is None else argv)
-    # Passed on whole, so their own options are not read as eclipse's.
+    # These take their own options, so pass them on whole.
     if argv[:1] == ["atmosphere"]:
         from .atmosphere import main as atmosphere_main
         atmosphere_main(argv[1:])
@@ -100,7 +100,6 @@ def main(argv=None):
         parser.error(f"'{args.command}' takes no options of eclipse's; put it first, as "
                      f"in 'eclipse {args.command} --help'.")
 
-    # Always print the logo first
     print_logo()
 
     if args.logo_only:
@@ -128,8 +127,8 @@ def main(argv=None):
         print("\nInterrupted by user.")
         sys.exit(1)
     except Exception as e:
-        # A run ECLIPSE cannot do, or a missing file, raises an error that says why.
-        # Anything else is unexpected, so print its traceback.
+        # A bad run or a missing file raises an error that says why. Print the
+        # traceback for anything else.
         if not isinstance(e, (ValueError, FileNotFoundError, FirstRankFailed)):
             traceback.print_exc()
         _fail(f"Error during {args.command}: {type(e).__name__}: {e}")
@@ -139,10 +138,9 @@ def _fail(message: str) -> None:
     """
     Print `message` and end the run on every MPI rank.
 
-    Ranks other than the first have their output silenced, so the message
-    goes to the stderr the rank started with. An MPI run is aborted, as the
-    other ranks would otherwise wait for this one until the job's time runs
-    out.
+    Ranks after the first have their output silenced, so the message goes
+    to the rank's original stderr. An MPI run is aborted, so the other ranks
+    do not wait for this one until the job's time runs out.
     """
     from .main import _STARTING_STDERR
     from .utils import _get_mpi_info

@@ -6,7 +6,7 @@ the folder holding them, as
 
     python $REPO/tools/docs_examples/make_figures.py $REPO/docs/images
 
-Names after the folder make only those figures.
+Function names given after the folder make only those figures.
 """
 import sys
 from functools import cache
@@ -44,13 +44,13 @@ def combination(name, **settings):
 
 @cache
 def main_maps():
-    """The maps of the worked example's run."""
+    """Maps of the worked example's run."""
     return create_sunpy_maps_from_combo(combination("muram_ar_fe12"), date_obs=DATE)
 
 
 @cache
 def sweep_maps():
-    """The maps of the combination that the analysis page reads."""
+    """Maps of the combination the analysis page reads."""
     return maps("muram_ar_sweep", offchip_bin_slit=2, **{
         "simulation.slit_width": 0.4 * u.arcsec, "simulation.expos": 60 * u.s})
 
@@ -69,7 +69,7 @@ def save(fig, name):
 
 
 def extent(image):
-    """The extent of a map in arcsec, with its centre at zero."""
+    """Extent of a map in arcsec, centred on zero."""
     width = image.dimensions.x.value * image.scale.axis1.to_value(u.arcsec / u.pix)
     height = image.dimensions.y.value * image.scale.axis2.to_value(u.arcsec / u.pix)
     return [-width / 2, width / 2, -height / 2, height / 2]
@@ -131,7 +131,7 @@ def stages():
 
 
 def slit_and_frame():
-    """The noise-free Fe XII raster with the slit, beside the full-CCD frame there."""
+    """Noise-free Fe XII raster with the slit, beside the full-CCD frame there."""
     det = Detector_SWC()
     raster = maps("muram_ar_psf", **{"simulation.psf": True})["total_dn"]
     pitch = det.plate_scale_angle.to_value(u.arcsec / u.pix)
@@ -177,7 +177,7 @@ def slit_and_frame():
 
 
 def frame_spectrum():
-    """The median over the slit in each row of the frame."""
+    """Median over the slit in each row of the frame."""
     fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
     for ccd, (wavelength, dn) in frame_data().items():
         ax.plot(wavelength, np.median(dn, axis=0), label=f"{ccd} CCD")
@@ -190,7 +190,7 @@ def frame_spectrum():
 
 
 def sweep():
-    """The velocity precision for each slit and exposure, with two pixels binned."""
+    """Velocity precision for each slit and exposure, with two pixels binned."""
     fig, axes = plt.subplots(2, 2, figsize=(7.5, 6.6), sharex=True, sharey=True,
                              layout="constrained")
     for row, slit in zip(axes, (0.2, 0.4)):
@@ -206,7 +206,7 @@ def sweep():
 
 
 def binning():
-    """The velocity precision without binning and with two pixels binned."""
+    """Velocity precision without binning and with two pixels binned."""
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.9), sharey=True, layout="constrained")
     for ax, binned in zip(axes, (1, 2)):
         image = maps("muram_ar_sweep", offchip_bin_slit=binned, **{
@@ -219,7 +219,7 @@ def binning():
 
 
 def noise():
-    """The Doppler velocity of one observation, without and with noise."""
+    """Doppler velocity of one observation, without and with noise."""
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.9), sharey=True, layout="constrained")
     for ax, flag in zip(axes, (False, True)):
         image = maps("muram_ar_noise", **{"simulation.noise": flag})["velocity_from_fit"]
@@ -261,7 +261,7 @@ def slits():
 
 
 def slit_mask():
-    """The active region without and with the slit's mask."""
+    """Active region without and with the slit's mask."""
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.9), sharey=True, layout="constrained")
     images = [maps("muram_ar_slit_mask", **{"simulation.slit_mask": flag})["total_dn"]
               for flag in (False, True)]
@@ -300,7 +300,7 @@ def blend_fit():
 
 
 def doppler():
-    """The true velocity, and the velocity measured with each start."""
+    """True velocity, and the velocity measured with each start."""
     observed = main_maps()
     default = maps("muram_ar_default_start")
     fig, axes = plt.subplots(1, 3, figsize=(11.5, 3.9), sharey=True, layout="constrained")
@@ -314,7 +314,7 @@ def doppler():
 
 
 def precision():
-    """The intensity in DN and the velocity's standard deviation over the iterations."""
+    """Intensity in DN and the velocity's standard deviation over the iterations."""
     observed = sweep_maps()
     dn = observed["total_dn"]
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.9), sharey=True, layout="constrained")
@@ -328,7 +328,7 @@ def precision():
 
 
 def exposure_time():
-    """The shortest exposure that measures each pixel's velocity to within 5 km/s."""
+    """Shortest exposure that measures each pixel's velocity to within 5 km/s."""
     requirement = 5 * u.km / u.s
     run = results("muram_ar_exposures")
     every = [get_results_for_combination(run, **{"simulation.expos": settings["simulation.expos"]})

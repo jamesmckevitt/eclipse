@@ -49,16 +49,16 @@ class EmissionMeasure:
         Pixel boundaries, evenly spaced, as lengths on the Sun or angles seen
         from 1 AU. x runs across the slit and y along it.
     velocity : u.Quantity, optional
-        Velocity bin centres of a VDEM, increasing. A positive velocity is
-        away from the observer, a redshift. It holds
-        the bulk motion only: the thermal width is added in the synthesis.
+        Velocity bin centres of a VDEM, increasing. Positive is away from
+        the observer (redshift). Bulk motion only: the thermal width is
+        added in the synthesis.
     electron_density : u.Quantity, optional
-        Electron density the contribution functions are taken at: one value,
-        one for each pixel, (ny, nx), or one for each temperature of each
-        pixel, (ny, nx, n_temperatures). Default None, for a density or a
-        pressure given to the synthesis.
+        Electron density for the contribution functions: one value, one per
+        pixel (ny, nx), or one per temperature of each pixel (ny, nx,
+        n_temperatures). Default None uses the density or pressure given to
+        the synthesis.
     source : str, optional
-        Free text saying where the emission measure came from, kept in the file.
+        Where the emission measure came from, kept in the file.
     time : u.Quantity, optional
         Time of the snapshot.
     """

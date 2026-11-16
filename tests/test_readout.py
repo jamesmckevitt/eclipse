@@ -1,19 +1,18 @@
 """The SW read-out model: where each row sits, and what it collects.
 
 Row wavelengths are checked against the optical design. The smear is
-checked against values written out from the clocking: a packet read out of
-row r sits at row r - k while image row k - 1 is in the serial register, so
-it collects rate[r - k] * dwell[k], where
+checked against the clocking written out by hand: a packet read out of row
+r sits at row r - k while image row k - 1 is in the serial register, so it
+collects rate[r - k] * dwell[k], where
 
     dwell[k] = row_transfer_time + line_read_time if row k - 1 is read
              = row_transfer_time                  otherwise
 
-Before the exposure, the packet that ends the clear at row r collects one
-row transfer at each row from r + dump_rows down.
+During the clear, the packet that ends at row r collects one row transfer
+at each row from r + dump_rows down.
 
 Charge transfer is checked against moving the charge one transfer at a time,
-each keeping a fraction `cte` of every well's charge and leaving the rest for
-the packet behind.
+each well keeping a fraction `cte` and leaving the rest for the packet behind.
 """
 from dataclasses import replace
 import warnings
@@ -168,9 +167,9 @@ def test_the_tilt_leaves_the_centre_of_the_field_alone():
 
 
 def test_charge_from_fe_xii_crosses_the_flare_lines_on_its_way_out():
-    # Why a flare smears: on the left CCD the register is at the
-    # short-wavelength end, so packets recording Fe XII 195.119 are clocked
-    # through Fe XXIV 192.030 and Ca XVII 192.858.
+    # On the left CCD the register is at the short-wavelength end, so packets
+    # recording Fe XII 195.119 are clocked through Fe XXIV 192.030 and Ca XVII
+    # 192.858.
     fp = FocalPlane_SWC()
     _, fe12 = fp.row_of_wavelength(195.119 * u.Angstrom)
     _, fe24 = fp.row_of_wavelength(192.030 * u.Angstrom)
@@ -303,11 +302,10 @@ def test_smear_is_linear_in_the_light():
 
 
 def test_the_smear_depends_on_which_row_is_being_read_at_the_time():
-    # A packet crossing a bright row collects its light for the length of the
-    # current transfer. The packet read out of row 11 crosses bright row 6
-    # while image row 4 is in the register, so reading row 4 adds a register
-    # read and reading row 5 instead does not, though the same number of rows
-    # is read either way.
+    # A packet collects a bright row's light for the length of the current
+    # transfer. The packet from row 11 crosses bright row 6 while image row 4
+    # is in the register, so reading row 4 adds a register read and reading
+    # row 5 does not, though one row is read either way.
     rate = np.zeros((12, 1))
     rate[6, 0] = 50.0
     reading_row_4 = smear_photons(rate, small_sequence(windows=[(4, 4)], parallel_overscan_rows=0))
@@ -480,7 +478,7 @@ def test_a_range_that_only_reaches_the_edge_of_the_ccd_is_not_on_it(low, high):
 # The camera's settings come from its configuration
 # ---------------------------------------------------------------------------
 def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
-    """The format, the pixels and the timing are set once, in Detector_SWC."""
+    """The format, pixels and timing are set once, in `Detector_SWC`."""
     det = Detector_SWC(n_rows=100, n_columns=40, ccd_gap=2.0 * u.mm,
                        pix_size=(10.0 * u.um).cgs / u.pixel,
                        plate_scale_angle=0.2 * u.arcsec / u.pixel,
@@ -524,7 +522,7 @@ def test_the_read_out_and_focal_plane_take_their_camera_from_the_detector():
 
 
 def test_the_defaults_are_those_of_the_default_camera():
-    """Built on their own, both classes match the default Detector_SWC camera."""
+    """Built on their own, both classes match the default `Detector_SWC` camera."""
     det = Detector_SWC()
     fp, from_det = FocalPlane_SWC(), FocalPlane_SWC.from_detector(det)
     for name in ("n_rows", "n_columns", "pixel_size", "gap", "plate_scale"):
@@ -606,7 +604,7 @@ def test_charge_left_behind_arrives_as_moving_it_one_transfer_at_a_time(
 
 @pytest.mark.parametrize("cte", [0.5, 0.9])
 def test_charge_left_by_packets_dumped_long_before_the_read_still_arrives(cte):
-    """Charge left behind in a clear longer than the frame reaches the rows read, as moved by hand."""
+    """Charge left in a clear longer than the frame reaches the rows read, as moved by hand."""
     sequence = ReadoutSequence(shutter=False, row_transfer_time=1.0 * u.s,
                                pixel_period=1e-3 * u.s, serial_prescan=0, serial_image_pixels=1,
                                serial_overscan=0, parallel_overscan_rows=0, dump_rows=4,
@@ -711,7 +709,7 @@ def test_dark_charge_is_carried_along_the_register_as_moved_one_transfer_at_a_ti
 
 
 def test_a_perfect_transfer_leaves_the_frame_as_it_was():
-    """With a CTE of 1, the frame is the exposure plus the smear, and the variance as `expose`."""
+    """With a CTE of 1, the frame is the exposure plus the smear, and so is a Poisson variance."""
     rate = np.random.default_rng(3).uniform(0.0, 5.0, (40, 6))
     sequence = ReadoutSequence(shutter=False, windows=[(5, 9)], parallel_overscan_rows=4)
     smear = smear_photons(rate, sequence)

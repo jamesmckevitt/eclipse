@@ -1,11 +1,10 @@
 """
-Full-CCD frames of the SW camera: the spectra of a synthesis file at one slit position.
+Full-CCD frames of the SW camera from a synthesis file at one slit position.
 
-A frame holds what the synthesis file holds. Every entry of the file is
-taken as a spectral radiance on its own wavelengths, and the entries are
-added, so a file with three lines gives three lines on the CCDs, and a
-file synthesised over the whole band (`eclipse.band`) gives every line in
-it.
+Every entry of the file is taken as a spectral radiance on its own
+wavelengths, and the entries are added. A file with three lines gives
+three lines on the CCDs, and a file synthesised over the whole band
+(`eclipse.band`) gives every line in it.
 """
 
 from __future__ import annotations
@@ -51,11 +50,10 @@ def _scene_weights(cell_edges: np.ndarray, pixel_edges: np.ndarray, sigma: float
     """
     Weight of each scene cell in each pixel, `(n_pixels, n_cells)`.
 
-    With `extend` and a blur, the edge cells continue past the scene for
-    the blur to bring in, and each pixel takes light only over its part
-    inside the scene, as every pixel of a run lies inside it. With
-    `openings`, `(n, 2)` in the unit of the edges, light gets through only
-    there, after the blur.
+    With `extend` and a blur, the edge cells continue past the scene, and
+    each pixel takes light only over its part inside the scene, to match a
+    run, whose pixels all lie inside it. With `openings`, `(n, 2)` in the
+    unit of the edges, light gets through only there, after the blur.
     """
     if not (extend and sigma > 0):
         if openings is None:
@@ -112,7 +110,7 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
                       psf_across_slit: Optional[u.Quantity] = None,
                       extend: bool = False) -> _Scene:
     """
-    Spectra under the slit from a synthesis file, one for each entry of the file.
+    Spectra under the slit from a synthesis file, one per entry.
 
     Parameters
     ----------
@@ -124,12 +122,11 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
     slit_width : u.Quantity
         Slit width, as an angle.
     psf_across_slit : u.Quantity, optional
-        FWHM of the telescope's blur across the slit, which brings in
-        emission from beside the slit. Default None, for no blur.
+        FWHM of the telescope's blur across the slit. Default None, no blur.
     extend : bool, optional
-        Take the Sun beyond the file's x edges as their edge cells, for the
-        blur to bring in, and the slit's light only from its part inside
-        them. Default False, for dark.
+        Take the Sun beyond the file's x edges to look like the edge cells,
+        and the slit's light only from its part inside them. Default False,
+        dark beyond.
     """
     from .atmosphere import _check_format, _open_to_read
     from .synthesis_file import (FORMAT_NAME, FORMAT_VERSION, RADIANCE_UNIT, _synthesis_in,
@@ -139,8 +136,7 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
     layout = read_synthesis_layout(path)
     columns, weights = _slit_columns(layout["x_edges"], slit_position, slit_width,
                                      psf_across_slit, extend)
-    # One column at a time, as a band's spectrum is large, from the file
-    # opened once.
+    # One column at a time, as a band's spectrum is large.
     edges, radiance = {}, {}
     with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
@@ -148,8 +144,8 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
         for column, weight in zip(range(columns.start, columns.stop), weights):
             synthesis = _synthesis_in(f, path, None, slice(column, column + 1))
             for name, line in synthesis.lines.items():
-                # Spectra already in ECLIPSE's radiance unit need no converting,
-                # which would copy a band's large spectrum three times.
+                # Skip converting spectra already in ECLIPSE's radiance unit,
+                # which would copy a band's spectrum three times.
                 values = (line.intensity.value if line.intensity.unit == RADIANCE_UNIT
                           else line.radiance().value)
                 part = weight * values[:, 0, :]
@@ -161,16 +157,16 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
 
 def _scene_light(scene: _Scene, telescope, solid_angle: float) -> list:
     """
-    The part of :func:`_rates` both CCDs share: for each spectrum of the
-    scene, its bins' lower and upper edges and middles, and the photons per
-    second per pixel per unit radiance in each bin.
+    Part of :func:`_rates` both CCDs share.
+
+    For each spectrum, its bins' lower and upper edges and middles, and the
+    photons per second per pixel per unit radiance in each bin.
     """
     lights = []
     for edges in scene.edges:
         low, high = edges[:-1], edges[1:]
         middle = (low + high) / 2
-        # Photons per second per pixel per unit radiance in each bin: its
-        # width in cm, through the pixel's solid angle.
+        # Bin width in cm, through the pixel's solid angle.
         collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
             photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
         lights.append((low, high, middle, collected))
@@ -183,19 +179,17 @@ def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, t
     """
     Photons per second in each row of one CCD from each image row under the slit.
 
-    Each wavelength of a spectrum covers the bin halfway to its neighbours,
-    and holds the radiance over that bin. The bin's light is spread evenly
-    over it, blurred by the spectral response and integrated over the rows,
-    in photons at the bin's own wavelength, with the telescope's throughput
-    there. Wavelengths outside the throughput tables give no light.
+    Each wavelength sample covers the bin halfway to its neighbours. The
+    bin's light is spread evenly over it, blurred by the spectral response
+    and integrated over the rows, in photons at the bin's wavelength.
+    Wavelengths outside the throughput tables give no light.
 
     Returns
     -------
     photons, per_wavelength, per_square : np.ndarray
         `(n_image_rows, n_rows)`: photons per second per pixel, and the same
-        with each photon divided by its wavelength in Angstrom and by its
-        square. These give the mean and root mean square energies of a
-        pixel's photons.
+        divided by each photon's wavelength in Angstrom and by its square,
+        for the mean and root mean square photon energies.
     """
     row_edges, order = _sorted_rows(focal_plane, ccd)
     shape = (scene.y_edges.size - 1, focal_plane.n_rows)
@@ -248,11 +242,10 @@ class FullFrame:
         Options the frame was made with, and the prescan and overscan sizes
         in `dn`.
     field_angle : dict
-        Angle along the slit of each image column, from the slit's centre,
-        positive towards solar north in nominal observations. The columns
-        count from the left output, so on the left CCD the angle falls with
-        the column number. If not given, it is taken from a default
-        `FocalPlane_SWC` with the columns of `rate`.
+        Angle along the slit of each image column from the slit centre,
+        positive toward solar north in nominal observations. Columns count
+        from the left output, so on the left CCD the angle falls with column
+        number. Default from a `FocalPlane_SWC` with the columns of `rate`.
     """
 
     rate: Dict[str, np.ndarray]
@@ -281,15 +274,13 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
     """
     Frame samples as the two outputs read them, with prescan and overscan.
 
-    Each output reads half the columns, with the prescan at the outer end of
-    the register and the overscan at the inner end (`ReadoutSequence`). In
-    order across the CCD, a row is: left prescan, first half of the image,
-    left overscan, right overscan, second half of the image, right prescan.
-    The prescan samples hold no charge from the image area, so they read
-    only the read noise. So do the overscan samples, unless `overscan_dn`
-    gives them, `(n_rows, 2 * serial_overscan)` in that order, with the
-    charge, light and dark, the serial register carries past the image. The
-    serial register's own dark current is not modelled, here or elsewhere.
+    Across the CCD, a row is: left prescan, first half of the image, left
+    overscan, right overscan, second half of the image, right prescan
+    (`ReadoutSequence`). The prescan samples read only read noise. So do
+    the overscan samples unless `overscan_dn` is given: the light and dark
+    charge the serial register carries past the image,
+    `(n_rows, 2 * serial_overscan)` in that order. The serial register's
+    own dark current is not modelled.
     """
     n_rows, n_columns = image_dn.shape
     half = (n_columns + 1) // 2
@@ -311,12 +302,11 @@ def lay_out_register(image_dn: np.ndarray, det, noise: bool = True,
 _FROM_SIMULATION = ("slit_width", "psf", "spectral_psf", "noise", "psf_boundary",
                     "slit_mask")
 
-# `Simulation` fields a frame does not use, as they do not change it. `expos`
-# is replaced by the `exposure` argument, and a frame always takes its
-# wavelengths from the focal plane.
+# `Simulation` fields a frame ignores. The `exposure` argument replaces
+# `expos`, and the wavelengths come from the focal plane.
 _IGNORED_SIMULATION_FIELDS = ("expos", "n_iter", "ncpu", "focal_plane_dispersion")
 
-# Fields not checked one by one. The pinhole settings are checked through
+# Fields not checked one by one; the pinhole settings are checked through
 # `enable_pinholes`.
 _UNCHECKED_FIELDS = frozenset(_FROM_SIMULATION + _IGNORED_SIMULATION_FIELDS
                               + ("pinhole_sizes", "pinhole_positions",
@@ -345,12 +335,12 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     """
     Slit, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
 
-    An argument in `given` equal to its default takes the value in `sim`.
-    Raises TypeError if `sim` is not a `Simulation`. Raises one ValueError
-    listing every argument that differs from both its default and `sim`, and
-    every setting in `sim` the frame does not model, including any field a
-    subclass adds. Warns if `sim.expos` differs from both 1 s, its default,
-    and `exposure`.
+    An argument in `given` at its default takes the value in `sim`. Raises
+    TypeError if `sim` is not a `Simulation`, and one ValueError listing
+    every argument that differs from both its default and `sim` and every
+    setting in `sim` the frame does not model, including fields a subclass
+    adds. Warns if `sim.expos` differs from both its 1 s default and
+    `exposure`.
     """
     from .pinhole_diffraction import _pinholes_on
 
@@ -401,9 +391,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     """
     Full-CCD frame of the SW camera from the spectra of a synthesis file.
 
-    The frame holds what the file holds: every entry of the file is laid
-    onto both CCDs, and the entries are added. Give `slit_position` and
-    `exposure` by name.
+    Every entry of the file is laid onto both CCDs, and the entries are
+    added. Give `slit_position` and `exposure` by name.
 
     Parameters
     ----------
@@ -411,10 +400,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         Synthesis file, from ECLIPSE or another code.
     lines : BandLines, optional
         Deprecated. Every line in the band, from
-        `eclipse.band.band_contribution_functions`, to work the band's
-        spectrum out from the emission measure a synthesis file from
-        ECLIPSE keeps, in place of the file's own spectra. Synthesise the
-        band into the file instead, with `synthesise-spectra --band`.
+        `eclipse.band.band_contribution_functions`, to compute the band's
+        spectrum from the emission measure an ECLIPSE synthesis file keeps,
+        in place of the file's own spectra. Synthesise the band into the
+        file instead, with `synthesise-spectra --band`.
     slit_position : u.Quantity
         Position of the slit centre across the slit, in the file's x
         coordinates. Along the slit, the image centre is at the slit centre.
@@ -443,31 +432,30 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     noise : bool, optional
         If False, every random draw is replaced by its mean. Default True.
     n_workers : int, optional
-        Only with `lines`: number of processes to work the band's spectrum
-        out with. Default 0 uses every CPU this process may use.
+        Only with `lines`: processes computing the band's spectrum. Default
+        0 uses every CPU this process may use.
     sim : Simulation, optional
-        Settings to take `slit_width`, `psf`, `spectral_psf`, `noise`,
-        `psf_boundary` and `slit_mask` from. Where one of these arguments
-        equals its default, given or not, the `Simulation`'s value is used;
-        any other value must agree with it. A `Simulation` has the PSF off unless made
-        with `psf=True`. Its `expos`, `n_iter` and `ncpu` are not used, nor
-        the pinhole settings with pinholes off. Default None.
+        Source of `slit_width`, `psf`, `spectral_psf`, `noise`,
+        `psf_boundary` and `slit_mask`. An argument at its default, given or
+        not, takes the `Simulation`'s value; any other value must agree with
+        it. A `Simulation` has the PSF off unless made with `psf=True`. Its
+        `expos`, `n_iter` and `ncpu` are not used, nor the pinhole settings
+        with pinholes off. Default None.
     psf_boundary : str, optional
         What the PSF brings in from beyond the edges of the synthesis, as
         in a run. `"replicate"` (default) takes the Sun there to look like
-        the edge cells. Each column, and the slit across, then gets light
-        only over its part inside the scene, so a uniform scene gives every
-        column inside it the same light and the columns beyond none.
-        `"zero"` takes the Sun there as dark, so the columns at the ends of
-        the scene get up to about a third less light, which the blur
-        carries to the columns just beyond. Keyword only.
+        the edge cells. Each column and the slit then get light only over
+        their part inside the scene, so a uniform scene gives every column
+        inside it the same light and the columns beyond none. `"zero"` takes
+        the Sun there as dark, so the end columns get up to about a third
+        less light, which the blur carries to the columns just beyond.
+        Keyword only.
     slit_mask : bool, optional
         Block the light beyond the ends of the slit and behind its
-        fiducials, from `telescope.slit_openings`, as in a run. The slit's
+        fiducials, from `telescope.slit_openings`, as in a run. The slit
         centre is the middle column and the middle of the scene. The blur
-        along the slit comes before the slit, so a column partly behind a
-        fiducial gets the light falling on its open part. Default False.
-        Keyword only.
+        along the slit comes first, so a column partly behind a fiducial
+        gets the light on its open part. Default False. Keyword only.
 
     Returns
     -------
@@ -598,9 +586,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     for ccd in CCDS:
         image_rate = rate[ccd].T                                          # (rows, columns)
         wavelength = focal_plane.wavelength(rows, ccd)
-        # Wavelengths of the mean and root mean square energies of the
-        # photons reaching each pixel. A pixel no photons reach keeps its
-        # row's wavelength.
+        # Wavelengths of the mean and root mean square photon energies in
+        # each pixel; an unlit pixel keeps its row's.
         own = np.broadcast_to(wavelength.to_value(u.Angstrom)[:, np.newaxis], image_rate.shape)
         lit = image_rate > 0
         reaching = np.divide(image_rate, per_wavelength[ccd].T, out=np.array(own, dtype=float),
@@ -610,8 +597,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                          where=lit & (per_square[ccd].T > 0))) * u.Angstrom
         overscan = None
         if sequence.cte_serial != 1:
-            # Charge the serial register leaves behind reaches the overscan;
-            # one transfer gives it and the image.
+            # Charge left in the serial register reaches the overscan; one
+            # transfer gives both.
             (photons, mean_wavelength, rms_wavelength), overscan = (
                 expose_with_serial_overscan_with_wavelengths(
                     image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms))
@@ -656,13 +643,12 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
     """
     Write a full-CCD frame to an HDF5 file.
 
-    The root holds the settings as attributes, including the prescan and
+    The root attributes hold the settings, including the prescan and
     overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
-    `parallel_overscan_rows`), and the version of ECLIPSE and the git commit
-    that wrote the file (`software_version` and `git_commit_id`). The
-    dataset `spectra` names the entries of the synthesis file the frame
-    holds. A group for each CCD, `left` and `right`, holds these datasets,
-    each with its unit:
+    `parallel_overscan_rows`), and the ECLIPSE version and git commit that
+    wrote the file (`software_version` and `git_commit_id`). The dataset
+    `spectra` names the synthesis file entries in the frame. Groups `left`
+    and `right` hold these datasets, each with its unit:
 
     - `dn`: frame as read out, with its prescan and overscan.
     - `photons` and `rate`.

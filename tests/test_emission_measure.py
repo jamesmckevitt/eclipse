@@ -129,12 +129,12 @@ def test_a_dem_gives_each_line_its_emission_measure_times_g_at_rest(tmp_path, mo
     products = read_synthesis_products(path)
     assert np.allclose(products["logT_grid"], LOGT)
     assert np.allclose(products["electron_density"], 1e9)
-    # A DEM's emission is in one velocity bin, at rest, and each line's wavelengths are
-    # those of the default velocity grid.
+    # A DEM's emission is in one velocity bin, at rest, and each line has the
+    # default velocity grid's wavelengths.
     assert products["em_tv"].shape == (3, 4, 21, 1)
     assert products["vel_grid"].to_value(u.km / u.s) == pytest.approx([0.0])
     assert held.lines[LINE].wavelength.size == 121
-    # The DEM is per unit log T, as the synthesis of an atmosphere keeps it.
+    # The DEM is per unit log T, as for an atmosphere.
     assert np.allclose(products["dem_map"].sum(axis=2) * 0.05, em[None, :])
     assert products["config"]["emission_measure"].endswith("measure.h5")
 
@@ -189,8 +189,10 @@ def test_a_vdem_shifts_each_line_by_its_velocities(tmp_path, monkeypatch, chiant
 @pytest.mark.parametrize("words", [(), ("--precision", "float32")])
 def test_a_vdem_keeps_its_light_whatever_its_velocity_bins(tmp_path, monkeypatch, chianti_free,
                                                            words):
-    """Bins 40 km/s apart are three thermal widths of the line at 1 MK, and one bin alone is
-    a VDEM too. Each line is integrated over its wavelengths, so its light is kept."""
+    """Light is kept for bins 40 km/s apart, three thermal widths at 1 MK, and for one bin.
+
+    Each line is integrated over its wavelengths.
+    """
     for velocity in (np.array([-80.0, -40.0, 0.0, 40.0, 80.0]), np.array([40.0])):
         em = np.zeros((1, 1, LOGT.size, velocity.size))
         em[0, 0, [0, 8, 20], -1] = 1e27      # at the first and last temperatures too

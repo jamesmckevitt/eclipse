@@ -24,7 +24,7 @@ WHEN = "2024-03-20T09:30:00"
 
 
 def _combination_results(telescope=None):
-    """Minimal results dict in the form create_sunpy_maps_from_combo expects."""
+    """Minimal results dict for `create_sunpy_maps_from_combo`."""
     wcs = WCS(naxis=3)
     wcs.wcs.ctype = ["WAVE", "HPLN-TAN", "HPLT-TAN"]
     wcs.wcs.cunit = ["Angstrom", "arcsec", "arcsec"]
@@ -60,7 +60,7 @@ def _make(**kwargs):
 
 def test_every_map_carries_the_date_it_was_given():
     maps = _make(date_obs=WHEN)
-    assert maps  # the loop below is worthless if this is empty
+    assert maps  # the loop below needs maps to check
     for name, map_obj in maps.items():
         assert map_obj.meta["date-obs"].startswith("2024-03-20"), name
 
@@ -76,7 +76,7 @@ def test_every_map_states_the_observer():
 
 
 def test_the_observer_survives_into_the_coordinate_frame():
-    """The keywords are only worth writing if sunpy reads them back."""
+    """sunpy reads the observer keywords back."""
     map_obj = _make(date_obs=WHEN)["total_dn"]
     observer = map_obj.observer_coordinate
     assert observer.radius.to_value(u.au) == pytest.approx(
@@ -85,14 +85,13 @@ def test_the_observer_survives_into_the_coordinate_frame():
 
 
 def test_no_sunpy_metadata_warnings_are_raised():
-    """The warnings are the visible symptom of missing metadata."""
+    """sunpy warns when metadata are missing."""
     maps = _make(date_obs=WHEN)
     with warnings.catch_warnings(), sunpy.log.log_to_list() as messages:
         warnings.simplefilter("error", SunpyMetadataWarning)
         for map_obj in maps.values():
-            # sunpy only checks the date, observer and solar radius when they
-            # are read, as in plotting, so building the maps alone would pass
-            # even without them.
+            # sunpy checks the date, observer and solar radius only when they
+            # are read, as in plotting.
             map_obj.wcs
     assert [m.getMessage() for m in messages] == []
 
@@ -125,7 +124,7 @@ def test_no_date_anywhere_raises_rather_than_inventing_one():
 
 
 def test_units_are_still_attached():
-    """The header rewrite must keep the map units."""
+    """The map units survive the header rewrite."""
     maps = _make(date_obs=WHEN)
     assert maps["total_dn"].meta["bunit"] == "DN"
     assert maps["velocity_mean"].meta["bunit"] == "km / s"

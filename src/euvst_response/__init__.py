@@ -1,10 +1,9 @@
 """
-The former name of the `eclipse` package, kept so existing scripts still run.
+Former name of the `eclipse` package, kept so existing scripts still run.
 
-Importing it warns that it will be removed in a future release. Each of its
-modules, such as `euvst_response.frame`, is the `eclipse` module of the same
-name, so older pickles that name these modules also still load. Its package
-data are those of `eclipse`.
+Importing it warns that it will be removed in a future release. Each module,
+such as `euvst_response.frame`, is the `eclipse` module of the same name, so
+old pickles still load. Package data are those of `eclipse`.
 """
 import importlib
 import importlib.abc
@@ -51,11 +50,10 @@ class _Alias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         return module
 
     def exec_module(self, module):
-        # The import machinery gave the module this alias's spec; give it back
-        # its own, so reloading it and its relative imports still work.
+        # Restore the module's own spec, so reloading and relative imports work.
         module.__spec__ = module.__spec__.loader_state
 
-    # Used by `python -m euvst_response.<name>`, which runs the module's code
+    # For `python -m euvst_response.<name>`, which runs a module's code
     # without importing it.
     def _loader(self, name):
         spec = importlib.util.find_spec(_new_name(name))
@@ -93,16 +91,16 @@ class _Package(types.ModuleType):
     """This package, whose attributes are those of `eclipse`."""
 
     def __setattr__(self, name, value):
-        # Importing `euvst_response.<name>` sets the module on this package.
-        # Keep the attribute `eclipse` gave it instead, such as the function `main`.
+        # Importing `euvst_response.<name>` sets the submodule here; keep the
+        # attribute from `eclipse` instead, such as the function `main`.
         if (isinstance(value, types.ModuleType) and value.__name__ == f"eclipse.{name}"
                 and getattr(self, name, value) is not value):
             return
         super().__setattr__(name, value)
 
 
-# Modules run with `python -m`, which runs a module's code only if the module
-# is not yet imported under the name given.
+# Modules run with `python -m`, left out of `_register`, as `-m` runs a
+# module's code only if it is not yet imported under the name given.
 _COMMANDS = {"atmosphere", "band", "cli", "continuum", "main", "synthesis", "synthesis_cli"}
 
 
@@ -118,9 +116,9 @@ if not any(getattr(finder, "euvst_response_alias", False) for finder in sys.meta
 _register()
 sys.modules[__name__].__class__ = _Package
 
-# importlib.resources.files("euvst_response") and the folder of `__file__`
-# give the package data of `eclipse`. `__path__` is left alone, so the
-# modules of `eclipse` are only ever imported as themselves.
+# Package data, from importlib.resources or the folder of `__file__`, come
+# from `eclipse`. `__path__` is left alone, so `eclipse` modules are only
+# imported under their own names.
 __spec__.loader = __loader__ = _Loader(__spec__.loader)
 __file__ = eclipse.__file__
 

@@ -132,8 +132,8 @@ def _default(key):
     return tool.setting("SWC", key)[1]
 
 
-# Each changes a default to a value derived from the current one, so the
-# hand-written cell no longer shows it.
+# Each changes a default to a value derived from the current one, which the
+# hand-written cell does not show.
 CHANGES = {
     "prescan up by one": ("detector.serial_prescan", lambda v: v + 1),
     # The new value appears elsewhere in the cell, for another setting or in a note.

@@ -25,9 +25,8 @@ def pytest_collection_modifyitems(config, items):
     """
     Skip tests marked `chianti` if the database is not built.
 
-    This is the case in the main CI jobs. If ECLIPSE_REQUIRE_CHIANTI is set,
-    as in the job that builds the database, a missing database is an error
-    instead.
+    If `ECLIPSE_REQUIRE_CHIANTI` is set, as in the CI job that builds the
+    database, a missing database is an error instead.
     """
     marked = [item for item in items if item.get_closest_marker("chianti")]
     if not marked or _chianti_database() is not None:

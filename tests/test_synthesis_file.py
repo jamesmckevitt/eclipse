@@ -35,7 +35,7 @@ REST = 195.119 * u.Angstrom
 BLEND = "Fe12_195.1790"
 BLEND_REST = 195.179 * u.Angstrom
 NY, NX, N_WAVE = 6, 4, 121
-# A power of two in Mm, so that edges built from it add up exactly.
+# Exact in binary, so edges built from it add up exactly.
 PIXEL = 0.1875 * u.Mm
 STEP = (5 * u.km / u.s / const.c * REST).to(u.cm)  # the synthesis's own grid
 
@@ -522,10 +522,7 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
 # Onto the detector
 # ----------------------------------------------------------------------
 def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
-    """Each input wavelength covers the interval halfway to its neighbours.
-
-    This is as in a synthesis, and holds for the outermost wavelengths too.
-    """
+    """Each input wavelength covers the interval halfway to its neighbours, the outermost too."""
     rng = np.random.default_rng(107)
     # Dense in the middle and coarser than the detector pixels at the ends,
     # with intensity all the way out.

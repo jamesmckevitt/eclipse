@@ -2,9 +2,10 @@
 Run files: one YAML file for a whole ECLIPSE job.
 
 A run file is the configuration `eclipse observe` reads. It can also name an
-atmosphere to synthesise first, with `atmosphere:` and a `synthesis:`
-section; a full-CCD frame to make, with a `frame:` section; and a list of
-`runs:`, each a variation on the rest of the file.
+atmosphere or emission measure to synthesise first, with `atmosphere:` or
+`emission_measure:` and a `synthesis:` section; a full-CCD frame to make,
+with a `frame:` section; and a list of `runs:`, each a variation on the rest
+of the file.
 """
 
 from __future__ import annotations
@@ -53,11 +54,11 @@ class RunOutput(NamedTuple):
 
     #: Name of the run, which names its files.
     name: str
-    #: The synthesis observed, or None.
+    #: Synthesis observed, or None.
     synthesis: Optional[Path]
-    #: The results of the observation, or None.
+    #: Results of the observation, or None.
     results: Optional[Path]
-    #: The full-CCD frame, or None.
+    #: Full-CCD frame, or None.
     frame: Optional[Path]
 
 
@@ -115,7 +116,7 @@ def load(source, name: Optional[str] = None) -> tuple[dict, str, str]:
     config : dict
     name : str
     source : str
-        The file, or `name`, for messages.
+        File, or `name`, for messages.
     """
     if isinstance(source, dict):
         config = copy.deepcopy(source)
@@ -183,7 +184,7 @@ def runs(config: dict, name: str) -> list[tuple[str, dict]]:
 # The synthesis
 # ----------------------------------------------------------------------
 def synthesis_options() -> dict:
-    """The keys of a single snapshot's `synthesis:` section, with their options."""
+    """Keys of a single snapshot's `synthesis:` section, with their options."""
     from .synthesis import build_parser
 
     return {action.dest: action for action in build_parser()._actions
@@ -197,7 +198,7 @@ def synthesises(config: dict) -> bool:
 
 
 def synthesised_from(config: dict) -> tuple[str, str]:
-    """The key naming what a run synthesises from, and the file it names."""
+    """Key naming what a run synthesises from, and the file it names."""
     given = [key for key in _SOURCES if key in config]
     if len(given) != 1:
         raise ValueError("A run synthesises one 'atmosphere' or one 'emission_measure'; "
@@ -239,8 +240,8 @@ def synthesis_arguments(config: dict, name: str, output: Optional[Path] = None) 
     Raises
     ------
     ValueError
-        If the run has no atmosphere, or its `synthesis:` section has a key
-        that is not a synthesis option.
+        If the run has no atmosphere or emission measure, or its
+        `synthesis:` section has a key that is not a synthesis option.
     """
     if not synthesises(config):
         raise ValueError("A run synthesises the 'atmosphere' or the 'emission_measure' it "
@@ -311,7 +312,7 @@ def _run_key(config: dict) -> str:
 
 
 def _stored_key(path: Path, name: str = "run_key") -> Optional[str]:
-    """A key a run file stored in an HDF5 file it wrote, or None."""
+    """Key a run file stored in an HDF5 file it wrote, or None."""
     import h5py
 
     try:
@@ -351,9 +352,9 @@ def _write_with_key(path: Path, keys: dict, write) -> None:
     """
     Write a file with `write(partial path)` and mark it with `keys`, attributes of its root.
 
-    The file is written under a name of its own and moved into place only
-    once it is complete, so a run stopped part way, or another run writing
-    the same file at the same time, leaves no file that looks finished.
+    The file is written under a temporary name and moved into place once
+    complete, so a run stopped part way, or another run writing the same
+    file, leaves no file that looks finished.
     """
     import h5py
 
@@ -395,12 +396,12 @@ def _reusable(path: Path, key: str, what: str) -> bool:
 
 def _synthesise_one(config: dict, name: str) -> Path:
     """
-    Synthesise a run's atmosphere, unless its synthesis file holds it already.
+    Synthesise a run's atmosphere or emission measure, unless already done.
 
     Returns
     -------
     Path
-        The synthesis file.
+        Synthesis file.
     """
     from .synthesis import main as run_synthesis, parse_arguments
 
@@ -452,8 +453,8 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
     """
     Check a run's settings for `steps` before anything is computed.
 
-    So a mistake in the observation's or the frame's settings is found
-    before an atmosphere is synthesised, which can take hours.
+    A mistake in the observation's or frame's settings is then found before
+    an atmosphere is synthesised, which can take hours.
     """
     _check(config, name, steps)
 
@@ -495,7 +496,7 @@ def _observe_one(config: dict, name: str, source: Optional[str] = None,
     Returns
     -------
     Path
-        The results file, `run/result/<name>.h5`.
+        Results file, `run/result/<name>.h5`.
     """
     from .main import run_config
 
@@ -613,7 +614,7 @@ def _frame_settings(config: dict, name: str) -> dict:
 
 def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
     """
-    The run with its synthesis replaced by that of the band under the slit.
+    Run with its synthesis replaced by that of the band under the slit.
 
     The band is synthesised with the run's own synthesis settings, over the
     image columns the slit takes light from, into the frame's own synthesis
@@ -650,13 +651,14 @@ def _band_config(config: dict, settings: dict, frame: dict, band) -> dict:
 
 def _frame_one(config: dict, name: str, settings: Optional[dict] = None) -> Path:
     """
-    Make the full-CCD frame a run's `frame:` section describes, from its
-    `settings` if they have been read already.
+    Make the full-CCD frame a run's `frame:` section describes.
+
+    Uses `settings` if they have been read already.
 
     Returns
     -------
     Path
-        The frame file, `frame.output` or `run/result/<name>_frame.h5`.
+        Frame file, `frame.output` or `run/result/<name>_frame.h5`.
     """
     from .config import AluminiumFilter, Detector_SWC, Telescope_EUVST
     from .full_frame import full_ccd_frame, write_full_frame
@@ -692,9 +694,8 @@ def _first_rank(step, *args):
     """
     Run `step` on the first MPI rank only, while the others wait.
 
-    The first rank may use every CPU of the job on its node meanwhile, and
-    the others wait without using them. If the step fails on the first
-    rank, every rank stops.
+    The first rank may use every CPU of the job on its node, as the others
+    wait without using them. If the step fails there, every rank stops.
     """
     import time
     import traceback
@@ -744,10 +745,10 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
     """
     One run's steps, from `"synthesise"`, `"observe"` and `"frame"`.
 
-    The synthesis is made only if the run names an atmosphere, and reused
-    if its file already holds it. The frame is made only if the run has a
-    `frame:` section, from `frame_settings` if they have been read
-    already. The run is checked first by :func:`run_all`.
+    The synthesis is made only if the run names an atmosphere or emission
+    measure, and reused if its file already holds it. The frame is made
+    only if the run has a `frame:` section, from `frame_settings` if they
+    have been read already. The run is checked first by :func:`run_all`.
     """
     synthesis = results = frame = None
     if synthesises(config):
@@ -770,8 +771,9 @@ def run_steps(config: dict, name: str, steps: tuple, source: Optional[str] = Non
 
 def _check_files_apart(found: list, steps: tuple, frames: dict) -> None:
     """
-    Refuse runs that would write different things to the same file. `frames`
-    holds each run's frame settings, by run name.
+    Refuse runs that would write different things to the same file.
+
+    `frames` holds each run's frame settings, by run name.
     """
     syntheses, outputs = {}, {}
     for run_name, config in found:
@@ -872,7 +874,7 @@ def run(source, *, settings=(), only: Optional[str] = None, name: Optional[str] 
     Returns
     -------
     list of RunOutput
-        The files of each run.
+        Files of each run.
     """
     return run_all(source, "run", settings=settings, only=only, name=name, **sections)
 
