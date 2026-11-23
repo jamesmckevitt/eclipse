@@ -415,3 +415,43 @@ def test_a_strip_of_a_view_from_a_position_holds_the_whole_images_columns(tmp_pa
     full, part = whole.lines[name].intensity.value, strip.lines[name].intensity.value
     assert full[:, 1:4].any()
     assert np.allclose(part, full[:, 1:4], rtol=1e-12, atol=0)
+
+
+def _many_lines(tmp_path):
+    """Synthesis file of 60 narrow lines across both CCDs."""
+    lines = {}
+    for i, centre in enumerate(np.linspace(175.0, 210.0, 60)):
+        wavelength = (centre + np.linspace(-0.05, 0.05, 41)) * u.AA
+        spectrum = 30.0 * np.exp(-0.5 * ((wavelength.value - centre) / 0.01) ** 2) * RADIANCE
+        lines[f"line{i:02d}"] = (wavelength, spectrum)
+    return _write(tmp_path / "many.h5", lines)
+
+
+@pytest.mark.parametrize("psf", [False, True])
+def test_spectra_laid_onto_the_rows_together_give_the_frame_laid_one_by_one(tmp_path, monkeypatch,
+                                                                           psf):
+    """Laying many spectra in one pass only changes the order of the sums."""
+    from eclipse import full_frame
+
+    path = _many_lines(tmp_path)
+    together = full_ccd_frame(path, **{**SHARP, "psf": psf}, n_workers=1)
+    monkeypatch.setattr(full_frame, "_PASS_BINS", 1)
+    alone = full_ccd_frame(path, **{**SHARP, "psf": psf}, n_workers=1)
+    for ccd in ("left", "right"):
+        assert together.rate[ccd].max() > 0
+        assert np.allclose(together.rate[ccd], alone.rate[ccd], rtol=1e-12, atol=0)
+        assert np.allclose(together.photon_wavelength[ccd], alone.photon_wavelength[ccd],
+                           rtol=1e-12, atol=0)
+
+
+def test_threads_give_the_frame_one_thread_gives(tmp_path, monkeypatch):
+    """The passes are added in the same order for any number of threads."""
+    from eclipse import full_frame
+
+    path = _many_lines(tmp_path)
+    monkeypatch.setattr(full_frame, "_PASS_BINS", 200)
+    one = full_ccd_frame(path, **SHARP, n_workers=1)
+    four = full_ccd_frame(path, **SHARP, n_workers=4)
+    for ccd in ("left", "right"):
+        assert np.array_equal(one.rate[ccd], four.rate[ccd])
+        assert np.array_equal(one.photon_wavelength[ccd], four.photon_wavelength[ccd])

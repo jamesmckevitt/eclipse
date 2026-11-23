@@ -696,8 +696,7 @@ def _read_dataset(f: h5py.Group, name: str,
 
     If given, `columns` reads only that slice of the x axis, `axis`.
     """
-    unit = _dataset_unit(f, name, units)
-    dataset = f[name]
+    dataset, unit = _dataset_and_unit(f, name, units)
     if columns is None:
         values = dataset[()]
     else:
@@ -709,15 +708,30 @@ def _read_dataset(f: h5py.Group, name: str,
 
 def _dataset_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS) -> u.Unit:
     """Unit of a dataset in a file or group, from its 'unit' attribute, without reading it."""
-    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
-    if name not in f:
-        raise ValueError(f"{where} has no '{name}' dataset.")
-    unit = _text_attribute(f[name].attrs, "unit")
+    return _dataset_and_unit(f, name, units)[1]
+
+
+def _dataset_and_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS):
+    """Dataset of a file or group, not read, and its unit."""
+    def where():
+        return f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
+
+    try:
+        dataset = f[name]
+    except KeyError:
+        raise ValueError(f"{where()} has no '{name}' dataset.") from None
+    unit = _text_attribute(dataset.attrs, "unit")
     if unit is None:
-        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
+        raise ValueError(f"'{name}' in {where()} has no 'unit' attribute. "
                          f"Every dataset needs one, for instance "
                          f"'{units[name]}'.")
-    return u.Unit(unit)
+    return dataset, _parsed_unit(unit) if isinstance(unit, str) else u.Unit(unit)
+
+
+@lru_cache(maxsize=None)
+def _parsed_unit(text: str) -> u.Unit:
+    """Unit named by `text`, parsed once for every dataset that names it."""
+    return u.Unit(text)
 
 
 # ----------------------------------------------------------------------

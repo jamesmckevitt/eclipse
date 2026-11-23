@@ -14,7 +14,6 @@ is written to a file.
 from __future__ import annotations
 
 import contextlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -25,7 +24,7 @@ import astropy.constants as const
 import astropy.units as u
 
 from .continuum import _beyond_the_rates, bins_to_cover
-from .utils import proton_electron_ratio_once
+from .utils import proton_electron_ratio_once, usable_cpus
 
 FORMAT_NAME = "eclipse-band-lines"
 FORMAT_VERSION = 1
@@ -360,8 +359,7 @@ def band_contribution_functions(
     jobs.sort(key=lambda job: -job[0] * (job[0] - job[1] + 1))
 
     if n_workers <= 0:
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
+        n_workers = usable_cpus()
     if n_workers > 1 and len(jobs) > 1:
         import multiprocessing as mp
 
@@ -803,8 +801,7 @@ def band_spectra(lines: BandLines, emission_measure: np.ndarray, electron_densit
     context["used"] = used
     temperatures = sorted(used)
     if n_workers <= 0:
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
+        n_workers = usable_cpus()
     n_workers = max(1, min(n_workers, len(temperatures)))
     if n_workers > 1 and "fork" not in mp.get_all_start_methods():
         warnings.warn("Processes cannot be forked here, so the temperatures are computed in "

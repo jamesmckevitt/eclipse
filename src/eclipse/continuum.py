@@ -11,11 +11,12 @@ of overlapping windows, added to every window it covers when observed.
 
 from __future__ import annotations
 
-import os
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import astropy.units as u
+
+from .utils import usable_cpus
 
 # Prefix of a continuum entry's name in a synthesis file, followed by its
 # wavelength range in Angstrom.
@@ -284,8 +285,7 @@ def compute_continuum_fiasco(
                    for symbol in elements]
 
     if n_workers <= 0:
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
+        n_workers = usable_cpus()
     if n_workers > 1 and len(worker_args) > 1:
         import multiprocessing as mp
 
