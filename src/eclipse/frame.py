@@ -550,7 +550,8 @@ def _per_pixel(wavelength: u.Quantity, shape: tuple) -> np.ndarray:
 
 
 def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, det,
-           *, noise: bool = True, rms_wavelength: Optional[u.Quantity] = None) -> np.ndarray:
+           *, noise: bool = True, rms_wavelength: Optional[u.Quantity] = None,
+           common_random_numbers: bool = False) -> np.ndarray:
     """
     Electrons per pixel from the photons a frame recorded.
 
@@ -581,6 +582,11 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
         :func:`expose_with_wavelengths`. Mixed photon energies widen the
         spread of a pixel's electrons. Default `wavelength`, for photons of
         one energy.
+    common_random_numbers : bool
+        Use one random value per pixel for the quantum efficiency, the Fano
+        spread and the dark current. Frames that differ only in their light
+        then share their noise. Seed NumPy with the same value before each
+        frame. Slower. Default False.
 
     Returns
     -------
@@ -594,14 +600,17 @@ def detect(photons: np.ndarray, wavelength: u.Quantity, dark_time: u.Quantity, d
     rms = wavelength if rms_wavelength is None else _per_pixel(rms_wavelength, photons.shape)
     if noise and not np.all(np.mod(photons, 1) == 0):
         raise ValueError("With noise on the photons must be whole numbers, as from a Poisson draw.")
-    detected = _detected_photons(photons, det, noise=noise)
+    detected = _detected_photons(photons, det, noise=noise,
+                                 inverse_transform=common_random_numbers)
     electrons = _vectorized_fano_noise(detected, wavelength * u.Angstrom, det, noise=noise,
+                                       every_pixel=common_random_numbers,
                                        rms_wavelength=rms * u.Angstrom)
 
     dark = (det.dark_current * u.Quantity(dark_time)).to_value(u.electron / u.pixel)
     if np.ndim(dark) == 1:
         dark = np.reshape(dark, (-1, 1))
-    electrons = electrons + _dark_electrons(dark, photons.shape, noise=noise)
+    electrons = electrons + _dark_electrons(dark, photons.shape, noise=noise,
+                                            inverse_transform=common_random_numbers)
     if noise:
         electrons = electrons + _read_noise(photons.shape, det)
     # Not clipped at zero, as a CCD reads out above a bias level; see
