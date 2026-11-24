@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import numbers
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -71,6 +72,9 @@ def to_radiance(intensity: u.Quantity, wavelength: u.Quantity) -> u.Quantity:
     A radiance per frequency or in photons is converted at each value of
     `wavelength`, which runs along the last axis of `intensity`.
     """
+    scale = _radiance_scale(intensity.unit)
+    if scale is not None:
+        return (intensity.value * scale) << RADIANCE_UNIT
     # spectral_density ignores solid angle, so remove the steradian and put
     # it back. It would also accept lambda F_lambda (an intensity summed over
     # a line), so first check for one of the four flux densities.
@@ -81,6 +85,23 @@ def to_radiance(intensity: u.Quantity, wavelength: u.Quantity) -> u.Quantity:
             f"frequency, such as erg / (s cm2 sr Angstrom) or W / (m2 sr Hz); "
             f"got {intensity.unit}.")
     return flux.to(RADIANCE_UNIT * u.sr, equivalencies=u.spectral_density(wavelength)) / u.sr
+
+
+@lru_cache(maxsize=None)
+def _radiance_scale(unit: u.UnitBase) -> Optional[float]:
+    """
+    Factor taking `unit` to erg / (s cm2 sr cm), or None if it needs the wavelength.
+
+    The factor is the one :func:`to_radiance` would apply, worked out once
+    for each unit.
+    """
+    try:
+        # A plain float, so that a float32 intensity stays float32. No
+        # equivalencies, not even ones enabled globally, so the factor holds
+        # in any context.
+        return float((1.0 * unit * u.sr).to(RADIANCE_UNIT * u.sr, equivalencies=None).value)
+    except u.UnitConversionError:
+        return None
 
 
 def _to_length(value: u.Quantity) -> u.Quantity:

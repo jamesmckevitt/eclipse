@@ -795,3 +795,21 @@ def test_a_pickle_is_not_converted_over_itself(tmp_path):
     with pytest.raises(ValueError, match="is the pickle being converted.*synthesis.h5"):
         convert_synthesis_pickle(pickle_path, tmp_path / "." / "synthesis.pkl")
     assert pickle_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("unit", [u.erg / (u.s * u.cm**2 * u.sr * u.AA),
+                                  u.W / (u.m**2 * u.sr * u.nm),
+                                  u.erg / (u.s * u.cm**2 * u.sr * u.Hz)])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_a_radiance_converts_as_through_the_spectral_density(unit, dtype):
+    """A radiance per wavelength takes only a scale, the one the equivalency applies."""
+    from eclipse.synthesis_file import RADIANCE_UNIT, to_radiance
+
+    wavelength = np.linspace(195.0, 196.0, 5) * u.AA
+    values = np.arange(1.0, 6.0).astype(dtype) * unit
+    expected = (values * u.sr).to(RADIANCE_UNIT * u.sr,
+                                  equivalencies=u.spectral_density(wavelength)) / u.sr
+    converted = to_radiance(values, wavelength)
+    assert converted.unit == RADIANCE_UNIT
+    assert converted.dtype == expected.dtype
+    assert np.array_equal(converted.value, expected.value)

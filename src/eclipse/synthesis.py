@@ -15,8 +15,9 @@ import dill
 import h5py
 from ndcube import NDCube
 from astropy.wcs import WCS
-from .utils import (element_data, proton_electron_ratio_once, require_uniform_grid, velocity_centers_to_edges, velocity_grid,
-                    view_axis_and_side, view_name, OBSERVER_SIDE, VELOCITY_CONVENTION)
+from .utils import (element_data, proton_electron_ratio_once, require_uniform_grid, usable_cpus,
+                    velocity_centers_to_edges, velocity_grid, view_axis_and_side, view_name,
+                    OBSERVER_SIDE, VELOCITY_CONVENTION)
 from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, write_line_cubes,
                              write_synthesis)
 from .emission_measure import (EmissionMeasure, is_emission_measure_file,
@@ -354,10 +355,7 @@ def compute_goft_fiasco(
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
     n_ions = len(worker_args)
     if n_workers <= 0:
-        # Use the CPUs this process may run on, as its SLURM step allows, not
-        # the whole node's.
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
+        n_workers = usable_cpus()
     use_parallel = n_workers > 1 and n_ions > 1
 
     if use_parallel:

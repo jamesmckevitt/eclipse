@@ -102,6 +102,7 @@ frame:
 | `exposure` | The exposure time | `simulation.expos` |
 | `slit_width` | The slit width | `simulation.slit_width`, or 0.2 arcsec |
 | `output` | The frame file | `run/result/<run file name>_frame.h5` |
+| `n_workers` | Workers to use, for the frame and the band's synthesis | one per CPU |
 | `windows` | Rows read out, such as `[[400, 520]]`; the others are dumped | every row |
 | `dump_rows` | Row transfers that clear the CCD before the exposure | a whole CCD |
 | `continuum` | Whether to add the continuum | `False` |
@@ -109,9 +110,8 @@ frame:
 | `band_step` | The spacing of the band's wavelengths | `0.002 Angstrom` |
 | `band_lines` | Where to keep the band's lines for later frames | `run/input/band_lines.h5` |
 | `band_file` | Where the band's synthesis goes, which runs can share | `run/input/<run file name>_band.h5` |
-| `n_workers` | Processes to use | one per CPU |
 
-The last six need an `atmosphere`. The instrument settings come from the run's other sections.
+The last five need an `atmosphere`. The instrument settings come from the run's other sections.
 
 ## Running it elsewhere
 

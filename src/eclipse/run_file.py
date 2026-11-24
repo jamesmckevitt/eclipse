@@ -31,7 +31,7 @@ FRAME_KEYS = {"slit_position", "exposure", "slit_width", "band", "band_step", "b
 
 # Keys of the `frame:` section that set how the band is synthesised from an
 # atmosphere.
-_BAND_KEYS = {"band", "band_step", "band_lines", "band_file", "continuum", "n_workers"}
+_BAND_KEYS = {"band", "band_step", "band_lines", "band_file", "continuum"}
 
 # Keys of the `synthesis:` section the frame's own band synthesis sets itself.
 _FRAME_SYNTHESIS_KEYS = {"lines", "continuum", "band", "band_step", "band_lines", "image_x"}
@@ -580,8 +580,12 @@ def _frame_settings(config: dict, name: str) -> dict:
         "telescope": _one_value("telescope", config.get("telescope") or {}),
         "filter": _one_value("filter", config.get("filter") or {}),
         "output": Path(frame.get("output", f"run/result/{name}_frame.h5")),
+        "n_workers": frame.get("n_workers", 0),
         "readout": {key: frame[key] for key in ("windows", "dump_rows") if key in frame},
     }
+    if isinstance(settings["n_workers"], bool) or not isinstance(settings["n_workers"], int):
+        raise ValueError(f"'frame.n_workers' is a whole number, 0 for one per CPU; got "
+                         f"{settings['n_workers']!r}.")
     if settings["readout"]:
         from .config import Detector_SWC
         from .full_frame import _readout_sequence
@@ -687,8 +691,8 @@ def _frame_one(config: dict, name: str, settings: Optional[dict] = None) -> Path
     detector = Detector_SWC(**settings["detector"])
     made = full_ccd_frame(settings["synthesis"], slit_position=settings["slit_position"],
                           exposure=settings["exposure"], slit_width=settings["slit_width"],
-                          det=detector, telescope=telescope, **settings["options"],
-                          **settings["readout"])
+                          det=detector, telescope=telescope, n_workers=settings["n_workers"],
+                          **settings["options"], **settings["readout"])
     path = settings["output"]
     path.parent.mkdir(parents=True, exist_ok=True)
     write_full_frame(made, path)

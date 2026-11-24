@@ -8,6 +8,7 @@ import functools
 import importlib
 import difflib
 import dataclasses
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -281,6 +282,13 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
         yield
     finally:
         ions.proton_electron_ratio = original
+
+
+def usable_cpus() -> int:
+    """Number of CPUs this process may run on, as its Slurm step allows, not the node's."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
 
 
 def element_data(symbol_or_number: str | int) -> tuple[int, float]:

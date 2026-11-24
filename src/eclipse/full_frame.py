@@ -9,9 +9,12 @@ three lines on the CCDs, and a file synthesised over the whole band
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import inspect
+import itertools
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -33,7 +36,7 @@ from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
 from .sampling import light_onto_pixels, pixel_weights, pixel_weights_through
 from .utils import (_bin_edges, _fwhm_to_sigma, _get_software_version, distance_to_angle,
-                    get_git_commit_id)
+                    get_git_commit_id, usable_cpus)
 
 CCDS = ("left", "right")
 
@@ -129,19 +132,19 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
         and the slit's light only from its part inside them. Default False,
         dark beyond.
     """
-    from .atmosphere import _check_format, _open_to_read
-    from .synthesis_file import (FORMAT_NAME, FORMAT_VERSION, RADIANCE_UNIT, _synthesis_in,
-                                 read_synthesis_layout)
+    from .atmosphere import _check_format, _open_to_read, _read_dataset
+    from .synthesis_file import (EDGES, FORMAT_NAME, FORMAT_VERSION, RADIANCE_UNIT, UNITS,
+                                 _synthesis_in)
 
     path = Path(path).expanduser()
-    layout = read_synthesis_layout(path)
-    columns, weights = _slit_columns(layout["x_edges"], slit_position, slit_width,
-                                     psf_across_slit, extend)
     # One column at a time, as a band's spectrum is large.
     edges, radiance = {}, {}
     with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
+        x_edges, y_edges = (_read_dataset(f, EDGES[axis], units=UNITS) for axis in ("x", "y"))
+        columns, weights = _slit_columns(x_edges, slit_position, slit_width, psf_across_slit,
+                                          extend)
         for column, weight in zip(range(columns.start, columns.stop), weights):
             synthesis = _synthesis_in(f, path, None, slice(column, column + 1))
             for name, line in synthesis.lines.items():
@@ -152,31 +155,101 @@ def read_slit_spectra(path: str | Path, slit_position: u.Quantity, slit_width: u
                 part = weight * values[:, 0, :]
                 radiance[name] = radiance[name] + part if name in radiance else part
                 edges[name] = _bin_edges(line.wavelength.to_value(u.Angstrom))
-    return _Scene(y_edges=_centred(layout["y_edges"]), names=list(radiance),
+    return _Scene(y_edges=_centred(y_edges), names=list(radiance),
                   edges=list(edges.values()), radiance=list(radiance.values()))
 
 
-def _scene_light(scene: _Scene, telescope, solid_angle: float) -> list:
+def _scene_light(scene: _Scene, telescope, solid_angle: float) -> _Light:
     """
     Part of :func:`_rates` both CCDs share.
 
-    For each spectrum, its bins' lower and upper edges and middles, and the
-    photons per second per pixel per unit radiance in each bin.
+    Every spectrum's bins in one set of arrays, as a file can hold a
+    spectrum for each of many thousand lines: their lower and upper edges
+    and middles, and the photons per second per pixel per unit radiance in
+    each bin.
     """
-    lights = []
-    for edges in scene.edges:
-        low, high = edges[:-1], edges[1:]
-        middle = (low + high) / 2
-        # Bin width in cm, through the pixel's solid angle.
-        collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
-            photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
-        lights.append((low, high, middle, collected))
-    return lights
+    sizes = [edges.size - 1 for edges in scene.edges]
+    low = np.concatenate([edges[:-1] for edges in scene.edges]) if sizes else np.zeros(0)
+    high = np.concatenate([edges[1:] for edges in scene.edges]) if sizes else np.zeros(0)
+    middle = (low + high) / 2
+    # Bin width in cm, through the pixel's solid angle.
+    collected = solid_angle * (high - low) * 1e-8 * np.nan_to_num(
+        photons_per_energy(telescope, middle * u.Angstrom).to_value(u.cm**2 / u.erg))
+    offsets = np.concatenate([[0], np.cumsum(sizes)]).astype(int)
+    return _Light(low, high, middle, collected, offsets)
 
 
-def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, telescope,
-           det, slit_width: u.Quantity,
-           blur: Optional[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+@dataclass(frozen=True)
+class _Light:
+    """Bins of every spectrum of a scene; spectrum `i` holds `offsets[i]:offsets[i + 1]`."""
+    low: np.ndarray
+    high: np.ndarray
+    middle: np.ndarray
+    collected: np.ndarray
+    offsets: np.ndarray
+
+
+# Most bins, and most values of light (image rows times bins), laid onto the
+# rows in one pass. Each bin's blurred light reaches a few tens of rows, so a
+# pass holds a few hundred MB of working arrays.
+_PASS_BINS = 2**17
+_PASS_SIZE = 2**24
+
+# Most threads laying passes onto the rows. More gained little on a frame of
+# 163,000 lines, as reading the file runs in one thread, and each holds a pass.
+_MOST_THREADS = 8
+
+
+def _passes(sizes: list, n_image_rows: int):
+    """
+    Groups of neighbouring spectra, as (first, stop) indices, to lay onto the rows together.
+
+    Each group holds at most `_PASS_BINS` bins and `_PASS_SIZE` values of
+    light, or one spectrum that is larger. Laying many small spectra at once
+    saves the work each pass repeats.
+    """
+    limit = max(1, min(_PASS_BINS, _PASS_SIZE // max(n_image_rows, 1)))
+    first, count = 0, 0
+    for index, size in enumerate(sizes):
+        if index > first and count + size > limit:
+            yield first, index
+            first, count = index, 0
+        count += size
+    if sizes:
+        yield first, len(sizes)
+
+
+def _onto_rows(low, high, middle, collected, radiance, row_edges, sigma, box) -> list:
+    """
+    Light of a group of spectra in each row, and the same divided by each
+    photon's wavelength and by its square. Rows in the order of `row_edges`.
+    """
+    onto_rows = light_onto_pixels(low, high, row_edges, sigma, box)   # (rows, bins)
+    light = radiance * collected
+    return [(onto_rows @ (light / middle**power).T).T for power in (0, 1, 2)]
+
+
+def _in_threads(function, arguments, workers: int):
+    """
+    Results of `function` on each item of `arguments`, in order.
+
+    At most `workers` items are prepared or running at once. Each result
+    taken lets the next item start.
+    """
+    arguments = iter(arguments)
+    with ThreadPoolExecutor(workers) as pool:
+        running = collections.deque(pool.submit(function, *item)
+                                    for item in itertools.islice(arguments, workers))
+        while running:
+            result = running.popleft().result()
+            for item in itertools.islice(arguments, 1):
+                running.append(pool.submit(function, *item))
+            yield result
+
+
+def _rates(scene: _Scene, light: _Light, focal_plane: FocalPlane_SWC, ccd: str, telescope,
+           det, slit_width: u.Quantity, blur: Optional[str],
+           n_workers: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Photons per second in each row of one CCD from each image row under the slit.
 
@@ -184,6 +257,11 @@ def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, t
     bin's light is spread evenly over it, blurred by the spectral response
     and integrated over the rows, in photons at the bin's wavelength.
     Wavelengths outside the throughput tables give no light.
+
+    Many small spectra, as from a file of every line in a band, are laid in
+    groups by up to `n_workers` threads, at most `_MOST_THREADS`, 0 for one
+    per CPU. The groups are added in the same order for any number of
+    threads.
 
     Returns
     -------
@@ -193,18 +271,39 @@ def _rates(scene: _Scene, lights: list, focal_plane: FocalPlane_SWC, ccd: str, t
         for the mean and root mean square photon energies.
     """
     row_edges, order = _sorted_rows(focal_plane, ccd)
-    shape = (scene.y_edges.size - 1, focal_plane.n_rows)
-    totals = tuple(np.zeros(shape) for _ in range(3))
-    for (low, high, middle, collected), radiance in zip(lights, scene.radiance):
-        if blur is None:
-            sigma = box = 0.0
-        else:
-            sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
-                                   middle)
-        onto_rows = light_onto_pixels(low, high, row_edges, sigma, box)   # (rows, bins)
-        light = radiance * collected
-        for total, power in zip(totals, (0, 1, 2)):
-            total[:, order] += (onto_rows @ (light / middle**power).T).T
+    n_image_rows = scene.y_edges.size - 1
+    groups = list(_passes(list(np.diff(light.offsets)), n_image_rows))
+
+    def inputs():
+        for first, stop in groups:
+            bins = slice(light.offsets[first], light.offsets[stop])
+            radiance = (scene.radiance[first] if stop == first + 1
+                        else np.concatenate(scene.radiance[first:stop], axis=1))
+            middle = light.middle[bins]
+            if blur is None:
+                sigma = box = 0.0
+            else:
+                sigma, box = _response(focal_plane, ccd, None, telescope, det, slit_width, blur,
+                                       middle)
+            yield (light.low[bins], light.high[bins], middle, light.collected[bins], radiance,
+                   row_edges, sigma, box)
+
+    # Threads only for groups of bounded size, so a few large spectra, such
+    # as a band's, are laid one at a time and held one at a time.
+    bounded = all(n_image_rows * (light.offsets[stop] - light.offsets[first]) <= _PASS_SIZE
+                  for first, stop in groups)
+    n_workers = usable_cpus() if n_workers <= 0 else n_workers
+    n_workers = min(n_workers, _MOST_THREADS, len(groups)) if bounded else 1
+    parts = (_in_threads(_onto_rows, inputs(), n_workers) if n_workers > 1
+             else (_onto_rows(*item) for item in inputs()))
+    # Summed in the order of row_edges, and put in the CCD's row order once.
+    sums = [np.zeros((n_image_rows, focal_plane.n_rows)) for _ in range(3)]
+    for part in parts:
+        for total, value in zip(sums, part):
+            total += value
+    totals = tuple(np.zeros_like(total) for total in sums)
+    for total, value in zip(totals, sums):
+        total[:, order] = value
     first, last = focal_plane.lit_rows(ccd)
     for total in totals:
         total[:, :first] = 0.0
@@ -460,8 +559,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     noise : bool, optional
         If False, every random draw is replaced by its mean. Default True.
     n_workers : int, optional
-        Only with `lines`: processes computing the band's spectrum. Default
-        0 uses every CPU this process may use.
+        Threads laying the spectra onto the rows, at most 8, and with
+        `lines` the processes computing the band's spectrum. Default 0 uses
+        every CPU this process may use.
     sim : Simulation, optional
         Source of `slit_width`, `psf`, `spectral_psf`, `noise`,
         `psf_boundary` and `slit_mask`. An argument at its default, given or
@@ -607,10 +707,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
     blur = spectral_psf if psf else None
     solid_angle = pixel_solid_angle(focal_plane, slit_width).to_value(u.sr)
     totals = tuple({} for _ in range(3))
-    lights = _scene_light(scene, telescope, solid_angle)
+    light = _scene_light(scene, telescope, solid_angle)
     for ccd in CCDS:
-        parts = _rates(scene, lights, focal_plane, ccd, telescope, det, u.Quantity(slit_width),
-                       blur)
+        parts = _rates(scene, light, focal_plane, ccd, telescope, det, u.Quantity(slit_width),
+                       blur, n_workers)
         for total, part in zip(totals, parts):
             total[ccd] = along @ part                               # (columns, rows)
     rate, per_wavelength, per_square = totals
