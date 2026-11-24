@@ -91,6 +91,8 @@ write_full_frame(frame, "frame.h5")
 
 `sim=Simulation(...)` takes the slit width, PSF and noise from a `Simulation` instead.
 
+`windows=[(400, 520)]` reads only those rows, which shortens the read-out and its smear. `windows_from_wavelengths` in `eclipse.readout` gives the rows of wavelength ranges. To compare two frames that differ only in their light, such as with and without the shutter, give both `common_random_numbers=True` and seed NumPy with the same value before each.
+
 ## How a frame differs from a simulated observation
 
 | Effect | `eclipse` run | Full-CCD frame |

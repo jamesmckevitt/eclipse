@@ -213,6 +213,28 @@ def test_runs_are_picked_by_name(tmp_path, monkeypatch, atmosphere, fake_synthes
         eclipse.synthesise(job, name="job", only="fe10")
 
 
+def test_a_frame_takes_the_run_files_windows_and_clear(tmp_path, monkeypatch):
+    from eclipse import full_frame
+
+    monkeypatch.chdir(tmp_path)
+    with h5py.File(tmp_path / "syn.h5", "w"):
+        pass
+    taken = {}
+    monkeypatch.setattr(full_frame, "full_ccd_frame",
+                        lambda *args, **kwargs: taken.update(kwargs=kwargs))
+    monkeypatch.setattr(full_frame, "write_full_frame", lambda frame, path: path)
+    job = {"synthesis_file": "syn.h5", "simulation": {"expos": "20 s"},
+           "frame": {"slit_position": "1 arcsec", "windows": [[400, 520]], "dump_rows": 100}}
+    eclipse.make_frame(job, name="job")
+    assert taken["kwargs"]["windows"] == [[400, 520]]
+    assert taken["kwargs"]["dump_rows"] == 100
+    taken.clear()
+    # Checked with the rest of the frame section, before any step runs.
+    with pytest.raises(ValueError, match="'frame' section: windows"):
+        eclipse.make_frame(job, name="job", frame={"windows": [400, 520]})
+    assert taken == {}
+
+
 def test_a_frame_takes_the_run_files_settings(tmp_path, monkeypatch):
     from eclipse import full_frame
 

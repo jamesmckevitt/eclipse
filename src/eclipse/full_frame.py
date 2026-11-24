@@ -17,7 +17,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -29,7 +29,8 @@ from .config import Simulation
 from .frame import (_response, _sorted_rows, detect, digitise,
                     expose_with_serial_overscan_with_wavelengths, expose_with_wavelengths,
                     pixel_solid_angle)
-from .radiometric import across_slit_fwhm, photons_per_energy, spatial_psf_fwhm
+from .radiometric import (_poisson_inverse_transform, across_slit_fwhm, photons_per_energy,
+                          spatial_psf_fwhm)
 from .config import _FOCAL_PLANE_SETTINGS, _same_setting
 from .data_processing import _openings_along_the_slit
 from .readout import FocalPlane_SWC, ReadoutSequence, dark_current_time, serial_dark_shares
@@ -326,7 +327,8 @@ class FullFrame:
         mean if `noise` was off.
     dn : dict
         Frame as read out, in DN: the prescan, image and overscan of each
-        output, (n_rows + parallel overscan, samples per row).
+        output, (n_rows + parallel overscan, samples per row). NaN in rows
+        outside the read-out windows.
     wavelength : dict
         Wavelength each image row records.
     photon_wavelength : dict
@@ -338,8 +340,8 @@ class FullFrame:
     exposure : u.Quantity
     slit_position, slit_width : u.Quantity
     settings : dict
-        Options the frame was made with, and the prescan and overscan sizes
-        in `dn`.
+        Options the frame was made with, the prescan and overscan sizes in
+        `dn`, and the read-out `windows` and `dump_rows`.
     field_angle : dict
         Angle along the slit of each image column from the slit centre,
         positive toward solar north in nominal observations. Columns count
@@ -477,6 +479,29 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     return {name: getattr(sim, name) for name in _FROM_SIMULATION}
 
 
+def _readout_sequence(det, windows, dump_rows) -> ReadoutSequence:
+    """Read-out of the frame, with `windows` and `dump_rows` checked against the CCD."""
+    given = windows
+    try:
+        windows = [] if windows is None else [tuple(window) for window in windows]
+    except TypeError:
+        windows = None
+    if windows is None or any(
+            len(window) != 2 or not all(isinstance(row, (int, np.integer))
+                                        and not isinstance(row, bool) for row in window)
+            or not 0 <= window[0] <= window[1] < det.n_rows for window in windows):
+        raise ValueError(f"windows are ranges of rows read out, each two rows from 0 to "
+                         f"{det.n_rows - 1}, the first no later than the last, such as "
+                         f"[(400, 520)]; got {given!r}.")
+    if dump_rows is not None and (isinstance(dump_rows, bool)
+                                  or not isinstance(dump_rows, (int, np.integer))
+                                  or dump_rows < 0):
+        raise ValueError(f"dump_rows is a number of row transfers, a whole number, zero or "
+                         f"more; got {dump_rows!r}.")
+    return ReadoutSequence.from_detector(det, windows=[(int(a), int(b)) for a, b in windows],
+                                         dump_rows=None if dump_rows is None else int(dump_rows))
+
+
 def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None,
                    slit_position: Optional[u.Quantity] = None,
                    exposure: Optional[u.Quantity] = None, *,
@@ -486,7 +511,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                    continuum: Optional[Tuple[u.Quantity, np.ndarray, np.ndarray]] = None,
                    noise: bool = True, n_workers: int = 0,
                    sim: Optional[Simulation] = None,
-                   psf_boundary: str = "replicate", slit_mask: bool = False) -> FullFrame:
+                   psf_boundary: str = "replicate", slit_mask: bool = False,
+                   windows: Optional[Sequence[Tuple[int, int]]] = (),
+                   dump_rows: Optional[int] = None,
+                   common_random_numbers: bool = False) -> FullFrame:
     """
     Full-CCD frame of the SW camera from the spectra of a synthesis file.
 
@@ -556,6 +584,20 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         centre is the middle column and the middle of the scene. The blur
         along the slit comes first, so a column partly behind a fiducial
         gets the light on its open part. Default False. Keyword only.
+    windows : sequence of tuple of int, optional
+        Rows read out, as inclusive ranges such as `[(400, 520)]`, on both
+        CCDs. The other rows are dumped, which shortens the read-out and its
+        smear, and their DN are NaN.
+        :func:`eclipse.readout.windows_from_wavelengths` gives the rows of
+        wavelength ranges. Default every row. Keyword only.
+    dump_rows : int, optional
+        Row transfers that clear the image area before the exposure.
+        Default a whole CCD. Keyword only.
+    common_random_numbers : bool, optional
+        Use one random value per pixel for each noise draw. Frames that
+        differ only in their light, such as with and without the shutter,
+        then share their noise. Seed NumPy with the same value before each
+        frame. Slower. Default False. Keyword only.
 
     Returns
     -------
@@ -579,7 +621,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         differs from both its default and the `Simulation`, or the
         `Simulation` asks for something the frame does not model: an
         instrument other than SWC, pinholes, visible stray light, or a
-        field a subclass adds. One error lists every such setting.
+        field a subclass adds. One error lists every such setting. Also if
+        a window is not two rows on the CCD, the first no later than the
+        last, or `dump_rows` is not a whole number, zero or more.
 
     Warns
     -----
@@ -629,6 +673,7 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
             raise ValueError(f"{name} must be a finite {unit.physical_type} above zero, got "
                              f"{value}.")
     openings = _openings_along_the_slit(telescope, slit_width) if slit_mask else None
+    sequence = _readout_sequence(det, windows, dump_rows)
     if (focal_plane.n_rows, focal_plane.n_columns) != (det.n_rows, det.n_columns):
         raise ValueError(
             f"The focal plane has {focal_plane.n_rows} rows and {focal_plane.n_columns} "
@@ -675,12 +720,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
             for total in totals:
                 total[ccd] = total[ccd][::-1].copy()
 
-    sequence = ReadoutSequence.from_detector(det)
     dark = dark_current_time(exposure, sequence, focal_plane.n_rows)
     # Each sample's share of its row's dark charge along the serial register.
     dark_image, dark_overscan = serial_dark_shares(sequence, focal_plane.n_columns)
     dark_time = dark[:, np.newaxis] * dark_image
     rows = np.arange(focal_plane.n_rows)
+    unread = ~sequence.is_read(focal_plane.n_rows)
+    draw = _poisson_inverse_transform if common_random_numbers else np.random.poisson
     frame = {"rate": {}, "photons": {}, "dn": {}, "wavelength": {}, "photon_wavelength": {},
              "photon_rms_wavelength": {}, "field_angle": {}}
     for ccd in CCDS:
@@ -705,20 +751,25 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         else:
             photons, mean_wavelength, rms_wavelength = expose_with_wavelengths(
                 image_rate, reaching, exposure, sequence, rms_wavelength=reaching_rms)
-        drawn = np.random.poisson(photons).astype(float) if noise else photons
+        drawn = draw(photons).astype(float) if noise else photons
         electrons = detect(drawn, mean_wavelength, dark_time, det, noise=noise,
-                           rms_wavelength=rms_wavelength)
+                           rms_wavelength=rms_wavelength,
+                           common_random_numbers=common_random_numbers)
         overscan_dn = None
         if overscan is not None:
             trail, trail_wavelength, trail_rms = overscan
-            trail = np.random.poisson(trail).astype(float) if noise else trail
+            trail = draw(trail).astype(float) if noise else trail
             overscan_dn = digitise(detect(trail, trail_wavelength,
                                           dark[:, np.newaxis] * dark_overscan, det,
-                                          noise=noise, rms_wavelength=trail_rms), det)
+                                          noise=noise, rms_wavelength=trail_rms,
+                                          common_random_numbers=common_random_numbers), det)
         frame["rate"][ccd] = image_rate
         frame["photons"][ccd] = drawn
-        frame["dn"][ccd] = lay_out_register(digitise(electrons, det), det, noise=noise,
-                                            overscan_dn=overscan_dn)
+        dn = lay_out_register(digitise(electrons, det), det, noise=noise,
+                              overscan_dn=overscan_dn)
+        # Rows outside the windows are dumped, not read.
+        dn[unread] = np.nan
+        frame["dn"][ccd] = dn
         frame["wavelength"][ccd] = wavelength
         frame["photon_wavelength"][ccd] = mean_wavelength
         frame["photon_rms_wavelength"][ccd] = rms_wavelength
@@ -733,7 +784,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                "spectra": list(scene.names),
                                "serial_prescan": det.serial_prescan,
                                "serial_overscan": det.serial_overscan,
-                               "parallel_overscan_rows": det.parallel_overscan_rows})
+                               "parallel_overscan_rows": det.parallel_overscan_rows,
+                               "windows": [list(window) for window in sequence.windows],
+                               "dump_rows": sequence.dump_rows,
+                               "common_random_numbers": bool(common_random_numbers)})
 
 
 FRAME_FORMAT = "eclipse-full-ccd-frame"
@@ -745,8 +799,10 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
 
     The root attributes hold the settings, including the prescan and
     overscan sizes in `dn` (`serial_prescan`, `serial_overscan` and
-    `parallel_overscan_rows`), and the ECLIPSE version and git commit that
-    wrote the file (`software_version` and `git_commit_id`). The dataset
+    `parallel_overscan_rows`), the rows read out and the clear (`windows`,
+    an array of first and last rows, empty for every row, and `dump_rows`),
+    and the ECLIPSE version and git commit that wrote the file
+    (`software_version` and `git_commit_id`). The dataset
     `spectra` names the synthesis file entries in the frame. Groups `left`
     and `right` hold these datasets, each with its unit:
 
@@ -782,6 +838,8 @@ def write_full_frame(frame: FullFrame, path: str | Path) -> Path:
             f.attrs[name] = value.value
             f.attrs[f"{name}_unit"] = str(value.unit)
         for key, value in frame.settings.items():
+            if key == "windows":
+                value = np.asarray(value, dtype=np.int64).reshape(-1, 2)
             if key != "spectra":
                 f.attrs[key] = value
         # A file can hold more entries than an attribute has room for.

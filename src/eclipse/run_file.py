@@ -27,7 +27,7 @@ from .utils import _parse_section, check_config_keys, load_yaml_config
 
 #: Keys of the `frame:` section.
 FRAME_KEYS = {"slit_position", "exposure", "slit_width", "band", "band_step", "band_lines",
-              "band_file", "continuum", "n_workers", "output"}
+              "band_file", "continuum", "n_workers", "output", "windows", "dump_rows"}
 
 # Keys of the `frame:` section that set how the band is synthesised from an
 # atmosphere.
@@ -581,10 +581,22 @@ def _frame_settings(config: dict, name: str) -> dict:
         "filter": _one_value("filter", config.get("filter") or {}),
         "output": Path(frame.get("output", f"run/result/{name}_frame.h5")),
         "n_workers": frame.get("n_workers", 0),
+        "readout": {key: frame[key] for key in ("windows", "dump_rows") if key in frame},
     }
     if isinstance(settings["n_workers"], bool) or not isinstance(settings["n_workers"], int):
         raise ValueError(f"'frame.n_workers' is a whole number, 0 for one per CPU; got "
                          f"{settings['n_workers']!r}.")
+    if settings["readout"]:
+        from .config import Detector_SWC
+        from .full_frame import _readout_sequence
+
+        # Checked now, rather than after the synthesis and observation.
+        try:
+            _readout_sequence(Detector_SWC(**settings["detector"]),
+                              settings["readout"].get("windows"),
+                              settings["readout"].get("dump_rows"))
+        except ValueError as error:
+            raise ValueError(f"'frame' section: {error}") from None
     if not synthesises(config):
         # The frame holds what the synthesis file holds.
         ignored = sorted(_BAND_KEYS & set(frame))
@@ -680,7 +692,7 @@ def _frame_one(config: dict, name: str, settings: Optional[dict] = None) -> Path
     made = full_ccd_frame(settings["synthesis"], slit_position=settings["slit_position"],
                           exposure=settings["exposure"], slit_width=settings["slit_width"],
                           det=detector, telescope=telescope, n_workers=settings["n_workers"],
-                          **settings["options"])
+                          **settings["options"], **settings["readout"])
     path = settings["output"]
     path.parent.mkdir(parents=True, exist_ok=True)
     write_full_frame(made, path)

@@ -103,6 +103,8 @@ frame:
 | `slit_width` | The slit width | `simulation.slit_width`, or 0.2 arcsec |
 | `output` | The frame file | `run/result/<run file name>_frame.h5` |
 | `n_workers` | Workers to use, for the frame and the band's synthesis | one per CPU |
+| `windows` | Rows read out, such as `[[400, 520]]`; the others are dumped | every row |
+| `dump_rows` | Row transfers that clear the CCD before the exposure | a whole CCD |
 | `continuum` | Whether to add the continuum | `False` |
 | `band` | The wavelengths of the lines to add | `[169 Angstrom, 213.5 Angstrom]` |
 | `band_step` | The spacing of the band's wavelengths | `0.002 Angstrom` |
