@@ -839,3 +839,79 @@ def test_a_frame_with_the_psf_and_noise_draws_its_photons(uniform_synthesis):
         image = frame.photon_wavelength[ccd][:lit.shape[0]]
         assert np.all(image[~lit] == np.broadcast_to(
             frame.wavelength[ccd].to_value(u.AA)[:, np.newaxis], lit.shape)[~lit] * u.AA)
+
+
+def test_a_windowed_frame_reads_only_its_rows(uniform_synthesis, sharp_frame, tmp_path):
+    """Rows outside the windows are dumped, so their DN are NaN; the light is the same."""
+    det = Detector_SWC()
+    with pytest.warns(UserWarning, match="dump_rows is 50"):
+        frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
+                               telescope=Telescope_EUVST(resolution_budget="none"), psf=False,
+                               noise=False, n_workers=1, windows=[(100, 300)], dump_rows=50)
+    read = np.zeros(det.n_rows + det.parallel_overscan_rows, dtype=bool)
+    read[100:301] = True
+    read[det.n_rows:] = True                  # the parallel overscan is always read
+    for ccd in ("left", "right"):
+        assert np.isnan(frame.dn[ccd][~read]).all()
+        assert np.isfinite(frame.dn[ccd][read]).all()
+        assert np.array_equal(frame.rate[ccd], sharp_frame.rate[ccd])
+    assert frame.settings["windows"] == [[100, 300]] and frame.settings["dump_rows"] == 50
+    assert sharp_frame.settings["windows"] == []
+    assert sharp_frame.settings["dump_rows"] == det.n_rows
+    import h5py
+
+    for made in (frame, sharp_frame):
+        path = write_full_frame(made, tmp_path / "frame.h5")
+        with h5py.File(path) as f:
+            assert np.array_equal(f.attrs["windows"].reshape(-1, 2),
+                                  np.reshape(made.settings["windows"], (-1, 2)))
+            assert f.attrs["dump_rows"] == made.settings["dump_rows"]
+
+
+def test_a_window_over_every_row_gives_the_full_frame(uniform_synthesis, sharp_frame):
+    frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
+                           telescope=Telescope_EUVST(resolution_budget="none"), psf=False,
+                           noise=False, n_workers=1, windows=[(0, Detector_SWC().n_rows - 1)])
+    for ccd in ("left", "right"):
+        assert np.array_equal(frame.dn[ccd], sharp_frame.dn[ccd])
+
+
+@pytest.mark.parametrize("readout", [{"windows": [(300, 100)]}, {"windows": [(0, 2048)]},
+                                     {"windows": [(-1, 10)]}, {"windows": [(10,)]},
+                                     {"windows": [(1.5, 10)]}, {"windows": 5},
+                                     {"dump_rows": -1}, {"dump_rows": 1.5}])
+def test_windows_and_the_clear_are_checked_before_the_synthesis_is_read(readout):
+    with pytest.raises(ValueError, match="windows|dump_rows"):
+        full_ccd_frame("not_there.h5", slit_position=0 * u.arcsec, exposure=1 * u.s, **readout)
+
+
+def test_no_windows_reads_every_row():
+    from eclipse.full_frame import _readout_sequence
+
+    for windows in (None, (), []):
+        assert _readout_sequence(Detector_SWC(), windows, None).windows == []
+
+
+def test_frames_differing_only_in_light_share_their_noise(uniform_synthesis):
+    """With common random numbers, a 1 per cent longer exposure leaves most dark pixels alone.
+
+    Without them, the quantum efficiency's binomial draw takes a varying
+    number of random values, so every later draw differs.
+    """
+    det = Detector_SWC(n_columns=64)          # narrow, to keep the slower draws quick
+
+    def frames(common):
+        made = []
+        for exposure in (1.0, 1.01):
+            np.random.seed(5)
+            made.append(full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm,
+                                       exposure=exposure * u.s, det=det, n_workers=1,
+                                       telescope=Telescope_EUVST(resolution_budget="none"),
+                                       common_random_numbers=common))
+        return made
+
+    def same_fraction(a, b):
+        return np.mean(a.dn["left"] == b.dn["left"])
+
+    assert same_fraction(*frames(True)) > 0.9
+    assert same_fraction(*frames(False)) < 0.5
