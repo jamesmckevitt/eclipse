@@ -1,5 +1,5 @@
 """
-Spectral fitting functions for Gaussian line profile analysis.
+Gaussian fits to spectral lines, single or blended, and their statistics.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import astropy.units as u
 import astropy.constants as const
 from ndcube import NDCube
 from scipy.optimize import curve_fit, least_squares, OptimizeWarning
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, effective_n_jobs
 from tqdm import tqdm
 from .utils import _fwhm_to_sigma, gaussian, multi_gaussian, pixel_mean_gaussians, tqdm_joblib
 from .extern.mpfit import mpfit
@@ -19,8 +19,10 @@ from .extern.mpfit import mpfit
 
 def _line_profile(x, *params, n_components=1, pixel=None):
     """
-    Fitted model: the Gaussians at wavelengths `x`, or with `pixel`, their
-    mean over pixels that wide centred on `x`, as a detector records them.
+    Fitted model: the Gaussians at wavelengths `x`.
+
+    With `pixel`, their mean over pixels that wide centred on `x`, as a
+    detector records them.
     """
     if pixel is None:
         return multi_gaussian(x, *params, n_components=n_components)
@@ -29,17 +31,16 @@ def _line_profile(x, *params, n_components=1, pixel=None):
 
 def _poisson_residuals(counts: np.ndarray, model: np.ndarray) -> np.ndarray:
     """
-    Residuals whose sum of squares is the Poisson deviance of counts about a model.
+    Residuals whose squares sum to the Poisson deviance of counts about a model.
 
     For counts d and model m, each residual is
     sign(d - m) sqrt(2 (m - d + d ln(d / m))). Their sum of squares is minus
     twice the Poisson log-likelihood plus a constant, so a least-squares fit
-    to them is the maximum-likelihood fit. The residual is zero at d = m and
-    close to (d - m) / sqrt(d) near it, the residual weighted by the noise.
+    to them is the maximum-likelihood fit. Near d = m the residual is close
+    to (d - m) / sqrt(d), the residual weighted by the noise.
 
-    A zero model has zero likelihood for counts above zero, so it is raised
-    to the smallest positive float to keep the arithmetic finite; the fit
-    then moves away from it.
+    A zero model is raised to the smallest positive float to keep the
+    arithmetic finite, as it has zero likelihood for counts above zero.
     """
     d = np.asarray(counts, dtype=float)
     m = np.maximum(np.asarray(model, dtype=float), np.finfo(float).tiny)
@@ -71,14 +72,23 @@ class FitComponent:
     name : str, optional
         Name in the results. Default the rest wavelength, e.g.
         `"195.1190 Angstrom"`.
+    velocity_limits : tuple of u.Quantity, optional
+        Lowest and highest velocity the fit may give this line, measured
+        from its rest wavelength, such as `(-60 * u.km / u.s, 60 * u.km / u.s)`.
+        Not for a line whose centre is tied to another's. Default None, for
+        no limits.
+    width_limits : tuple of u.Quantity, optional
+        Smallest and largest Gaussian sigma the fit may give this line, such
+        as `(0.019 * u.AA, 0.051 * u.AA)`. Not for a line whose width is tied
+        to another's. Default None, for no limits.
     """
     wavelength: u.Quantity
-    tie_center: Optional[int] = None   # index of component whose centre this is tied to
-    tie_width: Optional[int] = None    # index of component whose width this is tied to
-    amplitude_greater_than: Optional[int] = None  # index of component this must be brighter than
-    # Label for this component in the results. Defaults to its rest
-    # wavelength, e.g. "195.1190 Angstrom".
+    tie_center: Optional[int] = None
+    tie_width: Optional[int] = None
+    amplitude_greater_than: Optional[int] = None
     name: Optional[str] = None
+    velocity_limits: Optional[tuple] = None
+    width_limits: Optional[tuple] = None
 
     def __post_init__(self):
         # Catch a wavelength with no unit here rather than in the fit.
@@ -87,6 +97,38 @@ class FitComponent:
                 and np.isfinite(self.wavelength.value) and self.wavelength.value > 0):
             raise ValueError(f"A fitting component's wavelength must be the wavelength of a "
                              f"line, such as '195.119 AA'; got {self.wavelength!r}.")
+        for key, kind, example in (("velocity_limits", u.km / u.s, "[-60 km/s, 60 km/s]"),
+                                   ("width_limits", u.AA, "[0.019 AA, 0.051 AA]")):
+            value = getattr(self, key)
+            if value is None:
+                continue
+            try:
+                low, high = (u.Quantity(v) for v in value)
+            except (TypeError, ValueError):
+                low = high = None
+            if (low is None or not low.unit.is_equivalent(kind)
+                    or not high.unit.is_equivalent(kind)
+                    or not (np.isfinite(low.value) and np.isfinite(high.value))
+                    or not low < high or (key == "width_limits" and low <= 0)):
+                raise ValueError(
+                    f"A fitting component's {key} must be two {kind.physical_type}s, the "
+                    f"lower first{', both above zero' if key == 'width_limits' else ''}, "
+                    f"such as {example}; got {value!r}.")
+            setattr(self, key, (low.to(kind), high.to(kind)))
+
+    def centre_limits(self) -> Optional[tuple]:
+        """Lowest and highest centre in cm that `velocity_limits` allow, or None."""
+        if self.velocity_limits is None:
+            return None
+        rest = self.wavelength.to_value(u.cm)
+        c = const.c.to_value(u.km / u.s)
+        return tuple(rest * (1 + v.to_value(u.km / u.s) / c) for v in self.velocity_limits)
+
+    def sigma_limits(self) -> Optional[tuple]:
+        """Smallest and largest sigma in cm that `width_limits` allow, or None."""
+        if self.width_limits is None:
+            return None
+        return tuple(w.to_value(u.cm) for w in self.width_limits)
 
 
 def default_component_name(wavelength: u.Quantity) -> str:
@@ -123,29 +165,32 @@ class FitConfig:
         Weight each pixel of the DN spectra by one over its uncertainty
         squared, estimated from its own signal as eispac does, and fit the
         photon spectra by their Poisson likelihood. Default True.
+    start : str
+        Where each fit of a blend starts: `"search"` (default) slides the
+        components together along the spectrum to where they best match it;
+        `"rest"` starts every component at its rest wavelength, as eispac's
+        templates do.
     """
     components: List[FitComponent] = field(default_factory=list)
     primary_component: int = 0
     constrain_positive_intensity: bool = False
-    backend: str | None = None  # None = auto (scipy)
-    # Iterations the optimiser may take before it gives up. Counted in
-    # iterations, not function evaluations, so it means the same for both
-    # backends and does not shrink as components are added. EISPAC uses 2000;
-    # fits here converge in tens.
+    backend: str | None = None
+    # Counted in iterations, not function evaluations, so it means the same
+    # for both backends and any number of components. eispac uses 2000; fits
+    # here converge in tens.
     max_iter: int = 1000
-    # Use n - 1 rather than n in the standard deviation over Monte Carlo
-    # iterations (Bessel's correction). Off by default, to keep results
-    # comparable with earlier runs.
+    # Off by default, for results comparable with earlier runs.
     bessel_correction: bool = False
-    # Keep every iteration's fitted parameters in the results, not only their
-    # statistics. The results grow by about n_iter times the fit arrays.
+    # The results grow by about n_iter times the fit arrays.
     save_iterations: bool = False
-    # Weight the DN fits by each pixel's uncertainty and fit the photons by
-    # their Poisson likelihood. Unweighted, the velocity scatter of a Gaussian
-    # line is 1.24 times the photon-noise limit, because the wings that fix
-    # its position count no more than its noisier peak. Results files from
-    # before this setting are unweighted.
+    # Unweighted, the velocity scatter of a Gaussian line is 1.24 times the
+    # photon-noise limit, as the wings that fix its position count no more
+    # than its noisier peak. Results files from before this setting are
+    # unweighted.
     weighted: bool = True
+    # A search can start a faint blend a whole component spacing from the
+    # truth. Starting at rest, as eispac does, keeps it on the line there.
+    start: str = "search"
 
     def __post_init__(self):
         if len(self.components) == 1:
@@ -154,6 +199,8 @@ class FitConfig:
                 "needs at least two; for a single Gaussian leave components "
                 "out, and the other fitting settings still apply."
             )
+        if self.start not in ("search", "rest"):
+            raise ValueError(f"fitting.start must be 'search' or 'rest', got {self.start!r}.")
         if self.backend not in (None, "scipy", "mpfit"):
             raise ValueError(
                 f"Unknown fitting backend '{self.backend}'. "
@@ -194,6 +241,12 @@ class FitConfig:
                             f"has to be the index of another component, from "
                             f"0 to {n - 1}."
                         )
+                for key, tie in (("velocity_limits", "tie_center"), ("width_limits", "tie_width")):
+                    if getattr(comp, key) is not None and getattr(comp, tie) is not None:
+                        raise ValueError(
+                            f"fitting.components[{idx}] has {key} and {tie}. A tied "
+                            f"component follows the one it is tied to, so give the limits "
+                            f"to that one.")
                 if comp.name is not None and (
                         not isinstance(comp.name, str) or not comp.name.strip()):
                     raise ValueError(
@@ -229,8 +282,7 @@ class FitConfig:
                     f"the components a 'name'."
                 )
         else:
-            # Both settings need components; without them they would
-            # silently do nothing.
+            # These settings need components, and would otherwise do nothing.
             if self.primary_component != 0:
                 raise ValueError(
                     "fitting.primary_component picks one of the components, "
@@ -240,6 +292,11 @@ class FitConfig:
                 raise ValueError(
                     "fitting.constrain_positive_intensity is only applied to "
                     "multi-component fits, and there are no components."
+                )
+            if self.start != "search":
+                raise ValueError(
+                    "fitting.start is only applied to multi-component fits, and there are "
+                    "no components."
                 )
 
     @property
@@ -255,7 +312,7 @@ class FitConfig:
         """Total stored parameters: 3 per component + 1 background."""
         return 3 * self.n_components + 1
 
-    # Indices into the full parameter vector for the primary component
+    # Indices of the primary component's parameters in the full vector.
     @property
     def idx_peak(self) -> int:
         return 3 * self.primary_component
@@ -292,15 +349,17 @@ def _start_ratio(wv: np.ndarray, prof: np.ndarray, guess: np.ndarray,
     """
     Starting amplitude ratio of a component held fainter than its parent.
 
-    The ratio is read from the spectrum above the guessed background, at the
-    two guessed centres, interpolated between the finite pixels. The guess
-    itself starts every component but the primary at the same fraction of
-    the primary, so two components held one below the other would start
-    equal, at the bound, and a primary held below another would start above
-    it. If the spectrum makes the child the brighter, `_GUESS_FRACTION` is
-    used, strictly inside the bounds. `child` and `parent` index the
-    amplitudes in the full `guess`. A centre in NaN or infinite pixels at an
-    end of the window has zero height, as background.
+    The ratio of the spectrum's heights above the guessed background at the
+    two guessed centres, interpolated between the finite pixels. The plain
+    guess starts every component but the primary at the same fraction of
+    the primary, which would start two components held one below the other
+    equal, at the bound, and a primary held below another above it. If the
+    spectrum makes the child the brighter, `_GUESS_FRACTION` is used,
+    strictly inside the bounds.
+
+    `child` and `parent` index the amplitudes in the full `guess`. A centre
+    in NaN or infinite pixels at an end of the window has zero height, as
+    background.
     """
     wv, prof = np.asarray(wv), np.asarray(prof)
     finite = np.isfinite(prof)
@@ -334,12 +393,11 @@ def _fit_finite(fit, wv: np.ndarray, prof: np.ndarray, sigma: np.ndarray | None,
     """
     Fit only the pixels of a spectrum marked in `kept`.
 
-    `fit(wv, prof, sigma)` fits a spectrum and returns the parameters and
-    whether it succeeded. `sigma` is None, or one uncertainty per pixel,
-    kept or left out with its pixel. A spectrum with every pixel kept is
-    fitted as it is. With fewer than `min_pixels` kept, the fit is not
-    tried, and `start` of the whole window, with the pixels left out set to
-    NaN, is returned as a failed fit.
+    `fit(wv, prof, sigma)` returns the parameters and whether the fit
+    succeeded. `sigma` is None, or one uncertainty per pixel. With fewer
+    than `min_pixels` kept, the fit is not tried, and `start` of the whole
+    window, with the pixels left out set to NaN, is returned as a failed
+    fit.
     """
     if kept.all():
         return fit(wv, prof, sigma)
@@ -374,16 +432,14 @@ def _guess_params(wv: np.ndarray, prof: np.ndarray) -> list:
     """
     Starting peak, centre, width and background for a Gaussian fit.
 
-    The guesses are made robust to noise. The background is the median, as
-    most of a window is off the line; the minimum would sit below it by the
-    largest noise excursion. The line is found in the spectrum smoothed over
-    three pixels, so one noisy pixel cannot take it. Its width is that of
-    the run of pixels around it above half its height; the first and last
-    pixels above half maximum anywhere in the window would include noise far
-    from the line and start the width several times too wide. With those
-    cruder guesses, at a peak of two or three times the noise per pixel, the
-    fits ending hundreds of km/s away and the scatter of the fitted
-    velocities were both twice those from a good start.
+    The guesses are robust to noise. The background is the median, as most
+    of a window is off the line. The line is found in the spectrum smoothed
+    over three pixels, so one noisy pixel cannot take it. Its width is that
+    of the run of pixels around it above half its height, so noise far from
+    the line does not widen it. At a peak of two or three times the noise
+    per pixel, cruder guesses (the minimum, and the outermost pixels above
+    half maximum) doubled both the velocity scatter and the fits ending
+    hundreds of km/s away.
 
     Only the finite pixels are used. A spectrum with no finite pixel starts
     at zero peak and background, at the first wavelength.
@@ -421,13 +477,12 @@ def _single_fit_scales(wv: np.ndarray, prof: np.ndarray) -> tuple[float, float, 
     """
     Wavelength offset, wavelength step and signal scale for a single-Gaussian fit.
 
-    In the cgs units of the spectra, a line's peak can be 1e13 and its centre
-    2e-6 cm, thousands of widths from zero. The optimiser's convergence tests
-    are then set by the largest numbers, and a change in the last bits of the
-    data could move a fitted velocity by half a km/s. So the fit uses
-    wavelengths in pixels from the middle of the window and the signal
-    divided by its largest value, and the result is converted back. The
-    model is the same, so the fit is the same, in better-conditioned numbers.
+    In cgs, a line's peak can be 1e13 and its centre 2e-6 cm, thousands of
+    widths from zero. The optimiser's convergence tests are then set by the
+    largest numbers, and a change in the last bits of the data could move a
+    fitted velocity by half a km/s. The fit therefore uses wavelengths in
+    pixels from the middle of the window and the signal over its largest
+    value, and converts the result back.
     """
     offset = 0.5 * (float(np.min(wv)) + float(np.max(wv)))
     step = float(np.median(np.abs(np.diff(wv)))) if len(wv) > 1 else 0.0
@@ -452,13 +507,12 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
                    poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit one spectrum with a Gaussian using mpfit.
 
-    Same model, initial guess and fallback as :func:`_fit_one`, with the
-    width held positive as on the multi-component mpfit path. `max_iter` is
-    passed to mpfit, which counts iterations directly. `sigma` is each
-    pixel's uncertainty; the residuals are divided by it. With `poisson`, the
-    spectrum is counts, fitted by their Poisson likelihood
-    (:func:`_poisson_residuals`), with the peak and background held at zero
-    or above so the model is too.
+    As :func:`_fit_one`, with the width held positive as on the
+    multi-component mpfit path. `max_iter` is passed to mpfit, which counts
+    iterations. The residuals are divided by `sigma`, each pixel's
+    uncertainty. With `poisson`, the spectrum is counts, fitted by their
+    Poisson likelihood (:func:`_poisson_residuals`), with the peak and
+    background held at zero or above so the model is too.
 
     Returns the parameters and whether the fit succeeded; see
     :func:`_mpfit_succeeded`.
@@ -498,9 +552,8 @@ def _fit_one_mpfit(wv: np.ndarray, prof: np.ndarray,
 def _mpfit_succeeded(status: int, params: np.ndarray) -> bool:
     """Whether an mpfit result counts as a successful fit.
 
-    Status 5 means mpfit ran out of iterations. scipy raises in that case
-    and the fit falls back to its initial guess, so it counts as failed here
-    too, even though mpfit returns its last parameters.
+    Status 5, out of iterations, counts as failed, as it does with scipy,
+    though mpfit returns its last parameters.
     """
     return status > 0 and status != 5 and bool(np.all(np.isfinite(params)))
 
@@ -536,20 +589,18 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
              poisson: bool = False) -> tuple[np.ndarray, bool]:
     """Fit one spectrum with a Gaussian.
 
-    `max_iter` is an iteration count. curve_fit uses lm here, as there are no
-    bounds. lm counts every residual call against maxfev, including one per
-    parameter for each finite-difference Jacobian, so an iteration costs
-    len(p0) + 1 evaluations. With `pixel`, the Gaussian is averaged over
-    pixels that wide (:func:`_line_profile`). `sigma` is each pixel's
-    uncertainty; each pixel is weighted by one over its square.
+    With `pixel`, the Gaussian is averaged over pixels that wide
+    (:func:`_line_profile`). Each pixel is weighted by one over the square
+    of `sigma`, its uncertainty. `max_iter` is an iteration count. curve_fit
+    uses lm, as there are no bounds, and lm counts len(p0) + 1 evaluations
+    per iteration, one per parameter for the finite-difference Jacobian.
 
     With `poisson`, the spectrum is counts, fitted by their Poisson
     likelihood (:func:`_poisson_residuals`). The peak and background are
     held at zero or above so the model is too, which needs least_squares'
     trf method. That counts only its own residual calls, so `max_iter` is
-    the cap as it is. Wavelengths are in pixels from the middle of the
-    window, as in the other fits, but the counts are not divided by their
-    largest value, as the likelihood depends on the counts themselves.
+    its cap. The counts are not scaled, as the likelihood depends on their
+    values.
 
     Returns the parameters and whether the fit succeeded. A failed fit,
     including one that runs out of iterations, returns the initial guess.
@@ -580,24 +631,22 @@ def _fit_one(wv: np.ndarray, prof: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-#  Multi-component helpers  (scipy back-end -- fast, default)
+#  Multi-component helpers, scipy back end (the default)
 # ---------------------------------------------------------------------------
 
 def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = None):
     """Build a tied multi-Gaussian model for `curve_fit`.
 
     With `pixel_angstrom`, the Gaussians are averaged over pixels that wide
-    (:func:`_line_profile`).
+    (:func:`_line_profile`). Centres and sigmas are in Angstrom, which keeps
+    the free parameters within a few orders of magnitude of each other; in
+    cgs the fit is badly conditioned.
 
-    The model takes centres and sigmas in Angstrom, so all free parameters
-    are within a few orders of magnitude of each other. In cgs the fit is
-    severely ill-conditioned.
-
-    Without bounds, the Levenberg-Marquardt (`lm`) method is used (fast, no
-    bounds). When any component sets `amplitude_greater_than`, the
-    constrained component's amplitude is fitted as a ratio in [0, 1] of its
-    parent's. That, or `constrain_positive_intensity`, sets bounds, and
-    `curve_fit` then uses the Trust Region Reflective (`trf`) method.
+    A component that another names in its `amplitude_greater_than` is held
+    fainter, with its amplitude fitted as a ratio in [0, 1] of the other's. That,
+    `constrain_positive_intensity` or a velocity or width limit sets bounds,
+    and `curve_fit` then uses the Trust Region Reflective (`trf`) method
+    rather than Levenberg-Marquardt (`lm`).
 
     Returns
     -------
@@ -611,12 +660,14 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
         `{free_position: parent_full_amplitude_index}` for ratio params.
     bounds : tuple
         Bounds for `curve_fit(..., bounds=...)`.
+    has_bounds : bool
+        Whether any bound is set.
     """
     nc = fit_config.n_components
     n_full = fit_config.n_full_params  # 3*nc + 1
 
-    # Components whose amplitude is held below another's.
-    # amp_ratio_child[j] = i means amp_j = amp_i * ratio  (ratio in [0,1]).
+    # amp_ratio_child[j] = i: component j is held below i, with
+    # amp_j = amp_i * ratio and ratio in [0, 1].
     amp_ratio_child: dict[int, int] = {}
     for i, comp in enumerate(fit_config.components):
         if comp.amplitude_greater_than is not None:
@@ -631,28 +682,25 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
 
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
-        # peak - always free; mark as ratio if constrained
+        # Peak, always free, as a ratio if held below another.
         if i in amp_ratio_child:
             ratio_spec[len(free_indices)] = 3 * amp_ratio_child[i]
         free_indices.append(base)
 
-        # centre
+        # Centre
         if comp.tie_center is not None:
             src = _tie_root(fit_config, "tie_center", i)
-            # Tied centres share one velocity, and a velocity shifts a line in
-            # proportion to its wavelength, so the tie is the ratio of the rest
-            # wavelengths, not their separation. A fixed separation would give
-            # each component a different velocity: across an 8 Angstrom window
-            # near 195 Angstrom the end components would differ by (8 / 195) v,
-            # some 12 km/s at 300 km/s. The ratio is dimensionless, so it is the
-            # same in Angstrom or cm.
+            # Tied centres share one velocity, so the tie is the ratio of the
+            # rest wavelengths, not their separation. A fixed separation would
+            # give the ends of an 8 Angstrom window near 195 Angstrom
+            # velocities differing by (8 / 195) v, some 12 km/s at 300 km/s.
             factor = float(comp.wavelength.to(u.cm).value
                            / fit_config.components[src].wavelength.to(u.cm).value)
             tie_spec[base + 1] = (3 * src + 1, factor)
         else:
             free_indices.append(base + 1)
 
-        # sigma
+        # Sigma
         if comp.tie_width is not None:
             src = _tie_root(fit_config, "tie_width", i)
             # Tied widths are equal. Thermal broadening scales with wavelength,
@@ -661,24 +709,33 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
         else:
             free_indices.append(base + 2)
 
-    # background -- always free
+    # Background, always free
     free_indices.append(n_full - 1)
 
     n_free = len(free_indices)
 
-    # Build per-parameter bounds (default: unbounded -> LM method).
-    # Any non-default bound triggers TRF method.
+    # Bounds on each free parameter. Any bound makes curve_fit use trf
+    # rather than lm.
     lower = np.full(n_free, -np.inf)
     upper = np.full(n_free, np.inf)
     for fp in ratio_spec:
         lower[fp] = 0.0
         upper[fp] = 1.0
-    # Enforce positive amplitudes during fitting (not post-hoc clipping)
+    # Amplitudes held at zero or above during the fit.
     if fit_config.constrain_positive_intensity:
         for pos, fi in enumerate(free_indices):
             if fi % 3 == 0 and fi < 3 * nc and pos not in ratio_spec:
                 lower[pos] = 0.0
-    has_bounds = ratio_spec or fit_config.constrain_positive_intensity
+    # Limits on each component's centre and width, in Angstrom.
+    limited = False
+    for pos, fi in enumerate(free_indices):
+        if fi < 3 * nc and fi % 3 in (1, 2):
+            comp = fit_config.components[fi // 3]
+            limits = comp.centre_limits() if fi % 3 == 1 else comp.sigma_limits()
+            if limits is not None:
+                lower[pos], upper[pos] = (value * 1e8 for value in limits)
+                limited = True
+    has_bounds = ratio_spec or fit_config.constrain_positive_intensity or limited
     bounds = (lower, upper) if has_bounds else (-np.inf, np.inf)
 
     # Order the ratios so parents come before their children.
@@ -691,7 +748,7 @@ def _build_scipy_multi(fit_config: FitConfig, pixel_angstrom: float | None = Non
         full = np.empty(n_full)
         for pos, fi in enumerate(free_indices):
             full[fi] = free_params[pos]
-        # Convert ratio params -> absolute amplitudes
+        # Ratios to absolute amplitudes
         for fp, parent_idx in ratio_order:
             child_idx = free_indices[fp]
             full[child_idx] = full[parent_idx] * free_params[fp]
@@ -724,20 +781,20 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     """Fit one spectrum with several Gaussians using scipy's curve_fit.
 
     `wv_cm` is the wavelength axis in cm. The fit works in Angstrom and the
-    result is converted back to cm. `sigma` is each pixel's uncertainty;
-    each pixel is weighted by one over its square. With `poisson`, the
-    spectrum is counts, fitted by their Poisson likelihood
-    (:func:`_poisson_residuals`) with least_squares' trf method.
+    result is converted back to cm. Each pixel is weighted by one over the
+    square of `sigma`, its uncertainty. With `poisson`, the spectrum is
+    counts, fitted by their Poisson likelihood (:func:`_poisson_residuals`)
+    with least_squares' trf method.
 
     Returns the parameters and whether the fit succeeded. A failed fit
     returns the initial guess.
     """
     CM_TO_A = 1e8
 
-    # Initial guess in cm (from shared helper)
+    # Initial guess in cm
     p0_full_cm = _guess_multi_params(wv_cm, prof, fit_config)
 
-    # Convert centres & sigmas to A
+    # Centres and sigmas to Angstrom
     p0_full_A = p0_full_cm.copy()
     for i in range(fit_config.n_components):
         p0_full_A[3 * i + 1] *= CM_TO_A  # centre
@@ -753,29 +810,22 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
     wv_A = wv_cm * CM_TO_A
 
     # Keep scipy's default tolerances. At 1e-4, lm stopped with a blend's
-    # centres still over a km/s from convergence: the centres are some 195
-    # Angstrom from zero, so a relative step of 1e-4 is 30 km/s. Cap function
-    # evaluations as a safety net. Use 'trf' when bounds are active and 'lm'
-    # otherwise; each takes a different keyword for the cap.
+    # centres over a km/s from convergence, as a relative step of 1e-4 at 195
+    # Angstrom is 30 km/s.
     #
-    # fit_config.max_iter is an iteration count, so convert it to what each
-    # method counts. MINPACK's lm counts every residual call against maxfev,
-    # including the n_free calls for each forward-difference Jacobian, so an
-    # iteration costs n_free + 1 and the cap must scale with the problem or
-    # it shrinks as components are added. least_squares' trf counts only its
-    # own residual calls (Jacobian work goes in njev), so its cap is already
-    # an iteration count.
+    # fit_config.max_iter counts iterations. lm counts every residual call,
+    # including n_free for each forward-difference Jacobian, so its cap is
+    # max_iter * (n_free + 1). trf counts only its own residual calls, so
+    # its cap is max_iter.
     n_free = len(free_indices)
     max_iter = fit_config.max_iter
     if has_bounds:
         fit_kwargs: dict = {
             "method": "trf", "max_nfev": max_iter,
-            # Amplitudes reach ~1e11 while sigmas are ~0.03 Angstrom, some
-            # thirteen orders of magnitude apart, so step in variables scaled
-            # by the Jacobian. lm scales the same way internally, so only trf
-            # needs telling. On the blends tested this changed neither the
-            # fitted velocity nor the evaluation count; it guards against
-            # worse-conditioned windows rather than fixing an observed failure.
+            # Amplitudes reach ~1e11 while sigmas are ~0.03 Angstrom, so step
+            # in variables scaled by the Jacobian, as lm does internally. This
+            # guards against badly conditioned windows; on the blends tested
+            # it changed nothing.
             "x_scale": "jac",
         }
     else:
@@ -813,7 +863,7 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
                 popt_free_A = p0_free_A
                 succeeded = False
 
-    # Reconstruct full A vector, then convert centres & sigmas back to cm
+    # Full parameters, with centres and sigmas back in cm
     full_A = free_to_full_A(popt_free_A)
     full_cm = full_A.copy()
     for i in range(fit_config.n_components):
@@ -824,7 +874,7 @@ def _fit_one_scipy_multi(wv_cm: np.ndarray, prof: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-#  Multi-component helpers  (mpfit back-end)
+#  Multi-component helpers, mpfit back end
 # ---------------------------------------------------------------------------
 
 def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
@@ -857,7 +907,7 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
     for i, comp in enumerate(fit_config.components):
         base = 3 * i
 
-        # --- peak (intensity) ---
+        # Peak
         if base in ratio_params:
             # _fit_one_multi sets this for each spectrum; any value inside
             # the bounds will do here.
@@ -871,7 +921,7 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
                 peak_info["limits"] = [0.0, 0.0]
         parinfo.append(peak_info)
 
-        # --- centre ---
+        # Centre
         centre_info: dict = {"value": p0[base + 1]}
         if comp.tie_center is not None:
             src = _tie_root(fit_config, "tie_center", i)
@@ -879,21 +929,27 @@ def _build_parinfo(fit_config: FitConfig, p0: np.ndarray,
             # velocity; see _build_scipy_multi.
             factor = float(comp.wavelength.to(u.cm).value
                            / fit_config.components[src].wavelength.to(u.cm).value)
-            # mpfit tie expression references the parameter array p
+            # mpfit's tie expression refers to the parameter array p.
             centre_info["tied"] = f"p[{3 * src + 1}] * {factor!r}"
+        elif (centre_limits := comp.centre_limits()) is not None:
+            centre_info["limited"] = [1, 1]
+            centre_info["limits"] = list(centre_limits)
         parinfo.append(centre_info)
 
-        # --- sigma (width) ---
+        # Sigma
         sigma_info: dict = {"value": p0[base + 2]}
-        # Width must be strictly positive (avoid divide-by-zero in Gaussian)
+        # Width above zero, to avoid dividing by zero in the Gaussian.
         sigma_info["limited"] = [1, 0]
         sigma_info["limits"] = [1e-30, 0.0]
+        if (sigma_limits := comp.sigma_limits()) is not None:
+            sigma_info["limited"] = [1, 1]
+            sigma_info["limits"] = list(sigma_limits)
         if comp.tie_width is not None:
             src = _tie_root(fit_config, "tie_width", i)
             sigma_info["tied"] = f"p[{3 * src + 2}]"
         parinfo.append(sigma_info)
 
-    # --- background ---
+    # Background
     bg_info: dict = {"value": p0[-1]}
     parinfo.append(bg_info)
 
@@ -927,16 +983,10 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         sigma = (wv.max() - wv.min()) / 10
     else:
         # Width of the feature containing the peak, not of everything above
-        # half maximum.
-        #
-        # In a blend, the first and last pixels above half maximum span the
-        # whole blend, not one line. Every component then starts several
-        # pixels wide, and the fit can settle there: on a seven-component EIS
-        # window the widths came out at 89 mA and 16 mA either side of a 28 mA
-        # instrumental floor, with a residual 45 percent of the peak and the
-        # requested line fitted at effectively zero. Walking out from the peak
-        # to half maximum measures the peak feature alone, and for a single
-        # line it matches the first and last pixels.
+        # half maximum, which in a blend spans every line. Starting that wide,
+        # a seven-component EIS window settled at widths of 89 and 16 mA,
+        # either side of a 28 mA instrumental floor, with the requested line
+        # fitted at zero.
         half_max = 0.5 * peak
         above = prof_c >= half_max
         peak_idx = int(np.nanargmax(prof_c))
@@ -948,73 +998,70 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         if hi > lo:
             sigma = _fwhm_to_sigma(wv[hi] - wv[lo])
         else:
-            # Unresolved: the feature is one pixel wide, so take that as an
-            # upper bound on the width rather than a tenth of the window.
+            # Unresolved: take one pixel as an upper bound on the width, not
+            # a tenth of the window.
             sigma = float(np.median(np.diff(wv))) if len(wv) > 1 else \
                 (wv.max() - wv.min()) / 10
 
     # Estimate one shift of the primary centre, and start every other centre
-    # at its rest wavelength scaled by the same factor, as the tie enforces.
+    # at its rest wavelength scaled by the same factor, as the tie does.
     #
-    # The peak pixel belongs to whichever component dominates the window,
-    # which need not be the primary. Starting the primary there displaces it
-    # by the gap between the two, and as every tied centre is a fixed multiple
-    # of the primary's, the whole comb starts displaced by that gap. The
-    # optimiser does not reliably recover: a noiseless 7-component EIS window
-    # whose primary sat 0.14 Angstrom from the dominant line gave a 239 km/s
-    # centroid for lines at rest by construction, and moving the primary to a
-    # different component gave 451 km/s, each time very nearly the offset
-    # between that component and the brightest one.
+    # The peak pixel belongs to the brightest component, which need not be
+    # the primary, so starting the primary there displaces the whole comb. A
+    # noiseless 7-component EIS window with lines at rest gave 239 km/s this
+    # way. Taking the rest wavelength nearest the peak fails beyond half the
+    # component spacing: about 46 km/s for Fe XII 195.119 and 195.179, 0.060
+    # Angstrom apart, against the synthesis default of +/- 300 km/s.
     #
-    # So match the whole comb against the profile. Assigning the peak pixel
-    # to the nearest rest wavelength only works while the shift is below half
-    # the spacing to the neighbouring component, a small velocity for a close
-    # blend: Fe XII 195.119 and 195.179 are 0.060 Angstrom apart, so beyond
-    # about 46 km/s it picks the wrong component and displaces the comb by a
-    # whole spacing, while the synthesis default allows +/- 300 km/s.
-    #
-    # Each trial shift is scored by the total profile height under the
-    # shifted comb, which uses the spacing pattern that one pixel lacks. The
-    # trial shifts cover the range that keeps the comb inside the observed
-    # window, on the wavelength grid itself, so no resolution is invented.
-    # With a single component the score is the profile at each grid point, so
-    # the best shift puts the centre on the brightest pixel.
+    # So each trial shift is scored by the total profile height under the
+    # shifted comb. The trials are on the wavelength grid, over the range
+    # that keeps the comb inside the window. With one component, the best
+    # shift puts the centre on the brightest pixel.
     rest_wl = np.array([c.wavelength.to(u.cm).value
                         for c in fit_config.components])
     ref_wl = float(rest_wl[fit_config.primary_component])
-    if peak > 0:
+    # Shifts of the whole comb that keep each component within its velocity
+    # limits.
+    allowed = [-np.inf, np.inf]
+    for comp, rest in zip(fit_config.components, rest_wl):
+        limits = comp.centre_limits()
+        if limits is not None:
+            low_centre, high_centre = limits
+            allowed[0] = max(allowed[0], ref_wl * low_centre / rest - ref_wl)
+            allowed[1] = min(allowed[1], ref_wl * high_centre / rest - ref_wl)
+    # With start "rest", every component starts at its rest wavelength, as
+    # eispac's templates do.
+    if fit_config.start == "search" and peak > 0:
         # A trial shift moves the primary centre to ref_wl + shift and every
-        # other component to its rest wavelength times the same factor. The
-        # range keeps the whole comb inside the observed window; with all
-        # components at one wavelength it reduces to shifting the comb bodily.
+        # other component by the same factor, keeping the comb in the window.
         lo = float(wv.min()) * ref_wl / float(rest_wl.min()) - ref_wl
         hi = float(wv.max()) * ref_wl / float(rest_wl.max()) - ref_wl
+        lo, hi = max(lo, allowed[0]), min(hi, allowed[1])
         step = float(np.median(np.diff(wv))) if len(wv) > 1 else 0.0
         if hi > lo and step > 0:
-            trial = np.arange(lo, hi + 0.5 * step, step)
+            trial = np.minimum(np.arange(lo, hi + 0.5 * step, step), hi)
             score = np.zeros(trial.size)
             for r in rest_wl:
                 score += np.interp(r * (ref_wl + trial) / ref_wl, wv, prof_c,
                                    left=0.0, right=0.0)
-            # Known limit: if the primary carries no flux, every alias that
-            # puts some component on the one visible line scores the same, and
-            # the data cannot say which component produced it. With amplitudes
-            # free, all the flux in one component at one alias fits exactly as
-            # well as all of it in another at the next, so no scoring rule
-            # resolves it and the comb can start a spacing away. The velocity
-            # asked for is then that of a line that is not there, so there is
-            # nothing to recover.
+            # If the primary carries no flux, every alias that puts some
+            # component on the one visible line scores the same, and no
+            # scoring rule can tell them apart. The comb can then start a
+            # spacing away, but the velocity asked for is of a line that is
+            # not there.
             shift = float(trial[int(np.argmax(score))])
         else:
-            # The comb is wider than the window, so no shift keeps all of it
-            # inside. Fall back to the brightest pixel and the component
-            # nearest to it, read as a Doppler factor.
+            # No shift keeps the comb inside the window and the limits, so use
+            # the brightest pixel and its nearest component as a Doppler
+            # factor.
             peak_wl = float(wv[np.nanargmax(prof_c)])
             nearest = float(rest_wl[np.argmin(np.abs(rest_wl - peak_wl))])
             shift = ref_wl * (peak_wl / nearest - 1.0)
     else:
         shift = 0.0
 
+    if allowed[0] <= allowed[1]:
+        shift = float(np.clip(shift, *allowed))
     doppler = (ref_wl + shift) / ref_wl
     full_guess = np.zeros(fit_config.n_full_params)
     for i, comp in enumerate(fit_config.components):
@@ -1022,6 +1069,12 @@ def _guess_multi_params(wv: np.ndarray, prof: np.ndarray,
         full_guess[base] = peak if i == fit_config.primary_component else peak * 0.15
         full_guess[base + 1] = rest_wl[i] * doppler
         full_guess[base + 2] = sigma
+    # A start outside a component's limits is moved to the nearest limit, as
+    # the optimisers need one inside them.
+    for i, comp in enumerate(fit_config.components):
+        for offset, limits in ((1, comp.centre_limits()), (2, comp.sigma_limits())):
+            if limits is not None:
+                full_guess[3 * i + offset] = np.clip(full_guess[3 * i + offset], *limits)
     full_guess[-1] = back
     return full_guess
 
@@ -1030,10 +1083,10 @@ def _mpfit_residuals(p, fjac=None, x=None, y=None, n_components=1,
                      ratio_params=None, pixel=None, err=None, poisson=False):
     """Residual function in the form mpfit expects.
 
-    Must return `[status, residuals]`, with `status` 0 for success. `err` is
-    each pixel's uncertainty; the residuals are divided by it. With
-    `poisson`, `y` is counts and the residuals are those whose squares sum
-    to the Poisson deviance (:func:`_poisson_residuals`).
+    Returns `[status, residuals]`, with `status` 0 for success. The
+    residuals are divided by `err`, each pixel's uncertainty. With
+    `poisson`, `y` is counts and the residuals are those of
+    :func:`_poisson_residuals`.
     """
     p_eval = np.array(p, dtype=float)
     if ratio_params:
@@ -1056,28 +1109,27 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
     """Fit one spectrum with several Gaussians using mpfit.
 
     With `pixel`, the Gaussians are averaged over pixels that wide
-    (:func:`_line_profile`). `sigma` is each pixel's uncertainty; the
-    residuals are divided by it. With `poisson`, the spectrum is counts,
-    fitted by their Poisson likelihood (:func:`_poisson_residuals`), with
-    every amplitude and the background held at zero or above so the model is
-    too.
+    (:func:`_line_profile`). The residuals are divided by `sigma`, each
+    pixel's uncertainty. With `poisson`, the spectrum is counts, fitted by
+    their Poisson likelihood (:func:`_poisson_residuals`), with every
+    amplitude and the background held at zero or above so the model is too.
 
-    Returns the full parameter vector (length `3*N + 1`), with ratio
-    parameters converted back to absolute amplitudes, and whether the fit
-    succeeded; see :func:`_mpfit_succeeded`.
+    Returns the full parameter vector (length `3*N + 1`), with ratios
+    converted back to absolute amplitudes, and whether the fit succeeded;
+    see :func:`_mpfit_succeeded`.
     """
     p0 = _guess_multi_params(wv, prof, fit_config)
     p0_orig = p0.copy()
 
-    # Stamp current initial guesses into the parinfo dicts
+    # This spectrum's initial guesses
     parinfo = []
     for i, pi in enumerate(parinfo_template):
         d = dict(pi)
         d["value"] = p0[i]
         parinfo.append(d)
 
-    # Convert absolute amplitudes to ratios for constrained params. Use the
-    # original guesses, as a parent may already have been converted.
+    # Amplitudes held below another's start as ratios. Use the original
+    # guesses, as a parent may already have been converted.
     if ratio_params:
         for child_idx, parent_idx in ratio_params.items():
             ratio = _start_ratio(wv, prof, p0_orig, child_idx, parent_idx)
@@ -1101,7 +1153,7 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
                        maxiter=fit_config.max_iter)
         if result.status > 0:
             out = np.asarray(result.params, dtype=float)
-            # Convert ratios back to absolute amplitudes
+            # Ratios back to absolute amplitudes
             if ratio_params:
                 for child_idx, parent_idx in _in_dependency_order(ratio_params):
                     out[child_idx] = out[parent_idx] * result.params[child_idx]
@@ -1109,7 +1161,7 @@ def _fit_one_multi(wv: np.ndarray, prof: np.ndarray,
     except Exception:
         pass
 
-    return p0_orig, False  # fall back to initial guess (absolute amplitudes)
+    return p0_orig, False  # initial guess, as absolute amplitudes
 
 
 # ---------------------------------------------------------------------------
@@ -1120,16 +1172,16 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     """
     Fits that cannot have measured a line, to be counted as failed.
 
-    Also makes the widths positive in place. A Gaussian does not depend on
-    the sign of its width, so a fit with a negative width is kept with the
-    sign flipped, which also flips the sign of the intensity computed from
-    it. Only the pixels each fit kept are considered: those marked in
-    `kept`, by default the finite ones. A flat spectrum, such as one with no
-    photons, holds no line to fit, and a component wider than the window of
-    kept pixels is background, not a line. A spectrum with no kept pixel
-    counts as flat. Where the pixels at an end of the window were left out,
-    a centre, tied or not, beyond the edge of the last kept pixel on that
-    side was fitted with no data there.
+    Only the pixels in `kept` are considered, by default the finite ones. A
+    flat spectrum, such as one with no photons or no kept pixel, holds no
+    line. A component wider than the span of kept pixels is background, not
+    a line. Where pixels at an end of the window were left out, a centre,
+    tied or not, beyond the edge of the last kept pixel on that side was
+    fitted with no data there.
+
+    Also makes the widths positive in place, as a Gaussian does not depend
+    on the sign of its width. This flips the sign of the intensity computed
+    from a negative width.
     """
     widths = np.abs(params[..., 2:3 * n_components:3])
     params[..., 2:3 * n_components:3] = widths
@@ -1159,6 +1211,11 @@ def _unmeasurable(params: np.ndarray, spectra: np.ndarray, wavelength: np.ndarra
     above = ((longest < last)[..., np.newaxis]
              & (centres > (longest + half_pixel)[..., np.newaxis]))
     return flat | too_wide | np.any(below | above, axis=-1)
+
+
+# Pieces of spectra per fitting worker in `fit_cube_gauss`, so the workers
+# that finish first wait only a little for the others.
+FIT_PIECES_PER_WORKER = 8
 
 
 @overload
@@ -1194,7 +1251,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     eispac weights its fits. Only the ratios of the uncertainties within a
     spectrum matter, not their scale. With `poisson`, the spectra are counts,
     such as photons, and each is fitted by maximum Poisson likelihood
-    instead. This needs no uncertainty, even for a pixel with none.
+    instead. This needs no uncertainty, even for a pixel with no counts.
 
     Parameters
     ----------
@@ -1211,10 +1268,10 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
     uncertainty : np.ndarray, optional
         Uncertainty of every value in the cube, same shape as its data or
         broadcastable to it. A pixel whose uncertainty is NaN or positive
-        infinity is left out. Where the value is finite, an uncertainty at or
-        below zero, negative infinity included, is refused. If there are
-        finite values but none has a finite uncertainty, the uncertainty is
-        refused. Keyword only. Default None, for an unweighted fit.
+        infinity is left out. A ValueError is raised for an uncertainty at
+        or below zero where the value is finite, or if there are finite
+        values but none has a finite uncertainty. Keyword only. Default None,
+        for an unweighted fit.
     poisson : bool, optional
         Fit the spectra as counts by their Poisson likelihood, with every
         amplitude and the background held at zero or above. Each finite
@@ -1238,13 +1295,12 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     Notes
     -----
-    A pixel whose value is NaN or infinite is left out, and each spectrum is
-    fitted to the pixels kept. With `uncertainty`, so is a pixel whose
-    uncertainty is NaN or positive infinity.
-    Such a spectrum is a failed fit if fewer pixels are kept than free
-    parameters, or if the pixels at an end of the window were left out and
-    a fitted centre lies more than half a pixel beyond the outermost kept
-    pixel on that side. As for every spectrum, it is also a failed fit if
+    A pixel whose value is NaN or infinite is left out, as is one whose
+    uncertainty is NaN or positive infinity, and each spectrum is fitted to
+    the pixels kept. Such a spectrum is a failed fit if fewer pixels are
+    kept than free parameters, or if pixels at an end of the window were
+    left out and a fitted centre lies more than half a pixel beyond the
+    outermost kept pixel on that side. Any spectrum is also a failed fit if
     its kept pixels are flat or a fitted width is more than their span.
     """
     n_slit, n_scan, _ = signal_cube.shape
@@ -1260,8 +1316,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                     f"observed window, {wv.min().to(u.AA):.3f} to {wv.max().to(u.AA):.3f}, "
                     f"so there is no line of it to fit. Check its wavelength.")
 
-    # The iteration limit applies to every path. Without a fitting block
-    # there is no FitConfig, so use its default.
+    # Without a fitting block, use FitConfig's default iteration limit.
     max_iter = FitConfig.max_iter if fit_config is None else fit_config.max_iter
     # Pixel width in cm, the unit the fits use for wavelength.
     pixel = spectral_pixel_width(signal_cube).to_value(wv.unit) if pixel_mean else None
@@ -1293,11 +1348,23 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
 
     min_pixels = _n_free_params(fit_config)
 
-    def _rows():
-        """Each row along the slit, with its uncertainties and the pixels kept."""
-        for i in range(n_slit):
-            yield (signal_cube.data[i], None if uncertainty is None else uncertainty[i],
-                   kept[i])
+    # Fit in pieces: one per row on one CPU, else FIT_PIECES_PER_WORKER per
+    # worker.
+    n_spectra = n_slit * n_scan
+    workers = effective_n_jobs(n_jobs)
+    n_pieces = max(1, n_slit if workers == 1
+                   else min(n_spectra, FIT_PIECES_PER_WORKER * workers))
+    piece_edges = np.linspace(0, n_spectra, n_pieces + 1).astype(int)
+    spectra = signal_cube.data.reshape(n_spectra, -1)
+    flat_uncertainty = None if uncertainty is None else uncertainty.reshape(n_spectra, -1)
+    flat_kept = kept.reshape(n_spectra, -1)
+
+    def _pieces():
+        """Each piece of the spectra, with its uncertainties and the pixels kept."""
+        for first, last in zip(piece_edges[:-1], piece_edges[1:]):
+            yield (spectra[first:last],
+                   None if flat_uncertainty is None else flat_uncertainty[first:last],
+                   flat_kept[first:last])
 
     if fit_config is None or fit_config.is_single:
         # One Gaussian on a background, with its own fast fit.
@@ -1314,9 +1381,7 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
         n_components, n_params = fit_config.n_components, fit_config.n_full_params
         description = "Fit chunks (multi)"
         if fit_config.backend != "mpfit":
-            # scipy (default, fast) supports all constraints, positive
-            # intensity and amplitude ratio, through TRF bounds: LM when
-            # unconstrained, TRF when bounds are active.
+            # scipy, the default: lm without bounds, trf with them.
             (model_func, free_to_full, n_free,
              free_indices, ratio_spec, bounds, has_bounds) = _build_scipy_multi(
                 fit_config, None if pixel is None else pixel * 1e8)
@@ -1327,8 +1392,8 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                                             sigma, poisson)
 
         else:
-            # mpfit with full parinfo (slower, supports hard bounds)
-            # Build ratio_params for amplitude ordering constraint
+            # mpfit, slower. Amplitudes held below another's are fitted as
+            # ratios of it.
             ratio_params: dict[int, int] = {}
             for i, comp in enumerate(fit_config.components):
                 if comp.amplitude_greater_than is not None:
@@ -1356,13 +1421,15 @@ def fit_cube_gauss(signal_cube: NDCube, n_jobs: int = -1,
                 _start)
         return results, succeeded
 
-    with tqdm_joblib(tqdm(total=n_slit, desc=description, leave=False)):
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_block)(*row) for row in _rows()
+    # No more workers than pieces: a few spectra would otherwise start a worker
+    # on every CPU, each importing the package before its first fit.
+    with tqdm_joblib(tqdm(total=n_pieces, desc=description, leave=False)):
+        results = Parallel(n_jobs=min(workers, n_pieces))(
+            delayed(_fit_block)(*piece) for piece in _pieces()
         )
 
-    data_array = np.stack([r[0] for r in results], axis=0)
-    failed = ~np.stack([r[1] for r in results], axis=0)
+    data_array = np.concatenate([r[0] for r in results]).reshape(n_slit, n_scan, n_params)
+    failed = ~np.concatenate([r[1] for r in results]).reshape(n_slit, n_scan)
     failed |= _unmeasurable(data_array, signal_cube.data, wv.value, n_components, kept)
 
     # Amplitude, centre and width of each component, then the background.
@@ -1506,7 +1573,7 @@ def summarise_fits(fit_data: np.ndarray, failed: np.ndarray, units: list,
         kept = np.where(leave_out, np.nan, values)
         with warnings.catch_warnings():
             # A pixel with no successful fit, or only one under Bessel's
-            # correction, has no statistic, and NaN is the right answer.
+            # correction, gets NaN.
             warnings.simplefilter("ignore", RuntimeWarning)
             return (kept[0], np.nanmean(kept, axis=0),
                     np.nanstd(kept, axis=0, ddof=ddof))
@@ -1570,7 +1637,7 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
     fit_config : FitConfig, optional
         Fit configuration; None for a single Gaussian.
     n_jobs : int
-        Joblib parallelism.
+        Number of processes; -1 for one per CPU.
     uncertainty : np.ndarray, optional
         Each pixel's uncertainty, to weight the fit like the measured
         spectra, as for :func:`fit_cube_gauss`. Keyword only. Default None,
@@ -1585,11 +1652,10 @@ def ground_truth_summary(cube: NDCube, fit_config: FitConfig | None = None,
         NaN where the fit failed. There is no intensity, because the cube is
         in the units of the synthesis rather than in counts.
     """
-    # The cube holds the spectrum averaged over each pixel, so the truth is
-    # fitted with pixel-averaged Gaussians. Fitted at the pixel centres, as
-    # the noisy spectra are, a line not much wider than a pixel comes out
-    # pulled toward the middle of its pixel and too wide, and the truth would
-    # hide the same error in the noisy fits.
+    # The cube holds the spectrum averaged over each pixel, so fit
+    # pixel-averaged Gaussians. Fitted at pixel centres, a line not much
+    # wider than a pixel comes out pulled toward its pixel's middle and too
+    # wide, and the truth would hide the same error in the noisy fits.
     data, units, failed = fit_cube_gauss(cube, n_jobs=n_jobs,
                                          fit_config=fit_config,
                                          return_failed=True, pixel_mean=True,
@@ -1620,7 +1686,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
     wl0 : u.Quantity
         Rest wavelength the velocity is measured from.
     n_jobs : int, optional
-        Number of processes; -1 for one per CPU. Default -1.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's centre.
@@ -1632,7 +1698,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
     """
     idx = 1 if (fit_config is None or fit_config.is_single) else fit_config.idx_center
     centres_raw = fit_arr[..., idx]  # (n_slit, n_scan)
-    # Ensure we have a pure Quantity array
+    # As a Quantity array
     if isinstance(centres_raw, u.Quantity):
         centres = centres_raw.to(wl0.unit)
     elif np.asarray(centres_raw).dtype != object:
@@ -1642,20 +1708,7 @@ def velocity_from_fit(fit_arr: u.Quantity | np.ndarray, wl0: u.Quantity,
         get_val = np.vectorize(lambda q: q.to_value(wl0.unit))
         centres = u.Quantity(get_val(centres_raw), wl0.unit)
 
-    n_rows = centres.shape[0]
-
-    def _one_row(i):
-        return ((centres[i] - wl0) / wl0 * const.c).to(u.cm / u.s).value
-
-    with tqdm_joblib(tqdm(total=n_rows, desc="Velocity calc", leave=False)):
-        v_val = np.array(
-            Parallel(n_jobs=n_jobs)(
-                delayed(_one_row)(i) for i in range(n_rows)
-            )
-        )
-
-    v = v_val * (u.cm / u.s)
-    return v
+    return ((centres - wl0) / wl0 * const.c).to(u.cm / u.s)
 
 
 def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
@@ -1669,7 +1722,7 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
         Fitted values from `fit_cube_gauss`, with the parameters on the last
         axis.
     n_jobs : int, optional
-        Not used; kept so existing calls still work.
+        Ignored.
     fit_config : FitConfig, optional
         Fit configuration of a blend, which gives the parameter holding the
         primary component's width.
@@ -1682,16 +1735,16 @@ def width_from_fit(fit_arr: u.Quantity | np.ndarray, n_jobs: int = -1,
     """
     idx = 2 if (fit_config is None or fit_config.is_single) else fit_config.idx_sigma
     widths_raw = fit_arr[..., idx]  # (n_slit, n_scan)
-    # Ensure we have a pure Quantity array
+    # As a Quantity array
     if isinstance(widths_raw, u.Quantity):
         widths = widths_raw
     elif np.asarray(widths_raw).dtype != object:
         widths = u.Quantity(widths_raw, u.cm)
     else:  # object array of Quantity scalars
         get_val = np.vectorize(lambda q: q.value)
-        get_unit = widths_raw.flat[0].unit  # Get unit from first element
+        get_unit = widths_raw.flat[0].unit  # unit of the first element
         widths = u.Quantity(get_val(widths_raw), get_unit)
-    
+
     return widths
 
 

@@ -35,7 +35,7 @@ REST = 195.119 * u.Angstrom
 BLEND = "Fe12_195.1790"
 BLEND_REST = 195.179 * u.Angstrom
 NY, NX, N_WAVE = 6, 4, 121
-# A power of two in Mm, so that edges built from it add up exactly.
+# Exact in binary, so edges built from it add up exactly.
 PIXEL = 0.1875 * u.Mm
 STEP = (5 * u.km / u.s / const.c * REST).to(u.cm)  # the synthesis's own grid
 
@@ -489,6 +489,7 @@ def test_a_pickle_name_still_gets_the_pickle_older_versions_wrote(tmp_path, monk
     assert list(saved) == ["line_cubes", "dem_map", "em_tv", "electron_density", "logT_grid",
                            "vel_grid", "logN_grid", "goft", "voxel_sizes", "dynamic_mode",
                            "atmosphere", "config"]
+    assert saved["em_tv"].shape[2:] == (saved["logT_grid"].size, saved["vel_grid"].size)
     # Including the contribution functions, as older versions kept them.
     assert {"si", "wl_grid"} <= set(saved["goft"][LINE])
     assert np.array_equal(saved["line_cubes"][LINE].data,
@@ -521,10 +522,7 @@ def test_a_run_left_on_the_old_default_file_still_finds_it(tmp_path, monkeypatch
 # Onto the detector
 # ----------------------------------------------------------------------
 def test_an_uneven_wavelength_grid_is_resampled_conserving_the_intensity():
-    """Each input wavelength covers the interval halfway to its neighbours.
-
-    This is as in a synthesis, and holds for the outermost wavelengths too.
-    """
+    """Each input wavelength covers the interval halfway to its neighbours, the outermost too."""
     rng = np.random.default_rng(107)
     # Dense in the middle and coarser than the detector pixels at the ends,
     # with intensity all the way out.
@@ -797,3 +795,21 @@ def test_a_pickle_is_not_converted_over_itself(tmp_path):
     with pytest.raises(ValueError, match="is the pickle being converted.*synthesis.h5"):
         convert_synthesis_pickle(pickle_path, tmp_path / "." / "synthesis.pkl")
     assert pickle_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("unit", [u.erg / (u.s * u.cm**2 * u.sr * u.AA),
+                                  u.W / (u.m**2 * u.sr * u.nm),
+                                  u.erg / (u.s * u.cm**2 * u.sr * u.Hz)])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_a_radiance_converts_as_through_the_spectral_density(unit, dtype):
+    """A radiance per wavelength takes only a scale, the one the equivalency applies."""
+    from eclipse.synthesis_file import RADIANCE_UNIT, to_radiance
+
+    wavelength = np.linspace(195.0, 196.0, 5) * u.AA
+    values = np.arange(1.0, 6.0).astype(dtype) * unit
+    expected = (values * u.sr).to(RADIANCE_UNIT * u.sr,
+                                  equivalencies=u.spectral_density(wavelength)) / u.sr
+    converted = to_radiance(values, wavelength)
+    assert converted.unit == RADIANCE_UNIT
+    assert converted.dtype == expected.dtype
+    assert np.array_equal(converted.value, expected.value)

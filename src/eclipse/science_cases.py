@@ -2,8 +2,8 @@
 Science cases from the Concept Study Report, and ECLIPSE configurations for them.
 
 `data/science_cases.yaml` holds every case with all its lines. The functions
-here turn the lines ECLIPSE can currently simulate, in the short and long
-wavelength channels, into uniform-intensity configurations, and the
+here turn the lines ECLIPSE can simulate, in the short and long wavelength
+channels, into uniform-intensity configurations, and the
 `eclipse-science-cases` command writes them to files.
 """
 
@@ -100,12 +100,12 @@ def load_science_cases(path: str | Path | None = None) -> list[dict]:
 
 
 def line_label(line: dict) -> str:
-    """A line as written in the table, e.g. `Fe XII 195.119`."""
+    """Line as written in the table, e.g. `Fe XII 195.119`."""
     return f"{line['ion']} {line['wavelength'].split()[0]}"
 
 
 def line_id(line: dict) -> str:
-    """A line as used in file names, e.g. `fe12_195119`."""
+    """Line as used in file names, e.g. `fe12_195119`."""
     symbol, numeral = line["ion"].split()
     wavelength = u.Quantity(line["wavelength"]).to_value(u.AA)
     return f"{symbol.lower()}{_ROMAN[numeral]:02d}_{wavelength:.3f}".replace(".", "")
@@ -123,8 +123,8 @@ def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
     """
     Wavelength range ECLIPSE can simulate in the short wavelength channel.
 
-    This is where both the primary mirror and grating efficiency tables have
-    values; the effective area is undefined outside them.
+    Where both the primary mirror and grating efficiency tables have values;
+    the effective area is undefined outside them.
     """
     telescope = Telescope_EUVST()
     tables = [_load_throughput_table(table)[0]
@@ -206,8 +206,8 @@ def _chosen_lines(table: list[dict], cases: list[str] | None,
 def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     """One line's configuration: defaults, then the case, then the base settings."""
     value, unit = line["intensity"].split(maxsplit=1)
-    # Decimal keeps every digit of the table without binary rounding,
-    # e.g. 823 x 0.2 is 164.6, not 164.60000000000002.
+    # Decimal avoids binary rounding: 823 x 0.2 is 164.6, not
+    # 164.60000000000002.
     intensity = Decimal(value) * Decimal(str(case["filling_factor"]))
 
     settings = {**DEFAULT_SETTINGS, **base}
@@ -236,8 +236,7 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
         detector = config.get("detector")
         config["detector"] = {**(detector if isinstance(detector, dict) else {}),
                               "band": band, "order": order}
-    # Deep copy, so no list or section is shared with the defaults or the
-    # other configurations.
+    # Deep copy, so no list or section is shared with another configuration.
     return copy.deepcopy(config)
 
 
@@ -249,7 +248,7 @@ def science_case_configs(cases: list[str] | None = None,
     """
     ECLIPSE configurations for the science case lines ECLIPSE can simulate.
 
-    Each uses uniform intensity mode: the line's intensity times the case's
+    Each observes a uniform intensity: the line's intensity times the case's
     filling factor, the thermal width at the line's T_max, and the case's
     exposure time and slit width.
 
@@ -298,8 +297,8 @@ def science_case_configs(cases: list[str] | None = None,
                 f"observes its line's intensity, not a time series."
             )
 
-    # The simulation section is merged with each case's settings, so check it
-    # here; the other sections are checked with the whole configuration.
+    # The simulation section is merged with each case's, so check it here; the
+    # others are checked with the whole configuration.
     if "simulation" in base:
         _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 
@@ -366,6 +365,73 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
     return paths, skipped
 
 
+def _shared(configs: list[dict]) -> dict:
+    """Settings every configuration has, section by section."""
+    shared = {}
+    for key, value in configs[0].items():
+        if not all(key in config for config in configs):
+            continue
+        if all(config[key] == value for config in configs):
+            shared[key] = copy.deepcopy(value)
+        elif all(isinstance(config[key], dict) for config in configs):
+            inner = _shared([config[key] for config in configs])
+            if inner:
+                shared[key] = inner
+    return shared
+
+
+def _own(config: dict, shared: dict) -> dict:
+    """Settings of a configuration that are not among the shared ones."""
+    own = {}
+    for key, value in config.items():
+        if key not in shared:
+            own[key] = copy.deepcopy(value)
+        elif isinstance(value, dict) and isinstance(shared[key], dict):
+            inner = _own(value, shared[key])
+            if inner:
+                own[key] = inner
+        elif value != shared[key]:
+            own[key] = copy.deepcopy(value)
+    return own
+
+
+def write_science_case_run_file(path: str | Path, **kwargs) -> tuple[Path, list[str]]:
+    """
+    Write the configurations from :func:`science_case_configs` as one run file.
+
+    The settings every configuration shares are at the top level, and each
+    line is one entry of `runs:`, named after its case and line, with its
+    own settings.
+
+    Parameters
+    ----------
+    path : str or Path
+        File to write.
+    **kwargs
+        Passed to :func:`science_case_configs`.
+
+    Returns
+    -------
+    path : Path
+        File written.
+    skipped : list of str
+        Chosen lines ECLIPSE cannot simulate yet.
+    """
+    configs, skipped = science_case_configs(**kwargs)
+    if not configs:
+        raise ValueError("None of the chosen lines can be simulated yet, so there is no run "
+                         "to write.")
+    shared = _shared([item.config for item in configs])
+    entries = [{"name": item.name, **_own(item.config, shared)} for item in configs]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = ("# Science cases from the Concept Study Report, one run per line.\n"
+              "# Written by eclipse-science-cases from the science case table\n\n")
+    path.write_text(header + yaml.safe_dump({**shared, "runs": entries}, sort_keys=False,
+                                            default_flow_style=None))
+    return path, skipped
+
+
 def main(argv: list[str] | None = None) -> None:
     """Command line entry point for `eclipse-science-cases`."""
     parser = argparse.ArgumentParser(
@@ -387,6 +453,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--base", metavar="YAML",
                         help="a configuration file whose settings go into every "
                              "configuration, e.g. a detector section or n_iter")
+    parser.add_argument("--one-file", action="store_true",
+                        help="write one run file, science_cases.yaml, with a run for "
+                             "each line, instead of a file for each")
     parser.add_argument("--list", action="store_true",
                         help="list the chosen cases and lines instead of "
                              "writing anything")
@@ -408,10 +477,16 @@ def main(argv: list[str] | None = None) -> None:
         if not isinstance(base, dict):
             raise ValueError(f"{args.base} has to hold a mapping of settings.")
 
-    paths, skipped = write_science_case_configs(
-        args.out, cases=args.cases, lines=args.lines, base=base)
-    print(f"Wrote {len(paths)} configuration{'' if len(paths) == 1 else 's'} "
-          f"to {args.out}")
+    if args.one_file:
+        path, skipped = write_science_case_run_file(
+            Path(args.out) / "science_cases.yaml", cases=args.cases, lines=args.lines,
+            base=base)
+        print(f"Wrote {path}")
+    else:
+        paths, skipped = write_science_case_configs(
+            args.out, cases=args.cases, lines=args.lines, base=base)
+        print(f"Wrote {len(paths)} configuration{'' if len(paths) == 1 else 's'} "
+              f"to {args.out}")
     if skipped:
         print(f"Skipped {len(skipped)} line{'' if len(skipped) == 1 else 's'} "
               f"ECLIPSE cannot simulate yet; --list shows which")

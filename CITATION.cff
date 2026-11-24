@@ -1,0 +1,90 @@
+cff-version: 1.2.0
+message: "If ECLIPSE contributed to a publication, please cite the paper below and the version of the code you used."
+title: "ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST"
+type: software
+authors:
+  - family-names: McKevitt
+    given-names: James
+    orcid: "https://orcid.org/0000-0002-4071-5727"
+    affiliation: "Mullard Space Science Laboratory, University College London"
+license: BSD-3-Clause
+repository-code: "https://github.com/jamesmckevitt/eclipse"
+url: "https://solarc-eclipse.readthedocs.io"
+doi: 10.5281/zenodo.17543844
+keywords:
+  - solar physics
+  - spectroscopy
+  - forward modelling
+  - SOLAR-C
+  - EUVST
+preferred-citation:
+  type: article
+  title: "Pre-flare and active region plasma flows and structure seen by the short wavelength camera on SOLAR-C/EUVST"
+  journal: "Publications of the Astronomical Society of Japan"
+  volume: 78
+  issue: 4
+  start: 1524
+  end: 1545
+  year: 2026
+  doi: 10.1093/pasj/psag078
+  authors:
+    - family-names: McKevitt
+      given-names: James
+      orcid: "https://orcid.org/0000-0002-4071-5727"
+    - family-names: Matthews
+      given-names: Sarah
+      orcid: "https://orcid.org/0000-0001-9346-8179"
+    - family-names: Brooks
+      given-names: David H
+      orcid: "https://orcid.org/0000-0002-2189-9313"
+    - family-names: Shimizu
+      given-names: Toshifumi
+      orcid: "https://orcid.org/0000-0003-4764-6856"
+    - family-names: Tei
+      given-names: Akiko
+      orcid: "https://orcid.org/0000-0002-0236-361X"
+    - family-names: Ugarte-Urra
+      given-names: Ignacio
+      orcid: "https://orcid.org/0000-0001-5503-0491"
+    - family-names: Imada
+      given-names: Shinsuke
+      orcid: "https://orcid.org/0000-0001-7891-3916"
+    - family-names: Toriumi
+      given-names: Shin
+      orcid: "https://orcid.org/0000-0002-1276-2403"
+    - family-names: Brown
+      given-names: Charles M
+    - family-names: Ishikawa
+      given-names: Ryohko
+      orcid: "https://orcid.org/0000-0001-8830-0769"
+    - family-names: Katsukawa
+      given-names: Yukio
+      orcid: "https://orcid.org/0000-0002-5054-8782"
+    - family-names: Hara
+      given-names: Hirohisa
+      orcid: "https://orcid.org/0000-0001-5686-3081"
+    - family-names: Rust
+      given-names: Duncan
+    - family-names: Walton
+      given-names: David
+    - family-names: Winter
+      given-names: Berend
+    - family-names: Baker
+      given-names: Deborah
+      orcid: "https://orcid.org/0000-0002-0665-2355"
+    - family-names: Reid
+      given-names: Hamish
+      orcid: "https://orcid.org/0000-0002-6287-3494"
+    - family-names: Young
+      given-names: Peter R
+      orcid: "https://orcid.org/0000-0001-9034-2925"
+    - family-names: Pereira
+      given-names: Tiago M D
+      orcid: "https://orcid.org/0000-0003-4747-4329"
+    - family-names: Bradley
+      given-names: Louisa
+    - family-names: Shitvov
+      given-names: Alexey
+    - family-names: Harra
+      given-names: Louise
+      orcid: "https://orcid.org/0000-0001-9457-6200"

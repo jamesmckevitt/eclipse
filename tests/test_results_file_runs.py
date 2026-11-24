@@ -76,10 +76,9 @@ def _same(got, expected, where="payload", _memo=None):
     """
     Assert that `got` equals `expected`, entry by entry.
 
-    Sharing is checked too, for whatever the file writes as a dataset or
-    group: one object in the results, such as the ground truth the
-    combinations share, must come back as one object, and distinct objects
-    must stay distinct.
+    Sharing is checked too, for anything written as a dataset or group: one
+    object shared in the results, such as the combinations' ground truth,
+    comes back as one object, and distinct objects stay distinct.
     """
     memo = {} if _memo is None else _memo
     if _holds_array(expected):
@@ -221,7 +220,7 @@ def test_an_atmosphere_series_run_reads_back_what_it_saved(tmp_path, monkeypatch
 
 
 def test_an_eis_run_reads_back_what_it_saved(tmp_path, monkeypatch):
-    """Including the calibration date, which YAML reads as a datetime.date when unquoted."""
+    """Including the calibration date, which YAML reads as a `datetime.date` when unquoted."""
     import datetime
 
     payload, path = _run(tmp_path, monkeypatch, "eis", instrument="EIS",
@@ -322,7 +321,7 @@ def test_a_results_pickle_still_loads_and_converts(tmp_path, monkeypatch):
 
 
 def test_a_rerun_moves_the_pickle_of_its_name_aside(tmp_path, monkeypatch, capsys):
-    """So a script naming the pickle reads the new results, as when reruns overwrote it."""
+    """So a script naming the pickle reads the new results, not stale ones."""
     import dill
 
     stale = tmp_path / "run" / "result" / "uniform.pkl"

@@ -90,9 +90,9 @@ def test_the_optics_part_is_the_one_rsc_2022021c_gives():
     plate_scale = DET.plate_scale_angle.to_value(u.arcsec / u.pixel)
     # The document's own convolved value is the quadrature sum.
     assert np.hypot(0.352, 0.2) == pytest.approx(0.405, abs=5e-4)
-    # The optics part the code derives agrees within the rounding of 43.00 mA
-    # to 2.54 pixels and of 0.0118 arcsec per micron times 13.5 micron pixels
-    # to 0.159 arcsec per pixel.
+    # The derived optics part agrees within the rounding of 43.00 mA to 2.54
+    # pixels and of 0.0118 arcsec per micron times 13.5 micron pixels to 0.159
+    # arcsec per pixel.
     assert spectral_optics_fwhm(TEL, DET) * plate_scale == pytest.approx(0.352, abs=0.002)
     assert slit_image_width(0.2 * u.arcsec, DET) == pytest.approx(0.2 / plate_scale)
 
@@ -114,7 +114,7 @@ def test_wider_slits_add_their_width_in_quadrature(slit, expected):
 
 
 def test_the_reference_slit_blurs_exactly_as_one_fixed_psf_did():
-    """The 0.2 arcsec slit gets the fixed PSF that every slit used to get."""
+    """The 0.2 arcsec slit gets the same PSF as a telescope with no `psf_slit_width`."""
     fixed = Telescope_EUVST(psf_slit_width=None, resolution_budget="none")
     for convolve_spatial in (True, False):
         cube, sim = _frame(0.2)
@@ -144,8 +144,8 @@ def test_the_convolution_is_the_optics_gaussian_across_the_slit_image(slit):
     half = 0.5 * slit_image_width(slit * u.arcsec, DET)
 
     x = np.arange(-(kernel.size // 2), kernel.size // 2 + 1)
-    # Average the Gaussian across the rectangle at each pixel centre, using
-    # the midpoint rule over exactly the rectangle.
+    # Average the Gaussian across the rectangle at each pixel centre by the
+    # midpoint rule.
     n = 20000
     offsets = -half + (2 * half / n) * (np.arange(n) + 0.5)
     numerical = np.array([np.exp(-0.5 * ((centre - offsets) / sigma) ** 2).sum()
@@ -207,8 +207,8 @@ def test_the_configuration_takes_the_new_settings():
 def test_the_uniform_intensity_grid_holds_a_wide_slit_line():
     """The grid is sized for the line after this slit's PSF.
 
-    This holds whether or not `psf` is on, as it did for the 0.2 arcsec PSF,
-    so a sweep of `psf` sees one grid per slit.
+    The size is the same with `psf` on or off, so a sweep of `psf` sees one
+    grid per slit.
     """
     widths = []
     for slit in (0.2, 1.6):
@@ -232,10 +232,9 @@ def test_a_wider_slit_widens_the_window_by_its_extra_reach(slit, margin):
 def test_a_widened_window_keeps_a_doppler_shifted_line():
     """The default synthesis window, 300 km/s either side, is 25 pixels at 195 A.
 
-    A line at +200 km/s sits five pixels from its end. The 1.6 arcsec PSF
-    would spread about a seventh of it off the end of that window. The
-    widened window holds all of it, and the existing pixels keep their
-    wavelengths.
+    The 1.6 arcsec PSF spreads about a seventh of a line at +200 km/s, five
+    pixels from the end, off that window. The widened window holds all of
+    it, and the existing pixels keep their wavelengths.
     """
     pixel = (DET.wvl_res * u.pixel).to(u.AA)
     shift = (200 * u.km / u.s / const.c * REST / pixel).to_value(u.dimensionless_unscaled)

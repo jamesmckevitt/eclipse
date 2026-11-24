@@ -1,7 +1,7 @@
-"""The atmosphere file, the HDF5 input the synthesis reads.
+"""The atmosphere file, the HDF5 input to the synthesis.
 
-A flat contribution function replaces fiasco, so a cell's intensity is its
-emission measure.
+A flat contribution function stands in for fiasco, so a cell's intensity
+is its emission measure.
 """
 import sys
 import types
@@ -11,7 +11,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 import pytest
-from mendeleev import element
+from plasmapy.particles import standard_atomic_weight
 
 from eclipse import synthesis
 from eclipse.atmosphere import (
@@ -38,7 +38,7 @@ ELECTRON_DENSITY = 1.0e9 / u.cm**3
 MASS_PER_ELECTRON = 1.29
 SHAPE = (6, 5, 4)  # (nz, ny, nx)
 SPACING = {"x": 0.1 * u.Mm, "y": 0.15 * u.Mm, "z": 0.05 * u.Mm}
-# Six z cells of growing size, and four x cells of growing size around zero.
+# Six z cells, and four x cells around zero, of growing size.
 STRETCHED_Z = np.array([0.0, 0.05, 0.2, 0.45, 0.8, 1.25, 1.75]) * u.Mm
 STRETCHED_X = np.array([-0.25, -0.15, -0.05, 0.1, 0.3]) * u.Mm
 
@@ -84,7 +84,7 @@ def _flat_goft(lines, **kwargs):
 
 
 def _synthesise(tmp_path, monkeypatch, name, *options):
-    """Run synthesis main() with `options` and return the saved output."""
+    """Run the synthesis `main()` with `options` and return the saved output."""
     argv = ["synthesise-spectra", "--output-dir", str(tmp_path / "out"),
             "--output-name", f"{name}.h5", "--lines", LINE, *options]
     monkeypatch.setattr(sys, "argv", argv)
@@ -115,7 +115,7 @@ def _write_muram_cube(path, data):
 
 
 def _write_muram_files(root, atmosphere, suffix="0270000"):
-    """Write `atmosphere` as MURaM files, as read by the deprecated route and dynamic mode."""
+    """Write `atmosphere` as MURaM files, for the deprecated route and dynamic mode."""
     _write_muram_cube(root / "temp" / f"eosT.{suffix}",
                       atmosphere.temperature.to_value(u.K))
     _write_muram_cube(root / "rho" / f"result_prim_0.{suffix}",
@@ -306,7 +306,7 @@ def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path,
     ("temperature", None, "needs a temperature"),
     ("temperature", np.ones((4, 5, 6)) * u.K, "shape"),
     ("temperature", np.ones(SHAPE), "Quantity"),
-    ("temperature", np.ones(SHAPE) * u.m, "convertible"),
+    ("temperature", np.ones(SHAPE) * u.m, "unit of temperature, such as K"),
     ("mass_density", None, "needs a mass_density or an electron_density"),
     ("z_edges", np.arange(SHAPE[0] + 1)[::-1] * u.Mm, "must increase"),
     ("x_edges", np.arange(1) * u.Mm, "at least 1 cell"),
@@ -418,8 +418,7 @@ def test_downsampling_keeps_the_extent_of_the_box():
             2 * SPACING[axis].to_value(u.Mm))
         assert np.allclose(coarse.edges(axis).to_value(u.Mm),
                            even.edges(axis).to_value(u.Mm)[::2])
-    # Each coarse cell covers a block of fine cells, so it takes the block's
-    # edges and is centred on the block.
+    # Each coarse cell takes the edges and centre of its block of fine cells.
     assert np.allclose(coarse.coordinate("x").to_value(u.Mm), [-0.1, 0.1])
     assert np.allclose(coarse.coordinate("z").to_value(u.Mm), [0.025, 0.125, 0.225])
     assert even.downsampled(1) is even
@@ -447,14 +446,13 @@ def test_along_line_of_sight_lays_the_sizes_along_the_right_axis():
 # Mass per electron
 # ----------------------------------------------------------------------
 def test_the_mass_per_electron_follows_from_the_abundances():
-    hydrogen = element("H").atomic_weight
+    hydrogen = standard_atomic_weight("H").to_value(u.u)
     assert mass_per_electron_from_abundances({"H": 1.0}) == pytest.approx(hydrogen)
 
-    helium = element("He").atomic_weight
+    helium = standard_atomic_weight("He").to_value(u.u)
     expected = (hydrogen + 0.085 * helium) / (1.0 + 0.085 * 2)
     assert mass_per_electron_from_abundances({"H": 1.0, "He": 0.085}) == pytest.approx(expected)
-    # Well below the neutral-gas value of 1.29, and well above the 1 of a pure
-    # hydrogen plasma.
+    # Well between 1, for pure hydrogen, and the neutral-gas value of 1.29.
     assert 1.1 < expected < 1.2
 
     with pytest.raises(ValueError, match="hydrogen"):
@@ -478,7 +476,7 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(
         pass
 
     class Ion:
-        """Minimal fiasco.Ion that reads an abundance and records its arguments."""
+        """Minimal `fiasco.Ion` that reads an abundance and records its arguments."""
 
         def __init__(self, name, temperature, abundance=None, hdf5_dbase_root=None):
             asked.append((name, abundance, hdf5_dbase_root))
@@ -507,8 +505,8 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(
                          ("fiasco.util.exceptions", exceptions)):
         monkeypatch.setitem(sys.modules, name, module)
 
-    # The value is cached per set and database, so clear the cache before and
-    # after to keep real and fake results apart.
+    # Clear the cache, kept per set and database, before and after, so real
+    # and fake results stay apart.
     mass_per_electron.cache_clear()
     try:
         value = mass_per_electron("a set", str(database))
@@ -527,11 +525,11 @@ def test_the_default_mass_per_electron_reads_the_abundance_set_through_fiasco(
     assert asked_with_database == [(f"{symbol} 1", "a set", str(database))
                                    for symbol in ("H", "He", "O", "Fe")]
     assert [root for _, _, root in asked_with_default] == [None] * 4
-    # Building a new user's database is offered before it is read; fiasco
-    # itself offers only once an Ion is made.
+    # Building a new database is offered before it is read; fiasco itself
+    # offers only once an Ion is made.
     assert offered[:2] == [str(database), str(default)]
 
-    # A database the user declined to build stops the run with an error saying so.
+    # A database the user declined to build stops the run with an error.
     mass_per_electron.cache_clear()
     try:
         with pytest.raises(FileNotFoundError, match="no CHIANTI database.*not built"):
@@ -592,8 +590,8 @@ def test_the_units_in_the_file_do_not_matter(tmp_path, monkeypatch):
     cgs_cube = from_cgs["line_cubes"][LINE]
     si_cube = from_si["line_cubes"][LINE]
     assert np.all(_intensity(from_cgs) > 0)
-    # The flows shift the lines, so the spectra agree only if the velocity
-    # unit is read correctly. The summed intensity would not show this.
+    # The flows shift the lines, so comparing spectra, not summed intensity,
+    # checks the velocity unit.
     assert not np.allclose(cgs_cube.data[0, 0], cgs_cube.data[0, -1])
     assert si_cube.data == pytest.approx(cgs_cube.data, rel=1e-6)
     for k in range(3):
@@ -684,7 +682,7 @@ def test_a_stretched_line_of_sight_integrates_the_true_cell_sizes(tmp_path, monk
 
 
 def test_heights_rounded_to_single_precision_can_be_seen_from_the_side(tmp_path, monkeypatch):
-    """Heights as built by the MURaM recipe in the docs, from float32 FITS heights."""
+    """Float32 heights, as in the docs' MURaM recipe, still count as evenly spaced."""
     heights = (np.float32(41.9) + np.arange(SHAPE[0] + 1, dtype=np.float32)
                * np.float32(0.064)) * u.Mm
     assert np.ptp(np.diff(heights.value.astype(float))) > 1e-6 * 0.064
@@ -718,8 +716,8 @@ def test_the_synthesis_crops_an_atmosphere_file(tmp_path, monkeypatch):
     path = write_atmosphere(atmosphere, tmp_path / "box.h5")
     # x cells span -0.2 to 0.2 in steps of 0.1, so this keeps the middle two.
     crop = ["--crop-x", "-0.09 Mm", "0.09 Mm", "--crop-z", "0.12 Mm", "0.3 Mm"]
-    # Cropping at synthesis must match synthesising a pre-cropped atmosphere,
-    # whose cropping is tested against NDCube's rule above.
+    # Compare with a pre-cropped atmosphere, whose cropping is tested against
+    # NDCube's rule above.
     cropped = write_atmosphere(
         atmosphere.cropped(x=("-0.09 Mm", "0.09 Mm"), z=("0.12 Mm", "0.3 Mm")),
         tmp_path / "cropped.h5")
@@ -735,7 +733,7 @@ def test_the_synthesis_crops_an_atmosphere_file(tmp_path, monkeypatch):
 
 def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_a_warning(
         tmp_path, monkeypatch):
-    """The deprecated command line still runs and keeps the MURaM route's placement of the box."""
+    """The deprecated MURaM options give the same cube and placement as an atmosphere file."""
     atmosphere = _structured_atmosphere()
     _write_muram_files(tmp_path / "muram", atmosphere, suffix="0300000")
     nz, ny, nx = SHAPE
@@ -746,9 +744,8 @@ def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_
     options = ["--crop-x", "-0.09 Mm", "0.19 Mm", "--crop-z", "0.12 Mm", "0.3 Mm",
                "--mass-per-electron", str(MASS_PER_ELECTRON)]
 
-    # The MURaM files' values, in their units and precision, on the MURaM
-    # route's grid: x and y centred on zero and the bottom cell centred on
-    # z = 0.
+    # The MURaM values in their units and precision, on the MURaM grid: x and
+    # y centred on zero, the bottom cell centred on z = 0.
     as_written = write_atmosphere(Atmosphere(
         temperature=atmosphere.temperature.to(u.K).astype(np.float32),
         mass_density=atmosphere.mass_density.to(u.g / u.cm**3).astype(np.float32),
@@ -756,7 +753,7 @@ def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_
         **_edges()), tmp_path / "as_written.h5")
     from_file = _synthesise(tmp_path, monkeypatch, "file", "--atmosphere",
                             str(as_written), *options)
-    with pytest.warns(FutureWarning, match="deprecated.*atmosphere-files.*--atmosphere"):
+    with pytest.warns(FutureWarning, match="deprecated.*files/atmosphere.*--atmosphere"):
         direct = _synthesise(tmp_path, monkeypatch, "direct", *layout, *options,
                              "--temp-file", "temp/eosT.0300000",
                              "--rho-file", "rho/result_prim_0.0300000",
@@ -772,8 +769,7 @@ def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_
                               getattr(file_cube.wcs.wcs, attribute))
     assert np.array_equal(direct["dem_map"], from_file["dem_map"])
 
-    # The image axes match those from the cube loader that dynamic mode uses
-    # for MURaM files.
+    # The image axes match those of the MURaM cube loader used by dynamic mode.
     raw_cube = load_cube(tmp_path / "muram" / "temp" / "eosT.0300000",
                          shape=(nx, nz, ny), unit=u.K, voxel_dx=SPACING["x"],
                          voxel_dy=SPACING["y"], voxel_dz=SPACING["z"],
@@ -790,7 +786,7 @@ def test_muram_files_given_directly_synthesise_as_the_same_atmosphere_file_with_
 
 
 def test_without_an_atmosphere_file_the_missing_muram_files_are_named(tmp_path, monkeypatch):
-    """Forgetting --atmosphere warns that the MURaM route is deprecated before it fails."""
+    """Without `--atmosphere`, the deprecated MURaM route warns before it fails."""
     with pytest.warns(FutureWarning, match="--atmosphere"):
         with pytest.raises(FileNotFoundError, match="temperature file not found"):
             _synthesise(tmp_path, monkeypatch, "none", "--data-dir", str(tmp_path / "empty"))

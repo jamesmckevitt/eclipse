@@ -106,9 +106,9 @@ def test_a_line_keeps_its_flux_and_lands_on_its_own_row():
 
 def test_a_narrow_line_spreads_over_a_few_rows():
     # 0.0169 A is one row at 195 A, so three rows reach 1.5 sigma either side
-    # of the middle row's centre. The fraction of the line they hold depends
-    # on where it sits in its row: erf(1.5 / sqrt 2) = 0.866 at a row centre,
-    # and [erf(1 / sqrt 2) + erf(2 / sqrt 2)] / 2 = 0.819 at a row boundary.
+    # of the middle row's centre. They hold erf(1.5 / sqrt 2) = 0.866 of the
+    # line at a row centre and [erf(1 / sqrt 2) + erf(2 / sqrt 2)] / 2 = 0.819
+    # at a row boundary.
     fp = FocalPlane_SWC()
     rows = photons_from_lines(fp, "left", StubTelescope(), SLIT_WIDTH * u.arcsec,
                               [195.119] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
@@ -282,9 +282,9 @@ def test_each_pixel_gets_the_wavelength_of_its_mean_photon_energy():
 
 
 def test_each_pixel_gets_the_wavelength_of_its_photons_root_mean_square_energy():
-    # The same two rows. A packet's photons come from both, so the spread of
-    # their electrons depends on how far apart the two energies are. That is
-    # given by the photon-weighted mean of 1 / wavelength^2.
+    # The same two rows. The spread of a packet's electrons depends on how far
+    # apart its photons' energies are, given by the photon-weighted mean of
+    # 1 / wavelength^2.
     n_rows = 8
     wavelength = np.linspace(170.0, 210.0, n_rows) * u.Angstrom
     first, second = np.zeros((n_rows, 1)), np.zeros((n_rows, 1))
@@ -310,8 +310,8 @@ def test_each_pixel_gets_the_wavelength_of_its_photons_root_mean_square_energy()
 def test_each_pixel_can_bring_the_wavelength_of_the_photons_reaching_it():
     # Two columns whose lit row gets photons of different wavelengths, as when
     # a line is blurred onto its neighbour. Each keeps its own wavelength
-    # through the smear. A per-pixel wavelength that is the same across a row
-    # gives the same result as one per row.
+    # through the smear. A per-pixel wavelength constant along a row gives the
+    # same result as one per row.
     n_rows = 8
     wavelength = np.linspace(170.0, 210.0, n_rows)
     rate = np.zeros((n_rows, 2))
@@ -545,7 +545,7 @@ def test_a_line_on_the_right_ccd_keeps_its_flux_and_lands_on_its_row():
 
 
 def test_a_margin_adds_the_rows_past_each_end_and_leaves_the_chip_as_it_was():
-    """A line three rows from the register, so its tail runs into the margin."""
+    """A line three rows from the register, with its tail in the margin."""
     fp = FocalPlane_SWC()
     wavelength = fp.wavelength(3, "left").to_value(u.Angstrom)
     line = ([wavelength] * u.Angstrom, [1.0] * u.erg / (u.s * u.cm**2 * u.sr),
@@ -755,3 +755,31 @@ def test_a_lines_rows_are_never_below_zero(spectral_psf):
                 * photons_per_energy(telescope, 211.317 * u.Angstrom)[0]).to_value(u.s**-1)
     assert rows.sum() == pytest.approx(expected, rel=1e-3)
     np.random.default_rng(0).poisson(rows)
+
+
+@pytest.mark.parametrize("shutter, columns", [(False, 12), (True, 12), (False, 11)])
+def test_one_transfer_gives_the_image_and_overscan_two_transfers_give(shutter, columns):
+    """Bit for bit, with charge left behind along the columns and register."""
+    from eclipse.frame import (expose_serial_overscan_with_wavelengths,
+                               expose_with_serial_overscan_with_wavelengths,
+                               expose_with_wavelengths)
+    from eclipse.readout import ReadoutSequence
+
+    sequence = ReadoutSequence(shutter=shutter, row_transfer_time=15.0 * u.us,
+                               pixel_period=500.0 * u.ns, serial_prescan=2,
+                               serial_image_pixels=6, serial_overscan=3,
+                               parallel_overscan_rows=2, dump_rows=0, windows=[],
+                               cte_parallel=0.999, cte_serial=0.99)
+    generator = np.random.default_rng(4)
+    rate = generator.uniform(0.0, 50.0, (9, columns))
+    rate[3, 4] = 0.0
+    wavelength = generator.uniform(190.0, 200.0, rate.shape) * u.AA
+    rms = wavelength * 1.001
+    one = expose_with_serial_overscan_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence,
+                                                       rms_wavelength=rms)
+    two = (expose_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence, rms_wavelength=rms),
+           expose_serial_overscan_with_wavelengths(rate, wavelength, 2.0 * u.s, sequence,
+                                                   rms_wavelength=rms))
+    for together, apart in zip(one, two):
+        for got, want in zip(together, apart):
+            assert np.array_equal(u.Quantity(got).value, u.Quantity(want).value)

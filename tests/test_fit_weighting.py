@@ -114,9 +114,9 @@ def test_the_ground_truths_weights_are_those_of_the_dn_with_no_noise():
     expected = expected_dn_uncertainty(cube, sim.expos, det, tel, sim, offchip_bin_slit=2,
                                        uniform_mode=True)
     assert expected.shape == (1,) + cube.data.shape[1:]
-    # With no line, two pixels' dark current, read noise and rounding, in the
-    # first wavelength pixel, which collects its dark current for the time
-    # its row takes to be read.
+    # With no line, the first wavelength pixel holds two pixels' dark current,
+    # read noise and rounding. Its dark current builds up for the time its row
+    # takes to be read.
     floor = np.sqrt(dn_variance(0.0, REST, sim.expos, det, n_binned=2,
                                 dark_time=_dark_time(cube, sim.expos, det, sim)[0]))
     assert expected[0, 0, 0] == pytest.approx(floor, rel=1e-6)

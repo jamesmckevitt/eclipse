@@ -2,12 +2,12 @@
 
 ECLIPSE (Emission Calculation and Line Prediction for SOLAR-C EUVST) predicts what the EUV spectrograph EUVST on SOLAR-C will measure, and how precisely, starting from a model of the solar atmosphere. It also models Hinode/EIS.
 
-Contact: James McKevitt (jm2@mssl.ucl.ac.uk). See [LICENSE](LICENSE) for usage terms.
+Contact: James McKevitt (jm2@mssl.ucl.ac.uk). ECLIPSE is open source under the [BSD 3-Clause licence](LICENSE). Forward modelling results for SOLAR-C/EUVST need the SOLAR-C SWG's approval before publication.
 
 The instrument model will be updated as EUVST is built, tested and commissioned.
 
 [![Tests](https://github.com/jamesmckevitt/eclipse/actions/workflows/tests.yml/badge.svg)](https://github.com/jamesmckevitt/eclipse/actions/workflows/tests.yml)
-[![Documentation Status](https://app.readthedocs.org/projects/solarc-eclipse/badge/?version=stable)](https://solarc-eclipse.readthedocs.io/)
+[![Documentation Status](https://img.shields.io/readthedocs/solarc-eclipse/stable)](https://solarc-eclipse.readthedocs.io/)
 [![PyPI](https://img.shields.io/pypi/v/eclipse.svg)](https://pypi.org/project/eclipse/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.17543844-blue.svg)](https://doi.org/10.5281/zenodo.17543844)
 

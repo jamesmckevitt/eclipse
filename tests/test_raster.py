@@ -74,9 +74,8 @@ GOFT = 1.0e-24  # erg cm^3 / s, the order of a strong coronal line's peak
 def _flat_goft(lines, logN_min=8.0, logN_max=10.0, nN=21, **kwargs):
     """Contribution function flat in temperature and density, replacing fiasco.
 
-    A column's intensity is then its emission measure. The value is
-    realistic, so the photon counts in an instrument run are ones a detector
-    can hold."""
+    A column's intensity then follows its emission measure. The value is
+    realistic, so an instrument run does not saturate the detector."""
     logT_grid = np.linspace(5.0, 7.0, 21)
     logN_grid = np.linspace(logN_min, logN_max, nN)
     goft = {name: {"wl0": REST.to(u.cm), "g_tn": np.full((logN_grid.size, logT_grid.size), GOFT),
@@ -291,9 +290,9 @@ def test_the_rebinning_keeps_the_raster_where_it_is(tmp_path, flat_goft):
     scan = rebinned.axis_world_coords(1)[0]
     assert scan.Tx.to_value(u.arcsec)[0] == pytest.approx(expected, abs=1e-6)
 
-    # A strip cropped to one 0.2 arcsec row along the slit is smaller than a
-    # 1 arcsec EIS pixel, and the rebinning says so rather than returning
-    # nothing. Two 1 arcsec slit positions keep the raster inside the box.
+    # A strip cropped to one 0.2 arcsec row is smaller than a 1 arcsec EIS
+    # pixel, and the rebinning raises rather than returning nothing. Two
+    # 1 arcsec slit positions keep the raster inside the box.
     from eclipse.config import Detector_EIS
     one_row = RasterSynthesiser(series, _settings(crop_y=(0 * u.Mm, 0.5 * CELL)))
     narrow = one_row.summed_cube(RasterPlan(start=0 * u.s, steps=2, centre=0.5 * CELL),
@@ -519,7 +518,7 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
     monkeypatch.setattr(raster_module, "compute_goft_fiasco", None)
     with pytest.raises(ValueError, match="outside the series"):
         run(simulation={"slit_width": "0.4 arcsec", "expos": ["5 s", "15 s"], "psf": False})
-    # An empty reference_line means the first line (docs/time-series.md), so
+    # An empty reference_line means the first line (docs/observe/rasters.md), so
     # the run gets as far.
     with pytest.raises(ValueError, match="outside the series"):
         run(reference_line=None)
@@ -536,10 +535,10 @@ def test_a_series_run_refuses_what_it_cannot_do(tmp_path, monkeypatch, flat_goft
 # ----------------------------------------------------------------------
 # A series of synthesis files
 # ----------------------------------------------------------------------
-# On the detector, the two routes get the same wavelengths from WCSs with
-# different reference pixels, which differ in the last bit, about 4e-22 cm at
-# 195 Angstrom. That is about a part in 1e11 of a 5 km/s synthesis bin
-# (3e-11 cm), and the resampled spectra can differ by as much.
+# On the detector, the two routes get their wavelengths from WCSs with
+# different reference pixels, which differ in the last bit (about 4e-22 cm at
+# 195 Angstrom). That is about 1e-11 of a 5 km/s synthesis bin (3e-11 cm), and
+# the resampled spectra can differ by as much.
 DETECTOR_ROUNDING = 1e-10
 
 
@@ -978,11 +977,73 @@ def test_the_contribution_functions_are_worked_out_at_more_densities_as_later_sn
     assert calls == [] and synthesiser.goft is None
     for snapshot in range(3):
         synthesiser._synthesise_strip(snapshot, 0, 1)
-    # 1e9 needs 10^8.8 and 10^9.1; 1e10 is a point, so 10^9.7 to 10^10.3;
-    # 1e7 likewise 10^6.7 to 10^7.3.
+    # 1e9 needs 10^8.8 to 10^9.1, 1e10 needs 10^9.7 to 10^10.3 and 1e7
+    # 10^6.7 to 10^7.3, and the grid grows without gaps.
     assert calls == [(8.8, 9.1), (9.4, 10.3), (6.7, 8.5)]
     assert np.allclose(synthesiser.logN_grid, np.arange(6.7, 10.35, 0.3))
     assert np.array_equal(synthesiser.goft[LINE]["g_tn"][:, 0], synthesiser.logN_grid)
     # Nothing new is needed a second time.
     synthesiser._synthesise_strip(1, 1, 2)
     assert len(calls) == 3
+
+
+def test_a_small_cache_drops_columns_and_gives_the_same_raster(tmp_path, flat_goft):
+    """Columns dropped from a full cache are fetched again, and the cubes do not change."""
+    snapshots = [_snapshot(t, density_scale=1.0 + t / 10) for t in (0.0, 10.0, 20.0, 30.0)]
+    series = AtmosphereSeries(_series(tmp_path, snapshots))
+    plan = RasterPlan(start=0 * u.s, steps=3, repeats=1)
+    roomy = RasterSynthesiser(series, _settings())
+    tight = RasterSynthesiser(series, _settings())
+    tight.cache_bytes = 1
+    for width in (0.4 * u.arcsec, 0.2 * u.arcsec, 0.4 * u.arcsec):
+        expected = roomy.line_cubes(plan, width, 10 * u.s)[LINE].data
+        got = tight.line_cubes(plan, width, 10 * u.s)[LINE].data
+        assert np.array_equal(got, expected)
+    # One column is kept at the least; the roomy cache kept every one.
+    assert len(tight._columns) == 1 and len(roomy._columns) > 1
+    assert tight.strips_synthesised > roomy.strips_synthesised
+
+
+def test_a_raster_fetches_its_columns_before_its_exposures(tmp_path, flat_goft, monkeypatch):
+    """Each snapshot's columns for the whole raster come in one strip, not one per exposure."""
+    snapshots = [_snapshot(t) for t in (0.0, 30.0)]
+    series = AtmosphereSeries(_series(tmp_path, snapshots))
+    synthesiser = RasterSynthesiser(series, _settings())
+    strips = []
+    synthesise_strip = synthesiser._synthesise_strip
+
+    def recording(snapshot, first, last):
+        strips.append((snapshot, first, last))
+        synthesise_strip(snapshot, first, last)
+
+    monkeypatch.setattr(synthesiser, "_synthesise_strip", recording)
+    synthesiser.line_cubes(RasterPlan(start=0 * u.s, steps=3, repeats=1), 0.4 * u.arcsec,
+                           10 * u.s)
+    # One strip per snapshot, the first covering all three slit positions.
+    assert len(strips) == len({snapshot for snapshot, _, _ in strips})
+    assert strips[0][0] == 0 and strips[0][2] - strips[0][1] >= 3
+
+
+def _goft_at_named_wavelengths(lines, logN_min=8.0, logN_max=10.0, nN=21, **kwargs):
+    """As `_flat_goft`, with each line at the wavelength in its name."""
+    goft, logT_grid, logN_grid = _flat_goft(lines, logN_min, logN_max, nN)
+    for name, info in goft.items():
+        info["wl0"] = (float(name.split("_")[1]) * u.Angstrom).to(u.cm)
+    return goft, logT_grid, logN_grid
+
+
+def test_a_raster_synthesises_only_the_lines_reaching_the_window(tmp_path, monkeypatch):
+    """Lines outside the reference window are left out, and the summed cube is unchanged."""
+    monkeypatch.setattr(raster_module, "compute_goft_fiasco", _goft_at_named_wavelengths)
+    series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(30.0)]))
+    lines = (LINE, "Fe12_195.1790", "Fe09_171.0730")
+    plan = RasterPlan(start=0 * u.s, steps=2, repeats=1)
+    every = RasterSynthesiser(series, SynthesisSettings(lines=lines))
+    reaching = RasterSynthesiser(series, SynthesisSettings(lines=lines), reference_line=LINE)
+    expected = every.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, LINE)
+    got = reaching.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, LINE)
+    assert np.array_equal(got.data, expected.data)
+    assert reaching.lines == [LINE, "Fe12_195.1790"] and every.lines == list(lines)
+    assert set(reaching.line_cubes(plan, 0.4 * u.arcsec, 10 * u.s)) == {LINE, "Fe12_195.1790"}
+    with pytest.raises(ValueError, match="cannot sum"):
+        reaching.summed_cube(plan, 0.4 * u.arcsec, 10 * u.s, "Fe12_195.1790")

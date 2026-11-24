@@ -128,13 +128,8 @@ def test_what_yaml_can_put_in_a_configuration_survives(tmp_path):
 
 
 def test_the_file_is_made_as_any_file_is(tmp_path):
-    """The results file is made like any other file.
-
-    It gets the same permissions as any other new file there, so colleagues
-    can read it, and saving to a symlink writes its target.
-    """
-    # A umask that lets the group write; a file made only for its owner, or
-    # with fixed permissions, would not follow it.
+    """The file gets the same permissions as any new file, and a symlink's target is written."""
+    # A umask that lets the group write, which fixed permissions would not follow.
     previous = os.umask(0o002)
     try:
         path = save_results(tmp_path / "out.h5", {"instrument": "SWC"})
@@ -181,8 +176,8 @@ def test_scalars_and_strings_survive(tmp_path):
 def test_an_unquoted_yaml_date_survives(tmp_path):
     """The raw config is stored as read, dates included.
 
-    YAML reads an unquoted 2012-06-03 as a datetime.date, which is how an EIS
-    observation date usually arrives.
+    YAML reads an unquoted 2012-06-03, the usual form of an EIS date, as a
+    `datetime.date`.
     """
     config = yaml.safe_load("telescope:\n  calibration: dz2025\n"
                             "  date: 2012-06-03\n")
@@ -206,9 +201,8 @@ def test_the_cube_comes_back_whole(tmp_path):
 def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
     """A WCS saved as a FITS header comes back in its own units, not SI.
 
-    Otherwise a wavelength axis written in cm comes back in m. The
-    coordinates are the same, but anything reading wcs.wcs.cdelt directly
-    would be out by a factor of a hundred.
+    Otherwise `wcs.wcs.cdelt` of an axis in cm would come back in m, a
+    factor of a hundred out.
     """
     out = _round_trip(tmp_path)
     restored = out["cube_sim"].wcs
@@ -223,9 +217,7 @@ def test_the_wcs_keeps_the_units_it_was_written_in(tmp_path):
 def test_saving_leaves_the_callers_wcs_alone(tmp_path):
     """Saving does not change the caller's WCS.
 
-    Writing a WCS as a header converts it to SI in place. Saving must not do
-    that to the caller's cube or WCS, or a script that saves and carries on
-    would find its cdelt rescaled.
+    Writing a WCS as a FITS header converts it to SI in place.
     """
     cube, wcs = _cube(), _wcs()
     save_results(tmp_path / "out.h5", {"cube_sim": cube, "wcs": wcs})
@@ -323,11 +315,7 @@ def _same(before, after):
               max_iter=200, bessel_correction=True, save_iterations=True),
 ], ids=lambda obj: type(obj).__name__)
 def test_every_config_field_survives(tmp_path, config_object):
-    """Every field, Simulation.noise included, comes back unchanged.
-
-    A run with the noise off that read back with it on would be mistaken for
-    a noisy one.
-    """
+    """Every field, `Simulation.noise` included, comes back unchanged."""
     stored = results_file._jsonable(config_object)["fields"]
     assert set(stored) == {f.name for f in dataclasses.fields(config_object) if f.init}
     restored = _round_trip(tmp_path, {"object": config_object})["object"]
@@ -340,9 +328,9 @@ def test_every_config_field_survives(tmp_path, config_object):
 
 def test_a_restored_detector_still_computes(tmp_path):
     """
-    Rebuilt objects have to work, not merely have the right fields.
+    Rebuilt objects still compute, not only hold the right fields.
 
-    The EIS telescope checks its calibration and date in __post_init__.
+    The EIS telescope checks its calibration and date in `__post_init__`.
     """
     eis = Telescope_EIS(calibration="dz2025", date="2012-06-03")
     out = _round_trip(tmp_path, {**_payload(), "eis_telescope": eis})
@@ -359,11 +347,7 @@ def test_a_restored_detector_still_computes(tmp_path):
 
 def test_package_tables_are_not_stored_as_the_writers_paths(tmp_path,
                                                             monkeypatch):
-    """Package data is found in the reader's installation, not the writer's.
-
-    An absolute path to a throughput table names the writer's installation,
-    which a colleague reading the file elsewhere does not have.
-    """
+    """Package tables are found in the reader's installation, not the writer's."""
     telescope = Telescope_EUVST()
     path = save_results(tmp_path / "out.h5", {"telescope": telescope})
 
@@ -427,7 +411,7 @@ def test_a_pkl_name_is_corrected_rather_than_written(tmp_path, name):
 
 
 def test_an_old_pickle_still_loads(tmp_path):
-    """Existing result files must still load, under any name."""
+    """Old results pickles still load, under any name."""
     import dill
 
     path = tmp_path / "old.pkl"
@@ -601,7 +585,7 @@ def _with_attribute(tmp_path, name, value):
 
 
 def test_a_configuration_object_this_version_would_not_make_still_reads(tmp_path):
-    """Such as one from a later check, or with a setting since removed."""
+    """Such as one a newer check refuses, or with a setting since removed."""
     fit = FitConfig(components=[FitComponent(wavelength=195.119 * u.AA),
                                 FitComponent(wavelength=195.179 * u.AA)])
     encoded = results_file._jsonable(fit)
@@ -751,10 +735,7 @@ def test_datasets_that_store_more_than_the_file_are_refused(tmp_path, monkeypatc
 
 
 def test_a_damaged_file_is_named(tmp_path):
-    """HDF5's own errors are raised as OSError with the file's name.
-
-    One example is a chunk that does not decompress.
-    """
+    """HDF5's own errors, such as a chunk that does not decompress, name the file."""
     path = _crafted_dataset(tmp_path, lambda data: data.id.write_direct_chunk((0,), bytes(100)),
                             shape=(100,), chunks=(100,), dtype="f8", compression="gzip")
     with pytest.raises(OSError, match="crafted.h5 could not be read"):
@@ -1216,7 +1197,7 @@ def test_odd_paths_are_named_for_what_they_are(tmp_path, monkeypatch):
 
 
 class _Gone:
-    """Class named in a pickle, which a later version no longer has."""
+    """Class named in a pickle, which the reading version lacks."""
 
 
 def test_a_pickle_of_a_class_this_version_lacks_is_named(tmp_path, monkeypatch):

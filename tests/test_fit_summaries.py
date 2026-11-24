@@ -49,7 +49,7 @@ def _blend_units():
 
 
 def _blend_params(v_kms, peak0=100.0, peak1=20.0, sigma=0.03 * u.AA, back=5.0):
-    """One fitted parameter vector of the blend, in fit_cube_gauss units."""
+    """One fitted parameter vector of the blend, in `fit_cube_gauss` units."""
     shift = 1.0 + v_kms / C_KMS
     return [peak0, (REST0 * shift).to_value(u.cm), sigma.to_value(u.cm),
             peak1, (REST1 * shift).to_value(u.cm), sigma.to_value(u.cm), back]
@@ -102,7 +102,7 @@ def test_the_switches_have_to_be_true_or_false(key, value):
 # --- what each fit means -----------------------------------------------------
 
 def test_each_component_has_its_own_rest_wavelength():
-    """10 km/s is 0.0065 A at 195.119 and 0.0065 A at 195.179, not the same shift."""
+    """10 km/s is a slightly larger shift in A at 195.179 than at 195.119."""
     fit_data = np.array([_blend_params(10.0)] * 2)
     quantities = fit_quantities(fit_data, _blend_units(), STEP, REST0,
                                 _blend_config())
@@ -174,8 +174,8 @@ def test_bessel_correction_divides_by_n_minus_1():
 def test_intensity_spread_includes_peak_and_width_moving_together():
     """The spread comes from per-fit intensities, not per-parameter spreads.
 
-    Peak and width vary inversely here, so their product, and so the
-    intensity, is the same in every iteration.
+    Peak and width vary inversely here, so the intensity is the same in
+    every iteration.
     """
     fit_data, failed = _single_run([[10.0], [20.0], [40.0]],
                                    [[0.04], [0.02], [0.01]], [[False]] * 3)
@@ -410,8 +410,8 @@ def _blend_combination():
     fit_data = np.array([[[_blend_params(v, peak1=p1)
                            for v, p1 in zip((4.0, 6.0), (20.0, 30.0))]]
                          for _ in range(3)])
-    # The fits are made up: put the second component 2 km/s above the first so
-    # the analysis can tell them apart.
+    # Put the second component 2 km/s above the first, so the analysis can
+    # tell them apart.
     fit_data[..., 4] = (REST1 * (1.0 + (np.array([4.0, 6.0]) + 2.0) / C_KMS)).to_value(u.cm)
     failed = np.zeros(fit_data.shape[:3], dtype=bool)
     failed[2, 0, 1] = True
@@ -472,8 +472,7 @@ def test_maps_are_made_for_the_chosen_component():
     assert maps["intensity_mean"].unit == u.DN
     assert maps["failed_fits"].unit == u.dimensionless_unscaled
 
-    # These maps carry the same metadata as the others, so reading their WCS,
-    # as plotting does, raises no warnings.
+    # Reading these maps' WCS, as plotting does, raises no metadata warnings.
     with warnings.catch_warnings():
         warnings.simplefilter("error", SunpyMetadataWarning)
         for name in ("intensity_from_fit", "intensity_mean", "intensity_std",

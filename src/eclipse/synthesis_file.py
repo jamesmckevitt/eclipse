@@ -1,11 +1,10 @@
 """
 Synthesis files: the spectra the instrument simulation observes, as HDF5.
 
-The layout is described on the Files page of the docs. The view is
-`integration_axis`, `"x"`, `"y"` or `"z"` seen from +x, -y or above, or
+The layout is on the Synthesis files page of the docs. The view,
+`integration_axis`, is `"x"`, `"y"` or `"z"` seen from +x, -y or above, or
 `"-x"`, `"+y"` or `"-z"` from the other side, where the image is mirrored
-left to right and `x_edges` change sign. A file without it is taken as
-seen along z.
+left to right and `x_edges` change sign. A file without it is seen along z.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from __future__ import annotations
 import json
 import numbers
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -22,8 +22,8 @@ import numpy as np
 
 from .atmosphere import (_check_format, _open_to_read, _read_dataset, _replacing,
                          _text_attribute, _write_dataset)
-from .utils import (_bin_edges, _unpickle, angle_to_distance, onto_wavelength_bins, require_uniform_grid,
-                    view_axis_and_side, view_name)
+from .utils import (_bin_edges, _unpickle, angle_to_distance, checked_quantity,
+                    onto_wavelength_bins, require_uniform_grid, view_axis_and_side, view_name)
 
 __all__ = [
     "FORMAT_NAME",
@@ -72,11 +72,12 @@ def to_radiance(intensity: u.Quantity, wavelength: u.Quantity) -> u.Quantity:
     A radiance per frequency or in photons is converted at each value of
     `wavelength`, which runs along the last axis of `intensity`.
     """
-    # spectral_density converts flux densities per wavelength or frequency,
-    # in energy or photons, but knows nothing of solid angle, so the
-    # steradian is removed and put back. It would also convert lambda
-    # F_lambda (the unit of an intensity summed over a line), so the flux
-    # density is first checked to be one of the four kinds.
+    scale = _radiance_scale(intensity.unit)
+    if scale is not None:
+        return (intensity.value * scale) << RADIANCE_UNIT
+    # spectral_density ignores solid angle, so remove the steradian and put
+    # it back. It would also accept lambda F_lambda (an intensity summed over
+    # a line), so first check for one of the four flux densities.
     flux = intensity * u.sr
     if not any(flux.unit.is_equivalent(kind) for kind in _SPECTRAL_FLUX_DENSITIES):
         raise u.UnitConversionError(
@@ -86,24 +87,21 @@ def to_radiance(intensity: u.Quantity, wavelength: u.Quantity) -> u.Quantity:
     return flux.to(RADIANCE_UNIT * u.sr, equivalencies=u.spectral_density(wavelength)) / u.sr
 
 
-def _checked(value, name: str, ndim: int, kinds: Optional[tuple] = None) -> u.Quantity:
+@lru_cache(maxsize=None)
+def _radiance_scale(unit: u.UnitBase) -> Optional[float]:
     """
-    Validate and return `value`.
+    Factor taking `unit` to erg / (s cm2 sr cm), or None if it needs the wavelength.
 
-    It must be a finite Quantity with `ndim` axes and, if `kinds` is given,
-    a unit of one of those physical types.
+    The factor is the one :func:`to_radiance` would apply, worked out once
+    for each unit.
     """
-    if not isinstance(value, u.Quantity):
-        raise TypeError(f"{name} must be an astropy Quantity, got "
-                        f"{type(value).__name__}.")
-    if kinds is not None and value.unit.physical_type not in kinds:
-        raise u.UnitConversionError(
-            f"{name} must be in a unit of {' or '.join(kinds)}, got {value.unit}.")
-    if value.ndim != ndim:
-        raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}.")
-    if not np.all(np.isfinite(value.value)):
-        raise ValueError(f"{name} contains NaN or infinite values.")
-    return value
+    try:
+        # A plain float, so that a float32 intensity stays float32. No
+        # equivalencies, not even ones enabled globally, so the factor holds
+        # in any context.
+        return float((1.0 * unit * u.sr).to(RADIANCE_UNIT * u.sr, equivalencies=None).value)
+    except u.UnitConversionError:
+        return None
 
 
 def _to_length(value: u.Quantity) -> u.Quantity:
@@ -113,9 +111,8 @@ def _to_length(value: u.Quantity) -> u.Quantity:
     return value.to(u.Mm)
 
 
-# Relative tolerance for two grids that should be the same, allowing only for
-# rounding, e.g. from converting between Angstrom and nm or from edges
-# computed from two WCSs.
+# Relative tolerance for grids that differ only by rounding, such as from
+# converting Angstrom to nm or from edges computed from two WCSs.
 _SAME_GRID = 1e-12
 
 
@@ -135,7 +132,7 @@ def _check_wavelength(wavelength) -> u.Quantity:
     It must be a finite, increasing 1D Quantity of lengths with at least 2
     values.
     """
-    wavelength = _checked(wavelength, "wavelength", ndim=1, kinds=("length",))
+    wavelength = checked_quantity(wavelength, "wavelength", (u.AA,), ndim=1)
     if wavelength.size < 2:
         raise ValueError(f"wavelength must have at least 2 values, got {wavelength.size}.")
     if np.any(np.diff(wavelength.value) <= 0):
@@ -182,11 +179,11 @@ class SpectralLine:
         if self.atom is not None and self.ion is not None and self.ion > self.atom + 1:
             raise ValueError(f"ion {self.ion} is beyond the last stage of atom {self.atom}, "
                              f"{self.atom + 1}.")
-        rest = _checked(self.rest_wavelength, "rest_wavelength", ndim=0, kinds=("length",))
+        rest = checked_quantity(self.rest_wavelength, "rest_wavelength", (u.AA,), ndim=0)
         if not wavelength[0] <= rest <= wavelength[-1]:
             raise ValueError(f"rest_wavelength {rest} is outside the wavelengths, "
                              f"which run from {wavelength[0]} to {wavelength[-1]}.")
-        intensity = _checked(self.intensity, "intensity", ndim=3)
+        intensity = checked_quantity(self.intensity, "intensity", ndim=3)
         # A trial conversion rejects any unit that is not a spectral radiance.
         to_radiance(1.0 * intensity.unit, wavelength[0])
         if intensity.shape[-1] != wavelength.size:
@@ -222,10 +219,9 @@ class Synthesis:
         Time of the snapshot, needed to place it in a time series of
         synthesis files.
     integration_axis : str, optional
-        View: the simulation axis the image was seen along, `"x"`, `"y"` or
-        `"z"`, which names the image axes of the cubes made from it. A sign,
-        such as `"-x"`, gives the side of the box it was seen from. None
-        means seen along z.
+        View: simulation axis the image is seen along, `"x"`, `"y"` or
+        `"z"`, which names the image axes of its cubes. A sign, such as
+        `"-x"`, gives the side of the box. None means along z.
     """
 
     lines: Mapping[str, SpectralLine]
@@ -237,7 +233,7 @@ class Synthesis:
 
     def __post_init__(self):
         if self.time is not None:
-            _checked(self.time, "time", ndim=0, kinds=("time",))
+            checked_quantity(self.time, "time", (u.s,), ndim=0)
         if self.integration_axis is not None:
             try:
                 view = view_name(self.integration_axis)
@@ -249,7 +245,7 @@ class Synthesis:
             object.__setattr__(self, "integration_axis", view)
         for axis in AXES:
             name = EDGES[axis]
-            edges = _checked(getattr(self, name), name, ndim=1, kinds=("length", "angle"))
+            edges = checked_quantity(getattr(self, name), name, (u.Mm, u.arcsec), ndim=1)
             # The instrument grid uses one pixel size per axis, so the edges
             # must be evenly spaced.
             require_uniform_grid(edges.value, name)
@@ -291,10 +287,10 @@ class Synthesis:
         """
         Sum of all lines' radiance on the wavelengths of line `reference`.
 
-        This is what the instrument observes when it measures `reference`.
-        Each line is averaged onto the reference wavelength bins, conserving
-        flux, and is zero outside its own wavelength range. Lines reaching
-        the reference window add to it as blends; the others add nothing.
+        This is what the instrument observes for `reference`. Each line is
+        averaged onto the reference wavelength bins, conserving flux, and is
+        zero outside its own range, so lines reaching the window add to it
+        as blends.
         """
         if reference not in self.lines:
             raise ValueError(f"No line is named {reference!r}; the lines are "
@@ -338,8 +334,7 @@ class Synthesis:
         """
         Line `name` as an NDCube, indexed `[y, x, wavelength]`, in erg / (s cm2 sr cm).
 
-        The wavelengths must be evenly spaced for the cube's WCS to describe
-        them.
+        The wavelengths must be evenly spaced, as the WCS needs.
         """
         return self._cube(self.lines[name].radiance(), name, self.line_meta(name))
 
@@ -348,9 +343,9 @@ class Synthesis:
         """
         `summed` as an NDCube on the wavelengths of `reference`.
 
-        The reference wavelengths must be evenly spaced. The `summed`
-        argument, if given, is the result of `summed` already computed.
-        `meta` is added to `summed_meta`.
+        The reference wavelengths must be evenly spaced. `summed`, if given,
+        is the result of `summed` already computed. `meta` is added to
+        `summed_meta`.
         """
         return self._cube(self.summed(reference) if summed is None else summed, reference,
                           {**self.summed_meta(reference), **(meta or {})})
@@ -405,8 +400,8 @@ def write_synthesis(synthesis: Synthesis, path: str | Path,
     """
     Write a synthesis file.
 
-    The file is written to a new file beside it and then moved into place,
-    so a run stopped part way leaves any existing file unchanged.
+    Written beside `path` and then moved into place, so a run stopped part
+    way leaves any existing file unchanged.
 
     Parameters
     ----------
@@ -477,30 +472,36 @@ def read_synthesis(path: str | Path, reference_line: Optional[str] = None,
     with _open_to_read(path, "synthesis") as f:
         _check_format(f, path, kind="synthesis", format_name=FORMAT_NAME,
                       format_version=FORMAT_VERSION)
-        edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
-        if columns is not None:
-            nx = edges["x_edges"].size - 1
-            first = 0 if columns.start is None else columns.start
-            last = nx if columns.stop is None else columns.stop
-            if columns.step not in (None, 1) or not 0 <= first < last <= nx:
-                raise ValueError(f"columns must be a slice of neighbouring pixels among the "
-                                 f"{nx} along x, got {columns}.")
-            edges["x_edges"] = edges["x_edges"][first:last + 1]
-            columns = slice(first, last)
-        group, names = _lines_reaching(f, path, reference_line)
-        lines = {}
-        for name in names:
-            entry = group[name]
-            fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
-                      "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
-                      "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
-                      **_identity(entry)}
-            try:
-                lines[name] = SpectralLine(**fields)
-            except (TypeError, ValueError) as error:
-                raise type(error)(f"{path}, line {name!r}: {error}") from None
-        source, integration_axis = _source(f), _integration_axis(f)
-        time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
+        return _synthesis_in(f, path, reference_line, columns)
+
+
+def _synthesis_in(f, path: Path, reference_line: Optional[str],
+                  columns: Optional[slice]) -> Synthesis:
+    """`read_synthesis`, from a synthesis file already open and checked."""
+    edges = {EDGES[axis]: _read_dataset(f, EDGES[axis], units=UNITS) for axis in AXES}
+    if columns is not None:
+        nx = edges["x_edges"].size - 1
+        first = 0 if columns.start is None else columns.start
+        last = nx if columns.stop is None else columns.stop
+        if columns.step not in (None, 1) or not 0 <= first < last <= nx:
+            raise ValueError(f"columns must be a slice of neighbouring pixels among the "
+                             f"{nx} along x, got {columns}.")
+        edges["x_edges"] = edges["x_edges"][first:last + 1]
+        columns = slice(first, last)
+    group, names = _lines_reaching(f, path, reference_line)
+    lines = {}
+    for name in names:
+        entry = group[name]
+        fields = {"intensity": _read_dataset(entry, "intensity", columns, units=UNITS, axis=1),
+                  "wavelength": _read_dataset(entry, "wavelength", units=UNITS),
+                  "rest_wavelength": _read_dataset(entry, "rest_wavelength", units=UNITS),
+                  **_identity(entry)}
+        try:
+            lines[name] = SpectralLine(**fields)
+        except (TypeError, ValueError) as error:
+            raise type(error)(f"{path}, line {name!r}: {error}") from None
+    source, integration_axis = _source(f), _integration_axis(f)
+    time = _read_dataset(f, "time", units=UNITS) if "time" in f else None
     try:
         return Synthesis(lines=lines, source=source, time=time,
                          integration_axis=integration_axis, **edges)
@@ -514,10 +515,10 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
 
     Returns a dict of `x_edges`, `y_edges`, `time` (None if absent),
     `source`, `integration_axis` (None if absent) and `lines`. `lines` maps
-    each line, or each one reaching the window of `reference_line` if
-    given, to its `wavelength`, `rest_wavelength`, `identity` (its `atom`
-    and `ion`, where the file gives them) and the `shape` of its intensity.
-    A time series uses it to check its files before reading any spectra.
+    each line, or each reaching the window of `reference_line` if given, to
+    its `wavelength`, `rest_wavelength`, `identity` (`atom` and `ion`, where
+    given) and intensity `shape`. Used to check a time series' files before
+    reading any spectra.
     """
     path = Path(path)
     with _open_to_read(path, "synthesis") as f:
@@ -527,8 +528,8 @@ def read_synthesis_layout(path: str | Path, reference_line: Optional[str] = None
         layout["time"] = None
         if "time" in f:
             try:
-                layout["time"] = _checked(_read_dataset(f, "time", units=UNITS), "time",
-                                          ndim=0, kinds=("time",))
+                layout["time"] = checked_quantity(
+                    _read_dataset(f, "time", units=UNITS), "time", (u.s,), ndim=0)
             except (TypeError, ValueError) as error:
                 raise type(error)(f"{path}: {error}") from None
         layout["source"] = _source(f)
@@ -599,8 +600,8 @@ def _reaches(wavelength: u.Quantity, window: u.Quantity) -> bool:
     """
     Whether a line sampled at `wavelength` has any part inside `window`.
 
-    Each wavelength covers the bin halfway to its neighbours, as in the sum
-    of the lines, so a line reaches the window if its outermost bin
+    Each wavelength covers the bin halfway to its neighbours, as in
+    `Synthesis.summed`, so a line reaches the window if its outermost bin
     overlaps the window's, even when all its wavelengths lie outside.
     """
     own, window = wavelength.to_value(window.unit), window.value
@@ -619,11 +620,10 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
 
     - `dem_map`: DEM in each pixel, on the temperatures `logT_grid`.
     - `em_tv`: emission measure in each pixel by temperature and velocity,
-      on the velocities `vel_grid`.
-    - `electron_density`: electron density in cm^-3 at which the
-      contribution functions were evaluated, at each temperature of each
-      pixel, same shape as `dem_map`. It is the mean over the cells,
-      weighted by their emission measure.
+      on the velocities `vel_grid`, only if synthesised with `--keep-vdem`.
+    - `electron_density`: electron density in cm^-3 for the contribution
+      functions, same shape as `dem_map`: the mean over the cells, weighted
+      by emission measure.
     - `goft`: each line's contribution function, on the temperatures and
       the densities `logN_grid`.
     - `voxel_sizes`, `atmosphere`, `dynamic_mode` and `config`: the
@@ -637,13 +637,18 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
     path : str or Path
         Synthesis file.
     keys : iterable of str, optional
-        Products to read. Leaving out `em_tv`, often the largest part of the
-        file, saves time. Default None reads everything.
+        Products to read. Default None reads everything.
 
     Returns
     -------
     dict
         Products keyed by name.
+
+    Raises
+    ------
+    KeyError
+        If `em_tv` is asked for and the file was synthesised without
+        `--keep-vdem`.
     """
     path = Path(path)
     with _open_to_read(path, "synthesis") as f:
@@ -653,6 +658,8 @@ def read_synthesis_products(path: str | Path, keys: Optional[Iterable[str]] = No
             return {}
         if isinstance(keys, str):
             keys = [keys]
+        if keys is not None and "em_tv" in keys and "em_tv" not in f["synthesis"]:
+            raise KeyError(f"{path} has no em_tv: synthesise with --keep-vdem to keep it.")
         return _read_tree(f["synthesis"], None if keys is None else set(keys))
 
 
@@ -686,10 +693,9 @@ def load_synthesis(path: str | Path) -> dict:
     return {"line_cubes": line_cubes, **read_synthesis_products(path)}
 
 
-# The products are nested dicts of arrays and plain values. Arrays and
-# non-scalar Quantities become datasets. Everything else becomes a JSON
-# attribute, with Quantities stored as value and unit so they read back as
-# Quantities.
+# Products are nested dicts. Arrays and non-scalar Quantities become
+# datasets; everything else becomes a JSON attribute, with Quantities stored
+# as value and unit.
 def _write_tree(group: h5py.Group, tree: Mapping) -> None:
     for key, value in tree.items():
         key = str(key)
@@ -798,8 +804,8 @@ def write_line_cubes(line_cubes: Mapping, path: str | Path, source: str = "",
         if cube.data.shape[:2] != first.data.shape[:2]:
             raise ValueError(f"Line {name!r} has an image of {cube.data.shape[:2]} "
                              f"pixels, not {first.data.shape[:2]} as the others.")
-        # All lines share one image, so a cube of the same shape but at another
-        # position or with other pixel sizes would land on the wrong pixels.
+        # A cube of the same shape at another position or pixel size would
+        # land on the wrong pixels.
         for axis, wcs_axis in (("x", 1), ("y", 2)):
             if not _same_grid(_pixel_edges(cube, wcs_axis), edges[f"{axis}_edges"]):
                 raise ValueError(f"Line {name!r} has other pixel positions along {axis} "
@@ -836,11 +842,10 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
     """
     Convert a synthesis pickle from ECLIPSE 0.11.0 or earlier to a synthesis file.
 
-    Everything in the pickle is kept: the line cubes as the spectra and the
-    rest as the synthesis products. A pickle made before the axis order or
-    the velocity convention changed is rejected, as `eclipse` rejects it.
-    Loading a pickle runs any code it contains, so only convert pickles you
-    trust.
+    The line cubes become the spectra and the rest the synthesis products.
+    A pickle from before the axis order or velocity convention changed is
+    rejected. Loading a pickle runs any code it contains, so only convert
+    pickles you trust.
 
     Parameters
     ----------
@@ -854,9 +859,9 @@ def convert_synthesis_pickle(pickle_path: str | Path, path: str | Path) -> Path:
     Path
         Path of the written file.
     """
-    # Only duplicates of kept data are dropped: each line's spectra (si) and
-    # wavelengths (wl_grid) in goft, and the atmosphere metadata each line
-    # cube carried as spatial_reference.
+    # Only duplicates are dropped: each line's spectra (si) and wavelengths
+    # (wl_grid) in goft, and the atmosphere metadata each line cube carried
+    # as spatial_reference.
     from .data_processing import check_old_line_cubes
 
     # Writing over the pickle would destroy the only copy of its synthesis.

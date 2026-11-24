@@ -1,6 +1,6 @@
 # API reference
 
-Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`. [Using ECLIPSE from Python](python.md) shows them in use.
+Everything on this page is imported from `eclipse`, such as `from eclipse import monte_carlo`, except the synthesis functions, which are in `eclipse.synthesis` and `eclipse.continuum`. Some of them are used in [Other quick examples](gallery/index.md).
 
 ## The instrument
 
@@ -114,6 +114,16 @@ These are the steps `simulate_once` takes, in order.
 
 ::: eclipse.edges_from_centres
 
+## Emission measure files
+
+A DEM or VDEM over an image, which `synthesise-spectra --emission-measure` synthesises. [From a DEM or VDEM](emission/dem.md) shows how to write and use one.
+
+::: eclipse.EmissionMeasure
+
+::: eclipse.write_emission_measure
+
+::: eclipse.read_emission_measure
+
 ## Synthesis files
 
 ::: eclipse.Synthesis
@@ -152,9 +162,11 @@ These are the steps `simulate_once` takes, in order.
 
 ## Every line in a band
 
-A full-CCD frame holds every line in the band, not only the lines a synthesis names. These work out the contribution functions of all of them, on a synthesis's own grids, and keep them in a file.
+Every line in a band, for a full-CCD frame of the whole band. Their contribution functions are kept in a file, and give their spectrum from an emission measure.
 
 ::: eclipse.band_contribution_functions
+
+::: eclipse.band_spectra
 
 ::: eclipse.BandLines
 
@@ -166,7 +178,7 @@ A full-CCD frame holds every line in the band, not only the lines a synthesis na
 
 ## Full-CCD frames
 
-A frame of both SW CCDs at one slit position, with every line in the band and the continuum. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [A full-CCD frame](full-ccd-frame.md) shows how to make a frame.
+A frame of both SW CCDs at one slit position, holding the spectra of a synthesis file. `FocalPlane_SWC` gives the wavelength each row records, and `ReadoutSequence` how a frame is read out. `full_ccd_frame` takes the focal plane from the detector by default, and always takes the read-out from the detector. [Full-CCD frames](observe/full-ccd-frames.md) shows how to make a frame.
 
 ::: eclipse.full_ccd_frame
 

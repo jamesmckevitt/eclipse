@@ -1,13 +1,12 @@
 """
 Check the packages built into dist/ before they are uploaded to PyPI.
 
-Run it as `python tools/check_packages.py` after building them, or with
-`--tag vX.Y.Z` to check `eclipse` has the version of that tag too. dist/ must
-hold the sdist and wheel of `eclipse`, and may hold the sdist of
-`solarc-eclipse`, the former name, whose install must stop with a message. The
-wheel is read rather than the package imported, so this needs no runtime
-dependency. A PyPI version cannot be replaced once it is uploaded, so the
-release workflow runs this before uploading anything.
+Run `python tools/check_packages.py` after building them, with `--tag vX.Y.Z`
+to also check that `eclipse` has the tag's version. dist/ must hold the sdist
+and wheel of `eclipse`, and may hold the sdist of `solarc-eclipse`, the former
+name, whose install must stop with a message. The wheel is read, not
+imported, so no runtime dependency is needed. A PyPI version cannot be
+replaced once uploaded, so the release workflow runs this first.
 """
 
 import argparse
@@ -48,8 +47,8 @@ def check(dist, tag=None):
     if sorted(set(present) - {stub}) != expected:
         return [f"expected {expected} and perhaps {stub} in {dist}, found {present}"]
 
-    # Compared against the source tree rather than a list, so that this keeps
-    # working when files are added, and a partial package fails.
+    # Compare with the source tree, not a fixed list, so added files are
+    # checked too and a partial package fails.
     data = {path for path in (SOURCE / "eclipse" / "data").rglob("*") if path.is_file()}
     if not data:
         return ["no src/eclipse/data files in the checkout"]

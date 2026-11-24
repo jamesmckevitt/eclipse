@@ -1,29 +1,36 @@
 """
-Continuum under the lines: free-free, free-bound and two-photon emission.
+Free-free, free-bound and two-photon continuum.
 
 Computed from CHIANTI through fiasco for every element, with the same
 abundances and ionisation fractions as the lines. Like a contribution
-function, it multiplies an emission measure of n_e^2 dh, so fiasco's values
-are multiplied by n_H / n_e and divided by 4 pi. Only two-photon emission
-depends on density. In a synthesis file, each group of overlapping windows
-gets one continuum entry, which the instrument run adds to every window it
-reaches.
+function, it is per emission measure n_e^2 dh, so fiasco's values are
+multiplied by n_H / n_e and divided by 4 pi. Only two-photon emission
+depends on density. A synthesis file has one continuum entry for each group
+of overlapping windows, added to every window it covers when observed.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import astropy.units as u
 
-# Name prefix of a continuum entry in a synthesis file, followed by the
-# wavelength range of its window group in Angstrom.
+from .utils import usable_cpus
+
+# Prefix of a continuum entry's name in a synthesis file, followed by its
+# wavelength range in Angstrom.
 CONTINUUM_PREFIX = "continuum"
-# Unit of the continuum per emission measure: spectral radiance per
-# n_e^2 dh, with wavelengths in cm, as for ECLIPSE's line spectra.
+# Spectral radiance per n_e^2 dh, per cm of wavelength as for the lines.
 EMISSIVITY_UNIT = u.erg * u.cm**3 / (u.s * u.sr * u.cm)
+
+# Rounding tolerance for a range that is a whole number of bins.
+_WHOLE_BINS = 1e-12
+
+
+def bins_to_cover(low: float, high: float, step: float) -> int:
+    """Number of bins of width `step` needed to reach from `low` to `high`."""
+    return int(np.ceil((high - low) / step * (1 - _WHOLE_BINS)))
 
 
 def is_continuum(name: str) -> bool:
@@ -35,11 +42,11 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
     """
     Wavelengths of the continuum entries covering a set of spectral windows.
 
-    Each window wavelength covers the bin halfway to its neighbours. The
-    bins of the end wavelengths extend the same distance outward. Windows
-    whose bins overlap are grouped. Each group gets one evenly spaced grid,
-    at the smallest spacing of its windows, whose bins cover all of theirs.
-    Groups do not overlap, so no wavelength is in two entries.
+    Each wavelength covers the bin halfway to its neighbours, and the end
+    bins extend as far outward. Windows whose bins overlap are grouped. Each
+    group gets one evenly spaced grid at the smallest spacing of its
+    windows, covering all their bins. Groups do not overlap, so no
+    wavelength is in two entries.
 
     Parameters
     ----------
@@ -61,30 +68,25 @@ def continuum_windows(wavelengths: Sequence[u.Quantity]) -> Dict[str, u.Quantity
         spacing = np.diff(values)
         if not np.all(spacing > 0):
             raise ValueError("A spectral window's wavelengths must increase.")
-        # The window's bins, from half a spacing before its first wavelength
-        # to half a spacing after its last.
+        # Bin edges half a spacing beyond the first and last wavelengths.
         windows.append((float(values[0] - spacing[0] / 2), float(values[-1] + spacing[-1] / 2),
                         float(np.min(spacing))))
-
-    def bins(low, high, step):
-        """Number of bins of width `step` needed to reach from `low` to `high`."""
-        return int(np.ceil((high - low) / step * (1 - 1e-12)))
 
     windows.sort()
     groups: List[List[float]] = []
     for low, high, step in windows:
-        # A group's bins can reach past its windows' last bin, so a window is
-        # grouped with it if it begins before the group's bins end.
+        # A group's bins can reach past its last window, so join any window
+        # that starts before they end.
         if groups:
             first, last, spacing = groups[-1]
-            if low < first + bins(first, last, spacing) * spacing:
+            if low < first + bins_to_cover(first, last, spacing) * spacing:
                 groups[-1] = [first, max(last, high), min(spacing, step)]
                 continue
         groups.append([low, high, step])
     grids = {}
     for low, high, step in groups:
-        # Bins of this spacing from the group's first bin edge to past its last.
-        grid = low + (np.arange(bins(low, high, step)) + 0.5) * step
+        # Bin centres from the group's first edge to past its last.
+        grid = low + (np.arange(bins_to_cover(low, high, step)) + 0.5) * step
         name = f"{CONTINUUM_PREFIX}_{grid[0] * 1e8:.4f}-{grid[-1] * 1e8:.4f}"
         # Windows far narrower than any line's could round to the same name.
         if name in grids:
@@ -108,8 +110,8 @@ def _element_continuum(args):
     import fiasco
     from fiasco.util.exceptions import MissingDatasetException
 
-    # fiasco skips and logs each ion lacking data for a continuum; collect
-    # them to report once, rather than a line each.
+    # fiasco logs each ion it skips for lack of data; collect them to
+    # report once.
     left_out = []
 
     class _LeftOut(logging.Handler):
@@ -117,8 +119,7 @@ def _element_continuum(args):
             message = record.getMessage()
             if " not included in " in message:
                 ion, rest = message.split(" not included in ", 1)
-                # An ion with no electrons has no bound states, and so no
-                # free-bound emission to leave out.
+                # A bare nucleus has no free-bound emission to leave out.
                 if ion.split()[-1] == str(atomic_number + 1):
                     return
                 left_out.append(f"{ion} ({rest.split(' emission')[0]})")
@@ -174,12 +175,11 @@ def _two_photon(ion, wavelength, density, unit, single_ion: list, ion_kwargs: di
     """
     One ion's two-photon emission, shape (nT, nN, n_wavelength), in `unit`.
 
-    fiasco is called one density at a time, since version 0.8 fails to
-    arrange its result for several. Its level populations use level-resolved
-    recombination and ionisation rates, which for some ions CHIANTI
-    tabulates only up to some temperature. Above that, fiasco's single-ion
-    model is used, as for ions with no such rates at all, and the ion and
-    temperatures are added to `single_ion`.
+    fiasco is called one density at a time, as version 0.8 misarranges its
+    result for several. For some ions, CHIANTI has level-resolved
+    recombination and ionisation rates only up to some temperature. Above
+    it, fiasco's single-ion model is used, as for ions with no such rates,
+    and the ion and temperatures are added to `single_ion`.
     """
     import fiasco
 
@@ -285,8 +285,7 @@ def compute_continuum_fiasco(
                    for symbol in elements]
 
     if n_workers <= 0:
-        n_workers = (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                     else os.cpu_count() or 1)
+        n_workers = usable_cpus()
     if n_workers > 1 and len(worker_args) > 1:
         import multiprocessing as mp
 
@@ -346,13 +345,13 @@ def continuum_spectra(
     ----------
     emission_measure : np.ndarray
         Emission measure n_e^2 dh in each temperature bin of each pixel, in
-        cm^-5, shape (rows, columns, nT): a DEM times its bin widths.
-        ECLIPSE's synthesis uses its own DEM, which, unlike `em_tv`, keeps
-        plasma moving faster than the velocity grid reaches.
+        cm^-5, shape (rows, columns, nT): a DEM times its bin widths. The
+        synthesis uses its own DEM, which unlike `em_tv` keeps plasma
+        faster than the velocity grid reaches.
     electron_density : np.ndarray or float
         Electron density in cm^-3 at each pixel and temperature, same shape
-        as `emission_measure`, or one density for all. ECLIPSE's own
-        synthesis gives the mean weighted by emission measure.
+        as `emission_measure`, or one density for all. The synthesis uses
+        the mean weighted by emission measure.
     logN_grid : np.ndarray
         Densities `two_photon` is tabulated on, as log10(n_e / cm-3).
     free, two_photon : np.ndarray

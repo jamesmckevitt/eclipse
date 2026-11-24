@@ -1,10 +1,9 @@
 """The uniform-intensity line is integrated across each detector pixel.
 
-Taken at pixel centres instead, lines narrower than about half a pixel come
-out too bright, such as Fe IX 171.07 (sigma 0.35 SWC pixels) by 19 per
-cent. The expected photon count is the radiometric equation with literal
-constants. With the PSF on, the line is blurred by the spectral response
-before it is integrated, so a narrow line keeps its place within a pixel.
+Sampled at pixel centres, a line narrower than about half a pixel comes out
+too bright, Fe IX 171.07 (sigma 0.35 SWC pixels) by 19 per cent. With the
+PSF on, the line is blurred before it is integrated, so a narrow line keeps
+its place within a pixel.
 """
 import dataclasses
 import importlib
@@ -47,8 +46,8 @@ WIDTHS = [3, 8, 15, 30, 60]  # km/s
 class FlatTelescope(Telescope_EUVST):
     """EUVST telescope with an effective area constant in wavelength.
 
-    The photon count of a line then depends only on how much of it reaches
-    the detector, not on the shape of the effective area curve.
+    A line's photon count then depends only on how much of it reaches the
+    detector.
     """
 
     def ea_and_throughput(self, wl0):
@@ -110,9 +109,9 @@ def test_each_pixel_holds_the_gaussian_integrated_across_it(width):
 def test_the_detector_receives_the_photons_the_radiometric_equation_gives(width, slit):
     """N = I t A Omega lambda0 / (h c), through the instrument with the noise off.
 
-    Counted after the spectral PSF, which is what the fit sees. The photon
-    energy changes linearly across the line, so for a line symmetric about
-    lambda0 the energy at lambda0 is exact.
+    Counted after the spectral PSF, as the fit sees them. The photons per
+    unit energy change linearly across the line, so for a symmetric line
+    the value at lambda0 is exact.
     """
     tel = FlatTelescope()
     sim = Simulation(slit_width=slit * u.arcsec, psf=True, noise=False)
@@ -159,13 +158,11 @@ INSTRUMENTS = {
 
 def _narrow_cube(instrument, sim, offset=0.0):
     """
-    A line of `NARROW` pixels from `create_uniform_intensity_cube`, moved
-    `offset` pixels from the centre of its pixel.
+    A line `NARROW` pixels wide, `offset` pixels from the centre of its pixel.
 
-    The cube always has the line on the middle of a pixel. For other
-    offsets its data are replaced by the same line laid on the same pixels
-    the same way, with the line moved by `offset`. Without the PSF it is
-    integrated over the pixels as it is. At offset 0 this gives the cube.
+    `create_uniform_intensity_cube` puts the line on the middle of a pixel,
+    so its data are replaced by the same line laid on the pixels the same
+    way, moved by `offset`. At offset 0 this gives the cube.
     """
     det, tel, _ = INSTRUMENTS[instrument]
     dispersion = det.wvl_res.to_value(u.Angstrom / u.pixel)
@@ -212,9 +209,8 @@ def _sim(instrument, psf=True, spectral_psf="quadrature"):
 def test_a_line_narrower_than_a_pixel_keeps_its_fitted_centre(instrument, spectral_psf, offset):
     """
     Blurred before it is integrated over the pixels, the line is fitted
-    within 0.01 pixel of where it is. What is left comes from the effective
-    area and photon energy changing across the blurred line, about 0.002
-    pixel.
+    within 0.01 pixel of where it is. The effective area and photon energy
+    changing across the blurred line leave about 0.002 pixel.
     """
     sim = _sim(instrument, spectral_psf=spectral_psf)
     cube = _narrow_cube(instrument, sim, offset)
@@ -258,13 +254,12 @@ def test_a_cube_without_psf_applied_is_blurred_on_its_pixels_and_warns(instrumen
 @pytest.mark.parametrize("instrument", ["SWC", "EIS"])
 def test_the_line_matches_the_same_line_through_rebin_spectra(instrument, spectral_psf, width):
     """
-    The line, sampled at 64 points per pixel into a synthesis and laid onto
-    the pixels by `rebin_spectra`, gives the same pixels and photon
-    wavelengths, to 1e-10 of the peak and 1e-6 pixel, and the same fitted
-    centre without noise. A
-    line narrower than a pixel is fitted at its rest wavelength. A wider one
-    is fitted 0.02 to 0.04 km/s to the red, as the effective area and the
-    photon energy change across it.
+    The line sampled 64 times per pixel and laid onto the pixels by
+    `rebin_spectra` gives the same pixels (to 1e-10 of the peak), photon
+    wavelengths (to 1e-6 pixel) and fitted centre without noise. A line
+    narrower than a pixel is fitted at rest, and a wider one 0.02 to
+    0.04 km/s to the red, as the effective area and photon energy change
+    across it.
     """
     det, tel, slit = INSTRUMENTS[instrument]
     sim = Simulation(slit_width=slit, instrument=instrument, psf=True,
@@ -341,10 +336,10 @@ def test_without_the_psf_each_pixel_holds_the_line_alone(width):
 
 def test_a_run_lays_the_line_through_each_combinations_response(tmp_path, monkeypatch):
     """
-    Swept over `psf`, `spectral_psf` and the slit, each combination observes
-    the line through its own response, as `create_uniform_intensity_cube`
-    lays it, and without the PSF observes it as it is. Noise is off, so the
-    first signal is the mean signal.
+    Each combination of a sweep over `psf`, `spectral_psf` and the slit
+    observes the line through its own response, as
+    `create_uniform_intensity_cube` lays it. Noise is off, so the first
+    signal is the mean signal.
     """
     main_module = importlib.import_module("eclipse.main")
     saved = {}
@@ -407,9 +402,8 @@ def test_a_line_of_no_width_is_laid_through_the_response():
 @pytest.mark.parametrize("spectral_psf", ["quadrature", "convolution"])
 def test_the_blurred_line_keeps_its_photons(spectral_psf, width):
     """
-    The photons the Monte Carlo counts on the pixels, at each pixel's
-    wavelength, are those of the line, each at its own wavelength, to 1e-6,
-    and their mean wavelength is the line's, to 1e-4 pixel.
+    The photons counted at each pixel's wavelength match those of the line at
+    its own wavelengths to 1e-6, and their mean wavelength to 1e-4 pixel.
     """
     from eclipse.radiometric import photons_per_energy
 

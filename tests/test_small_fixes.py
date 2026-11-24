@@ -1,6 +1,6 @@
 """Small fixes around the edges.
 
-The command line, --debug, the recorded git commit, `atmosphere info`, a
+The command line, `--debug`, the recorded git commit, `atmosphere info`, a
 script's old option name, the science-case tool and the deprecated dynamic
 mode.
 """
@@ -32,11 +32,13 @@ def _cli(monkeypatch, tmp_path, error):
     config = tmp_path / "run.yaml"
     config.write_text("instrument: SWC\n")
 
-    def run():
+    from eclipse import run_file
+
+    def run(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(cli, "run_simulation", run)
-    monkeypatch.setattr(sys, "argv", ["eclipse", "--config", str(config)])
+    monkeypatch.setattr(run_file, "run_all", run)
+    monkeypatch.setattr(sys, "argv", ["eclipse", "run", str(config)])
     with pytest.raises(SystemExit):
         cli.main()
 
@@ -44,12 +46,12 @@ def _cli(monkeypatch, tmp_path, error):
 def test_an_unexpected_error_says_what_it_was_and_where(monkeypatch, tmp_path, capsys):
     _cli(monkeypatch, tmp_path, TypeError("boom"))
     captured = capsys.readouterr()
-    assert "Error during simulation: TypeError: boom" in captured.out
+    assert "Error during run: TypeError: boom" in captured.out
     assert "Traceback" in captured.err
     # A refusal (ValueError) explains itself, so it gets no traceback.
     _cli(monkeypatch, tmp_path, ValueError("slit_width must be 0.2"))
     captured = capsys.readouterr()
-    assert "Error during simulation: ValueError: slit_width must be 0.2" in captured.out
+    assert "Error during run: ValueError: slit_width must be 0.2" in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -149,7 +151,7 @@ def _atmosphere(tmp_path, name="box.h5", **overrides):
                 f["time"].attrs.__setitem__("unit", "s")), "time must have 0 dimensions"),
     (lambda f: f["temperature"].attrs.__delitem__("unit"), "'temperature' in .* has no 'unit'"),
     (lambda f: f["temperature"].attrs.__setitem__("unit", "m"),
-     "must be in a unit convertible to K, got m"),
+     "must be in a unit of temperature, such as K, got m"),
 ])
 def test_info_refuses_a_file_that_cannot_be_read_rather_than_describing_it(tmp_path, change, message):
     path = _atmosphere(tmp_path)

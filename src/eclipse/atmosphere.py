@@ -2,9 +2,9 @@
 Atmosphere input for the synthesis, and its HDF5 file.
 
 An `Atmosphere` holds the temperature, density and velocity of every cell
-and the cell edges, from any simulation code. This module reads and writes
-it, and converts mass density to electron density with the synthesis's
-abundances. The file layout is described on the Files page of the docs.
+and the cell edges, from any simulation code. Mass density is converted to
+electron density with the synthesis's abundances. The file layout is on the
+Atmosphere files page of the docs.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ import numpy as np
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from .utils import element_data, require_downsample_divides, require_uniform_grid
+from .utils import (checked_quantity, element_data, require_downsample_divides,
+                    require_uniform_grid)
 
 __all__ = [
     "FORMAT_NAME",
@@ -66,34 +67,13 @@ UNITS = {
     "time": u.s,
 }
 
-# fiasco needs a temperature to build an Ion, but Ion.abundance reads only
-# the abundance table, so any fixed value will do.
+# fiasco needs a temperature to build an Ion; Ion.abundance does not use it.
 _ABUNDANCE_PROBE_TEMPERATURE = 1.0e6 * u.K
-
-
-def _quantity(value, name: str, ndim: Optional[int] = None) -> u.Quantity:
-    """
-    `value`, checked to be a finite Quantity of the right kind for `name`.
-
-    `ndim`, if given, is the number of axes it must have.
-    """
-    unit = UNITS[name]
-    if not isinstance(value, u.Quantity):
-        raise TypeError(f"{name} must be an astropy Quantity in a unit "
-                        f"convertible to {unit}, got {type(value).__name__}.")
-    if not value.unit.is_equivalent(unit):
-        raise u.UnitConversionError(
-            f"{name} must be in a unit convertible to {unit}, got {value.unit}.")
-    if ndim is not None and value.ndim != ndim:
-        raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}.")
-    if not np.all(np.isfinite(value.value)):
-        raise ValueError(f"{name} contains NaN or infinite values.")
-    return value
 
 
 def _check_edges(edges, name: str) -> u.Quantity:
     """Check that cell edges increase and bound at least one cell."""
-    edges = _quantity(edges, name, ndim=1)
+    edges = checked_quantity(edges, name, (UNITS[name],), ndim=1)
     if edges.size < 2:
         raise ValueError(f"{name} must bound at least 1 cell, so have "
                          f"at least 2 values, got {edges.size}.")
@@ -107,10 +87,9 @@ def edges_from_centres(centres: u.Quantity) -> u.Quantity:
     """
     Cell edges from cell centres.
 
-    Each inner edge is halfway between two centres. Each outer edge is as
-    far from the end centre as that cell's inner edge. On an even grid every
-    cell then has the grid spacing. On an uneven grid this is only one
-    reasonable choice, so give the true edges if your code knows them.
+    Inner edges are halfway between centres, and each outer edge is as far
+    from the end centre as that cell's inner edge. On an uneven grid this is
+    only one reasonable choice; give the true edges if known.
 
     Parameters
     ----------
@@ -138,11 +117,10 @@ class Atmosphere:
     """
     One snapshot of a simulated atmosphere, for the synthesis.
 
-    Every cube is `(nz, ny, nx)`. The edge arrays `z_edges`, `y_edges` and
-    `x_edges` give the cell boundaries and are one longer than the cubes
-    along their axis. Velocities are positive towards increasing coordinate.
-    Either density may be given; if only the mass density is, the synthesis
-    derives the electron density from it.
+    Every cube is `(nz, ny, nx)`, and each edge array is one longer than the
+    cubes along its axis. Velocities are positive towards increasing
+    coordinate. If only the mass density is given, the synthesis derives the
+    electron density from it.
 
     Parameters
     ----------
@@ -183,15 +161,15 @@ class Atmosphere:
             cube = getattr(self, name)
             if cube is None:
                 continue
-            _quantity(cube, name, ndim=3)
+            checked_quantity(cube, name, (UNITS[name],), ndim=3)
             if cube.shape != shape:
                 raise ValueError(
                     f"{name} has shape {cube.shape} but the edges bound "
                     f"(nz, ny, nx) = {shape} cells. The cubes are (z, y, x): "
                     f"the first axis is height.")
-        # Cells at or below zero temperature would otherwise be dropped
-        # silently from the synthesis, as log10 is undefined there. An empty
-        # cell may have zero density.
+        # The synthesis would silently drop cells at or below zero
+        # temperature, where log10 is undefined. An empty cell may have zero
+        # density.
         if np.any(self.temperature.value <= 0):
             raise ValueError("temperature must be above zero in every cell, got "
                              f"{self.temperature.min()} at least once.")
@@ -203,7 +181,7 @@ class Atmosphere:
             raise ValueError("An atmosphere needs a mass_density or an "
                              "electron_density.")
         if self.time is not None:
-            _quantity(self.time, "time", ndim=0)
+            checked_quantity(self.time, "time", (UNITS["time"],), ndim=0)
         if not isinstance(self.source, str):
             raise TypeError(f"source must be a string, got "
                             f"{type(self.source).__name__}.")
@@ -296,9 +274,9 @@ class Atmosphere:
                 raise ValueError(f"The {axis} range must have low < high, got "
                                  f"{bounds}.")
             values = all_edges.value
-            # Round-number bounds often land on cell boundaries. So that
-            # rounding does not decide whether the cell beyond is kept, a cell
-            # counts as inside only if more than a millionth of it is.
+            # Bounds often land on cell boundaries, so a cell counts as inside
+            # only if more than a millionth of it is, to keep rounding from
+            # adding the cell beyond.
             tolerance = 1e-6 * np.diff(values).min()
             inside = np.flatnonzero((values[1:] - low > tolerance)
                                     & (high - values[:-1] > tolerance))
@@ -342,11 +320,11 @@ class Atmosphere:
         `quantity` as an NDCube with the atmosphere's coordinates.
 
         `quantity` must have the atmosphere's shape. The coordinates are
-        linear. An axis whose cells are not all the same size gets their mean
-        size, and is listed in the cube's `meta["nonuniform_axes"]`.
+        linear: an uneven axis gets the mean cell size and is listed in
+        `meta["nonuniform_axes"]`.
         """
-        # Only the line of sight may be uneven: it is integrated out with the
-        # true size of every cell, and its coordinates are never used.
+        # Only the line of sight may be uneven: it is integrated with each
+        # cell's true size, and its coordinates are not used.
         if quantity.shape != self.shape:
             raise ValueError(f"Expected a cube of shape {self.shape}, got "
                              f"{quantity.shape}.")
@@ -414,19 +392,21 @@ def require_mass_per_electron(value) -> float:
 # ----------------------------------------------------------------------
 # HDF5
 # ----------------------------------------------------------------------
-def _new_partial(path: Path) -> Path:
+def _new_partial(path: Path, ending: str = "") -> Path:
     """
     New empty file with a unique name beside `path`, to write `path` into.
 
     It is created normally, so the umask and the directory's default
-    permissions apply to it, and so to `path`, as colleagues sharing a
-    project directory expect.
+    permissions apply to it and so to `path`. With `ending`, for a writer
+    that checks the name, the name ends in `ending` and starts with a dot,
+    so a pattern such as `*.h5` does not take it for a finished file.
     """
+    prefix = "." if ending else ""
     while True:
-        suffix = f".{secrets.token_hex(4)}.part"
+        suffix = f".{secrets.token_hex(4)}.part{ending}"
         # Truncate the stem so the name fits the 255 bytes most filesystems allow.
-        stem = path.name.encode()[:255 - len(suffix)].decode(errors="ignore")
-        partial = path.with_name(stem + suffix)
+        stem = path.name.encode()[:255 - len(prefix) - len(suffix)].decode(errors="ignore")
+        partial = path.with_name(prefix + stem + suffix)
         try:
             os.close(os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
         except FileExistsError:
@@ -435,13 +415,12 @@ def _new_partial(path: Path) -> Path:
 
 
 @contextmanager
-def _replacing(path: Path):
+def _replacing(path: Path, ending: str = ""):
     """
     New file beside `path` to write, which replaces `path` once written.
 
-    A write cut short by an error, a full disk or the job being killed
-    leaves any file already at `path` unchanged. Writing over it directly
-    would leave a broken file and lose the old one.
+    A write cut short by an error, a full disk or a killed job leaves any
+    file already at `path` unchanged. The new file's name ends in `ending`.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Follow a symlink to its target, as writing to the link would.
@@ -449,7 +428,7 @@ def _replacing(path: Path):
     # Refuse to replace a read-only file, as writing into it would fail.
     if destination.exists() and not os.access(destination, os.W_OK):
         raise PermissionError(f"{destination} is read-only, so it is not written over.")
-    partial = _new_partial(destination)
+    partial = _new_partial(destination, ending)
     try:
         yield partial
         os.replace(partial, destination)
@@ -485,7 +464,7 @@ def write_atmosphere(atmosphere: Atmosphere, path: str | Path,
     Returns
     -------
     Path
-        Path of the file written.
+        File written.
     """
     path = Path(path)
     with _replacing(path) as partial, h5py.File(partial, "w") as f:
@@ -525,8 +504,7 @@ def read_atmosphere(path: str | Path,
         file lacks is an error.
     columns : slice, optional
         Cells along x to read, as a slice of their index. Only those columns
-        are read from disk, so reading a few columns of a large box is quick.
-        Default None, for all of them.
+        are read from disk. Default None, all of them.
 
     Returns
     -------
@@ -537,8 +515,8 @@ def read_atmosphere(path: str | Path,
     wanted = AXES if velocities is None else tuple(_check_axis(axis) for axis in velocities)
     with _open_to_read(path) as f:
         _check_format(f, path)
-        # Check for missing velocities before reading any cube, since the
-        # cubes of a large simulation take gigabytes.
+        # Check for missing velocities before reading cubes, which can take
+        # gigabytes.
         if velocities is not None:
             for axis in wanted:
                 if f"velocity_{axis}" not in f:
@@ -571,8 +549,8 @@ def read_time(path: str | Path) -> Optional[u.Quantity]:
     """
     Snapshot time in an atmosphere file, or None if it has none.
 
-    The time gets the same checks as when reading the whole file, so a time
-    that is NaN, infinite or not a single value is refused here too.
+    A time that is NaN, infinite or not a single value is refused, as when
+    reading the whole file.
     """
     path = Path(path)
     with _open_to_read(path) as f:
@@ -581,7 +559,7 @@ def read_time(path: str | Path) -> Optional[u.Quantity]:
             return None
         time = _read_dataset(f, "time")
     try:
-        return _quantity(time, "time", ndim=0)
+        return checked_quantity(time, "time", (UNITS["time"],), ndim=0)
     except ValueError as error:
         raise ValueError(f"{path}: {error}") from None
 
@@ -598,11 +576,10 @@ def describe_atmosphere_file(path: str | Path) -> str:
     """
     Description of an atmosphere file, without reading its cubes.
 
-    This is what `eclipse-atmosphere info` prints. Only the attributes, the
-    edges, the time and the cubes' names, shapes and units are read, so it
-    is quick for any size of file. A file whose layout or units cannot be
-    read is refused. The values in the cubes are checked only when they are
-    read.
+    This is what `eclipse-atmosphere info` prints. Only the attributes,
+    edges, time and the cubes' names, shapes and units are read, so it is
+    quick for any size of file. A file whose layout or units cannot be read
+    is refused; the cube values are checked only when they are read.
 
     Parameters
     ----------
@@ -631,8 +608,9 @@ def describe_atmosphere_file(path: str | Path) -> str:
                                  f"the edges bound (nz, ny, nx) = {shape} cells.")
             unit = _dataset_unit(f, name)
             if not unit.is_equivalent(UNITS[name]):
-                raise u.UnitConversionError(f"{name} in {path} must be in a unit convertible "
-                                            f"to {UNITS[name]}, got {unit}.")
+                raise u.UnitConversionError(
+                    f"{name} in {path} must be in a unit of {UNITS[name].physical_type}, "
+                    f"such as {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
         if "mass_density" not in cubes and "electron_density" not in cubes:
@@ -641,7 +619,7 @@ def describe_atmosphere_file(path: str | Path) -> str:
         time = _read_dataset(f, "time") if "time" in f else None
         if time is not None:
             try:
-                time = _quantity(time, "time", ndim=0)
+                time = checked_quantity(time, "time", (UNITS["time"],), ndim=0)
             except ValueError as error:
                 raise ValueError(f"{path}: {error}") from None
         source = _text_attribute(f.attrs, "source", "")
@@ -667,9 +645,8 @@ def _open_to_read(path: Path, kind: str = "atmosphere") -> h5py.File:
     """
     Open `path` for reading.
 
-    Every ECLIPSE `kind` file is HDF5. An existing file that is not is
-    refused with a plain message, rather than h5py's "file signature not
-    found".
+    Every ECLIPSE `kind` file is HDF5. Any other existing file is refused
+    with a plain message rather than h5py's "file signature not found".
     """
     path = Path(path)
     if path.is_file() and not h5py.is_hdf5(path):
@@ -719,28 +696,42 @@ def _read_dataset(f: h5py.Group, name: str,
 
     If given, `columns` reads only that slice of the x axis, `axis`.
     """
-    unit = _dataset_unit(f, name, units)
-    dataset = f[name]
+    dataset, unit = _dataset_and_unit(f, name, units)
     if columns is None:
         values = dataset[()]
     else:
         index = [slice(None)] * dataset.ndim
         index[axis] = columns
         values = dataset[tuple(index)]
-    return u.Quantity(values, unit)
+    return values << unit
 
 
 def _dataset_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS) -> u.Unit:
     """Unit of a dataset in a file or group, from its 'unit' attribute, without reading it."""
-    where = f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
-    if name not in f:
-        raise ValueError(f"{where} has no '{name}' dataset.")
-    unit = _text_attribute(f[name].attrs, "unit")
+    return _dataset_and_unit(f, name, units)[1]
+
+
+def _dataset_and_unit(f: h5py.Group, name: str, units: Dict[str, u.Unit] = UNITS):
+    """Dataset of a file or group, not read, and its unit."""
+    def where():
+        return f.file.filename if f.name == "/" else f"{f.file.filename}, {f.name}"
+
+    try:
+        dataset = f[name]
+    except KeyError:
+        raise ValueError(f"{where()} has no '{name}' dataset.") from None
+    unit = _text_attribute(dataset.attrs, "unit")
     if unit is None:
-        raise ValueError(f"'{name}' in {where} has no 'unit' attribute. "
+        raise ValueError(f"'{name}' in {where()} has no 'unit' attribute. "
                          f"Every dataset needs one, for instance "
                          f"'{units[name]}'.")
-    return u.Unit(unit)
+    return dataset, _parsed_unit(unit) if isinstance(unit, str) else u.Unit(unit)
+
+
+@lru_cache(maxsize=None)
+def _parsed_unit(text: str) -> u.Unit:
+    """Unit named by `text`, parsed once for every dataset that names it."""
+    return u.Unit(text)
 
 
 # ----------------------------------------------------------------------
@@ -750,8 +741,8 @@ def mass_per_electron_from_abundances(abundances: Dict[str, float]) -> float:
     """
     Mass per free electron of a fully ionised plasma, in atomic mass units.
 
-    This is the sum over elements of abundance times atomic weight, divided
-    by the sum of abundance times atomic number.
+    The sum over elements of abundance times atomic weight, divided by the
+    sum of abundance times atomic number.
 
     Parameters
     ----------
@@ -774,10 +765,9 @@ def _offer_database_build(hdf5_dbase_root: Optional[str] = None) -> None:
     """
     Offer to build fiasco's CHIANTI database if it is missing.
 
-    A new user's first run needs this. fiasco asks only when an `Ion` is
-    made, so code that reads the database before that, or makes its ions in
-    worker processes with no terminal to answer from, calls this first in
-    the process the user runs.
+    fiasco asks only when an `Ion` is made, so code that reads the database
+    before that, or makes its ions in worker processes with no terminal,
+    calls this first in the user's process.
     """
     import fiasco
     from fiasco.util import check_database
@@ -797,15 +787,14 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
     """
     Mass per free electron for a CHIANTI abundance set, in atomic mass units.
 
-    It converts a simulation's mass density to the electron density the
-    contribution functions need, when the simulation gives none. Every
-    element is assumed fully ionised. Hydrogen and helium, which give almost
-    all the electrons, are fully ionised above about log T 5.2, so there the
-    electron density is within about 1 per cent even where the metals are
-    not. Cooler cells get too high an electron density, but emit few of the
+    Converts a simulation's mass density to electron density when the
+    simulation gives none. Every element is taken as fully ionised. Hydrogen
+    and helium, which give almost all the electrons, are fully ionised above
+    about log T 5.2, so there the electron density is good to about 1 per
+    cent. Cooler cells get too high an electron density, but emit few of the
     lines ECLIPSE synthesises. The value is about 1.16 for coronal
-    abundances, against 1.29 for a neutral gas, so an atmosphere read with
-    the neutral value has about 20 per cent too little emission measure.
+    abundances, against 1.29 for a neutral gas; the neutral value would give
+    about 20 per cent too little emission measure.
 
     Parameters
     ----------

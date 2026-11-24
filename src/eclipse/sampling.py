@@ -22,12 +22,11 @@ _REACH_IN_SIGMA = 12.0
 
 def _antiderivative(u, sigma, order: int) -> np.ndarray:
     """
-    Antiderivative of order `order` of a unit Gaussian of standard deviation
-    `sigma`, zero at minus infinity.
+    Repeated antiderivative of a unit Gaussian, zero at minus infinity.
 
-    `order` is 1 (the cumulative distribution), 2 or 3. Where `sigma` is 0
-    the Gaussian is a unit spike. `sigma` is one value or one per element of
-    `u`.
+    `order` is 1 (the cumulative distribution), 2 or 3. `sigma` is the
+    standard deviation, one value or one per element of `u`. Where `sigma`
+    is 0 the Gaussian is a unit spike.
     """
     u = np.asarray(u, dtype=float)
     sigma = np.broadcast_to(np.asarray(sigma, dtype=float), u.shape)
@@ -51,9 +50,11 @@ def _antiderivative(u, sigma, order: int) -> np.ndarray:
 
 def _blurred_antiderivative(u, sigma, width, order: int) -> np.ndarray:
     """
-    :func:`_antiderivative` of the Gaussian convolved with a rectangle
-    `width` wide, such as a slit's image, where `width` is above 0. `sigma`
-    and `width` are each one value or one per element of `u`.
+    :func:`_antiderivative` of the Gaussian convolved with a rectangle.
+
+    The rectangle is `width` wide, such as a slit's image, where `width` is
+    above 0. `sigma` and `width` are each one value or one per element of
+    `u`.
     """
     u = np.asarray(u, dtype=float)
     width = np.broadcast_to(np.asarray(width, dtype=float), u.shape)
@@ -100,8 +101,7 @@ def light_onto_pixels(cell_low, cell_high, pixel_edges, sigma=0.0,
     width = np.broadcast_to(np.asarray(width, dtype=float), low.shape)
     reach = _REACH_IN_SIGMA * sigma + width
     # Pixels each cell's blurred light reaches: from the first pixel ending
-    # above where it starts, to just before the first starting above where
-    # it ends.
+    # above its start to just before the first starting above its end.
     first = np.searchsorted(edges[1:], low - reach, side="right")
     last = np.searchsorted(edges[:-1], high + reach, side="left")
     count = np.maximum(last - first, 0)
@@ -164,7 +164,7 @@ def points_onto_pixels(position, pixel_edges, sigma, width=0.0) -> sparse.csr_ma
 def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
                         wavelength: np.ndarray) -> tuple:
     """
-    Photons laid onto pixels, with the wavelengths of their mean and root mean square energies.
+    Photons laid onto pixels, with the wavelengths of their mean and RMS energies.
 
     Parameters
     ----------
@@ -179,13 +179,13 @@ def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
     Returns
     -------
     tuple
-        `(on_pixels, photon_wavelength, rms_wavelength)`, all with the pixels
-        on the last axis. A photon frees electrons in a detector by its
-        energy, so `photon_wavelength` is the wavelength of the mean energy
-        of the photons a pixel receives, and `rms_wavelength` that of their
-        root mean square energy, which sets how far their electrons spread.
-        Both are in the unit of `wavelength`, and NaN where no photons
-        arrive, or only photons below the smallest normal float.
+        `(on_pixels, photon_wavelength, rms_wavelength)`, with the pixels on
+        the last axis. `photon_wavelength` is the wavelength of the mean
+        energy of each pixel's photons, which sets their electrons, and
+        `rms_wavelength` that of their root mean square energy, which sets
+        the electrons' spread. Both are in the unit of `wavelength`, and NaN
+        where no photons arrive, or only photons below the smallest normal
+        float.
     """
     photons = np.asarray(photons, dtype=float)
     flat = photons.reshape(-1, photons.shape[-1])
@@ -198,14 +198,13 @@ def photons_onto_pixels(share: sparse.spmatrix, photons: np.ndarray,
 
 def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     """
-    Photons moved by `carry`, with the wavelengths of the mean and root mean
-    square energies of the photons where they land.
+    Photons moved by `carry`, with the wavelengths of their mean and RMS energies.
 
-    A photon's energy goes as one over its wavelength. Photons whose mean
-    energy is that of wavelength `mean`, and whose root mean square energy
-    is that of `rms`, hold an energy that goes as photons / mean and a
-    squared energy that goes as photons / rms**2. Both add up like the
-    photons, so any linear map `carry` moves them as it moves the photons.
+    A photon's energy goes as one over its wavelength. With `mean` and `rms`
+    the wavelengths of the mean and RMS energies, photons hold an energy
+    that goes as photons / mean and a squared energy as photons / rms**2.
+    Both add like photons, so any linear map `carry` moves them as it moves
+    the photons.
 
     Parameters
     ----------
@@ -219,26 +218,34 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
     fill : float or np.ndarray
         Wavelength for both where no photons land, broadcasting against
         where they land. Also used where the photons that land are below
-        the smallest normal float, as their ratios then have too few
-        significant bits to mean anything.
+        the smallest normal float, as their ratios then mean nothing.
 
     Returns
     -------
     tuple
-        `(moved, mean, rms)`.
+        `(moved, mean, rms)`. If `carry` gives a tuple of arrays, one such
+        tuple for each, with `fill` a tuple of fills to match.
     """
     photons = np.asarray(photons, dtype=float)
     mean = np.broadcast_to(np.asarray(mean, dtype=float), photons.shape)
     rms = np.broadcast_to(np.asarray(rms, dtype=float), photons.shape)
-    # The wavelengths are taken relative to the largest, so the energies
-    # carried are about the size of the photons. Divided by wavelengths in
-    # cm they would be up to 1e12 times larger, and could stay above zero
-    # where the photons round to zero.
+    # Wavelengths relative to the largest keep the energies about the size of
+    # the photons. In cm they would be up to 1e12 times larger, and could stay
+    # above zero where the photons round to zero.
     scale = np.max(mean, initial=0.0, where=np.isfinite(mean))
     scale = scale if scale > 0 else 1.0
     moved = carry(photons)
     energy = carry(photons * np.divide(scale, mean, out=np.zeros(photons.shape), where=mean > 0))
     square = carry(photons * np.divide(scale, rms, out=np.zeros(photons.shape), where=rms > 0)**2)
+    if isinstance(moved, tuple):
+        # `carry` lands the photons in several places, each with its own fill.
+        return tuple(_landed_wavelengths(*parts, scale)
+                     for parts in zip(moved, energy, square, fill))
+    return _landed_wavelengths(moved, energy, square, fill, scale)
+
+
+def _landed_wavelengths(moved, energy, square, fill, scale) -> tuple:
+    """Wavelengths for `_carry_photon_wavelengths` from what was carried."""
     empty = np.broadcast_to(np.asarray(fill, dtype=float), moved.shape)
     tiny = np.finfo(float).tiny
     with_mean = (moved >= tiny) & (energy >= tiny)
@@ -253,8 +260,10 @@ def _carry_photon_wavelengths(carry, photons, mean, rms, fill) -> tuple:
 def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.0,
                   extend: bool = False) -> np.ndarray:
     """
-    Weight of each cell in each pixel: the mean over the pixel of the cell's
-    light, uniform over the cell, after blurring.
+    Weight of each cell in each pixel.
+
+    The mean over the pixel of the cell's light, uniform over the cell,
+    after blurring.
 
     Parameters
     ----------
@@ -268,7 +277,7 @@ def pixel_weights(cell_edges, pixel_edges, sigma: float = 0.0, width: float = 0.
         image, in the same unit; 0 for none.
     extend : bool
         Extend the first and last cells outward as far as the blur reaches,
-        for a scene that continues past its edges.
+        for a scene that continues past its edges. Default False.
 
     Returns
     -------
@@ -297,10 +306,11 @@ def pixel_weights_through(cell_edges, pixel_edges, openings, sigma: float = 0.0,
     """
     Pixel weights for light passing only through `openings`.
 
-    As :func:`pixel_weights`, for a slit with gaps in it. The blur comes before the openings,
-    as the optics in front of a slit blur the image the slit then cuts. Each
-    pixel still holds the mean over its whole extent, so a pixel half
-    covered by a gap holds half the light, and a pixel inside a gap none.
+    As :func:`pixel_weights`, for a slit with gaps in it. The blur comes
+    before the openings, as the optics in front of a slit blur the image the
+    slit then cuts. Each pixel holds the mean over its whole extent, so a
+    pixel half covered by a gap holds half the light, and one inside a gap
+    none.
 
     Parameters
     ----------
@@ -342,8 +352,10 @@ def centred_edges(n: int, pitch: float, centre: float = 0.0) -> np.ndarray:
 def onto_pixels(data: np.ndarray, rows: np.ndarray, columns: np.ndarray,
                 wavelengths: np.ndarray) -> np.ndarray:
     """
-    `data`, shaped `(y, x, wavelength)`, laid onto pixels by the weights
-    along each axis from :func:`pixel_weights`.
+    `data`, shaped `(y, x, wavelength)`, laid onto pixels.
+
+    `rows`, `columns` and `wavelengths` are the weights along each axis,
+    from :func:`pixel_weights`.
     """
     out = np.tensordot(data, wavelengths, axes=([2], [1]))       # (y, x, l)
     out = np.tensordot(out, columns, axes=([1], [1]))            # (y, l, q)

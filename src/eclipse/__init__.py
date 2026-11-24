@@ -4,7 +4,7 @@ ECLIPSE: Emission Calculation and Line Prediction for SOLAR-C EUVST
 Tools for modeling the performance of EUVST, the EUV spectrograph on SOLAR-C.
 """
 
-__version__ = "0.13.1"
+__version__ = "0.16.2"
 __author__ = "James McKevitt"
 __email__ = "jm2@mssl.ucl.ac.uk"
 
@@ -30,10 +30,12 @@ from .synthesis_file import (SpectralLine, Synthesis, convert_synthesis_pickle, 
                              read_synthesis, read_synthesis_products, write_line_cubes,
                              write_synthesis)
 from .results_file import convert_results_pickle
-from .band import (BandLines, IonLines, band_contribution_functions, read_band_lines,
-                   write_band_lines)
+from .emission_measure import EmissionMeasure, read_emission_measure, write_emission_measure
+from .band import (BandLines, IonLines, band_contribution_functions, band_spectra,
+                   read_band_lines, write_band_lines)
 from .readout import FocalPlane_SWC, ReadoutSequence
 from .full_frame import FullFrame, full_ccd_frame, write_full_frame
+from .run_file import RunOutput, make_frame, observe, run, synthesise
 from .analysis import (
     load_instrument_response_results,
     get_parameter_combinations,
@@ -59,6 +61,11 @@ __all__ = [
     "FitConfig", "FitComponent",
     "simulate_once", "monte_carlo",
     "main",
+    "run",
+    "synthesise",
+    "observe",
+    "make_frame",
+    "RunOutput",
     "load_atmosphere",
     "create_uniform_intensity_cube",
     "Atmosphere",
@@ -75,9 +82,13 @@ __all__ = [
     "read_synthesis",
     "write_synthesis",
     "convert_results_pickle",
+    "EmissionMeasure",
+    "read_emission_measure",
+    "write_emission_measure",
     "BandLines",
     "IonLines",
     "band_contribution_functions",
+    "band_spectra",
     "read_band_lines",
     "write_band_lines",
     "FocalPlane_SWC",

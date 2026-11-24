@@ -35,8 +35,8 @@ from eclipse.radiometric import (
 )
 from eclipse.utils import angle_to_distance
 
-# CODATA values and the IAU astronomical unit, written out rather than taken
-# from astropy so the expected values do not depend on the code under test.
+# CODATA values and the IAU astronomical unit, written out so the expected
+# values do not depend on the code under test.
 H_ERG_S = 6.62607015e-27
 C_CM_S = 2.99792458e10
 HC_ERG_CM = H_ERG_S * C_CM_S
@@ -47,10 +47,9 @@ ERG_PER_EV = 1.602176634e-12
 N_SCAN, N_SLIT, N_SPEC = 2, 8, 16
 REST = 195.119 * u.Angstrom
 
-# Spectral sampling of the input cube, in Angstrom. It differs on purpose from
-# both detectors' wvl_res (16.9 and 22.3 mAA): the chain takes the photon
-# energy from the cube's wavelength axis but the wavelength a pixel covers
-# from det.wvl_res, and equal values would hide a mix-up between the two.
+# Spectral sampling of the input cube, in Angstrom. The photon energy comes
+# from the cube's axis and a pixel's width from det.wvl_res (16.9 and 22.3
+# mAA), so a different value here catches a mix-up between the two.
 CDELT_ANGSTROM = 0.0200
 
 # Spectral radiance per unit wavelength, in the synthesis output units.
@@ -61,9 +60,8 @@ RADIANCE = 1.0e4
 class ConstantAreaTelescope:
     """Telescope with a fixed effective area times throughput.
 
-    The chain only calls `ea_and_throughput`, so this is the whole interface.
-    A fixed value separates the geometry and unit arithmetic from the
-    calibration curve, which has its own tests.
+    The chain only calls `ea_and_throughput`. A fixed value tests the
+    geometry and units apart from the calibration curve.
     """
 
     def __init__(self, area_cm2=1.5):
@@ -91,9 +89,8 @@ def make_radiance_cube(value=RADIANCE, n_spec=N_SPEC, rest=REST):
     )
 
 
-# Slit widths each instrument offers. Simulation rejects any other value, and
-# the two instruments share none, so a comparison between them must include
-# the slit ratio.
+# Slit widths each instrument offers; Simulation rejects any other. The two
+# share none, so a comparison between them includes the slit ratio.
 SLIT_WIDTHS = {
     Detector_SWC: (0.2, 0.4, 0.8, 1.6),
     Detector_EIS: (1.0, 2.0),
@@ -125,12 +122,11 @@ def run_chain(cube, tel, det, sim, t_exp):
 
 
 def literal_wavelength_axis_cm(n_spec=N_SPEC, rest=REST):
-    """Wavelength axis, in cm, of the cube from make_radiance_cube.
+    """Wavelength axis, in cm, of the cube from `make_radiance_cube`.
 
-    FITS pixel coordinates are one-based, so the value at numpy index `i` is
-    `crval + (i + 1 - crpix) * cdelt`. It is written out rather than read
-    from the cube so that test_wavelength_axis_follows_the_fits_convention
-    can check the pipeline sees the intended axis.
+    FITS pixels are one-based, so the value at numpy index `i` is
+    `crval + (i + 1 - crpix) * cdelt`. It is written out, not read from the
+    cube, so `test_wavelength_axis_follows_the_fits_convention` can check it.
     """
     crpix = n_spec / 2.0
     i = np.arange(n_spec)
@@ -142,19 +138,17 @@ def expected_photons_per_pixel(radiance, t_exp, area_cm2, det, sim,
                                lam_cm=None):
     """Photons per pixel from the standard equation, with literal constants.
 
-    `lam_cm` is the wavelength of each pixel, not the rest wavelength, since
-    the photon energy is hc / lambda at the pixel's own wavelength. Across a
-    16 pixel window at 195 Angstrom this is a 0.13 per cent gradient in
-    photon count.
+    `lam_cm` is each pixel's wavelength, not the rest wavelength, as the
+    photon energy hc / lambda is taken there. Across a 16 pixel window at
+    195 Angstrom this is a 0.13 per cent gradient in photon count.
     """
     if lam_cm is None:
         lam_cm = literal_wavelength_axis_cm()
     e_ph = HC_ERG_CM / np.asarray(lam_cm)
 
-    # Linear size at 1 au of the angles a pixel spans. The pipeline uses the
-    # exact 2 au tan(theta / 2), not the small-angle form; they differ by
-    # theta^2 / 12, two parts in 1e12 at 1 arcsec (see
-    # test_small_angle_correction_is_quadratic).
+    # Size at 1 au of the angles a pixel spans, by the exact 2 au
+    # tan(theta / 2). The small-angle form differs by theta^2 / 12, two parts
+    # in 1e12 at 1 arcsec.
     slit_cm = 2.0 * AU_CM * np.tan(0.5 * sim.slit_width.to_value(u.rad))
     pix_rad = (det.plate_scale_angle * (1 * u.pix)).to_value(u.rad)
     pix_cm = 2.0 * AU_CM * np.tan(0.5 * pix_rad)
@@ -172,8 +166,7 @@ def test_photons_per_pixel_matches_standard_equation(detector_cls, slit_arcsec,
                                                      t_exp_s, area_cm2):
     """Photons per pixel from the chain match the standard equation.
 
-    Run at every slit width of each instrument, since the slit sets the
-    solid angle a pixel sees and enters the result linearly.
+    Run at every slit width, as the slit sets the solid angle a pixel sees.
     """
     det = detector_cls()
     sim = sim_for(detector_cls, slit_arcsec)
@@ -187,8 +180,7 @@ def test_photons_per_pixel_matches_standard_equation(detector_cls, slit_arcsec,
     expected = expected_photons_per_pixel(RADIANCE, t_exp, area_cm2, det, sim)
     actual = got_per_pix.to_value(u.photon / u.pix)
 
-    # atol=0 on purpose: the default 1e-8 exceeds these photon counts at short
-    # exposures and would hide a relative error of any size.
+    # The default atol of 1e-8 exceeds these photon counts at short exposures.
     assert np.allclose(actual, expected[np.newaxis, np.newaxis, :],
                        rtol=1e-10, atol=0.0)
 
@@ -196,9 +188,8 @@ def test_photons_per_pixel_matches_standard_equation(detector_cls, slit_arcsec,
 def test_wavelength_axis_follows_the_fits_convention():
     """The pipeline reads the wavelength axis this file means to write.
 
-    The other tests build their expected photon counts from
-    literal_wavelength_axis_cm. If its one-based FITS convention were wrong,
-    the expected values would all be wrong together and could still agree.
+    The other tests take their expected values from
+    `literal_wavelength_axis_cm`, so an error there would otherwise go unseen.
     """
     cube = make_radiance_cube()
     from_cube = cube.axis_world_coords(2)[0].to_value(u.cm)
@@ -228,11 +219,9 @@ def test_photons_scale_linearly_with_radiance_exposure_and_area():
 
 
 def test_photons_scale_with_wavelength_at_fixed_energy_radiance():
-    """At fixed energy radiance, photon count goes as lambda.
+    """At fixed energy radiance, photon count goes as wavelength.
 
-    Doubling the wavelength halves the energy per photon, so the same energy
-    gives twice the photons. This catches an inverted conversion, which a
-    single wavelength cannot.
+    This catches an inverted conversion, which a single wavelength cannot.
     """
     det = Detector_SWC()
     sim = sim_for(Detector_SWC)
@@ -246,10 +235,8 @@ def test_photons_scale_with_wavelength_at_fixed_energy_radiance():
     n_long = run_chain(make_radiance_cube(rest=long), tel, det, sim,
                        1 * u.s).data[0, 0, :]
 
-    # Compare pixel by pixel with the ratio of the pixels' wavelengths, not a
-    # flat 2.0: each window is 0.30 Angstrom wide, so the ratio runs from
-    # 2.0014 at the blue end to 1.9984 at the red end, and a flat comparison
-    # would need a tolerance loose enough to hide a real error.
+    # Compare with the ratio of each pixel's wavelengths, not a flat 2.0:
+    # across the 0.30 Angstrom windows it runs from 2.0014 to 1.9984.
     expected = (literal_wavelength_axis_cm(rest=long)
                 / literal_wavelength_axis_cm(rest=short))
     assert np.allclose(n_long / n_short, expected, rtol=1e-10, atol=0.0)
@@ -257,10 +244,10 @@ def test_photons_scale_with_wavelength_at_fixed_energy_radiance():
 
 
 def test_pixel_solid_angle_matches_geometry():
-    """Omega_pix is the patch of Sun one pixel sees, in steradian.
+    """Omega_pix is the solid angle one pixel sees.
 
-    Recomputed from arcseconds and the astronomical unit, using only the
-    detector numbers from the pipeline.
+    Worked out from arcseconds and the astronomical unit, taking only the
+    detector's numbers from the pipeline.
     """
     for det in (Detector_SWC(), Detector_EIS()):
         for slit in (0.2, 1.0) * u.arcsec:
@@ -284,10 +271,8 @@ def test_pixel_solid_angle_matches_geometry():
 def test_small_angle_correction_is_quadratic():
     """2 au tan(theta / 2) exceeds au theta by theta^2 / 12.
 
-    This shows the size of the term for anyone simplifying
-    angle_to_distance: two parts in 1e12 at 1 arcsec, seven parts in 1e9 at
-    60 arcsec. It is negligible at every slit width of either instrument, but
-    it is a real term, not an identity.
+    That is two parts in 1e12 at 1 arcsec and seven parts in 1e9 at 60
+    arcsec.
     """
     for arcsec in (0.2, 1.0, 4.0, 60.0):
         theta = arcsec * ARCSEC_RAD
@@ -343,9 +328,9 @@ def test_photon_arrival_sampling_preserves_the_mean():
 def test_electron_conversion_applies_quantum_efficiency_and_fano_gain():
     """Mean electrons per detected photon is E_ph / w(T).
 
-    w(T) = 3.71 - 0.0006 (T - 300) eV per electron-hole pair, so at 195
-    Angstrom a detected photon frees about seventeen electrons. Quantum
-    efficiency is a binomial draw, so the mean carries one factor of it.
+    w(T) = 3.71 - 0.0006 (T - 300) eV per electron-hole pair, about
+    seventeen electrons per photon at 195 Angstrom. The quantum efficiency
+    is a binomial draw, so the mean carries one factor of it.
     """
     np.random.seed(20260912)
     det = Detector_SWC(ccd_temperature=-60 * u.deg_C)
@@ -412,11 +397,8 @@ def test_swc_full_well_moves_no_constructor_argument():
 def test_eis_and_swc_differ_only_by_their_numbers():
     """For the same radiance, the EIS to SWC ratio is set by geometry alone.
 
-    At equal effective area the instruments differ only in the sky area a
-    pixel sees and the wavelength it covers: EIS has a 1 arcsec pixel and a
-    1 arcsec slit against SWC's 0.159 and 0.2, and a 22.3 mAA spectral pitch
-    against 16.9. This checks that choosing an instrument changes nothing
-    else in the chain.
+    At equal effective area, EIS has a 1 arcsec pixel and slit against
+    SWC's 0.159 and 0.2 arcsec, and a 22.3 mAA spectral pitch against 16.9.
     """
     tel = ConstantAreaTelescope(1.0)
     swc, eis = Detector_SWC(), Detector_EIS()
@@ -442,8 +424,8 @@ def test_an_iteration_raises_no_warnings_about_the_cube_having_no_observer():
     """
     A cube with helioprojective and wavelength axes has no observer, and
     astropy warns each time its wavelengths become SpectralCoord objects.
-    eclipse filters these warnings, but a call from Python does not, so each
-    Monte Carlo iteration must not raise them.
+    The `eclipse` command filters these warnings, but a call from Python
+    does not.
     """
     import warnings
 
