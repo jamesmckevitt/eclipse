@@ -402,6 +402,13 @@ def test_the_science_cases_as_one_run_file_are_the_separate_configurations(tmp_p
         check(run_config, run_name)
 
 
+def test_an_lw_run_is_checked_before_anything_runs():
+    config = {"instrument": "LW", "uniform_intensity": "50 erg / (s cm2 sr)",
+              "rest_wavelength": "499.406 AA", "simulation": {"slit_mask": True}}
+    with pytest.raises(ValueError, match="simulation.slit_mask describes the SW slit"):
+        check(config, "lw")
+
+
 def test_a_setting_changed_from_outside_wins_over_a_runs_own(tmp_path, monkeypatch, atmosphere,
                                                              fake_synthesis):
     monkeypatch.chdir(tmp_path)

@@ -461,7 +461,7 @@ def check(config: dict, name: str, steps: tuple = ("synthesise", "observe", "fra
 
 def _check(config: dict, name: str, steps: tuple) -> Optional[dict]:
     """`check`, returning the frame's settings if `steps` makes one, so they are read once."""
-    from .main import _validate_config_keys
+    from .main import _check_lw_sections, _validate_config_keys
 
     frame = None
 
@@ -484,7 +484,10 @@ def _check(config: dict, name: str, steps: tuple) -> Optional[dict]:
                     f"{key.replace('_', ' ').capitalize()} file not found: {source}")
     observed = observation_config(config, name)
     if "observe" in steps:
-        _validate_config_keys(observed, str(observed.get("instrument", "SWC")).upper())
+        instrument = str(observed.get("instrument", "SWC")).upper()
+        _validate_config_keys(observed, instrument)
+        if instrument == "LW":
+            _check_lw_sections(observed)
     return frame
 
 
