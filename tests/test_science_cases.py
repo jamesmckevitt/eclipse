@@ -214,7 +214,7 @@ def test_the_command_writes_the_chosen_configs(tmp_path, capsys):
         assert yaml.safe_load((tmp_path / "out" / name).read_text())["n_iter"] == 50
     out = capsys.readouterr().out
     assert "Wrote 3 configurations to" in out
-    assert "Skipped 1 line ECLIPSE cannot simulate yet" in out
+    assert "Skipped 1 line that ECLIPSE cannot simulate yet or the base settings" in out
 
 
 def test_the_command_lists_cases_and_what_can_be_simulated(capsys):

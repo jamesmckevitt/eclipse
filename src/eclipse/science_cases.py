@@ -278,7 +278,8 @@ def science_case_configs(cases: list[str] | None = None,
     configs : list of ScienceCaseConfig
         One per chosen line that ECLIPSE can simulate.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet, as `<task> <line>`.
+        Chosen lines left out, which ECLIPSE cannot simulate yet or the base
+        settings do not suit, as `<task> <line>`.
     """
     from .main import _check_lw_sections, _require_mapping, _validate_config_keys
 
@@ -352,7 +353,7 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
     paths : list of Path
         Files written.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet.
+        Chosen lines left out, as for :func:`science_case_configs`.
     """
     configs, skipped = science_case_configs(**kwargs)
     out_dir = Path(out_dir)
@@ -415,7 +416,7 @@ def write_science_case_run_file(path: str | Path, **kwargs) -> tuple[Path, list[
     path : Path
         File written.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet.
+        Chosen lines left out, as for :func:`science_case_configs`.
     """
     configs, skipped = science_case_configs(**kwargs)
     if not configs:
@@ -489,4 +490,4 @@ def main(argv: list[str] | None = None) -> None:
               f"to {args.out}")
     if skipped:
         print(f"Skipped {len(skipped)} line{'' if len(skipped) == 1 else 's'} "
-              f"ECLIPSE cannot simulate yet; --list shows which")
+              f"that ECLIPSE cannot simulate yet or the base settings do not suit")
