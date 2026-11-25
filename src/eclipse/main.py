@@ -977,6 +977,9 @@ def run_config(config: dict, name: str, *, source: str | None = None,
         band = _lw_band_and_order(line_wavelength, det_fixed, hint)
         det_fixed.update(band)
         tel_fixed.update(band)
+        observed = "" if uniform_intensity_mode else f"{reference_line}, "
+        print(f"  Observing {observed}at {u.Quantity(line_wavelength).to(u.AA):.3f}, in "
+              f"{band['band']}, order {band['order']}")
     if instrument == "EIS":
         if config.get("filter"):
             warnings.warn(

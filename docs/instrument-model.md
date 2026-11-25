@@ -32,6 +32,8 @@ rest_wavelength: 499.406 AA
 
 `band` and `order` in the `detector:` or `telescope:` section set them instead, and are checked against the line.
 
+A run observes the window of one line, the single intensity's or the `reference_line` of a synthesis file, so it records one band in one order. The run prints which. Lines in other bands, or other lines of one band, need runs of their own, such as the entries of a run file's `runs:`.
+
 The throughput comes from the sensitivity budget, RSC-2022035, whose tables stop at 845 Angstrom in LW1, 1039 Angstrom in LW2, and 520 and 609 Angstrom in second order. A run with a wavelength beyond them, such as Mg X 609.79, stops with an error.
 
 Each band has an intensified APS. Its microchannel plate (MCP) turns each detected photon into a burst of electrons, about 13 in the APS on average. The bursts vary in size, which doubles the variance of the photon count. The chance of detecting a photon is taken at each pixel's wavelength. In LW3 it drops from 0.30 at 1208 Angstrom to 0.01 above 1212 Angstrom, where the MCP has no photocathode so that it can observe Lyman-alpha.
