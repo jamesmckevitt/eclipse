@@ -33,7 +33,7 @@ def test_a_gallery_script_has_a_page_a_figure_and_a_card(script):
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda path: path.stem)
-def test_a_gallery_script_runs_and_draws_a_figure(script, monkeypatch):
+def test_a_gallery_script_runs_and_draws_a_figure(script, monkeypatch, tmp_path):
     # Two iterations, fitted in this process, show the script runs; the
     # figures are made with the scripts' own settings by tools/docs_gallery.py.
     monte_carlo = eclipse.monte_carlo
@@ -43,7 +43,10 @@ def test_a_gallery_script_runs_and_draws_a_figure(script, monkeypatch):
 
     monkeypatch.setattr(eclipse, "monte_carlo", quick)
     monkeypatch.setattr(eclipse, "Simulation", functools.partial(eclipse.Simulation, ncpu=1))
+    monkeypatch.setattr(eclipse, "observe", functools.partial(eclipse.observe, n_iter=2, ncpu=1))
     monkeypatch.setattr(plt, "show", lambda *args, **kwargs: None)
+    # Some scripts write files, which go in a scratch folder.
+    monkeypatch.chdir(tmp_path)
     plt.close("all")
     runpy.run_path(str(script), run_name="__main__")
     # tools/docs_gallery.py saves one figure for each script.
