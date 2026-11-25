@@ -135,13 +135,14 @@ def test_a_file_round_trips(tmp_path):
     atmosphere = _atmosphere(
         temperature=rng.uniform(5e5, 3e6, SHAPE) * u.K,
         electron_density=rng.uniform(1e8, 1e10, SHAPE) / u.cm**3,
+        proton_density=rng.uniform(1e8, 1e10, SHAPE) / u.cm**3,
         velocity_x=rng.normal(0, 10, SHAPE) * u.km / u.s,
         time=1234.5 * u.s, source="a test box")
     path = write_atmosphere(atmosphere, tmp_path / "box.h5")
 
     back = read_atmosphere(path)
 
-    for name in ("temperature", "mass_density", "electron_density",
+    for name in ("temperature", "mass_density", "electron_density", "proton_density",
                  "velocity_x", "velocity_z", "x_edges", "y_edges", "z_edges", "time"):
         original = getattr(atmosphere, name)
         assert getattr(back, name).unit == original.unit
@@ -307,7 +308,8 @@ def test_the_downsampling_factor_must_be_a_whole_number_of_one_or_more(tmp_path,
     ("temperature", np.ones((4, 5, 6)) * u.K, "shape"),
     ("temperature", np.ones(SHAPE), "Quantity"),
     ("temperature", np.ones(SHAPE) * u.m, "unit of temperature, such as K"),
-    ("mass_density", None, "needs a mass_density or an electron_density"),
+    ("mass_density", None, "needs a mass_density, an electron_density or a proton_density"),
+    ("proton_density", -np.ones(SHAPE) / u.cm**3, "proton_density cannot be negative"),
     ("z_edges", np.arange(SHAPE[0] + 1)[::-1] * u.Mm, "must increase"),
     ("x_edges", np.arange(1) * u.Mm, "at least 1 cell"),
     ("time", np.arange(2) * u.s, "0 dimensions"),
@@ -622,6 +624,55 @@ def test_an_electron_density_is_used_as_given(tmp_path, monkeypatch):
     assert from_electrons["config"]["mass_per_electron"] is None
     assert "electron density" in from_electrons["config"]["mass_per_electron_source"]
     assert from_electrons["atmosphere"]["electron_density_given"] is True
+
+
+def test_a_proton_density_is_divided_by_the_ratio_of_protons_to_electrons(tmp_path,
+                                                                          monkeypatch):
+    """The ratio is fiasco's at each cell's temperature; here a stand-in that varies with it."""
+    from eclipse import atmosphere as atmosphere_module
+
+    def ratios(abundance, hdf5_dbase_root=None):
+        assert abundance == "sun_coronal_2021_chianti"
+        return np.interp(np.log10(atmosphere_module._RATIO_TEMPERATURES), [4.0, 6.0, 9.0],
+                         [0.7, 0.8, 0.85])
+
+    monkeypatch.setattr(atmosphere_module, "_proton_electron_ratios", ratios)
+    rng = np.random.default_rng(2)
+    temperature = rng.uniform(5e5, 2e6, SHAPE) * u.K
+    electrons = rng.uniform(5e8, 2e9, SHAPE) / u.cm**3
+    ratio = np.interp(np.log10(temperature.to_value(u.K)), [4.0, 6.0, 9.0], [0.7, 0.8, 0.85])
+    with_electrons = write_atmosphere(
+        _atmosphere(temperature=temperature, mass_density=None, electron_density=electrons),
+        tmp_path / "electrons.h5")
+    with_protons = write_atmosphere(
+        _atmosphere(temperature=temperature, mass_density=None, proton_density=electrons * ratio),
+        tmp_path / "protons.h5")
+    assert "proton_density" in read_atmosphere(with_protons).describe()
+
+    from_electrons = _synthesise(tmp_path, monkeypatch, "electrons",
+                                 "--atmosphere", str(with_electrons))
+    from_protons = _synthesise(tmp_path, monkeypatch, "protons", "--atmosphere", str(with_protons))
+
+    assert np.all(_intensity(from_protons) > 0)
+    assert _intensity(from_protons) == pytest.approx(_intensity(from_electrons), rel=1e-4)
+    assert from_protons["config"]["mass_per_electron"] is None
+    assert "proton density" in from_protons["config"]["mass_per_electron_source"]
+    assert from_protons["atmosphere"]["proton_density_given"] is True
+    assert from_electrons["atmosphere"]["proton_density_given"] is False
+
+
+@pytest.mark.chianti
+def test_the_ratio_of_protons_to_electrons_is_fiascos():
+    import fiasco
+
+    from eclipse.atmosphere import electron_density_from_protons
+
+    temperature = 10.0 ** np.random.default_rng(3).uniform(3.5, 9.5, 200)
+    protons = np.full(temperature.shape, 1e9)
+    expected = protons / fiasco.proton_electron_ratio(
+        temperature * u.K, abundance="sun_coronal_2021_chianti").value
+    assert electron_density_from_protons(temperature, protons) == pytest.approx(expected,
+                                                                                rel=1e-12)
 
 
 def test_the_mass_per_electron_comes_from_the_abundances_by_default(tmp_path, monkeypatch):
