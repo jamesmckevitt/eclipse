@@ -601,11 +601,6 @@ def test_a_frame_refuses_a_simulation_asking_for_what_it_does_not_model(settings
                        sim=Simulation(**settings))
 
 
-# Arguments of `full_ccd_frame` that a `Simulation` sets, at their defaults.
-_DEFAULTS = {"slit_width": 0.2 * u.arcsec, "psf": True, "spectral_psf": "quadrature",
-             "noise": True, "psf_boundary": "replicate", "slit_mask": False}
-
-
 def test_one_error_lists_every_unsupported_setting_and_conflict():
     sim = Simulation(psf=True, vis_sl=1 * u.photon / (u.s * u.cm**2))
     with pytest.raises(ValueError) as error:
@@ -627,7 +622,7 @@ def test_a_simulation_field_the_frame_does_not_know_is_refused():
 
     for sim in (Extended(), Extended(new_effect=True)):
         with pytest.raises(ValueError, match="new_effect"):
-            _settings_from_simulation(sim, _DEFAULTS, 1 * u.s)
+            _settings_from_simulation(sim, {}, 1 * u.s)
 
 
 def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
@@ -640,12 +635,12 @@ def test_a_subclass_cannot_hide_a_setting_by_changing_its_default():
 
     dark = 0 * u.photon / (u.s * u.cm**2)
     with pytest.raises(ValueError, match="vis_sl"):
-        _settings_from_simulation(Lit(), _DEFAULTS, 1 * u.s)
+        _settings_from_simulation(Lit(), {}, 1 * u.s)
     with pytest.warns(UserWarning, match="sim.expos"):
-        _settings_from_simulation(Lit(vis_sl=dark), _DEFAULTS, 1 * u.s)
+        _settings_from_simulation(Lit(vis_sl=dark), {}, 1 * u.s)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        _settings_from_simulation(Lit(vis_sl=dark), _DEFAULTS, 5 * u.s)
+        _settings_from_simulation(Lit(vis_sl=dark), {}, 5 * u.s)
 
 
 def test_settings_a_frame_does_not_use_are_accepted():
@@ -653,42 +648,50 @@ def test_settings_a_frame_does_not_use_are_accepted():
     iterations and CPUs of a run change nothing in a frame."""
     sim = Simulation(enable_pinholes=True, psf_boundary="replicate", n_iter=3, ncpu=2,
                      pinhole_positions_spectral=[], pinhole_visible_wavelength=500 * u.nm)
-    assert _settings_from_simulation(sim, _DEFAULTS, 1 * u.s)["psf"] is False
+    assert _settings_from_simulation(sim, {}, 1 * u.s)["psf"] is False
 
 
 def test_a_simulation_gives_the_frame_its_slit_width_psf_and_noise():
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=True, psf_boundary="zero",
                      spectral_psf="convolution", noise=False)
-    assert _settings_from_simulation(sim, _DEFAULTS, 1 * u.s) == {
+    assert _settings_from_simulation(sim, {}, 1 * u.s) == {
         "slit_width": 0.4 * u.arcsec, "psf": True, "spectral_psf": "convolution", "noise": False,
         "psf_boundary": "zero", "slit_mask": False}
 
 
 def test_an_argument_set_both_ways_must_agree_with_the_simulation():
-    """An argument at its default takes the `Simulation`'s value; one set otherwise must
-    match it."""
+    """An argument left out takes the `Simulation`'s value; one typed out must match it, even
+    at its default."""
     sim = Simulation(slit_width=0.4 * u.arcsec, psf=False, spectral_psf="convolution",
                      noise=False)
     expected = {"slit_width": 0.4 * u.arcsec, "psf": False, "spectral_psf": "convolution",
                 "noise": False, "psf_boundary": "replicate", "slit_mask": False}
-    assert _settings_from_simulation(sim, _DEFAULTS, 1 * u.s) == expected
-    assert _settings_from_simulation(sim, {**_DEFAULTS, "slit_width": 400 * u.mas, "psf": False,
-                                           "noise": False}, 1 * u.s) == expected
+    assert _settings_from_simulation(sim, {}, 1 * u.s) == expected
+    assert _settings_from_simulation(sim, {"slit_width": 400 * u.mas, "psf": False,
+                                           "noise": False, "psf_boundary": "replicate",
+                                           "slit_mask": False}, 1 * u.s) == expected
     for given in ({"slit_width": 0.8 * u.arcsec}, {"psf": None}, {"noise": None},
-                  {"slit_width": None}, {"slit_width": [0.2] * u.arcsec}):
+                  {"slit_width": None}, {"slit_width": [0.2] * u.arcsec},
+                  {"slit_width": 0.2 * u.arcsec}, {"psf": True},
+                  {"spectral_psf": "quadrature"}, {"noise": True}):
         with pytest.raises(ValueError, match=f"{next(iter(given))} is"):
             full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim=sim, **given)
     with pytest.raises(TypeError, match="must be a Simulation"):
         full_ccd_frame("no_such_file.h5", None, 0.3 * u.Mm, 1 * u.s, sim={"psf": False})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match="needs a slit_position and an exposure"):
+            full_ccd_frame("no_such_file.h5", slit_position=0.3 * u.Mm,
+                           sim=Simulation(expos=5 * u.s))
 
 
 def test_a_frame_warns_that_the_simulation_exposure_is_not_used():
     with pytest.warns(UserWarning, match="sim.expos"):
-        _settings_from_simulation(Simulation(expos=5 * u.s), _DEFAULTS, 10 * u.s)
+        _settings_from_simulation(Simulation(expos=5 * u.s), {}, 10 * u.s)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        _settings_from_simulation(Simulation(expos=10 * u.s), _DEFAULTS, 10 * u.s)
-        _settings_from_simulation(Simulation(), _DEFAULTS, 10 * u.s)
+        _settings_from_simulation(Simulation(expos=10 * u.s), {}, 10 * u.s)
+        _settings_from_simulation(Simulation(), {}, 10 * u.s)
 
 
 def test_the_frame_api_is_exported_from_the_package():
