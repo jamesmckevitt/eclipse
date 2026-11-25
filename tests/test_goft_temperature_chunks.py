@@ -25,18 +25,24 @@ class _Transitions:
 
 
 class _Ion:
-    """Enough of `fiasco.Ion` for `_compute_single_ion`, recording each call."""
+    """Enough of `fiasco.Ion` for `_compute_single_ion`, recording where it works out G."""
 
     temperatures_per_call = []
 
     def __init__(self, name, temperature, abundance=None, hdf5_dbase_root=None):
-        _Ion.temperatures_per_call.append(temperature.size)
         self.temperature = temperature
         self.atomic_number = 26
         self.hdf5_dbase_root = hdf5_dbase_root or "default.h5"
         self.transitions = _Transitions()
 
+    ion_name = "Fe 12"
+
+    @property
+    def ionization_fraction(self):
+        return np.full(self.temperature.size, 0.5)
+
     def contribution_function(self, density):
+        _Ion.temperatures_per_call.append(self.temperature.size)
         logt = np.log10(self.temperature.to_value(u.K))[:, np.newaxis, np.newaxis]
         logn = np.log10(density.to_value(u.cm**-3))[np.newaxis, :, np.newaxis]
         transition = np.arange(1, 4)[np.newaxis, np.newaxis, :]
@@ -90,6 +96,49 @@ def test_fiasco_is_given_no_more_than_a_chunk(fake_fiasco):
     fake_fiasco.temperatures_per_call = []
     compute_goft_fiasco(LINES, n_workers=1)
     assert fake_fiasco.temperatures_per_call == [101]
+
+
+@pytest.mark.parametrize("chunk", [None, 7])
+def test_lines_are_worked_out_only_where_the_ion_exists(fake_fiasco, monkeypatch, chunk):
+    """Where the ionisation fraction is zero the ion is absent, so G is zero and fiasco is
+    not asked for it."""
+    everywhere, logt, _ = compute_goft_fiasco(LINES, n_workers=1, temperature_chunk=chunk)
+
+    def fraction(self):
+        log_t = np.log10(self.temperature.to_value(u.K))
+        return np.where((log_t > 5.5) & (log_t < 7.0), 0.5, 0.0)
+
+    monkeypatch.setattr(fake_fiasco, "ionization_fraction", property(fraction))
+    fake_fiasco.temperatures_per_call = []
+    goft, _, _ = compute_goft_fiasco(LINES, n_workers=1, temperature_chunk=chunk)
+    present = (logt > 5.5) & (logt < 7.0)
+    assert sum(fake_fiasco.temperatures_per_call) == present.sum()
+    for line in LINES:
+        assert np.array_equal(goft[line]["g_tn"][:, present], everywhere[line]["g_tn"][:, present])
+        assert not goft[line]["g_tn"][:, ~present].any()
+
+
+def test_where_the_rates_stop_and_dropped_levels_are_reported(fake_fiasco, monkeypatch,
+                                                                 capsys):
+    """The single-ion model is used from the first temperature beyond the level-resolved
+    rates, found across chunks, and levels left out are counted."""
+    from eclipse import band as band_module
+
+    end = 10 ** 7.0 * (1 - 1e-9)
+
+    def contribution(ion, density, dropped, **kwargs):
+        temperature = ion.temperature.to_value(u.K)
+        if kwargs.get("use_two_ion_model", True) and temperature.max() >= end:
+            raise ValueError("A value in x_new is above the interpolation range.")
+        dropped.update({k: 1 for k in range(temperature.size)})
+        return ion.contribution_function(density)
+
+    monkeypatch.setattr(band_module, "_contribution_function", contribution)
+    goft, _, _ = compute_goft_fiasco(LINES, n_workers=1, temperature_chunk=7)
+    out = capsys.readouterr().out
+    assert "from log T 7.00 its level populations are worked out with fiasco's single-ion" in out
+    assert "Fe 12: levels nothing populates were left out at 101 temperatures" in out
+    assert all(np.isfinite(goft[line]["g_tn"]).all() for line in LINES)
 
 
 @pytest.mark.parametrize("chunk", [0, -3])
