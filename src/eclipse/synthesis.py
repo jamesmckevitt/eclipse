@@ -4,6 +4,7 @@ import re
 import argparse
 import warnings
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Tuple, List, Optional, Union
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -121,19 +122,61 @@ def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.n
     return np.flatnonzero(distance == distance.min()), how
 
 
+def _ion_part(elem: str, stage: int, temperature_K: np.ndarray, densities, abundance: str,
+              lines, ion_kwargs: dict, step: int):
+    """
+    G(T, N) of the transitions that could be one ion's requested lines, on part of the grid.
+
+    fiasco is called on `step` temperatures at a time, and only the
+    candidate transitions are kept. Returns the candidates of each line, a
+    list per candidate of G on each chunk, (temperature, density), the
+    wavelengths and whether they are observed, the atomic number and the
+    database.
+    """
+    import fiasco
+
+    g_parts = {}
+    for start in range(0, len(temperature_K), step):
+        ion = fiasco.Ion(f'{elem} {stage}', temperature_K[start:start + step] * u.K,
+                         abundance=abundance, **ion_kwargs)
+
+        g = ion.contribution_function(densities)
+        pe_ratio = ion.proton_electron_ratio
+        g = g * pe_ratio[:, np.newaxis, np.newaxis]
+
+        # The transitions do not depend on temperature, so the lines are
+        # matched once, on the first chunk.
+        if start == 0:
+            bound = ion.transitions.is_bound_bound
+            bb_wl = ion.transitions.wavelength[bound]
+            # CHIANTI stores theoretical wavelengths as negative numbers;
+            # fiasco gives them positive and marks observed ones with this
+            # flag.
+            observed = np.asarray(ion.transitions.is_observed[bound])
+            matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
+                       for line_name, _ in lines}
+            g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
+                       for idx in indices}
+        for (line_name, idx), parts in g_parts.items():
+            parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+        del g
+    return matches, g_parts, bb_wl, observed, int(ion.atomic_number), str(ion.hdf5_dbase_root)
+
+
 def _compute_single_ion(args):
     """G(T, N) of the requested lines of one ion, for a worker process.
 
     fiasco is imported here so each spawned process has its own HDF5
     handles. With `temperature_chunk`, fiasco is called on that many
     temperatures at a time and only the requested lines are kept, so memory
-    use is that of one chunk."""
+    use is that of one chunk. Otherwise `n_threads` threads can each take
+    part of the temperatures."""
 
     import fiasco
     import logging
 
     (elem, stage, temperature_K, densities_cm3, abundance, lines,
-     hdf5_dbase_root, temperature_chunk) = args
+     hdf5_dbase_root, temperature_chunk, n_threads) = args
     densities = densities_cm3 / u.cm**3
     n_temperatures = len(temperature_K)
     step = n_temperatures if temperature_chunk is None else temperature_chunk
@@ -151,44 +194,35 @@ def _compute_single_ion(args):
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
 
-    g_parts = {}
     try:
-        with proton_electron_ratio_once(temperature_K):
-            for start in range(0, n_temperatures, step):
-                ion = fiasco.Ion(f'{elem} {stage}',
-                                 temperature_K[start:start + step] * u.K,
-                                 abundance=abundance, **ion_kwargs)
-
-                g = ion.contribution_function(densities)
-                pe_ratio = ion.proton_electron_ratio
-                g = g * pe_ratio[:, np.newaxis, np.newaxis]
-
-                # The transitions do not depend on temperature, so the lines are
-                # matched once, on the first chunk.
-                if start == 0:
-                    bound = ion.transitions.is_bound_bound
-                    bb_wl = ion.transitions.wavelength[bound]
-                    # CHIANTI stores theoretical wavelengths as negative numbers;
-                    # fiasco gives them positive and marks observed ones with this
-                    # flag.
-                    observed = np.asarray(ion.transitions.is_observed[bound])
-                    matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
-                               for line_name, _ in lines}
-                    g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
-                               for idx in indices}
-                for (line_name, idx), parts in g_parts.items():
-                    parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
-                del g
+        with proton_electron_ratio_once(temperature_K) as shared:
+            # Without a shared ratio each thread would work it out again.
+            if n_threads > 1 and shared:
+                # The ratio of protons to electrons is worked out once, here,
+                # and the threads share it.
+                fiasco.Ion(f'{elem} {stage}', temperature_K * u.K, abundance=abundance,
+                           **ion_kwargs).proton_electron_ratio
+                spans = np.array_split(np.arange(n_temperatures), n_threads)
+                with ThreadPoolExecutor(n_threads) as pool:
+                    parts = list(pool.map(
+                        lambda span: _ion_part(elem, stage, temperature_K[span], densities,
+                                               abundance, lines, ion_kwargs, span.size),
+                        spans))
+            else:
+                parts = [_ion_part(elem, stage, temperature_K, densities, abundance, lines,
+                                   ion_kwargs, step)]
     finally:
         fiasco_logger.setLevel(prev_level)
 
+    matches, _, bb_wl, observed, atomic_number, database = parts[0]
     results = {}
     for line_name, target_wl_aa in lines:
         target_wl = target_wl_aa * u.AA
         indices, how = matches[line_name]
         tables = {}
         for idx in indices:
-            g_tn = np.concatenate(g_parts[(line_name, int(idx))]).T
+            g_tn = np.concatenate([g for _, g_parts, *_ in parts
+                                   for g in g_parts[(line_name, int(idx))]]).T
             tables[int(idx)] = np.nan_to_num(g_tn, nan=0.0, posinf=0.0, neginf=0.0)
         # Of the transitions at one wavelength, take the brightest.
         idx = max(tables, key=lambda i: tables[i].max())
@@ -196,7 +230,7 @@ def _compute_single_ion(args):
 
         results[line_name] = {
             "g_tn": tables[idx],
-            "atom": int(ion.atomic_number),
+            "atom": atomic_number,
             "ion": stage,
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
@@ -206,7 +240,7 @@ def _compute_single_ion(args):
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
             # Database the contribution functions came from; fiasco fills in
             # the fiascorc default if none was chosen.
-            "hdf5_dbase_root": str(ion.hdf5_dbase_root),
+            "hdf5_dbase_root": database,
         }
     return results
 
@@ -243,6 +277,12 @@ def _parse_line_name(name: str) -> Tuple[str, int, float]:
                          f"Angstrom.")
     return elem, stage, wavelength
 
+# Threads sharing one ion's temperatures. fiasco holds Python's lock for much
+# of its work, so beyond about 8 threads an ion takes longer, not less.
+_MOST_THREADS_PER_ION = 8
+# Fewest temperatures a thread takes, so that each has a fair share of work.
+_LEAST_TEMPERATURES_PER_THREAD = 8
+
 # Default grids for G(T, n_e): log10 T from 4 to 9 in steps of 0.05, and
 # log10 n_e from 7 to 13 in steps of 0.3. density_grid extends the density
 # grid on the same points as far as an atmosphere needs.
@@ -272,7 +312,8 @@ def compute_goft_fiasco(
     not the name's. G includes the proton-to-electron ratio, so it is per
     emission measure n_e^2 dh. With two or more ions and workers, the ions
     run in spawned processes, so a calling script needs an
-    `if __name__ == "__main__":` guard.
+    `if __name__ == "__main__":` guard. Workers beyond one per ion become
+    threads, up to 8 for each ion, each taking part of its temperatures.
 
     Parameters
     ----------
@@ -291,15 +332,17 @@ def compute_goft_fiasco(
     precision : type, optional
         `np.float32` or `np.float64` (default).
     n_workers : int, optional
-        Number of worker processes, each computing one ion at a time, capped
-        at the number of ions. Default 0 uses every CPU this process may use
-        (as allocated by SLURM), up to that cap.
+        Number of workers. Two or more ions are shared between processes,
+        and the workers beyond one per ion become threads sharing an ion's
+        temperatures. Default 0 uses every CPU this process may use (as
+        allocated by SLURM).
     hdf5_dbase_root : str or Path, optional
         CHIANTI database to read. Default is fiasco's, set in
         `~/.fiasco/fiascorc`.
     temperature_chunk : int, optional
-        Temperatures passed to fiasco at a time, to use less memory. The
-        result is the same. Default None (the whole grid).
+        Temperatures passed to fiasco at a time, to use less memory, with one
+        thread for each ion. The result is the same. Default None (the whole
+        grid).
 
     Returns
     -------
@@ -340,11 +383,22 @@ def compute_goft_fiasco(
         elem, stage, wl = _parse_line_name(name)
         ion_lines.setdefault((elem, stage), []).append((name, wl))
 
+    # Workers beyond one per ion become threads, each taking part of an
+    # ion's temperatures.
+    n_ions = len(ion_lines)
+    if n_workers <= 0:
+        n_workers = usable_cpus()
+    n_threads = max(1, min(n_workers // max(n_ions, 1), _MOST_THREADS_PER_ION,
+                           nT // _LEAST_TEMPERATURES_PER_THREAD))
+    # A chunk smaller than the grid limits the memory, so it keeps one thread.
+    if temperature_chunk is not None and temperature_chunk < nT:
+        n_threads = 1
+
     # Build worker arguments (all picklable plain types / numpy arrays)
     dbase_root = None if hdf5_dbase_root is None else str(hdf5_dbase_root)
     worker_args = [
         (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root,
-         temperature_chunk)
+         temperature_chunk, n_threads)
         for (elem, stage), lines in ion_lines.items()
     ]
     if temperature_chunk is not None and temperature_chunk < nT:
@@ -354,19 +408,19 @@ def compute_goft_fiasco(
     _offer_database_build(dbase_root)
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
-    n_ions = len(worker_args)
-    if n_workers <= 0:
-        n_workers = usable_cpus()
     use_parallel = n_workers > 1 and n_ions > 1
 
     if use_parallel:
         import multiprocessing as mp
         pool_size = min(n_workers, n_ions)
         ctx = mp.get_context("spawn")
-        print(f"  Parallel: {pool_size} workers for {n_ions} ions")
+        print(f"  Parallel: {pool_size} workers for {n_ions} ions"
+              + (f", each with {n_threads} threads" if n_threads > 1 else ""))
         with ctx.Pool(pool_size) as pool:
             all_results = pool.map(_compute_single_ion, worker_args)
     else:
+        if n_threads > 1:
+            print(f"  {n_threads} threads share the ion's temperatures")
         all_results = [_compute_single_ion(a) for a in tqdm(
             worker_args, desc="Computing G(T,N)", unit="ion"
         )]
@@ -1986,8 +2040,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     computing = parser.add_argument_group("Computing")
     computing.add_argument("--n-workers", type=int, default=0,
-                           help="Number of parallel workers for fiasco G(T,N) "
-                                "computation (0 = all CPUs, default: 0)")
+                           help="Number of workers for fiasco G(T,N): processes for "
+                                "the ions, and threads within each "
+                                "(0 = all CPUs, default: 0)")
     computing.add_argument("--goft-temperature-chunk", type=int, default=None,
                            help="Compute G(T,N) this many temperatures at a time "
                                 "rather than the whole grid at once. This lowers "

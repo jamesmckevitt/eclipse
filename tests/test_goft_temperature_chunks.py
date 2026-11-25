@@ -61,8 +61,14 @@ def fake_fiasco(tmp_path, monkeypatch):
     util = types.ModuleType("fiasco.util")
     util.check_database = lambda hdf5_dbase_root, **kwargs: None
     module.util = util
+    # The ratio of protons to electrons, which proton_electron_ratio_once shares.
+    ions = types.ModuleType("fiasco.ions")
+    ions.proton_electron_ratio = lambda temperature, **kwargs: (
+        0.8 + 0.01 * np.log10(temperature.to_value(u.K))) * u.dimensionless_unscaled
+    module.ions = ions
     monkeypatch.setitem(sys.modules, "fiasco", module)
     monkeypatch.setitem(sys.modules, "fiasco.util", util)
+    monkeypatch.setitem(sys.modules, "fiasco.ions", ions)
     _Ion.temperatures_per_call = []
     return _Ion
 
@@ -89,6 +95,36 @@ def test_fiasco_is_given_no_more_than_a_chunk(fake_fiasco):
 
     fake_fiasco.temperatures_per_call = []
     compute_goft_fiasco(LINES, n_workers=1)
+    assert fake_fiasco.temperatures_per_call == [101]
+
+
+@pytest.mark.parametrize("n_workers, sizes", [(6, [17] * 5 + [16]), (100, [13] * 5 + [12] * 3)])
+def test_an_ions_temperatures_shared_between_threads_give_what_one_thread_gives(
+        fake_fiasco, n_workers, sizes):
+    """Workers beyond one per ion are threads, at most 8, each with part of the temperatures."""
+    whole, _, _ = compute_goft_fiasco(LINES, n_workers=1)
+    fake_fiasco.temperatures_per_call = []
+    shared, _, _ = compute_goft_fiasco(LINES, n_workers=n_workers)
+    # The first Ion, on the whole grid, works out the ratio of protons to electrons once.
+    assert fake_fiasco.temperatures_per_call[0] == 101
+    assert sorted(fake_fiasco.temperatures_per_call[1:]) == sorted(sizes)
+    for line in LINES:
+        assert np.array_equal(shared[line]["g_tn"], whole[line]["g_tn"])
+
+    # A chunk size limits the memory, so the ion keeps to one thread, as it does
+    # without a shared ratio, which each thread would work out again.
+    fake_fiasco.temperatures_per_call = []
+    compute_goft_fiasco(LINES, n_workers=n_workers, temperature_chunk=7)
+    assert max(fake_fiasco.temperatures_per_call) == 7
+    assert sum(fake_fiasco.temperatures_per_call) == 101
+    fake_fiasco.temperatures_per_call = []
+    compute_goft_fiasco(LINES, n_workers=n_workers, temperature_chunk=500)
+    assert sorted(fake_fiasco.temperatures_per_call[1:]) == sorted(sizes)
+
+
+def test_an_ion_keeps_one_thread_without_a_shared_ratio(fake_fiasco, monkeypatch):
+    monkeypatch.delattr(sys.modules["fiasco.ions"], "proton_electron_ratio")
+    compute_goft_fiasco(LINES, n_workers=6)
     assert fake_fiasco.temperatures_per_call == [101]
 
 
