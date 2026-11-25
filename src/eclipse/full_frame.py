@@ -777,8 +777,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                                             ccd)
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
-                     settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
-                               "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
+                     settings={"psf": bool(psf), "spectral_psf": spectral_psf,
+                               "noise": bool(noise), "psf_boundary": psf_boundary,
+                               "slit_mask": bool(slit_mask),
                                "continuum": any(is_continuum(name) or name == "continuum"
                                                 for name in scene.names),
                                "spectra": list(scene.names),
