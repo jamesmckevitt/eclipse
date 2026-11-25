@@ -5,9 +5,11 @@ Run from the repository with `python tools/docs_gallery.py`, or give the
 scripts to run, such as `python tools/docs_gallery.py dark_current`.
 """
 
+import contextlib
 import pathlib
 import runpy
 import sys
+import tempfile
 
 import matplotlib
 
@@ -23,7 +25,9 @@ def main(names: list[str]) -> None:
                or sorted(GALLERY.glob("*.py")))
     for script in scripts:
         plt.close("all")
-        runpy.run_path(str(script), run_name="__main__")
+        # Some scripts write files, which go in a scratch folder.
+        with tempfile.TemporaryDirectory() as scratch, contextlib.chdir(scratch):
+            runpy.run_path(str(script), run_name="__main__")
         plt.gcf().savefig(GALLERY / "images" / f"{script.stem}.png", dpi=150)
         print(f"{script.stem}: saved")
 
