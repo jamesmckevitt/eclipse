@@ -567,6 +567,9 @@ def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame
 
     with h5py.File(write_full_frame(frame, tmp_path / "frame.h5")) as f:
         assert f.attrs["psf"] == np.False_ and f.attrs["noise"] == np.False_
+    with pytest.raises(ValueError, match="spectral_psf must be"):
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
+                       psf=False, spectral_psf=None)
 
 
 def test_the_signature_keeps_its_plain_defaults():
