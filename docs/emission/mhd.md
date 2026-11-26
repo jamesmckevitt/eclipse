@@ -103,7 +103,7 @@ synthesise-spectra --atmosphere ./data/atmosphere.h5 --lines Fe12_195.1190 \
 - `--abundance`: The CHIANTI abundance set (default: `sun_coronal_2021_chianti`)
 - `--electron-density`, `--pressure`: With `--emission-measure`, the density or electron pressure to take the contribution functions at
 - `--continuum`: Also synthesise the continuum (default: off)
-- `--n-workers`: Processes for the contribution functions (default: `0`, every CPU)
+- `--n-workers`: Workers for the contribution functions, as processes for the ions and threads within each (default: `0`, every CPU)
 - `--hdf5-dbase-root`: Another CHIANTI database for fiasco to read
 - `--goft-temperature-chunk`: Temperatures to compute at a time, to use less memory
 
