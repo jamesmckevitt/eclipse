@@ -50,7 +50,7 @@ An [atmosphere file](../files/atmosphere.md) holds the simulation's temperature,
 
 ### Electron density
 
-An `electron_density` in the file is used as it is. Otherwise the mass density is divided by the mass per electron, worked out from `--abundance` for a fully ionised plasma (about 1.16 u for coronal abundances), or given with `--mass-per-electron`.
+An `electron_density` in the file is used as it is. A `proton_density` is divided by CHIANTI's ratio of protons to electrons at each cell's temperature, the ratio the contribution functions use. Otherwise the mass density is divided by the mass per electron, worked out from `--abundance` for a fully ionised plasma (about 1.16 u for coronal abundances), or given with `--mass-per-electron`.
 
 ## Cropping and downsampling
 

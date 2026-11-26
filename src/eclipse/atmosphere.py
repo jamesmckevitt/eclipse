@@ -43,6 +43,7 @@ __all__ = [
     "mass_per_electron",
     "mass_per_electron_from_abundances",
     "require_mass_per_electron",
+    "electron_density_from_protons",
 ]
 
 FORMAT_NAME = "eclipse-atmosphere"
@@ -54,12 +55,15 @@ NUMPY_AXIS = {"x": 2, "y": 1, "z": 0}
 CTYPE = {"x": "SOLX", "y": "SOLY", "z": "SOLZ"}
 EDGES = {axis: f"{axis}_edges" for axis in AXES}
 
-CUBES = ("temperature", "mass_density", "electron_density",
+CUBES = ("temperature", "mass_density", "electron_density", "proton_density",
          "velocity_x", "velocity_y", "velocity_z")
+# Densities an atmosphere can give, at least one of them.
+DENSITIES = ("mass_density", "electron_density", "proton_density")
 UNITS = {
     "temperature": u.K,
     "mass_density": u.g / u.cm**3,
     "electron_density": u.cm**-3,
+    "proton_density": u.cm**-3,
     "velocity_x": u.cm / u.s,
     "velocity_y": u.cm / u.s,
     "velocity_z": u.cm / u.s,
@@ -119,8 +123,8 @@ class Atmosphere:
 
     Every cube is `(nz, ny, nx)`, and each edge array is one longer than the
     cubes along its axis. Velocities are positive towards increasing
-    coordinate. If only the mass density is given, the synthesis derives the
-    electron density from it.
+    coordinate. Without an electron density, the synthesis works it out from
+    the proton density, or else from the mass density.
 
     Parameters
     ----------
@@ -129,7 +133,7 @@ class Atmosphere:
     x_edges, y_edges, z_edges : u.Quantity
         Cell boundaries along each axis, 1D and increasing.
     mass_density, electron_density : u.Quantity, optional
-        At least one is needed.
+        At least one of these or `proton_density` is needed.
     velocity_x, velocity_y, velocity_z : u.Quantity, optional
         Velocity components. The synthesis needs the one along its line of
         sight.
@@ -137,6 +141,9 @@ class Atmosphere:
         Simulation time of this snapshot.
     source : str, optional
         Free text naming the simulation, kept in the file and the results.
+    proton_density : u.Quantity, optional
+        Density of protons, which is the hydrogen density where hydrogen is
+        ionised.
     """
 
     temperature: u.Quantity
@@ -150,6 +157,7 @@ class Atmosphere:
     velocity_z: Optional[u.Quantity] = None
     time: Optional[u.Quantity] = None
     source: str = ""
+    proton_density: Optional[u.Quantity] = None
 
     def __post_init__(self):
         if self.temperature is None:
@@ -173,13 +181,13 @@ class Atmosphere:
         if np.any(self.temperature.value <= 0):
             raise ValueError("temperature must be above zero in every cell, got "
                              f"{self.temperature.min()} at least once.")
-        for name in ("mass_density", "electron_density"):
+        for name in DENSITIES:
             cube = getattr(self, name)
             if cube is not None and np.any(cube.value < 0):
                 raise ValueError(f"{name} cannot be negative, got {cube.min()} at least once.")
-        if self.mass_density is None and self.electron_density is None:
-            raise ValueError("An atmosphere needs a mass_density or an "
-                             "electron_density.")
+        if all(getattr(self, name) is None for name in DENSITIES):
+            raise ValueError("An atmosphere needs a mass_density, an electron_density or a "
+                             "proton_density.")
         if self.time is not None:
             checked_quantity(self.time, "time", (UNITS["time"],), ndim=0)
         if not isinstance(self.source, str):
@@ -231,16 +239,22 @@ class Atmosphere:
     # ------------------------------------------------------------------
     # Density
     # ------------------------------------------------------------------
-    def electron_density_from(self, mass_per_electron_amu: float) -> u.Quantity:
+    def electron_density_from(self, mass_per_electron_amu: float, *,
+                              abundance: str = "sun_coronal_2021_chianti",
+                              hdf5_dbase_root: Optional[str] = None) -> u.Quantity:
         """
-        Electron density, derived from the mass density if not given.
+        Electron density, worked out from the proton or mass density if not given.
 
         Parameters
         ----------
         mass_per_electron_amu : float
             Plasma mass per free electron, in atomic mass units, about 1.16
-            for coronal abundances. Not used if the atmosphere has an
-            electron density.
+            for coronal abundances. Used only with the mass density alone.
+        abundance : str, optional
+            CHIANTI abundance set, for the proton density. Default
+            `"sun_coronal_2021_chianti"`.
+        hdf5_dbase_root : str, optional
+            fiasco database, for the proton density. Default fiasco's.
 
         Returns
         -------
@@ -249,6 +263,10 @@ class Atmosphere:
         """
         if self.electron_density is not None:
             return self.electron_density
+        if self.proton_density is not None:
+            return electron_density_from_protons(
+                self.temperature.to_value(u.K), self.proton_density.to_value(u.cm**-3),
+                abundance, hdf5_dbase_root) * u.cm**-3
         require_mass_per_electron(mass_per_electron_amu)
         return (self.mass_density / (mass_per_electron_amu * const.u)).to(u.cm**-3)
 
@@ -366,7 +384,7 @@ def _describe(edges: Dict[str, u.Quantity], cubes: Sequence[str],
                          f"to {thickness.max():.4f}")
         else:
             lines.append(f"  {axis}: {extent}, cells of {spacing:.4f}")
-    densities = [name for name in ("mass_density", "electron_density") if name in cubes]
+    densities = [name for name in DENSITIES if name in cubes]
     lines.append(f"  Density: {' and '.join(densities)}")
     velocities = [axis for axis in AXES if f"velocity_{axis}" in cubes]
     lines.append(f"  Velocities: {', '.join(velocities) if velocities else 'none'}")
@@ -532,7 +550,7 @@ def read_atmosphere(path: str | Path,
             fields[EDGES["x"]] = fields[EDGES["x"]][first:last + 1]
             columns = slice(first, last)
         fields["temperature"] = _read_dataset(f, "temperature", columns)
-        for name in ("mass_density", "electron_density"):
+        for name in DENSITIES:
             if name in f:
                 fields[name] = _read_dataset(f, name, columns)
         if "time" in f:
@@ -613,9 +631,9 @@ def describe_atmosphere_file(path: str | Path) -> str:
                     f"such as {UNITS[name]}, got {unit}.")
         if "temperature" not in cubes:
             raise ValueError(f"{path} has no 'temperature' dataset.")
-        if "mass_density" not in cubes and "electron_density" not in cubes:
+        if not any(name in cubes for name in DENSITIES):
             raise ValueError(f"{path} has no density: an atmosphere needs a "
-                             f"mass_density or an electron_density.")
+                             f"mass_density, an electron_density or a proton_density.")
         time = _read_dataset(f, "time") if "time" in f else None
         if time is not None:
             try:
@@ -825,6 +843,67 @@ def mass_per_electron(abundance: str, hdf5_dbase_root: Optional[str] = None) -> 
         raise ValueError(f"No element has an abundance in the set "
                          f"{abundance!r}; is the name right?")
     return mass_per_electron_from_abundances(abundances)
+
+
+# Temperatures fiasco's ratio of protons to electrons is taken at. They
+# include CHIANTI's ionisation balance points, log T 4 to 9 in steps of 0.05,
+# between which fiasco interpolates the ratio linearly, so interpolating
+# between these gives fiasco's own values.
+_RATIO_TEMPERATURES = np.logspace(4.0, 9.0, 1001)
+
+
+@lru_cache(maxsize=None)
+def _proton_electron_ratios(abundance: str, hdf5_dbase_root: Optional[str] = None) -> np.ndarray:
+    """fiasco's ratio of proton to electron density at `_RATIO_TEMPERATURES`."""
+    import logging
+
+    import fiasco
+
+    _offer_database_build(hdf5_dbase_root)
+    kwargs = {"abundance": abundance}
+    if hdf5_dbase_root is not None:
+        kwargs["hdf5_dbase_root"] = hdf5_dbase_root
+    # fiasco warns about each element the abundance set leaves out.
+    logger = logging.getLogger("fiasco")
+    level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        ratio = fiasco.proton_electron_ratio(_RATIO_TEMPERATURES * u.K, **kwargs)
+    finally:
+        logger.setLevel(level)
+    return np.asarray(ratio.to_value(u.dimensionless_unscaled), dtype=float)
+
+
+def electron_density_from_protons(temperature: np.ndarray, proton_density: np.ndarray,
+                                  abundance: str = "sun_coronal_2021_chianti",
+                                  hdf5_dbase_root: Optional[str] = None) -> np.ndarray:
+    """
+    Electron density from the proton density, as the contribution functions take it.
+
+    The contribution functions include fiasco's ratio of proton to electron
+    density, from CHIANTI's ionisation balance and the abundances, so the
+    electron density is the proton density divided by that ratio at each
+    cell's temperature. Outside log T 4 to 9 the ratio at the nearer end is
+    used, as fiasco does.
+
+    Parameters
+    ----------
+    temperature : np.ndarray
+        Temperature of each cell, in K.
+    proton_density : np.ndarray
+        Proton density of each cell, in cm-3, same shape as `temperature`.
+    abundance : str, optional
+        CHIANTI abundance set. Default `"sun_coronal_2021_chianti"`.
+    hdf5_dbase_root : str, optional
+        fiasco database. Default fiasco's.
+
+    Returns
+    -------
+    np.ndarray
+        Electron density in cm-3, same shape as `temperature`.
+    """
+    ratio = _proton_electron_ratios(abundance, hdf5_dbase_root)
+    return np.asarray(proton_density) / np.interp(temperature, _RATIO_TEMPERATURES, ratio)
 
 
 def build_parser() -> argparse.ArgumentParser:

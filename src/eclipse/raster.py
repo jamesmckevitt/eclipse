@@ -23,8 +23,8 @@ import psutil
 from astropy.wcs import WCS
 from ndcube import NDCube
 
-from .atmosphere import (Atmosphere, read_atmosphere, read_edges, read_time,
-                         require_mass_per_electron)
+from .atmosphere import (Atmosphere, electron_density_from_protons, read_atmosphere,
+                         read_edges, read_time, require_mass_per_electron)
 from .data_processing import sum_line_cubes
 from .synthesis import (
     _LOGT_MAX,
@@ -828,6 +828,10 @@ class RasterSynthesiser(_SlitRaster):
         temperature = strip.temperature.astype(precision).to_value(u.K)
         if strip.electron_density is not None:
             electron_density = strip.electron_density.astype(precision).to_value(u.cm**-3)
+        elif strip.proton_density is not None:
+            electron_density = electron_density_from_protons(
+                temperature, strip.proton_density.astype(precision).to_value(u.cm**-3),
+                settings.abundance, settings.hdf5_dbase_root).astype(precision)
         else:
             amu, _ = self._mass_per_electron_amu()
             electron_density = (strip.mass_density.astype(precision)

@@ -28,7 +28,8 @@ from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
 from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
                         continuum_windows)
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
-                         mass_per_electron, read_atmosphere, require_mass_per_electron)
+                         electron_density_from_protons, mass_per_electron, read_atmosphere,
+                         require_mass_per_electron)
 # Deprecated MURaM file readers and dynamic mode, importable from here.
 from .deprecated import (_dynamic_mode_cubes, apply_cube_cropping,  # noqa: F401
                          build_composite_cubes_mhd, compute_slice_timestep_mapping_mhd,
@@ -604,8 +605,8 @@ def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, pr
     `_log_cubes`, one slab of the first axis at a time.
 
     The electron density, which can be float64, is then never held for the
-    whole box. `to_electron_density` turns a slab of `density` into
-    electron density in cm^-3.
+    whole box. `to_electron_density` turns a slab of `temperature` and of
+    `density` into electron density in cm^-3.
     """
     logT_cube = np.empty(temperature.shape, dtype=precision)
     logN_cube = np.empty(temperature.shape, dtype=precision)
@@ -615,7 +616,7 @@ def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, pr
     for first in range(0, temperature.shape[0], slab):
         cut = slice(first, first + slab)
         logT_cube[cut], logN_cube[cut] = _log_cubes(
-            temperature[cut], to_electron_density(density[cut]), precision)
+            temperature[cut], to_electron_density(temperature[cut], density[cut]), precision)
     return logT_cube, logN_cube
 
 
@@ -2362,9 +2363,9 @@ def main(args=None) -> None:
     write_pickle = _writes_pickle(args.output_name)
 
     # Set by whichever route reads the atmosphere. Only an atmosphere file
-    # can give the electron density directly, or a size for each cell along
+    # can give the electron or proton density, or a size for each cell along
     # the line of sight.
-    ne_values = None
+    ne_values = np_values = None
     sky = None
     los_thickness = None
     atmosphere_metadata = None
@@ -2459,6 +2460,9 @@ def main(args=None) -> None:
         if atmosphere.electron_density is not None:
             ne_values = atmosphere.electron_density.astype(precision, copy=False).to_value(
                 u.cm**-3)
+        elif atmosphere.proton_density is not None:
+            np_values = atmosphere.proton_density.astype(precision, copy=False).to_value(
+                u.cm**-3)
         los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
         if towards is not None:
@@ -2478,30 +2482,42 @@ def main(args=None) -> None:
             "shape": atmosphere.shape,
             "nonuniform_axes": atmosphere.nonuniform_axes(),
             "electron_density_given": atmosphere.electron_density is not None,
+            "proton_density_given": atmosphere.proton_density is not None,
         }
 
     # ---------------- Common processing (both modes) -----------------
     
     vel_grid = velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
-    # Electron density from the atmosphere if given, otherwise the mass
-    # density divided by the mass per free electron.
-    if ne_values is None:
+    # Electron density from the atmosphere if given, otherwise from the
+    # proton density, otherwise the mass density divided by the mass per
+    # free electron.
+    if ne_values is not None:
+        logT_cube, logN_cube = _log_cubes_by_slab(
+            temp_cube.data, ne_values, lambda temperature, electrons: electrons, precision)
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
+        print("Electron density taken from the atmosphere")
+    elif np_values is not None:
+        database = getattr(args, "hdf5_dbase_root", None)
+        logT_cube, logN_cube = _log_cubes_by_slab(
+            temp_cube.data, np_values,
+            lambda temperature, protons: electron_density_from_protons(
+                temperature, protons, args.abundance, database), precision)
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the proton density"
+        print(f"Electron density from the proton density, with fiasco's ratio of the two "
+              f"for {args.abundance} abundances")
+    else:
         mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
         print(f"Electron density from the mass density with "
               f"{mass_per_electron_amu:.4f} u per electron ({mass_per_electron_source})")
         per_electron = mass_per_electron_amu * const.u
         logT_cube, logN_cube = _log_cubes_by_slab(
-            temp_cube.data, rho, lambda mass: (mass / per_electron).to_value(u.cm**-3),
-            precision)
-    else:
-        logT_cube, logN_cube = _log_cubes_by_slab(temp_cube.data, ne_values,
-                                                  lambda electrons: electrons, precision)
-        mass_per_electron_amu = None
-        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
-        print("Electron density taken from the atmosphere")
+            temp_cube.data, rho,
+            lambda temperature, mass: (mass / per_electron).to_value(u.cm**-3), precision)
     # Free the densities once their logs are taken.
-    rho = ne_values = atmosphere = None
+    rho = ne_values = np_values = atmosphere = None
 
     # The Doppler shift needs the velocity away from the observer, which
     # vel_cube already holds along a slanted line of sight.
