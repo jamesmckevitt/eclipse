@@ -614,7 +614,8 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         `Simulation`.
     ValueError
         Among others: if `exposure` or `slit_width` is not above zero,
-        `psf_boundary` is not `"replicate"` or `"zero"`, `slit_mask` is on
+        `psf_boundary` is not `"replicate"` or `"zero"`, `spectral_psf` is
+        not `"quadrature"` or `"convolution"`, `slit_mask` is on
         and the telescope does not give the slit's openings for this slit
         width, the slit is off the synthesis, or `focal_plane` does not
         match `det` or has a tilted slit image. With `sim`, if an argument
@@ -660,6 +661,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         psf_boundary, slit_mask = settings["psf_boundary"], settings["slit_mask"]
     if not (isinstance(psf_boundary, str) and psf_boundary in ("replicate", "zero")):
         raise ValueError(f"psf_boundary must be 'replicate' or 'zero', got {psf_boundary!r}.")
+    if not (isinstance(spectral_psf, str) and spectral_psf in ("quadrature", "convolution")):
+        raise ValueError(f"spectral_psf must be 'quadrature' or 'convolution', got "
+                         f"{spectral_psf!r}.")
     extend = psf_boundary == "replicate"
     if slit_mask not in (True, False):
         raise ValueError(f"slit_mask must be True or False, got {slit_mask!r}.")
@@ -777,8 +781,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                                             ccd)
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
-                     settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
-                               "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
+                     settings={"psf": bool(psf), "spectral_psf": spectral_psf,
+                               "noise": bool(noise), "psf_boundary": psf_boundary,
+                               "slit_mask": bool(slit_mask),
                                "continuum": any(is_continuum(name) or name == "continuum"
                                                 for name in scene.names),
                                "spectra": list(scene.names),

@@ -556,14 +556,20 @@ def test_a_frame_from_a_non_default_simulation_matches_the_keyword_arguments(
     _same_frames(from_sim, from_keywords)
 
 
-def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame):
-    """`psf=None` is taken as false and recorded as given."""
+def test_psf_none_gives_the_frame_without_the_psf(uniform_synthesis, sharp_frame, tmp_path):
+    """`psf=None` and `noise=None` are taken as false, so the frame can be written."""
     frame = full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
                            telescope=Telescope_EUVST(resolution_budget="none"), psf=None,
-                           noise=False, n_workers=1)
-    assert frame.settings["psf"] is None
-    frame.settings["psf"] = False
+                           noise=None, n_workers=1)
+    assert frame.settings["psf"] is False and frame.settings["noise"] is False
     _same_frames(frame, sharp_frame)
+    import h5py
+
+    with h5py.File(write_full_frame(frame, tmp_path / "frame.h5")) as f:
+        assert f.attrs["psf"] == np.False_ and f.attrs["noise"] == np.False_
+    with pytest.raises(ValueError, match="spectral_psf must be"):
+        full_ccd_frame(uniform_synthesis, slit_position=0.3 * u.Mm, exposure=1 * u.s,
+                       psf=False, spectral_psf=None)
 
 
 def test_the_signature_keeps_its_plain_defaults():
