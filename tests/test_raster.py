@@ -890,6 +890,30 @@ def test_a_series_given_as_mass_density_is_seen_as_its_electron_density(tmp_path
     assert np.max(np.abs(found.data - expected.data)) <= 1e-12 * np.max(expected.data)
 
 
+def test_a_series_given_as_proton_density_is_seen_as_its_electron_density(tmp_path, flat_goft,
+                                                                          monkeypatch):
+    """The electron density is the proton density over the ratio of protons to electrons."""
+    from eclipse import atmosphere as atmosphere_module
+
+    monkeypatch.setattr(atmosphere_module, "_proton_electron_ratios",
+                        lambda abundance, hdf5_dbase_root=None: np.full(
+                            atmosphere_module._RATIO_TEMPERATURES.shape, 0.8))
+    electron = [_snapshot(t, density_scale=1.0 + t / 10, columns={5: (2.0, -10.0)})
+                for t in (0.0, 10.0)]
+    protons = [Atmosphere(temperature=a.temperature, velocity_z=a.velocity_z, time=a.time,
+                          proton_density=0.8 * a.electron_density,
+                          x_edges=a.x_edges, y_edges=a.y_edges, z_edges=a.z_edges)
+               for a in electron]
+    plan = RasterPlan(start=2 * u.s, steps=3)
+    (tmp_path / "ne").mkdir()
+    (tmp_path / "np").mkdir()
+    expected = RasterSynthesiser(AtmosphereSeries(_series(tmp_path / "ne", electron)),
+                                 _settings()).summed_cube(plan, 0.4 * u.arcsec, 5 * u.s, LINE)
+    found = RasterSynthesiser(AtmosphereSeries(_series(tmp_path / "np", protons)),
+                              _settings()).summed_cube(plan, 0.4 * u.arcsec, 5 * u.s, LINE)
+    assert np.max(np.abs(found.data - expected.data)) <= 1e-6 * np.max(expected.data)
+
+
 def test_a_raster_cube_is_labelled_with_the_wavelengths_it_was_synthesised_on(tmp_path, flat_goft):
     series = AtmosphereSeries(_series(tmp_path, [_snapshot(0.0), _snapshot(10.0)]))
     synthesiser = RasterSynthesiser(series, _settings())

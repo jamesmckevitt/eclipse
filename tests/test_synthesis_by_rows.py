@@ -91,6 +91,7 @@ def test_the_logs_a_slab_at_a_time_are_the_logs_of_the_whole_box():
                                  (mass / per_electron).to_value(u.cm**-3), np.float32)
     by_slab = synthesis._log_cubes_by_slab(
         temperature.astype(np.float32), mass,
-        lambda part: (part / per_electron).to_value(u.cm**-3), np.float32, slab=4)
+        lambda _temperature, part: (part / per_electron).to_value(u.cm**-3), np.float32,
+        slab=4)
     for expected, got in zip(whole, by_slab):
         assert got.dtype == np.float32 and np.array_equal(got, expected)

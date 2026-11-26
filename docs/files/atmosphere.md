@@ -18,8 +18,9 @@ Datasets, each with a `unit` attribute astropy can read, such as `K`, `g / cm3` 
 | --- | --- | --- |
 | `x_edges`, `y_edges`, `z_edges` | `(nx + 1,)`, `(ny + 1,)`, `(nz + 1,)` | Cell boundaries, increasing |
 | `temperature` | `(nz, ny, nx)` | |
-| `mass_density` | `(nz, ny, nx)` | This or `electron_density` is needed |
-| `electron_density` | `(nz, ny, nx)` | |
+| `mass_density` | `(nz, ny, nx)` | Mass of the plasma per volume. One of the three densities is needed |
+| `electron_density` | `(nz, ny, nx)` | Free electrons per volume |
+| `proton_density` | `(nz, ny, nx)` | Protons per volume, the hydrogen density where hydrogen is ionised |
 | `velocity_x`, `velocity_y`, `velocity_z` | `(nz, ny, nx)` | Positive towards increasing coordinate; only those along the line of sight are needed |
 | `time` | scalar | Time of the snapshot (optional) |
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import functools
 import inspect
 import itertools
 import warnings
@@ -436,22 +437,18 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     """
     Slit, PSF and noise settings for `full_ccd_frame` from a `Simulation`.
 
-    An argument in `given` at its default takes the value in `sim`. Raises
-    TypeError if `sim` is not a `Simulation`, and one ValueError listing
-    every argument that differs from both its default and `sim` and every
-    setting in `sim` the frame does not model, including fields a subclass
-    adds. Warns if `sim.expos` differs from both its 1 s default and
-    `exposure`.
+    `given` holds the arguments the call typed out. Raises TypeError if
+    `sim` is not a `Simulation`, and one ValueError listing every given
+    argument that differs from `sim` and every setting in `sim` the frame
+    does not model, including fields a subclass adds. Warns if `sim.expos`
+    differs from both its 1 s default and `exposure`.
     """
     from .pinhole_diffraction import _pinholes_on
 
     if not isinstance(sim, Simulation):
         raise TypeError(f"sim must be a Simulation, got {type(sim).__name__}.")
-    arguments = inspect.signature(full_ccd_frame).parameters
     problems = [f"{name} is {value!r} here and {getattr(sim, name)!r} in sim"
-                for name, value in given.items()
-                if not _same(value, arguments[name].default)
-                and not _same(value, getattr(sim, name))]
+                for name, value in given.items() if not _same(value, getattr(sim, name))]
     # Defaults of `Simulation` itself, so a subclass cannot hide a setting by
     # changing its default.
     base = {f.name: f for f in dataclasses.fields(Simulation)}
@@ -479,6 +476,29 @@ def _settings_from_simulation(sim: Simulation, given: Dict[str, object],
     return {name: getattr(sim, name) for name in _FROM_SIMULATION}
 
 
+def _taking_simulation(function):
+    """
+    `function`, with its settings filled in from its `sim` argument first.
+
+    Binding the call to the signature shows which arguments were typed out,
+    which the function itself cannot tell from those left at their defaults.
+    """
+    signature = inspect.signature(function)
+
+    @functools.wraps(function)
+    def taking_simulation(*args, **kwargs):
+        given = signature.bind(*args, **kwargs).arguments
+        sim = given.get("sim")
+        # Without an exposure the body raises its own error, which comes first.
+        if sim is None or given.get("exposure") is None:
+            return function(*args, **kwargs)
+        typed = {name: given[name] for name in _FROM_SIMULATION if name in given}
+        kwargs.update(_settings_from_simulation(sim, typed, given.get("exposure")), sim=None)
+        return function(*args, **kwargs)
+
+    return taking_simulation
+
+
 def _readout_sequence(det, windows, dump_rows) -> ReadoutSequence:
     """Read-out of the frame, with `windows` and `dump_rows` checked against the CCD."""
     given = windows
@@ -502,6 +522,7 @@ def _readout_sequence(det, windows, dump_rows) -> ReadoutSequence:
                                          dump_rows=None if dump_rows is None else int(dump_rows))
 
 
+@_taking_simulation
 def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None,
                    slit_position: Optional[u.Quantity] = None,
                    exposure: Optional[u.Quantity] = None, *,
@@ -564,11 +585,10 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         every CPU this process may use.
     sim : Simulation, optional
         Source of `slit_width`, `psf`, `spectral_psf`, `noise`,
-        `psf_boundary` and `slit_mask`. An argument at its default, given or
-        not, takes the `Simulation`'s value; any other value must agree with
-        it. A `Simulation` has the PSF off unless made with `psf=True`. Its
-        `expos`, `n_iter` and `ncpu` are not used, nor the pinhole settings
-        with pinholes off. Default None.
+        `psf_boundary` and `slit_mask`. Any of these also given here must
+        agree with it, even at its default. A `Simulation` has the PSF off
+        unless made with `psf=True`. Its `expos`, `n_iter` and `ncpu` are
+        not used, nor the pinhole settings with pinholes off. Default None.
     psf_boundary : str, optional
         What the PSF brings in from beyond the edges of the synthesis, as
         in a run. `"replicate"` (default) takes the Sun there to look like
@@ -614,12 +634,13 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
         `Simulation`.
     ValueError
         Among others: if `exposure` or `slit_width` is not above zero,
-        `psf_boundary` is not `"replicate"` or `"zero"`, `slit_mask` is on
+        `psf_boundary` is not `"replicate"` or `"zero"`, `spectral_psf` is
+        not `"quadrature"` or `"convolution"`, `slit_mask` is on
         and the telescope does not give the slit's openings for this slit
         width, the slit is off the synthesis, or `focal_plane` does not
         match `det` or has a tilted slit image. With `sim`, if an argument
-        differs from both its default and the `Simulation`, or the
-        `Simulation` asks for something the frame does not model: an
+        given differs from the `Simulation`, or the `Simulation` asks for
+        something the frame does not model: an
         instrument other than SWC, pinholes, visible stray light, or a
         field a subclass adds. One error lists every such setting. Also if
         a window is not two rows on the CCD, the first no later than the
@@ -650,16 +671,12 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
             "The lines and continuum arguments of full_ccd_frame are deprecated and will be "
             "removed in a future release. A frame holds the spectra in the synthesis file: "
             "synthesise the band into it with synthesise-spectra --band, or make the frame "
-            "from a run file, and leave these arguments out.", FutureWarning, stacklevel=2)
-    if sim is not None:
-        given = {"slit_width": slit_width, "psf": psf, "spectral_psf": spectral_psf,
-                 "noise": noise, "psf_boundary": psf_boundary, "slit_mask": slit_mask}
-        settings = _settings_from_simulation(sim, given, exposure)
-        slit_width, psf = settings["slit_width"], settings["psf"]
-        spectral_psf, noise = settings["spectral_psf"], settings["noise"]
-        psf_boundary, slit_mask = settings["psf_boundary"], settings["slit_mask"]
+            "from a run file, and leave these arguments out.", FutureWarning, stacklevel=3)
     if not (isinstance(psf_boundary, str) and psf_boundary in ("replicate", "zero")):
         raise ValueError(f"psf_boundary must be 'replicate' or 'zero', got {psf_boundary!r}.")
+    if not (isinstance(spectral_psf, str) and spectral_psf in ("quadrature", "convolution")):
+        raise ValueError(f"spectral_psf must be 'quadrature' or 'convolution', got "
+                         f"{spectral_psf!r}.")
     extend = psf_boundary == "replicate"
     if slit_mask not in (True, False):
         raise ValueError(f"slit_mask must be True or False, got {slit_mask!r}.")
@@ -777,8 +794,9 @@ def full_ccd_frame(synthesis_path: str | Path, lines: Optional[BandLines] = None
                                                             ccd)
     return FullFrame(**frame, exposure=u.Quantity(exposure),
                      slit_position=u.Quantity(slit_position), slit_width=u.Quantity(slit_width),
-                     settings={"psf": psf, "spectral_psf": spectral_psf, "noise": noise,
-                               "psf_boundary": psf_boundary, "slit_mask": bool(slit_mask),
+                     settings={"psf": bool(psf), "spectral_psf": spectral_psf,
+                               "noise": bool(noise), "psf_boundary": psf_boundary,
+                               "slit_mask": bool(slit_mask),
                                "continuum": any(is_continuum(name) or name == "continuum"
                                                 for name in scene.names),
                                "spectra": list(scene.names),

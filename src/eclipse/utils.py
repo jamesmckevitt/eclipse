@@ -255,14 +255,16 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
     which can take longer than the rest of an ion's work. It depends only on
     temperature and the atomic data, so within the block it is worked out
     once on `temperature_K`. An Ion whose temperatures are all on that grid
-    gets those values, and any other gets fiasco's own. Use it from one
-    thread at a time, as it swaps a function in `fiasco.ions`.
+    gets those values, and any other gets fiasco's own. Enter it from one
+    thread, as it swaps a function in `fiasco.ions`; threads in the block
+    can then share the values once one has worked them out. Yields whether
+    the values are shared, which they are not if fiasco has no such function.
     """
     try:
         ions = importlib.import_module("fiasco.ions")
         original = ions.proton_electron_ratio
     except (ImportError, AttributeError):
-        yield
+        yield False
         return
     grid = np.unique(np.asarray(temperature_K, dtype=float))
     grid_key = grid.tobytes()
@@ -279,7 +281,7 @@ def proton_electron_ratio_once(temperature_K: np.ndarray):
 
     ions.proton_electron_ratio = ratio
     try:
-        yield
+        yield True
     finally:
         ions.proton_electron_ratio = original
 

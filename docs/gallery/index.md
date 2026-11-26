@@ -52,4 +52,8 @@ Short scripts that use the `eclipse` package from Python. Each page shows a scri
 
     [Common random numbers](common-random-numbers.md)
 
+-   [![A simulated 20 s exposure of a line at 192.5 Angstrom in one pixel, from spectra written in Python](images/own_line.png)](own-line.md)
+
+    [Your own line](own-line.md)
+
 </div>

@@ -4,6 +4,7 @@ import re
 import argparse
 import warnings
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Tuple, List, Optional, Union
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -28,7 +29,8 @@ from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
 from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
                         continuum_windows)
 from .atmosphere import (AXES, NUMPY_AXIS, Atmosphere, _offer_database_build,
-                         mass_per_electron, read_atmosphere, require_mass_per_electron)
+                         electron_density_from_protons, mass_per_electron, read_atmosphere,
+                         require_mass_per_electron)
 # Deprecated MURaM file readers and dynamic mode, importable from here.
 from .deprecated import (_dynamic_mode_cubes, apply_cube_cropping,  # noqa: F401
                          build_composite_cubes_mhd, compute_slice_timestep_mapping_mhd,
@@ -120,6 +122,30 @@ def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.n
     return np.flatnonzero(distance == distance.min()), how
 
 
+def _ion_part(ion_name: str, temperature_K: np.ndarray, rows: np.ndarray, densities_cm3,
+              abundance: str, ion_kwargs: dict, step: int, g_tables: dict):
+    """
+    Fill in G(T, N) of one ion's candidate transitions at some of its temperatures.
+
+    fiasco is called on `step` of the temperatures in `rows` at a time, and
+    the candidate transitions are written to those rows of `g_tables`.
+    Returns the number of temperatures at which levels were left out, and
+    log10 of the temperature from which the single-ion model is used, or None.
+    """
+    dropped, single_ion = 0, None
+    for start in range(0, rows.size, step):
+        chunk = rows[start:start + step]
+        g, chunk_dropped, chunk_single_ion = ion_contribution_function(
+            ion_name, temperature_K[chunk], densities_cm3, abundance, ion_kwargs)
+        dropped += chunk_dropped
+        if single_ion is None:
+            single_ion = chunk_single_ion
+        for (line_name, idx), table in g_tables.items():
+            table[chunk] = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value
+        del g
+    return dropped, single_ion
+
+
 def _compute_single_ion(args):
     """G(T, N) of the requested lines of one ion, for a worker process.
 
@@ -128,14 +154,15 @@ def _compute_single_ion(args):
     fraction above zero, and is zero elsewhere, as the ion is absent. With
     `temperature_chunk`, fiasco is called on that many temperatures at a
     time and only the requested lines are kept, so memory use is that of one
-    chunk."""
+    chunk. Otherwise up to `n_threads` threads can each take part of the
+    temperatures."""
 
     import fiasco
     import logging
 
     (elem, stage, temperature_K, densities_cm3, abundance, lines,
-     hdf5_dbase_root, temperature_chunk) = args
-    densities = densities_cm3 / u.cm**3
+     hdf5_dbase_root, temperature_chunk, n_threads) = args
+    ion_name = f'{elem} {stage}'
     n_temperatures = len(temperature_K)
     step = n_temperatures if temperature_chunk is None else temperature_chunk
 
@@ -152,13 +179,11 @@ def _compute_single_ion(args):
     prev_level = fiasco_logger.level
     fiasco_logger.setLevel(logging.ERROR)
 
-    dropped, single_ion = 0, None
     try:
-        with proton_electron_ratio_once(temperature_K):
+        with proton_electron_ratio_once(temperature_K) as shared:
             # The transitions and the ionisation fractions are read once, on
             # the whole grid; no level populations are worked out for this.
-            ion = fiasco.Ion(f'{elem} {stage}', temperature_K * u.K, abundance=abundance,
-                             **ion_kwargs)
+            ion = fiasco.Ion(ion_name, temperature_K * u.K, abundance=abundance, **ion_kwargs)
             bound = ion.transitions.is_bound_bound
             bb_wl = ion.transitions.wavelength[bound]
             # CHIANTI stores theoretical wavelengths as negative numbers; fiasco
@@ -166,23 +191,32 @@ def _compute_single_ion(args):
             observed = np.asarray(ion.transitions.is_observed[bound])
             matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
                        for line_name, _ in lines}
-            g_tables = {(line_name, int(idx)): np.zeros((n_temperatures, densities.size))
+            g_tables = {(line_name, int(idx)): np.zeros((n_temperatures, densities_cm3.size))
                         for line_name, (indices, _) in matches.items() for idx in indices}
             fraction = np.nan_to_num(np.asarray(ion.ionization_fraction, dtype=float))
             present = np.flatnonzero(fraction > 0)
-            for start in range(0, present.size, step):
-                chunk = present[start:start + step]
-                g, chunk_dropped, chunk_single_ion = ion_contribution_function(
-                    f'{elem} {stage}', temperature_K[chunk], densities_cm3, abundance,
-                    ion_kwargs)
-                dropped += chunk_dropped
-                if single_ion is None:
-                    single_ion = chunk_single_ion
-                for (line_name, idx), table in g_tables.items():
-                    table[chunk] = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value
-                del g
+            threads = min(n_threads, present.size // _LEAST_TEMPERATURES_PER_THREAD)
+            # Without a shared ratio each thread would work it out again.
+            if threads > 1 and shared:
+                # The ratio of protons to electrons is worked out once, here,
+                # and the threads share it. Each thread fills in its own rows.
+                ion.proton_electron_ratio
+                spans = np.array_split(present, threads)
+                with ThreadPoolExecutor(threads) as pool:
+                    parts = list(pool.map(
+                        lambda span: _ion_part(ion_name, temperature_K, span, densities_cm3,
+                                               abundance, ion_kwargs, span.size, g_tables),
+                        spans))
+            else:
+                parts = [_ion_part(ion_name, temperature_K, present, densities_cm3, abundance,
+                                   ion_kwargs, step, g_tables)]
     finally:
         fiasco_logger.setLevel(prev_level)
+
+    dropped = sum(n for n, _ in parts)
+    # The coolest part beyond the level-resolved rates says where they stop.
+    starts = [log_t for _, log_t in parts if log_t is not None]
+    single_ion = min(starts) if starts else None
 
     results = {}
     for line_name, target_wl_aa in lines:
@@ -248,6 +282,12 @@ def _parse_line_name(name: str) -> Tuple[str, int, float]:
                          f"Angstrom.")
     return elem, stage, wavelength
 
+# Threads sharing one ion's temperatures. fiasco holds Python's lock for much
+# of its work, so beyond about 8 threads an ion takes longer, not less.
+_MOST_THREADS_PER_ION = 8
+# Fewest temperatures a thread takes, so that each has a fair share of work.
+_LEAST_TEMPERATURES_PER_THREAD = 8
+
 # Default grids for G(T, n_e): log10 T from 4 to 9 in steps of 0.05, and
 # log10 n_e from 7 to 13 in steps of 0.3. density_grid extends the density
 # grid on the same points as far as an atmosphere needs.
@@ -277,7 +317,8 @@ def compute_goft_fiasco(
     not the name's. G includes the proton-to-electron ratio, so it is per
     emission measure n_e^2 dh. With two or more ions and workers, the ions
     run in spawned processes, so a calling script needs an
-    `if __name__ == "__main__":` guard.
+    `if __name__ == "__main__":` guard. Workers beyond one per ion become
+    threads, up to 8 for each ion, each taking part of its temperatures.
 
     Parameters
     ----------
@@ -296,15 +337,17 @@ def compute_goft_fiasco(
     precision : type, optional
         `np.float32` or `np.float64` (default).
     n_workers : int, optional
-        Number of worker processes, each computing one ion at a time, capped
-        at the number of ions. Default 0 uses every CPU this process may use
-        (as allocated by SLURM), up to that cap.
+        Number of workers. Two or more ions are shared between processes,
+        and the workers beyond one per ion become threads sharing an ion's
+        temperatures. Default 0 uses every CPU this process may use (as
+        allocated by SLURM).
     hdf5_dbase_root : str or Path, optional
         CHIANTI database to read. Default is fiasco's, set in
         `~/.fiasco/fiascorc`.
     temperature_chunk : int, optional
-        Temperatures passed to fiasco at a time, to use less memory. The
-        result is the same. Default None (the whole grid).
+        Temperatures passed to fiasco at a time, to use less memory, with one
+        thread for each ion. The result is the same. Default None (the whole
+        grid).
 
     Returns
     -------
@@ -345,11 +388,22 @@ def compute_goft_fiasco(
         elem, stage, wl = _parse_line_name(name)
         ion_lines.setdefault((elem, stage), []).append((name, wl))
 
+    # Workers beyond one per ion become threads, each taking part of an
+    # ion's temperatures.
+    n_ions = len(ion_lines)
+    if n_workers <= 0:
+        n_workers = usable_cpus()
+    n_threads = max(1, min(n_workers // max(n_ions, 1), _MOST_THREADS_PER_ION,
+                           nT // _LEAST_TEMPERATURES_PER_THREAD))
+    # A chunk smaller than the grid limits the memory, so it keeps one thread.
+    if temperature_chunk is not None and temperature_chunk < nT:
+        n_threads = 1
+
     # Build worker arguments (all picklable plain types / numpy arrays)
     dbase_root = None if hdf5_dbase_root is None else str(hdf5_dbase_root)
     worker_args = [
         (elem, stage, temperature_K, densities_cm3, abundance, lines, dbase_root,
-         temperature_chunk)
+         temperature_chunk, n_threads)
         for (elem, stage), lines in ion_lines.items()
     ]
     if temperature_chunk is not None and temperature_chunk < nT:
@@ -359,19 +413,19 @@ def compute_goft_fiasco(
     _offer_database_build(dbase_root)
 
     # ---- dispatch: parallel for 2+ ions, serial otherwise ----
-    n_ions = len(worker_args)
-    if n_workers <= 0:
-        n_workers = usable_cpus()
     use_parallel = n_workers > 1 and n_ions > 1
 
     if use_parallel:
         import multiprocessing as mp
         pool_size = min(n_workers, n_ions)
         ctx = mp.get_context("spawn")
-        print(f"  Parallel: {pool_size} workers for {n_ions} ions")
+        print(f"  Parallel: {pool_size} workers for {n_ions} ions"
+              + (f", each with up to {n_threads} threads" if n_threads > 1 else ""))
         with ctx.Pool(pool_size) as pool:
             all_results = pool.map(_compute_single_ion, worker_args)
     else:
+        if n_threads > 1:
+            print(f"  Up to {n_threads} threads share the ion's temperatures")
         all_results = [_compute_single_ion(a) for a in tqdm(
             worker_args, desc="Computing G(T,N)", unit="ion"
         )]
@@ -620,8 +674,8 @@ def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, pr
     `_log_cubes`, one slab of the first axis at a time.
 
     The electron density, which can be float64, is then never held for the
-    whole box. `to_electron_density` turns a slab of `density` into
-    electron density in cm^-3.
+    whole box. `to_electron_density` turns a slab of `temperature` and of
+    `density` into electron density in cm^-3.
     """
     logT_cube = np.empty(temperature.shape, dtype=precision)
     logN_cube = np.empty(temperature.shape, dtype=precision)
@@ -631,7 +685,7 @@ def _log_cubes_by_slab(temperature: np.ndarray, density, to_electron_density, pr
     for first in range(0, temperature.shape[0], slab):
         cut = slice(first, first + slab)
         logT_cube[cut], logN_cube[cut] = _log_cubes(
-            temperature[cut], to_electron_density(density[cut]), precision)
+            temperature[cut], to_electron_density(temperature[cut], density[cut]), precision)
     return logT_cube, logN_cube
 
 
@@ -2001,8 +2055,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     computing = parser.add_argument_group("Computing")
     computing.add_argument("--n-workers", type=int, default=0,
-                           help="Number of parallel workers for fiasco G(T,N) "
-                                "computation (0 = all CPUs, default: 0)")
+                           help="Number of workers for fiasco G(T,N): processes for "
+                                "the ions, and threads within each "
+                                "(0 = all CPUs, default: 0)")
     computing.add_argument("--goft-temperature-chunk", type=int, default=None,
                            help="Compute G(T,N) this many temperatures at a time "
                                 "rather than the whole grid at once. This lowers "
@@ -2378,9 +2433,9 @@ def main(args=None) -> None:
     write_pickle = _writes_pickle(args.output_name)
 
     # Set by whichever route reads the atmosphere. Only an atmosphere file
-    # can give the electron density directly, or a size for each cell along
+    # can give the electron or proton density, or a size for each cell along
     # the line of sight.
-    ne_values = None
+    ne_values = np_values = None
     sky = None
     los_thickness = None
     atmosphere_metadata = None
@@ -2475,6 +2530,9 @@ def main(args=None) -> None:
         if atmosphere.electron_density is not None:
             ne_values = atmosphere.electron_density.astype(precision, copy=False).to_value(
                 u.cm**-3)
+        elif atmosphere.proton_density is not None:
+            np_values = atmosphere.proton_density.astype(precision, copy=False).to_value(
+                u.cm**-3)
         los_thickness = atmosphere.cell_thickness(integration_axis)
         reference_cube = temp_cube
         if towards is not None:
@@ -2494,30 +2552,42 @@ def main(args=None) -> None:
             "shape": atmosphere.shape,
             "nonuniform_axes": atmosphere.nonuniform_axes(),
             "electron_density_given": atmosphere.electron_density is not None,
+            "proton_density_given": atmosphere.proton_density is not None,
         }
 
     # ---------------- Common processing (both modes) -----------------
     
     vel_grid = velocity_grid(vel_res, vel_lim, ("--vel-res", "--vel-lim"))
 
-    # Electron density from the atmosphere if given, otherwise the mass
-    # density divided by the mass per free electron.
-    if ne_values is None:
+    # Electron density from the atmosphere if given, otherwise from the
+    # proton density, otherwise the mass density divided by the mass per
+    # free electron.
+    if ne_values is not None:
+        logT_cube, logN_cube = _log_cubes_by_slab(
+            temp_cube.data, ne_values, lambda temperature, electrons: electrons, precision)
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
+        print("Electron density taken from the atmosphere")
+    elif np_values is not None:
+        database = getattr(args, "hdf5_dbase_root", None)
+        logT_cube, logN_cube = _log_cubes_by_slab(
+            temp_cube.data, np_values,
+            lambda temperature, protons: electron_density_from_protons(
+                temperature, protons, args.abundance, database), precision)
+        mass_per_electron_amu = None
+        mass_per_electron_source = "not needed: the atmosphere gives the proton density"
+        print(f"Electron density from the proton density, with fiasco's ratio of the two "
+              f"for {args.abundance} abundances")
+    else:
         mass_per_electron_amu, mass_per_electron_source = resolve_mass_per_electron(args)
         print(f"Electron density from the mass density with "
               f"{mass_per_electron_amu:.4f} u per electron ({mass_per_electron_source})")
         per_electron = mass_per_electron_amu * const.u
         logT_cube, logN_cube = _log_cubes_by_slab(
-            temp_cube.data, rho, lambda mass: (mass / per_electron).to_value(u.cm**-3),
-            precision)
-    else:
-        logT_cube, logN_cube = _log_cubes_by_slab(temp_cube.data, ne_values,
-                                                  lambda electrons: electrons, precision)
-        mass_per_electron_amu = None
-        mass_per_electron_source = "not needed: the atmosphere gives the electron density"
-        print("Electron density taken from the atmosphere")
+            temp_cube.data, rho,
+            lambda temperature, mass: (mass / per_electron).to_value(u.cm**-3), precision)
     # Free the densities once their logs are taken.
-    rho = ne_values = atmosphere = None
+    rho = ne_values = np_values = atmosphere = None
 
     # The Doppler shift needs the velocity away from the observer, which
     # vel_cube already holds along a slanted line of sight.
