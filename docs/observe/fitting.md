@@ -57,8 +57,6 @@ The true velocity, and that measured with the default start and with these setti
 
 A fit that fails, or runs past `max_iter` (default 1000), is left out of the statistics, and the run says how many failed. `backend` is `scipy` (default) or `mpfit`. `save_iterations: true` keeps every iteration, making the results about `n_iter` times larger.
 
-Runs with NumPy seeded the same give the same fits on one kind of processor, and under MPI with the same number of ranks. On another kind of processor the fits can differ in their last digits, and now and then one settles a little differently, so compare runs made on one kind.
-
 ## Which signals are fitted
 
 Both the DN and the photons reaching the detector are fitted. `fit_signals: dn` or `photon`, at the top level, fits one and saves time.
