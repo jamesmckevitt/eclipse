@@ -4,13 +4,41 @@ ECLIPSE follows the light from the Sun through the telescope, the point spread f
 
 ## The instruments
 
-`instrument:` chooses `SWC`, SOLAR-C/EUVST's short wavelength channel (the default), or `EIS`, Hinode/EIS.
+`instrument:` chooses `SWC`, SOLAR-C/EUVST's short wavelength channel (the default), `LW`, its long wavelength channel, or `EIS`, Hinode/EIS.
 
 ### EUVST-SW
 
 The default settings describe EUVST-SW, as in [McKevitt et al. (2026), PASJ 78, 1524](https://academic.oup.com/pasj/article/78/4/1524/8731000). Its slits are 0.2, 0.4, 0.8 and 1.6 arcsec wide, and a wider slit gives coarser pixels across the slit:
 
 ![The core of the active region, 30 arcsec across, through the 0.2, 0.4, 0.8 and 1.6 arcsec slits](images/example-slits.png)
+
+### EUVST-LW
+
+LW records three bands, with LW2 and LW3 in second order as well.
+
+| Band | First order (Angstrom) | Second order (Angstrom) |
+| --- | --- | --- |
+| `LW1` | 709.5 - 851.4 | |
+| `LW2` | 919.1 - 1049.0 | 459.5 - 524.5 |
+| `LW3` | 1108.3 - 1225.4 | 554.1 - 612.7 |
+
+The bands do not overlap, so ECLIPSE takes the band and order from the observed line. Si XII 499.41, for example, is in LW2 in second order.
+
+```yaml
+instrument: LW
+uniform_intensity: 50 erg / (s cm2 sr)
+rest_wavelength: 499.406 AA
+```
+
+`band` and `order` in the `detector:` or `telescope:` section set them instead, and are checked against the line.
+
+A run observes the window of one line, the single intensity's or the `reference_line` of a synthesis file, so it records one band in one order. The run prints which. Lines in other bands, or other lines of one band, need runs of their own, such as the entries of a run file's `runs:`.
+
+The throughput comes from the sensitivity budget, RSC-2022035, whose tables stop at 845 Angstrom in LW1, 1039 Angstrom in LW2, and 520 and 609 Angstrom in second order. A run with a wavelength beyond them, such as Mg X 609.79, stops with an error.
+
+Each band has an intensified APS. Its microchannel plate (MCP) turns each detected photon into a burst of electrons, about 13 in the APS on average. The bursts vary in size, which doubles the variance of the photon count. The chance of detecting a photon is taken at each pixel's wavelength. In LW3 it drops from 0.30 at 1208 Angstrom to 0.01 above 1212 Angstrom, where the MCP has no photocathode so that it can observe Lyman-alpha.
+
+LW uses the SW slits. Its MCP does not see visible light, so there is no filter and the `filter:` section is ignored, with a warning. `vis_sl`, pinholes, `slit_mask` and `focal_plane_dispersion` are refused. Its PSF is a Gaussian with the band's worst resolution in the optical design, RSC-2022021C.
 
 ### Hinode/EIS
 

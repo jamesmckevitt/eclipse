@@ -744,9 +744,9 @@ _SECTION_STRING_FIELDS = {
     # 'instrument' is left out: the top-level key sets it, and main()
     # rejects it here rather than silently discard it.
     "simulation": ["psf_boundary", "spectral_psf"],
-    "detector": ["material"],
+    "detector": ["material", "band"],
     "telescope": ["psf_type", "calibration", "date", "pm_table", "grating_table",
-                  "field_of_view", "resolution_budget"],
+                  "field_of_view", "resolution_budget", "band"],
     "filter": ["al_table", "oxide_table", "c_table"],
 }
 

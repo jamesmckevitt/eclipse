@@ -24,7 +24,7 @@ from .synthesis_file import (SpectralLine, Synthesis, _pixel_edges, _to_length, 
 from .emission_measure import (EmissionMeasure, is_emission_measure_file,
                                read_emission_measure, read_emission_measure_layout)
 from .band import (BAND_STEP, BandLines, IonLines, band_lines_for, band_spectra,
-                   band_wavelengths, same_temperatures)
+                   band_wavelengths, ion_contribution_function, same_temperatures)
 from .projection import PROJECTIONS, CurvedSkyView, SkyView, disk_geometry
 from .continuum import (CONTINUUM_PREFIX, compute_continuum_fiasco, continuum_spectra,
                         continuum_windows)
@@ -122,62 +122,47 @@ def _match_candidates(line_name: str, wavelengths_aa: np.ndarray, observed: np.n
     return np.flatnonzero(distance == distance.min()), how
 
 
-def _ion_part(elem: str, stage: int, temperature_K: np.ndarray, densities, abundance: str,
-              lines, ion_kwargs: dict, step: int):
+def _ion_part(ion_name: str, temperature_K: np.ndarray, rows: np.ndarray, densities_cm3,
+              abundance: str, ion_kwargs: dict, step: int, g_tables: dict):
     """
-    G(T, N) of the transitions that could be one ion's requested lines, on part of the grid.
+    Fill in G(T, N) of one ion's candidate transitions at some of its temperatures.
 
-    fiasco is called on `step` temperatures at a time, and only the
-    candidate transitions are kept. Returns the candidates of each line, a
-    list per candidate of G on each chunk, (temperature, density), the
-    wavelengths and whether they are observed, the atomic number and the
-    database.
+    fiasco is called on `step` of the temperatures in `rows` at a time, and
+    the candidate transitions are written to those rows of `g_tables`.
+    Returns the number of temperatures at which levels were left out, and
+    log10 of the temperature from which the single-ion model is used, or None.
     """
-    import fiasco
-
-    g_parts = {}
-    for start in range(0, len(temperature_K), step):
-        ion = fiasco.Ion(f'{elem} {stage}', temperature_K[start:start + step] * u.K,
-                         abundance=abundance, **ion_kwargs)
-
-        g = ion.contribution_function(densities)
-        pe_ratio = ion.proton_electron_ratio
-        g = g * pe_ratio[:, np.newaxis, np.newaxis]
-
-        # The transitions do not depend on temperature, so the lines are
-        # matched once, on the first chunk.
-        if start == 0:
-            bound = ion.transitions.is_bound_bound
-            bb_wl = ion.transitions.wavelength[bound]
-            # CHIANTI stores theoretical wavelengths as negative numbers;
-            # fiasco gives them positive and marks observed ones with this
-            # flag.
-            observed = np.asarray(ion.transitions.is_observed[bound])
-            matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
-                       for line_name, _ in lines}
-            g_parts = {(line_name, int(idx)): [] for line_name, (indices, _) in matches.items()
-                       for idx in indices}
-        for (line_name, idx), parts in g_parts.items():
-            parts.append(g[:, :, idx].to(u.erg * u.cm**3 / u.s).value)
+    dropped, single_ion = 0, None
+    for start in range(0, rows.size, step):
+        chunk = rows[start:start + step]
+        g, chunk_dropped, chunk_single_ion = ion_contribution_function(
+            ion_name, temperature_K[chunk], densities_cm3, abundance, ion_kwargs)
+        dropped += chunk_dropped
+        if single_ion is None:
+            single_ion = chunk_single_ion
+        for (line_name, idx), table in g_tables.items():
+            table[chunk] = g[:, :, idx].to(u.erg * u.cm**3 / u.s).value
         del g
-    return matches, g_parts, bb_wl, observed, int(ion.atomic_number), str(ion.hdf5_dbase_root)
+    return dropped, single_ion
 
 
 def _compute_single_ion(args):
     """G(T, N) of the requested lines of one ion, for a worker process.
 
     fiasco is imported here so each spawned process has its own HDF5
-    handles. With `temperature_chunk`, fiasco is called on that many
-    temperatures at a time and only the requested lines are kept, so memory
-    use is that of one chunk. Otherwise `n_threads` threads can each take
-    part of the temperatures."""
+    handles. G is worked out only where CHIANTI gives the ion an ionisation
+    fraction above zero, and is zero elsewhere, as the ion is absent. With
+    `temperature_chunk`, fiasco is called on that many temperatures at a
+    time and only the requested lines are kept, so memory use is that of one
+    chunk. Otherwise up to `n_threads` threads can each take part of the
+    temperatures."""
 
     import fiasco
     import logging
 
     (elem, stage, temperature_K, densities_cm3, abundance, lines,
      hdf5_dbase_root, temperature_chunk, n_threads) = args
-    densities = densities_cm3 / u.cm**3
+    ion_name = f'{elem} {stage}'
     n_temperatures = len(temperature_K)
     step = n_temperatures if temperature_chunk is None else temperature_chunk
 
@@ -196,33 +181,50 @@ def _compute_single_ion(args):
 
     try:
         with proton_electron_ratio_once(temperature_K) as shared:
+            # The transitions and the ionisation fractions are read once, on
+            # the whole grid; no level populations are worked out for this.
+            ion = fiasco.Ion(ion_name, temperature_K * u.K, abundance=abundance, **ion_kwargs)
+            bound = ion.transitions.is_bound_bound
+            bb_wl = ion.transitions.wavelength[bound]
+            # CHIANTI stores theoretical wavelengths as negative numbers; fiasco
+            # gives them positive and marks observed ones with this flag.
+            observed = np.asarray(ion.transitions.is_observed[bound])
+            matches = {line_name: _match_candidates(line_name, bb_wl.to_value(u.AA), observed)
+                       for line_name, _ in lines}
+            g_tables = {(line_name, int(idx)): np.zeros((n_temperatures, densities_cm3.size))
+                        for line_name, (indices, _) in matches.items() for idx in indices}
+            fraction = np.nan_to_num(np.asarray(ion.ionization_fraction, dtype=float))
+            present = np.flatnonzero(fraction > 0)
+            threads = min(n_threads, present.size // _LEAST_TEMPERATURES_PER_THREAD)
             # Without a shared ratio each thread would work it out again.
-            if n_threads > 1 and shared:
+            if threads > 1 and shared:
                 # The ratio of protons to electrons is worked out once, here,
-                # and the threads share it.
-                fiasco.Ion(f'{elem} {stage}', temperature_K * u.K, abundance=abundance,
-                           **ion_kwargs).proton_electron_ratio
-                spans = np.array_split(np.arange(n_temperatures), n_threads)
-                with ThreadPoolExecutor(n_threads) as pool:
+                # and the threads share it. Each thread fills in its own rows.
+                ion.proton_electron_ratio
+                spans = np.array_split(present, threads)
+                with ThreadPoolExecutor(threads) as pool:
                     parts = list(pool.map(
-                        lambda span: _ion_part(elem, stage, temperature_K[span], densities,
-                                               abundance, lines, ion_kwargs, span.size),
+                        lambda span: _ion_part(ion_name, temperature_K, span, densities_cm3,
+                                               abundance, ion_kwargs, span.size, g_tables),
                         spans))
             else:
-                parts = [_ion_part(elem, stage, temperature_K, densities, abundance, lines,
-                                   ion_kwargs, step)]
+                parts = [_ion_part(ion_name, temperature_K, present, densities_cm3, abundance,
+                                   ion_kwargs, step, g_tables)]
     finally:
         fiasco_logger.setLevel(prev_level)
 
-    matches, _, bb_wl, observed, atomic_number, database = parts[0]
+    dropped = sum(n for n, _ in parts)
+    # The coolest part beyond the level-resolved rates says where they stop.
+    starts = [log_t for _, log_t in parts if log_t is not None]
+    single_ion = min(starts) if starts else None
+
     results = {}
     for line_name, target_wl_aa in lines:
         target_wl = target_wl_aa * u.AA
         indices, how = matches[line_name]
         tables = {}
         for idx in indices:
-            g_tn = np.concatenate([g for _, g_parts, *_ in parts
-                                   for g in g_parts[(line_name, int(idx))]]).T
+            g_tn = g_tables[(line_name, int(idx))].T
             tables[int(idx)] = np.nan_to_num(g_tn, nan=0.0, posinf=0.0, neginf=0.0)
         # Of the transitions at one wavelength, take the brightest.
         idx = max(tables, key=lambda i: tables[i].max())
@@ -230,7 +232,7 @@ def _compute_single_ion(args):
 
         results[line_name] = {
             "g_tn": tables[idx],
-            "atom": atomic_number,
+            "atom": int(ion.atomic_number),
             "ion": stage,
             "target_wl_cm": float(target_wl.to(u.cm).value),
             "matched_wl_aa": float(matched_wl.to(u.AA).value),
@@ -240,7 +242,10 @@ def _compute_single_ion(args):
             "delta_aa": float(abs(matched_wl - target_wl).to(u.AA).value),
             # Database the contribution functions came from; fiasco fills in
             # the fiascorc default if none was chosen.
-            "hdf5_dbase_root": database,
+            "hdf5_dbase_root": str(ion.hdf5_dbase_root),
+            "ion_name": ion.ion_name,
+            "dropped": dropped,
+            "single_ion": single_ion,
         }
     return results
 
@@ -415,12 +420,12 @@ def compute_goft_fiasco(
         pool_size = min(n_workers, n_ions)
         ctx = mp.get_context("spawn")
         print(f"  Parallel: {pool_size} workers for {n_ions} ions"
-              + (f", each with {n_threads} threads" if n_threads > 1 else ""))
+              + (f", each with up to {n_threads} threads" if n_threads > 1 else ""))
         with ctx.Pool(pool_size) as pool:
             all_results = pool.map(_compute_single_ion, worker_args)
     else:
         if n_threads > 1:
-            print(f"  {n_threads} threads share the ion's temperatures")
+            print(f"  Up to {n_threads} threads share the ion's temperatures")
         all_results = [_compute_single_ion(a) for a in tqdm(
             worker_args, desc="Computing G(T,N)", unit="ion"
         )]
@@ -428,6 +433,16 @@ def compute_goft_fiasco(
     # ---- collect results ----
     goft_dict: Dict[str, dict] = {}
     for result in all_results:
+        # What was done to work out the ion's populations, once per ion.
+        info = next(iter(result.values()), None)
+        if info is not None and info["dropped"]:
+            print(f"  {info['ion_name']}: levels nothing populates were left out at "
+                  f"{info['dropped']} temperatures, and the rest solved exactly")
+        if info is not None and info["single_ion"] is not None:
+            print(f"  {info['ion_name']}: CHIANTI's recombination and ionisation rates of each "
+                  f"level stop short of the hottest temperatures, so from log T "
+                  f"{info['single_ion']:.2f} its level populations are worked out with "
+                  f"fiasco's single-ion model, as for ions that have no such rates")
         for line_name, info in result.items():
             used = info["hdf5_dbase_root"]
             if dbase_root is not None and used != dbase_root:

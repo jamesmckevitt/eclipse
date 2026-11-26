@@ -6,7 +6,7 @@ Every setting of a run file, with its default. A value with units is a number an
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `instrument` | `SWC` or `EIS`; see [The instruments](../instrument-model.md#the-instruments) | `SWC` |
+| `instrument` | `SWC`, `LW` or `EIS`; see [The instruments](../instrument-model.md#the-instruments) | `SWC` |
 | `synthesis_file` | The synthesis file to observe | `./run/input/synthesised_spectra.h5` |
 | `reference_line` | The line whose window is observed, named as in [Naming spectral lines](line-names.md); blends in the window are included | the file's only line, or `Fe12_195.1190` |
 | `n_iter` | Monte Carlo iterations | `25` |
@@ -28,9 +28,9 @@ Every setting of a run file, with its default. A value with units is a number an
 
 | Key | What it sets | Default |
 | --- | --- | --- |
-| `slit_width` | 0.2, 0.4, 0.8 or 1.6 arcsec for SWC, 1 or 2 arcsec for EIS | `0.2 arcsec` |
+| `slit_width` | 0.2, 0.4, 0.8 or 1.6 arcsec for SWC and LW, 1 or 2 arcsec for EIS | `0.2 arcsec` |
 | `expos` | Exposure time | `1 s` |
-| `vis_sl` | Visible stray light, in photons per second per cm2, before the filter for SWC and at the CCD for EIS | `0 photon / (s cm2)` |
+| `vis_sl` | Visible stray light, in photons per second per cm2, before the filter for SWC and at the CCD for EIS, and 0 for LW | `0 photon / (s cm2)` |
 | `psf` | Blur with the [PSF](../instrument-model.md#the-point-spread-function) | `False` |
 | `psf_boundary` | What the PSF brings in from beyond the atmosphere, `replicate` or `zero` | `replicate` |
 | `spectral_psf` | How the slit adds to the optics' blur, `quadrature` or `convolution` | `quadrature` |
@@ -42,6 +42,8 @@ Every setting of a run file, with its default. A value with units is a number an
 | `pinhole_visible_wavelength` | Wavelength of the visible light through the pinholes (SWC) | `600 nm` |
 
 ## detector
+
+LW's are under [LW](#lw).
 
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
@@ -78,6 +80,8 @@ A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane sett
 
 ## telescope
 
+LW's are under [LW](#lw).
+
 | Key | What it sets | SWC | EIS |
 | --- | --- | --- | --- |
 | `D_ap` | Aperture diameter; half its area feeds SW | `0.28 m` | - |
@@ -98,9 +102,39 @@ A run takes each pixel's wavelength from `wvl_res`, and refuses focal plane sett
 
 `psf_params`, `psf_slit_width`, `fiducial_centres` and `fiducial_lengths` each take one value, not a sweep. A table has two columns, wavelength in nm and throughput from 0 to 1, and lines starting with `#` are skipped.
 
+## LW
+
+LW has detector and telescope settings of its own. Others, such as `slit_length`, do not apply to it.
+
+| Key | What it sets | Default |
+| --- | --- | --- |
+| `band` | `LW1`, `LW2` or `LW3`, in `detector:` or `telescope:` | the observed line's |
+| `order` | Diffraction order, 1, or 2 for LW2 and LW3, in either section | the observed line's |
+| `detector.aps_temperature` | APS temperature | `-40 Celsius` |
+| `detector.dark_current` | Dark current; needed at any other temperature | `2 electron / (pix s)` |
+| `detector.read_noise_rms` | Read noise | `40 electron / pix` |
+| `detector.read_noise_pedestal` | Constant added to every pixel's electrons | `0 electron / pix` |
+| `detector.gain_e_per_dn` | Electrons per DN | `6 electron / DN` |
+| `detector.max_dn` | Where DN are clipped | `65535 DN / pix` |
+| `detector.mux_noise_dn` | Noise added after the conversion to DN | `1.891 DN / pix` |
+| `detector.full_well` | Full well, for comparison only; nothing is clipped at it | `86000 electron / pix` |
+| `detector.gain_mcp` | MCP mean gain, in electrons per detected photon | `1000` |
+| `detector.gain_phosphor`, `detector.efficiency_fiber_optic`, `detector.transmission_bonding`, `detector.attenuation`, `detector.qe_aps` | Phosphor gain, transmissions of the fibre optics, bonds and attenuator, and APS QE, which give the APS electrons per MCP electron | `7.25`, `0.66`, `0.81`, `0.01`, `0.34` |
+| `detector.qe_euv` | One detection probability for every wavelength, in place of `qe_table` | none |
+| `detector.qe_table` | Detection probability table | packaged |
+| `detector.pix_size` | Pixel size at the MCP | `16.7 um / pix` |
+| `detector.wvl_res`, `detector.plate_scale_angle` | Wavelength step per pixel, and angle per pixel along the slit | the band's |
+| `telescope.D_ap` | Aperture diameter; half its area feeds LW | `0.28 m` |
+| `telescope.microroughness_sigma` | RMS roughness of the primary mirror | `0.6 nm` |
+| `telescope.contamination_factor` | One contamination throughput for every wavelength, in place of `contamination_table` | none |
+| `telescope.psf_type`, `telescope.psf_params`, `telescope.psf_slit_width` | PSF, as for SWC | `gaussian`, the band's, `0.2 arcsec` |
+| `telescope.pm_table`, `telescope.grating_table_1st`, `telescope.grating_table_2nd`, `telescope.contamination_table` | Primary mirror reflectance, grating efficiency in each order, and contamination throughput tables | packaged |
+
+`band` and `order` each take one value, not a sweep.
+
 ## filter
 
-SWC's filter; ignored, with a warning, for EIS.
+SWC's filter; ignored, with a warning, for LW and EIS.
 
 | Key | What it sets | Default |
 | --- | --- | --- |

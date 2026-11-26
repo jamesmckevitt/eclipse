@@ -193,6 +193,110 @@ def _contribution_function(ion, density, dropped: Dict[int, int], **kwargs):
             f"levels nothing populates left out: {error}") from None
 
 
+def _first_beyond_the_rates(ion_name, present, density, abundance: str, kwargs: dict) -> int:
+    """
+    Index of the first of `present`'s temperatures beyond its level-resolved rates.
+
+    The rates cover the cooler temperatures, as each of CHIANTI's tables starts
+    below 10^4 K, the bottom of ECLIPSE's grids, so the first temperature
+    beyond them is found by bisection, a temperature at a time at one density.
+    It is 0 for temperatures all beyond them, such as the hottest of several
+    chunks. Raises RuntimeError if the hottest temperature alone works.
+    """
+    import fiasco
+
+    temperature = present.temperature
+
+    def beyond(index: int) -> bool:
+        one = fiasco.Ion(ion_name, temperature[index][np.newaxis], abundance=abundance, **kwargs)
+        try:
+            _contribution_function(one, density[:1], {})
+        except ValueError as error:
+            if not _beyond_the_rates(error):
+                raise
+            return True
+        return False
+
+    cool, hot = 0, temperature.size - 1
+    if not beyond(hot):
+        raise RuntimeError(
+            f"fiasco could not use CHIANTI's level-resolved recombination and ionisation "
+            f"rates of {present.ion_name} for all its temperatures at once, though it could "
+            f"for the hottest alone, so ECLIPSE cannot tell where to use the single-ion "
+            f"model.")
+    if beyond(cool):
+        return 0
+    while hot - cool > 1:
+        middle = (cool + hot) // 2
+        if beyond(middle):
+            hot = middle
+        else:
+            cool = middle
+    return hot
+
+
+def ion_contribution_function(ion_name, temperature_K: np.ndarray, densities_cm3: np.ndarray,
+                              abundance: str, kwargs: dict):
+    """
+    fiasco's contribution function of an ion, times the ratio of protons to electrons.
+
+    Where the level populations cannot be solved, the levels nothing populates
+    are left out and the rest solved exactly. For some ions, CHIANTI's
+    level-resolved recombination and ionisation rates stop short of the
+    hottest temperatures, and fiasco's single-ion model is used from there, as
+    for ions with no such rates.
+
+    Parameters
+    ----------
+    ion_name : str or tuple
+        The ion, as `fiasco.Ion` takes it, such as `"Fe 12"` or `(26, 12)`.
+    temperature_K, densities_cm3 : np.ndarray
+        Temperatures in K and electron densities in cm^-3.
+    abundance : str
+        CHIANTI abundance set.
+    kwargs : dict
+        Other arguments for `fiasco.Ion`, such as `hdf5_dbase_root`.
+
+    Returns
+    -------
+    g : u.Quantity
+        (temperature, density, transition).
+    dropped : int
+        Number of temperatures at which levels were left out.
+    single_ion : float or None
+        log10 of the temperature from which the single-ion model is used.
+    """
+    import fiasco
+
+    present = fiasco.Ion(ion_name, temperature_K * u.K, abundance=abundance, **kwargs)
+    density = densities_cm3 * u.cm**-3
+    dropped: Dict[int, int] = {}
+    single_ion = None
+    try:
+        g = _contribution_function(present, density, dropped)
+    except ValueError as error:
+        if not _beyond_the_rates(error):
+            raise
+        first = _first_beyond_the_rates(ion_name, present, density, abundance, kwargs)
+        # Recount the dropped levels, keyed by temperature index in the full
+        # array, without those of the failed attempt.
+        dropped.clear()
+        parts = []
+        if first > 0:
+            below = fiasco.Ion(ion_name, present.temperature[:first], abundance=abundance,
+                               **kwargs)
+            parts.append(_contribution_function(below, density, dropped))
+        above = fiasco.Ion(ion_name, present.temperature[first:], abundance=abundance, **kwargs)
+        dropped_above: Dict[int, int] = {}
+        parts.append(_contribution_function(above, density, dropped_above,
+                                            use_two_ion_model=False))
+        dropped.update({first + k: n for k, n in dropped_above.items()})
+        g = np.concatenate(parts)
+        single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
+    return (g * present.proton_electron_ratio[:, np.newaxis, np.newaxis], len(dropped),
+            single_ion)
+
+
 def _ion_band_lines(args):
     """One ion's lines in the band, for a worker process; None if it has none there."""
     import logging
@@ -240,60 +344,19 @@ def _band_lines_of_ion(atom, stage, temperature_K, densities_cm3, band, abundanc
         return None
 
     try:
-        present = fiasco.Ion((atom, stage), temperature_K[temperatures] * u.K, abundance=abundance,
-                             **kwargs)
-        density = densities_cm3 * u.cm**-3
-        dropped: Dict[int, int] = {}
-        single_ion = None
-        try:
-            g = _contribution_function(present, density, dropped)
-        except ValueError as error:
-            if not _beyond_the_rates(error):
-                raise
-            # For some ions, CHIANTI's level-resolved recombination and
-            # ionisation rates stop short of the hottest temperatures. Use
-            # fiasco's single-ion model there, as for ions with no such rates.
-            first = None
-            for index, temperature in enumerate(present.temperature):
-                one = fiasco.Ion((atom, stage), temperature[np.newaxis], abundance=abundance,
-                                 **kwargs)
-                try:
-                    _contribution_function(one, density[:1], {})
-                except ValueError as error:
-                    if not _beyond_the_rates(error):
-                        raise
-                    first = index
-                    break
-            if first is None:
-                raise
-            # Recount the dropped levels, keyed by temperature index in the
-            # full array, without those of the failed attempt.
-            dropped.clear()
-            parts = []
-            if first > 0:
-                below = fiasco.Ion((atom, stage), present.temperature[:first], abundance=abundance,
-                                   **kwargs)
-                parts.append(_contribution_function(below, density, dropped))
-            above = fiasco.Ion((atom, stage), present.temperature[first:], abundance=abundance,
-                               **kwargs)
-            dropped_above: Dict[int, int] = {}
-            parts.append(_contribution_function(above, density, dropped_above,
-                                                use_two_ion_model=False))
-            dropped.update({first + k: n for k, n in dropped_above.items()})
-            g = np.concatenate(parts)
-            single_ion = float(np.log10(present.temperature[first].to_value(u.K)))
-        g = g * present.proton_electron_ratio[:, np.newaxis, np.newaxis]
+        g, dropped, single_ion = ion_contribution_function(
+            (atom, stage), temperature_K[temperatures], densities_cm3, abundance, kwargs)
     except MissingDatasetException as error:
         # CHIANTI or the abundance set lacks data the lines need.
         return {"skipped": f"{ion.ion_name} ({error})"}
     # Reorder (temperature, density, transition) to (line, density,
     # temperature), as in compute_goft_fiasco, with non-finite values set to 0.
     g = np.nan_to_num(g.to_value(G_UNIT)[..., columns], nan=0.0, posinf=0.0, neginf=0.0)
-    return {"atom": atom, "stage": stage, "name": present.ion_name,
+    return {"atom": atom, "stage": stage, "name": ion.ion_name,
             "mass": float(ion.mass.to_value(u.u)),
             "wavelength": wavelength[columns], "observed": observed[columns],
             "temperatures": temperatures, "g": np.ascontiguousarray(np.transpose(g, (2, 1, 0))),
-            "dropped": len(dropped), "single_ion": single_ion,
+            "dropped": dropped, "single_ion": single_ion,
             "hdf5_dbase_root": str(ion.hdf5_dbase_root)}
 
 

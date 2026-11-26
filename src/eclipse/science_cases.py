@@ -2,14 +2,16 @@
 Science cases from the Concept Study Report, and ECLIPSE configurations for them.
 
 `data/science_cases.yaml` holds every case with all its lines. The functions
-here turn the lines ECLIPSE can simulate into uniform-intensity
-configurations, and the `eclipse-science-cases` command writes them to files.
+here turn the lines ECLIPSE can simulate, in the short and long wavelength
+channels, into uniform-intensity configurations, and the
+`eclipse-science-cases` command writes them to files.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
@@ -21,7 +23,7 @@ import astropy.units as u
 import numpy as np
 import yaml
 
-from .config import Telescope_EUVST, _load_throughput_table
+from .config import Telescope_EUVST, _load_throughput_table, check_lw_wavelength, lw_band_of
 from .utils import element_data, load_yaml_config
 
 # Defaults for every configuration unless the base settings override them:
@@ -41,6 +43,9 @@ _LINE_KEYS = ("instrument", "uniform_intensity", "rest_wavelength",
 # Time-series keys, not allowed in a configuration observing one line's
 # intensity.
 _SERIES_KEYS = ("atmosphere_series", "synthesis_series", "raster", "synthesis")
+
+# Sections that describe one channel's hardware.
+_HARDWARE_SECTIONS = ("detector", "telescope", "filter")
 
 # Two table entries for the same line can be written to different precision,
 # e.g. 195.119 and 195.12, so a wavelength matches lines within this.
@@ -129,9 +134,24 @@ def short_wavelength_range() -> tuple[u.Quantity, u.Quantity]:
 
 
 def instrument_for(line: dict) -> str | None:
-    """ECLIPSE instrument that can simulate `line`, or None if there is none yet."""
+    """
+    ECLIPSE instrument that can simulate `line`, or None if there is none yet.
+
+    An LW line that lands on a detector beyond the sensitivity budget's
+    tables, where its throughput is not yet known, has none.
+    """
+    wavelength = u.Quantity(line["wavelength"])
     low, high = short_wavelength_range()
-    return "SWC" if low <= u.Quantity(line["wavelength"]) <= high else None
+    if low <= wavelength <= high:
+        return "SWC"
+    band = lw_band_of(wavelength)
+    if band is None:
+        return None
+    try:
+        check_lw_wavelength(wavelength, *band)
+    except ValueError:
+        return None
+    return "LW"
 
 
 def _line_matches(line: dict, selector: str) -> bool:
@@ -204,6 +224,18 @@ def _config(case: dict, line: dict, instrument: str, base: dict) -> dict:
     }
     config.update({k: v for k, v in settings.items()
                    if isinstance(v, dict) and k != "simulation"})
+    if instrument == "LW":
+        # The line decides the band and order, as it decides the wavelength.
+        for section in ("detector", "telescope"):
+            for key in ("band", "order"):
+                if isinstance(config.get(section), dict) and key in config[section]:
+                    raise ValueError(
+                        f"The base settings cannot set {section}.{key}: every LW "
+                        f"configuration takes it from its line.")
+        band, order = lw_band_of(u.Quantity(line["wavelength"]))
+        detector = config.get("detector")
+        config["detector"] = {**(detector if isinstance(detector, dict) else {}),
+                              "band": band, "order": order}
     # Deep copy, so no list or section is shared with another configuration.
     return copy.deepcopy(config)
 
@@ -233,7 +265,11 @@ def science_case_configs(cases: list[str] | None = None,
         Settings for every configuration, as in a configuration file. These
         override the defaults (512 iterations on every CPU, PSF on, off-chip
         binning of 1 and 2) and, where given, the case's exposure time and
-        slit width. They cannot set the instrument or the line.
+        slit width. They cannot set the instrument or the line. When the
+        chosen lines are on both channels, a base that sets the detector,
+        telescope or filter, or a setting the LW channel does not have, is
+        applied to the SW lines only, and the LW lines are skipped with a
+        warning. Choose the LW lines alone to give them settings of their own.
     table : list of dict, optional
         Science cases to use instead of the table included with ECLIPSE.
 
@@ -242,9 +278,10 @@ def science_case_configs(cases: list[str] | None = None,
     configs : list of ScienceCaseConfig
         One per chosen line that ECLIPSE can simulate.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet, as `<task> <line>`.
+        Chosen lines left out, which ECLIPSE cannot simulate yet or the base
+        settings do not suit, as `<task> <line>`.
     """
-    from .main import _require_mapping, _validate_config_keys
+    from .main import _check_lw_sections, _require_mapping, _validate_config_keys
 
     table = load_science_cases() if table is None else table
     base = {} if base is None else base
@@ -266,17 +303,36 @@ def science_case_configs(cases: list[str] | None = None,
     if "simulation" in base:
         _require_mapping(base["simulation"], "The base settings' 'simulation:' section")
 
-    configs, skipped = [], []
-    for case, line in _chosen_lines(table, cases, lines):
-        instrument = instrument_for(line)
+    chosen = [(case, line, instrument_for(line))
+              for case, line in _chosen_lines(table, cases, lines)]
+    both = {"SWC", "LW"} <= {instrument for _, _, instrument in chosen}
+    hardware = [section for section in _HARDWARE_SECTIONS if base.get(section)]
+    configs, skipped, not_lw = [], [], None
+    for case, line, instrument in chosen:
         if instrument is None:
             skipped.append(f"{case['task']} {line_label(line)}")
             continue
         config = _config(case, line, instrument, base)
-        _validate_config_keys(config, instrument)
+        try:
+            if instrument == "LW" and both and hardware:
+                raise ValueError(f"They set {', '.join(hardware)}, which describe one "
+                                 f"channel's hardware.")
+            _validate_config_keys(config, instrument)
+            if instrument == "LW":
+                _check_lw_sections(config)
+        except ValueError as error:
+            if not (instrument == "LW" and both):
+                raise
+            not_lw = not_lw or str(error)
+            skipped.append(f"{case['task']} {line_label(line)}")
+            continue
         configs.append(ScienceCaseConfig(
             name=f"{case['name']}_{line_id(line)}",
             case=case, line=line, config=config))
+    if not_lw:
+        warnings.warn(f"The base settings are applied to the SW lines only, and the LW lines "
+                      f"are skipped. Choose the LW lines alone to give them settings of their "
+                      f"own. {not_lw}", UserWarning, stacklevel=2)
     return configs, skipped
 
 
@@ -297,7 +353,7 @@ def write_science_case_configs(out_dir: str | Path, **kwargs) -> tuple[list[Path
     paths : list of Path
         Files written.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet.
+        Chosen lines left out, as for :func:`science_case_configs`.
     """
     configs, skipped = science_case_configs(**kwargs)
     out_dir = Path(out_dir)
@@ -360,7 +416,7 @@ def write_science_case_run_file(path: str | Path, **kwargs) -> tuple[Path, list[
     path : Path
         File written.
     skipped : list of str
-        Chosen lines ECLIPSE cannot simulate yet.
+        Chosen lines left out, as for :func:`science_case_configs`.
     """
     configs, skipped = science_case_configs(**kwargs)
     if not configs:
@@ -422,7 +478,6 @@ def main(argv: list[str] | None = None) -> None:
         if not isinstance(base, dict):
             raise ValueError(f"{args.base} has to hold a mapping of settings.")
 
-    low, high = short_wavelength_range()
     if args.one_file:
         path, skipped = write_science_case_run_file(
             Path(args.out) / "science_cases.yaml", cases=args.cases, lines=args.lines,
@@ -435,5 +490,4 @@ def main(argv: list[str] | None = None) -> None:
               f"to {args.out}")
     if skipped:
         print(f"Skipped {len(skipped)} line{'' if len(skipped) == 1 else 's'} "
-              f"outside the {low.value:g} to {high.value:g} Angstrom ECLIPSE can "
-              f"simulate yet; --list shows which")
+              f"that ECLIPSE cannot simulate yet or the base settings do not suit")

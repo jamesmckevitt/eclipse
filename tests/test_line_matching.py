@@ -50,6 +50,14 @@ class _Ion:
     def proton_electron_ratio(self):
         return np.full(self.temperature.size, 0.83)
 
+    @property
+    def ionization_fraction(self):
+        return np.full(self.temperature.size, 0.5)
+
+    @property
+    def ion_name(self):
+        return "Fe 12"
+
 
 @pytest.fixture
 def fake_fiasco(tmp_path, monkeypatch):

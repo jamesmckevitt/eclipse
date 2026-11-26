@@ -89,14 +89,15 @@ def _dataclass_registry() -> dict:
     Imported on first use, as the time series settings import the
     synthesis.
     """
-    from .config import (AluminiumFilter, Detector_EIS, Detector_SWC,
-                         Simulation, Telescope_EIS, Telescope_EUVST)
+    from .config import (AluminiumFilter, Detector_EIS, Detector_LW, Detector_SWC,
+                         Simulation, Telescope_EIS, Telescope_EUVST,
+                         Telescope_EUVST_LW)
     from .fitting import FitComponent, FitConfig
     from .raster import RasterPlan, SynthesisSettings
 
     return {cls.__name__: cls for cls in (
-        AluminiumFilter, Detector_EIS, Detector_SWC, Simulation,
-        Telescope_EIS, Telescope_EUVST, FitComponent, FitConfig,
+        AluminiumFilter, Detector_EIS, Detector_LW, Detector_SWC, Simulation,
+        Telescope_EIS, Telescope_EUVST, Telescope_EUVST_LW, FitComponent, FitConfig,
         RasterPlan, SynthesisSettings,
     )}
 
