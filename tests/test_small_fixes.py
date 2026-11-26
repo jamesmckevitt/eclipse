@@ -146,7 +146,8 @@ def _atmosphere(tmp_path, name="box.h5", **overrides):
 
 @pytest.mark.parametrize("change, message", [
     (lambda f: f["x_edges"].__setitem__(slice(None), np.arange(5)[::-1]), "x_edges must increase"),
-    (lambda f: f.__delitem__("electron_density"), "needs a mass_density or an electron_density"),
+    (lambda f: f.__delitem__("electron_density"),
+     "needs a mass_density, an electron_density or a proton_density"),
     (lambda f: (f.__delitem__("time"), f.create_dataset("time", data=[10.0]),
                 f["time"].attrs.__setitem__("unit", "s")), "time must have 0 dimensions"),
     (lambda f: f["temperature"].attrs.__delitem__("unit"), "'temperature' in .* has no 'unit'"),
